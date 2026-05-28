@@ -12,6 +12,7 @@ public enum AppServerMethods {
     public static let turnStart = "turn/start"
     public static let turnSteer = "turn/steer"
     public static let turnInterrupt = "turn/interrupt"
+    public static let audioTranscribe = "audio/transcribe"
 }
 
 public struct ClientInfo: Codable, Equatable, Sendable {

@@ -27,6 +27,10 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to Codex app-server hosts on your private network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_codexdock._tcp</string>
+	</array>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Hold the microphone button to dictate a message into the Codex composer.</string>
 	<key>UILaunchScreen</key>

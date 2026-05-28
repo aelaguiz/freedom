@@ -256,6 +256,18 @@ public actor AppServerClient {
         )
     }
 
+    public func audioTranscribe(
+        params: AudioTranscribeParams,
+        timeout: Duration = .seconds(60)
+    ) async throws -> AudioTranscribeResponseDTO {
+        try await sendRequest(
+            method: AppServerMethods.audioTranscribe,
+            params: try JSONValue.encoded(params),
+            timeout: timeout,
+            as: AudioTranscribeResponseDTO.self
+        )
+    }
+
     private func sendNotification(
         method: String,
         params: JSONValue? = nil,

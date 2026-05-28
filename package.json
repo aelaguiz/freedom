@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dock-relay": "node scripts/dock-relay.mjs",
+    "test": "npm run test:relay",
     "test:relay": "node --test scripts/dock-relay.test.mjs"
   },
   "dependencies": {

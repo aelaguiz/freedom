@@ -4,13 +4,26 @@ public struct DockHostConfiguration: Equatable, Sendable, Identifiable {
     public let id: String
     public let displayName: String
     public let webSocketURL: URL
-    public let bearerToken: String
+    public let bearerToken: String?
 
-    public init(id: String, displayName: String, webSocketURL: URL, bearerToken: String) {
+    public init(
+        id: String,
+        displayName: String,
+        webSocketURL: URL,
+        bearerToken: String? = nil
+    ) {
         self.id = id
         self.displayName = displayName
         self.webSocketURL = webSocketURL
-        self.bearerToken = bearerToken
+        self.bearerToken = Self.normalized(bearerToken)
+    }
+
+    static func normalized(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            return trimmed
+        }
+        return nil
     }
 }
 
@@ -25,9 +38,9 @@ public enum DockHostConfigurationError: Error, Equatable, LocalizedError, Sendab
         case .missingEndpoint:
             return "Set CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS to a ws:// or wss:// Codex app-server URL."
         case let .invalidEndpoint(value):
-            return "CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS is not a valid ws:// or wss:// URL: \(value)"
+            return "Codex Dock WebSocket URL must be ws:// or wss://, include a host, and not include username/password credentials: \(value)"
         case .missingBearerToken:
-            return "Set CODEX_DOCK_APP_SERVER_BEARER_TOKEN or CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE."
+            return "Bearer auth is optional for the local relay path."
         case let .tokenFileReadFailed(path):
             return "Could not read CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE at \(path)."
         }
@@ -35,6 +48,20 @@ public enum DockHostConfigurationError: Error, Equatable, LocalizedError, Sendab
 }
 
 public extension DockHostConfiguration {
+    static func validatedWebSocketURL(_ rawValue: String) throws -> URL {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let webSocketURL = URL(string: value),
+              let scheme = webSocketURL.scheme?.lowercased(),
+              scheme == "ws" || scheme == "wss",
+              webSocketURL.host?.isEmpty == false,
+              webSocketURL.user == nil,
+              webSocketURL.password == nil
+        else {
+            throw DockHostConfigurationError.invalidEndpoint(value)
+        }
+        return webSocketURL
+    }
+
     static func fromEnvironment(
         _ environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> DockHostConfiguration {
@@ -47,15 +74,9 @@ public extension DockHostConfiguration {
             throw DockHostConfigurationError.missingEndpoint
         }
 
-        guard let webSocketURL = URL(string: endpoint),
-              let scheme = webSocketURL.scheme?.lowercased(),
-              scheme == "ws" || scheme == "wss",
-              webSocketURL.host?.isEmpty == false
-        else {
-            throw DockHostConfigurationError.invalidEndpoint(endpoint)
-        }
+        let webSocketURL = try validatedWebSocketURL(endpoint)
 
-        let bearerToken: String
+        let bearerToken: String?
         if let token = firstNonEmpty(environment["CODEX_DOCK_APP_SERVER_BEARER_TOKEN"]) {
             bearerToken = token
         } else if let tokenFile = firstNonEmpty(environment["CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE"]) {
@@ -66,11 +87,7 @@ public extension DockHostConfiguration {
                 throw DockHostConfigurationError.tokenFileReadFailed(tokenFile)
             }
         } else {
-            throw DockHostConfigurationError.missingBearerToken
-        }
-
-        guard !bearerToken.isEmpty else {
-            throw DockHostConfigurationError.missingBearerToken
+            bearerToken = nil
         }
 
         let hostID = firstNonEmpty(

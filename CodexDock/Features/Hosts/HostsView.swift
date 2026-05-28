@@ -34,7 +34,7 @@ public struct HostsView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
-            Text("Hosts")
+            Text("Relay")
                 .font(.largeTitle.weight(.semibold))
                 .foregroundStyle(.primary)
 
@@ -51,7 +51,7 @@ public struct HostsView: View {
             }
             .buttonStyle(.bordered)
             .disabled(store.rows.isEmpty)
-            .accessibilityLabel("Test all hosts")
+            .accessibilityLabel("Test relay connections")
         }
     }
 
@@ -70,7 +70,7 @@ public struct HostsView: View {
         if let configurationError = store.configurationError {
             DockMessageView(
                 icon: "exclamationmark.triangle",
-                title: "Host not configured",
+                title: "Relay not configured",
                 message: configurationError
             )
         } else {
@@ -102,7 +102,7 @@ public struct HostsView: View {
     private var hostEditor: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(editingHostID == nil ? "Add Host" : "Edit Host")
+                Text(editingHostID == nil ? "Add Relay" : "Edit Relay")
                     .font(.headline)
                 Spacer()
                 if editingHostID != nil {
@@ -119,10 +119,9 @@ public struct HostsView: View {
             }
 
             VStack(spacing: 10) {
-                HostTextField(title: "ID", text: $draft.id)
+                HostTextField(title: "Relay ID", text: $draft.id)
                 HostTextField(title: "Name", text: $draft.displayName)
                 HostTextField(title: "WebSocket", text: $draft.webSocketURL)
-                HostTextField(title: "Token", text: $draft.bearerToken, isSecure: true)
             }
 
             if let validationMessage {
@@ -132,7 +131,7 @@ public struct HostsView: View {
             Button {
                 saveDraft()
             } label: {
-                Label("Save Host", systemImage: "square.and.arrow.down")
+                Label("Save Relay", systemImage: "square.and.arrow.down")
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
@@ -144,19 +143,20 @@ public struct HostsView: View {
     }
 
     private func saveDraft() {
-        do {
-            try store.saveHost(
-                replacing: editingHostID,
-                id: draft.id,
-                displayName: draft.displayName,
-                webSocketURL: draft.webSocketURL,
-                bearerToken: draft.bearerToken
-            )
-            editingHostID = nil
-            draft = HostDraft()
-            validationMessage = nil
-        } catch {
-            validationMessage = error.localizedDescription
+        Task { @MainActor in
+            do {
+                try await store.saveHost(
+                    replacing: editingHostID,
+                    id: draft.id,
+                    displayName: draft.displayName,
+                    webSocketURL: draft.webSocketURL
+                )
+                editingHostID = nil
+                draft = HostDraft()
+                validationMessage = nil
+            } catch {
+                validationMessage = error.localizedDescription
+            }
         }
     }
 }
@@ -277,7 +277,6 @@ private struct HostDraft: Equatable {
     var id = ""
     var displayName = ""
     var webSocketURL = ""
-    var bearerToken = ""
 
     init() {}
 
@@ -285,6 +284,5 @@ private struct HostDraft: Equatable {
         self.id = host.id
         self.displayName = host.displayName
         self.webSocketURL = host.webSocketURL.absoluteString
-        self.bearerToken = host.bearerToken
     }
 }

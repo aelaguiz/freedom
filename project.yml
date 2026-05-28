@@ -31,6 +31,7 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.aelaguiz.CodexDockApp
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: NO
     info:
       path: CodexDockApp/Info.plist
@@ -40,6 +41,8 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         NSLocalNetworkUsageDescription: Connect to Codex app-server hosts on your private network.
+        NSBonjourServices:
+          - _codexdock._tcp
         NSMicrophoneUsageDescription: Hold the microphone button to dictate a message into the Codex composer.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

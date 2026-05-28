@@ -201,6 +201,18 @@ final class DockStoreTests: XCTestCase {
         XCTAssertEqual(host.bearerToken, "test-token")
     }
 
+    func testHostConfigurationAllowsNoClientBearerTokenForRelay() throws {
+        let host = try DockHostConfiguration.fromEnvironment([
+            "CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS": "ws://192.168.50.117:4510",
+            "CODEX_DOCK_REAL_HOST_ID": "Amir-M5",
+            "CODEX_DOCK_REAL_HOST_NAME": "Amir-M5"
+        ])
+
+        XCTAssertEqual(host.id, "Amir-M5")
+        XCTAssertEqual(host.webSocketURL.absoluteString, "ws://192.168.50.117:4510")
+        XCTAssertNil(host.bearerToken)
+    }
+
     func testHostConfigurationRejectsMissingEndpoint() {
         XCTAssertThrowsError(
             try DockHostConfiguration.fromEnvironment([
@@ -208,6 +220,19 @@ final class DockStoreTests: XCTestCase {
             ])
         ) { error in
             XCTAssertEqual(error as? DockHostConfigurationError, .missingEndpoint)
+        }
+    }
+
+    func testHostConfigurationRejectsCredentialBearingEndpoint() {
+        XCTAssertThrowsError(
+            try DockHostConfiguration.fromEnvironment([
+                "CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS": "ws://token@192.168.50.117:4510"
+            ])
+        ) { error in
+            XCTAssertEqual(
+                error as? DockHostConfigurationError,
+                .invalidEndpoint("ws://token@192.168.50.117:4510")
+            )
         }
     }
 
@@ -228,7 +253,119 @@ final class DockStoreTests: XCTestCase {
             "ws://192.168.50.117:4510",
             "ws://100.66.11.7:4510"
         ])
-        XCTAssertEqual(registry.hosts.map(\.bearerToken), ["amir-token", "home-token"])
+        XCTAssertEqual(registry.hosts.map(\.bearerToken), ["amir-token", "home-token"] as [String?])
+    }
+
+    @MainActor
+    func testRelayBootstrapStartsDiscoveryWithoutLaunchEnvironmentAndUsesNoSecretHost() async throws {
+        let discovery = FakeRelayDiscovery()
+        let configurationStore = InMemoryLocalDockConfigurationStore()
+        let store = RelayBootstrapStore(
+            environment: [:],
+            configurationStore: configurationStore,
+            discovery: discovery
+        )
+
+        store.start()
+
+        guard case .discovering = store.state else {
+            return XCTFail("Expected discovery state, got \(store.state)")
+        }
+        XCTAssertTrue(discovery.didStart)
+
+        let relay = try XCTUnwrap(DiscoveredRelay(
+            displayName: "Codex Dock Test",
+            hostName: "Amir-M5.local.",
+            port: 4510,
+            txtRecords: ["auth": "none"]
+        ))
+        discovery.publish([relay])
+
+        try await waitForRelayBootstrap {
+            if case .ready(let registry) = store.state {
+                return registry.hosts.first?.webSocketURL.absoluteString == "ws://Amir-M5.local:4510"
+                    && registry.hosts.first?.bearerToken == nil
+            }
+            return false
+        }
+        let saved = await configurationStore.savedConfiguration()
+        XCTAssertEqual(saved?.webSocketURL.absoluteString, "ws://Amir-M5.local:4510")
+    }
+
+    @MainActor
+    func testRelayBootstrapUsesSavedRelayWhenDiscoveryHasNotPublished() async throws {
+        let savedRelayURL = try XCTUnwrap(URL(string: "ws://192.168.50.117:4510"))
+        let discovery = FakeRelayDiscovery()
+        let configurationStore = InMemoryLocalDockConfigurationStore(
+            saved: LocalRelayConfiguration(
+                displayName: "Saved Relay",
+                webSocketURL: savedRelayURL
+            )
+        )
+        let store = RelayBootstrapStore(
+            environment: [:],
+            configurationStore: configurationStore,
+            discovery: discovery
+        )
+
+        store.start()
+
+        try await waitForRelayBootstrap {
+            if case .ready(let registry) = store.state {
+                return registry.hosts.first?.displayName == "Saved Relay"
+                    && registry.hosts.first?.webSocketURL == savedRelayURL
+                    && registry.hosts.first?.bearerToken == nil
+            }
+            return false
+        }
+        XCTAssertEqual(store.manualURLText, "ws://192.168.50.117:4510")
+        XCTAssertTrue(discovery.didStop)
+    }
+
+    func testManualRelayValidationAllowsOnlyWebSocketURLs() throws {
+        XCTAssertEqual(
+            try RelayBootstrapStore.validatedWebSocketURL("ws://192.168.50.117:4510").absoluteString,
+            "ws://192.168.50.117:4510"
+        )
+        XCTAssertThrowsError(
+            try RelayBootstrapStore.validatedWebSocketURL("https://192.168.50.117:4510")
+        ) { error in
+            XCTAssertEqual(
+                error as? DockHostConfigurationError,
+                .invalidEndpoint("https://192.168.50.117:4510")
+            )
+        }
+        XCTAssertThrowsError(
+            try RelayBootstrapStore.validatedWebSocketURL("ws://token@192.168.50.117:4510")
+        ) { error in
+            XCTAssertEqual(
+                error as? DockHostConfigurationError,
+                .invalidEndpoint("ws://token@192.168.50.117:4510")
+            )
+        }
+    }
+
+    func testFileLocalDockConfigurationStorePersistsRelayWithoutSecrets() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = directory.appendingPathComponent("relay-config.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let savedURL = try XCTUnwrap(URL(string: "ws://Amir-M5.local:4510"))
+        let writer = FileLocalDockConfigurationStore(fileURL: fileURL)
+        try await writer.save(
+            LocalRelayConfiguration(
+                displayName: "Amir-M5",
+                webSocketURL: savedURL
+            )
+        )
+
+        let reader = FileLocalDockConfigurationStore(fileURL: fileURL)
+        let loaded = try await reader.load()
+
+        XCTAssertEqual(loaded?.displayName, "Amir-M5")
+        XCTAssertEqual(loaded?.webSocketURL, savedURL)
+        XCTAssertNil(loaded?.hostConfiguration.bearerToken)
     }
 
     @MainActor
@@ -531,21 +668,26 @@ final class DockStoreTests: XCTestCase {
             ])),
             "Home": .failure(.offline("Home unreachable"))
         ])
+        let configurationStore = InMemoryLocalDockConfigurationStore()
         let store = HostSettingsStore(
             registry: registry,
             tester: loader,
+            configurationStore: configurationStore,
             now: { Date(timeIntervalSince1970: 2_000) }
         )
 
-        try store.saveHost(
+        try await store.saveHost(
             replacing: nil,
             id: "Home",
             displayName: "Home",
-            webSocketURL: "ws://100.66.11.7:4510",
-            bearerToken: "home-token"
+            webSocketURL: "ws://100.66.11.7:4510"
         )
 
         XCTAssertEqual(store.registry?.hosts.map(\.id), ["Amir-M5", "Home"])
+        XCTAssertNil(store.registry?.hosts.first(where: { $0.id == "Home" })?.bearerToken)
+        let savedHomeConfiguration = await configurationStore.savedConfiguration()
+        XCTAssertEqual(savedHomeConfiguration?.webSocketURL.absoluteString, "ws://100.66.11.7:4510")
+        XCTAssertNil(savedHomeConfiguration?.hostConfiguration.bearerToken)
 
         await store.test("Home")
         XCTAssertEqual(
@@ -553,18 +695,45 @@ final class DockStoreTests: XCTestCase {
             .offline("Home unreachable", checkedAt: Date(timeIntervalSince1970: 2_000))
         )
 
-        try store.saveHost(
+        try await store.saveHost(
             replacing: "Home",
             id: "Home",
             displayName: "Home Server",
-            webSocketURL: "ws://100.66.11.7:4520",
-            bearerToken: "home-token-2"
+            webSocketURL: "ws://100.66.11.7:4520"
         )
 
         let edited = try XCTUnwrap(store.registry?.hosts.first(where: { $0.id == "Home" }))
         XCTAssertEqual(edited.displayName, "Home Server")
         XCTAssertEqual(edited.webSocketURL.absoluteString, "ws://100.66.11.7:4520")
-        XCTAssertEqual(edited.bearerToken, "home-token-2")
+        XCTAssertNil(edited.bearerToken)
+        let savedEditedConfiguration = await configurationStore.savedConfiguration()
+        XCTAssertEqual(savedEditedConfiguration?.webSocketURL.absoluteString, "ws://100.66.11.7:4520")
+    }
+
+    @MainActor
+    func testHostSettingsRejectsCredentialBearingRelayURL() async throws {
+        let host = makeHost()
+        let registry = try HostRegistry(hosts: [host])
+        let store = HostSettingsStore(
+            registry: registry,
+            tester: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: []))),
+            configurationStore: InMemoryLocalDockConfigurationStore()
+        )
+
+        do {
+            try await store.saveHost(
+                replacing: nil,
+                id: "SecretRelay",
+                displayName: "Secret Relay",
+                webSocketURL: "ws://token@192.168.50.117:4510"
+            )
+            XCTFail("Expected credential-bearing relay URL to be rejected")
+        } catch {
+            XCTAssertEqual(
+                error as? HostSettingsError,
+                .invalidEndpoint("ws://token@192.168.50.117:4510")
+            )
+        }
     }
 }
 
@@ -722,6 +891,61 @@ private actor InMemoryLocalThreadMetadataStore: LocalThreadMetadataStoring {
             values.removeValue(forKey: key)
         }
         return values
+    }
+}
+
+private actor InMemoryLocalDockConfigurationStore: LocalDockConfigurationStoring {
+    private var saved: LocalRelayConfiguration?
+
+    init(saved: LocalRelayConfiguration? = nil) {
+        self.saved = saved
+    }
+
+    func load() async throws -> LocalRelayConfiguration? {
+        saved
+    }
+
+    func save(_ configuration: LocalRelayConfiguration) async throws {
+        saved = configuration
+    }
+
+    func savedConfiguration() -> LocalRelayConfiguration? {
+        saved
+    }
+}
+
+private final class FakeRelayDiscovery: RelayDiscoveryManaging {
+    private(set) var relays: [DiscoveredRelay] = []
+    var onRelaysChanged: (@Sendable ([DiscoveredRelay]) -> Void)?
+    private(set) var didStart = false
+    private(set) var didStop = false
+
+    func start() {
+        didStart = true
+    }
+
+    func stop() {
+        didStop = true
+    }
+
+    func publish(_ relays: [DiscoveredRelay]) {
+        self.relays = relays
+        onRelaysChanged?(relays)
+    }
+}
+
+@MainActor
+private func waitForRelayBootstrap(
+    timeout: Duration = .seconds(1),
+    condition: @escaping @MainActor () -> Bool
+) async throws {
+    let deadline = ContinuousClock.now + timeout
+    while !condition() {
+        if ContinuousClock.now >= deadline {
+            XCTFail("Timed out waiting for relay bootstrap state")
+            return
+        }
+        try await Task.sleep(for: .milliseconds(10))
     }
 }
 

@@ -64,6 +64,61 @@ public struct OpenAITranscriptionConfiguration: Equatable, Sendable {
     }
 }
 
+public struct RelayTranscriptionClient: TranscriptionServicing {
+    private let host: DockHostConfiguration
+    private let makeClient: @Sendable (DockHostConfiguration) -> AppServerClient
+    private let mimeType: String
+
+    public init(
+        host: DockHostConfiguration,
+        mimeType: String = "audio/mp4",
+        makeClient: @escaping @Sendable (DockHostConfiguration) -> AppServerClient = {
+            AppServerClient(webSocketURL: $0.webSocketURL, bearerToken: $0.bearerToken)
+        }
+    ) {
+        self.host = host
+        self.mimeType = mimeType
+        self.makeClient = makeClient
+    }
+
+    public func transcribe(audioFile: URL) async throws -> String {
+        let data: Data
+        do {
+            data = try Data(contentsOf: audioFile)
+        } catch {
+            throw TranscriptionServiceError.transportFailed
+        }
+
+        let client = makeClient(host)
+        do {
+            _ = try await client.connectAndInitialize(
+                params: .codexDock(version: "0.1.0"),
+                timeout: .seconds(5)
+            )
+            let response = try await client.audioTranscribe(
+                params: AudioTranscribeParams(
+                    mimeType: mimeType,
+                    base64Audio: data.base64EncodedString()
+                ),
+                timeout: .seconds(60)
+            )
+            await client.disconnect()
+
+            let transcript = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !transcript.isEmpty else {
+                throw TranscriptionServiceError.emptyTranscript
+            }
+            return transcript
+        } catch let error as TranscriptionServiceError {
+            await client.disconnect()
+            throw error
+        } catch {
+            await client.disconnect()
+            throw TranscriptionServiceError.transportFailed
+        }
+    }
+}
+
 public struct OpenAITranscriptionClient: TranscriptionServicing {
     private struct TranscriptionResponse: Decodable {
         let text: String

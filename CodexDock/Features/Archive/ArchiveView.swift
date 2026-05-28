@@ -78,7 +78,7 @@ public struct ArchiveView: View {
         case let .configurationError(message):
             DockMessageView(
                 icon: "exclamationmark.triangle",
-                title: "Host not configured",
+                title: "Relay not configured",
                 message: message
             )
         case let .idle(hosts):

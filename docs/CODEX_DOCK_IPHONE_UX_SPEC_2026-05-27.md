@@ -5,6 +5,13 @@ Status: MVP UX requirements and wireframe spec
 Owner: aelaguiz
 Audience: future Swift/iOS implementer
 
+Supersession note, 2026-05-28: the personal physical-iPhone runtime now uses
+the Mac-side relay plan in
+`docs/IPHONE_PERSONAL_PAIRING_SECRET_PLAN_2026-05-28.md`. Any legacy "Hosts",
+"Add Host", "Edit Host", token, or phone-side OpenAI-key language in this UX
+wireframe should be read as the current Relay connection surface with no
+phone-side secrets.
+
 ## 1. North Star
 
 Build a simple iPhone client, "Codex Dock", for one operator to monitor and
@@ -81,10 +88,10 @@ kept explicit so they are not lost during implementation.
   composer text box.
 - The app must not submit the transcript automatically. The user can edit the
   transcribed text, then taps Send when ready.
-- Push-to-talk should use the OpenAI Whisper API, or equivalent OpenAI speech
-  transcription, to convert voice to text.
-- The repo `.env` has a client OpenAI API key that the user says is safe to
-  embed in the iPhone client for this app. Do not print the key in docs or logs.
+- Push-to-talk should use OpenAI speech transcription through the Mac relay.
+- Superseded on 2026-05-28: the OpenAI key stays in the Mac environment or repo
+  `.env`; it is not embedded in, pasted into, stored by, or sent to the iPhone
+  client.
 - The user can manage Codex sessions while on the road.
 
 ### 2.6 Archive
@@ -607,11 +614,12 @@ Notes:
 - On release, transcription fills the composer text field.
 - Voice becomes editable text before sending.
 - The transcript must not auto-send in MVP.
-- MVP uses OpenAI speech transcription. The UI calls it "Dictate" or "Push to
-  talk"; implementation can use Whisper or the current OpenAI transcription
-  API.
-- OpenAI transcription may use the client-scoped OpenAI API key from `.env`;
-  the user has explicitly said that key is safe to embed in the client.
+- MVP uses OpenAI speech transcription through the Mac relay. The UI calls it
+  "Dictate" or "Push to talk"; implementation should not expose provider/model
+  names in the phone UI.
+- Superseded on 2026-05-28: OpenAI transcription uses the Mac-side key from env
+  or `.env`. The phone sends audio to the relay and never receives the key or
+  chooses the OpenAI transcription model.
 
 ### 8.4 Archive
 
@@ -1362,10 +1370,10 @@ analytics in MVP.
 SEC-009: If a host endpoint is unreachable, do not leak endpoint details into
 third-party services.
 
-SEC-010: The `.env` OpenAI API key is user-declared client-scoped and safe to
-embed in the iPhone client. Implementation may use it for the OpenAI
-transcription path, but docs, logs, telemetry, screenshots, and error messages
-must not print the key value.
+SEC-010: Superseded on 2026-05-28. The `.env` OpenAI API key is Mac-side only.
+Implementation must not embed it in the iPhone client, store it on the phone,
+send it to the phone, or print it in docs, logs, telemetry, screenshots, or
+error messages.
 
 ## 16. MVP Acceptance Criteria
 

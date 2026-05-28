@@ -679,6 +679,103 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(steerResponse.turnId, "turn-1")
     }
 
+    func testAudioTranscribeSendsTypedRelayRequestWithoutModel() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let task = Task {
+            try await client.audioTranscribe(
+                params: AudioTranscribeParams(
+                    mimeType: "audio/mp4",
+                    base64Audio: "ZmFrZSBhdWRpbw=="
+                ),
+                timeout: .seconds(1)
+            )
+        }
+        let request = try await transport.nextSentRequest()
+        XCTAssertEqual(request.method, AppServerMethods.audioTranscribe)
+        guard case .object(let params) = try XCTUnwrap(request.params) else {
+            return XCTFail("Expected audio/transcribe params")
+        }
+        XCTAssertEqual(params["mimeType"], .string("audio/mp4"))
+        XCTAssertEqual(params["base64Audio"], .string("ZmFrZSBhdWRpbw=="))
+        XCTAssertNil(params["model"])
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: request.id,
+                    result: try JSONValue.encoded(AudioTranscribeResponseDTO(text: "Check relay status"))
+                )
+            )
+        )
+
+        let response = try await task.value
+        XCTAssertEqual(response.text, "Check relay status")
+    }
+
+    func testRelayTranscriptionClientSendsAudioThroughRelayWithoutOpenAIKeyOrModel() async throws {
+        let transport = ScriptedAppServerTransport()
+        let appServerClient = AppServerClient(transport: transport)
+        let host = DockHostConfiguration(
+            id: "Amir-M5",
+            displayName: "Amir-M5",
+            webSocketURL: URL(string: "ws://192.168.50.117:4510")!,
+            bearerToken: nil
+        )
+        let service = RelayTranscriptionClient(host: host) { _ in
+            appServerClient
+        }
+        let audioFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try Data("relay audio".utf8).write(to: audioFile)
+        defer { try? FileManager.default.removeItem(at: audioFile) }
+
+        let task = Task {
+            try await service.transcribe(audioFile: audioFile)
+        }
+
+        let initializeRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(initializeRequest.method, AppServerMethods.initialize)
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: initializeRequest.id,
+                    result: .object([
+                        "userAgent": .string("codex-test"),
+                        "codexHome": .string("/tmp/codex"),
+                        "platformFamily": .string("unix"),
+                        "platformOs": .string("macos"),
+                    ])
+                )
+            )
+        )
+        let initializedNotification = try await transport.nextSentNotification()
+        XCTAssertEqual(initializedNotification.method, AppServerMethods.initialized)
+
+        let request = try await transport.nextSentRequest()
+        XCTAssertEqual(request.method, AppServerMethods.audioTranscribe)
+        guard case .object(let params) = try XCTUnwrap(request.params) else {
+            return XCTFail("Expected audio/transcribe params")
+        }
+        XCTAssertEqual(params["mimeType"], .string("audio/mp4"))
+        XCTAssertEqual(params["base64Audio"], .string(Data("relay audio".utf8).base64EncodedString()))
+        XCTAssertNil(params["model"])
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: request.id,
+                    result: try JSONValue.encoded(AudioTranscribeResponseDTO(text: "  relay transcript  "))
+                )
+            )
+        )
+
+        let transcript = try await task.value
+        XCTAssertEqual(transcript, "relay transcript")
+    }
+
     func testSendResponseSendsJsonRPCResponseForServerRequestID() async throws {
         let transport = ScriptedAppServerTransport()
         let client = AppServerClient(transport: transport)
@@ -734,14 +831,9 @@ final class AppServerClientTests: XCTestCase {
             isLoopbackHost(url.host),
             "Phone-reachable handshake endpoint cannot be localhost, 127.0.0.1, or ::1"
         )
-        let bearerToken = try XCTUnwrap(
-            try appServerBearerToken(from: environment),
-            "Set CODEX_DOCK_APP_SERVER_BEARER_TOKEN or CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE for the phone-reachable authenticated app-server"
-        )
-
         try await assertRealHostHandshakeSucceeds(
             url: url,
-            bearerToken: bearerToken,
+            bearerToken: nil,
             timeout: .seconds(5)
         )
     }
@@ -762,12 +854,7 @@ final class AppServerClientTests: XCTestCase {
             isLoopbackHost(url.host),
             "Phone-reachable thread/list endpoint cannot be localhost, 127.0.0.1, or ::1"
         )
-        let bearerToken = try XCTUnwrap(
-            try appServerBearerToken(from: environment),
-            "Set CODEX_DOCK_APP_SERVER_BEARER_TOKEN or CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE for the phone-reachable authenticated app-server"
-        )
-
-        let client = AppServerClient(webSocketURL: url, bearerToken: bearerToken)
+        let client = AppServerClient(webSocketURL: url, bearerToken: nil)
         _ = try await client.connectAndInitialize(
             params: .codexDock(version: "0.1.0"),
             timeout: .seconds(5)
@@ -808,12 +895,7 @@ final class AppServerClientTests: XCTestCase {
             isLoopbackHost(url.host),
             "Phone-reachable thread detail endpoint cannot be localhost, 127.0.0.1, or ::1"
         )
-        let bearerToken = try XCTUnwrap(
-            try appServerBearerToken(from: environment),
-            "Set CODEX_DOCK_APP_SERVER_BEARER_TOKEN or CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE for the phone-reachable authenticated app-server"
-        )
-
-        let client = AppServerClient(webSocketURL: url, bearerToken: bearerToken)
+        let client = AppServerClient(webSocketURL: url, bearerToken: nil)
         _ = try await client.connectAndInitialize(
             params: .codexDock(version: "0.1.0"),
             timeout: .seconds(5)
@@ -866,12 +948,7 @@ final class AppServerClientTests: XCTestCase {
             isLoopbackHost(url.host),
             "Phone-reachable archive endpoint cannot be localhost, 127.0.0.1, or ::1"
         )
-        let bearerToken = try XCTUnwrap(
-            try appServerBearerToken(from: environment),
-            "Set CODEX_DOCK_APP_SERVER_BEARER_TOKEN or CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE for the phone-reachable authenticated app-server"
-        )
-
-        let client = AppServerClient(webSocketURL: url, bearerToken: bearerToken)
+        let client = AppServerClient(webSocketURL: url, bearerToken: nil)
         _ = try await client.connectAndInitialize(
             params: .codexDock(version: "0.1.0"),
             timeout: .seconds(5)

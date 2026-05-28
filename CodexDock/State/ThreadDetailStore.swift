@@ -172,7 +172,7 @@ public final class ThreadDetailStore: ObservableObject {
         row: DockRowViewModel,
         factory: any ThreadDetailSessionMaking = AppServerThreadDetailSessionFactory(),
         voiceCapture: any VoiceCaptureControlling = VoiceCaptureController(),
-        transcriptionService: any TranscriptionServicing = OpenAITranscriptionClient(),
+        transcriptionService: (any TranscriptionServicing)? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.host = host
@@ -180,7 +180,7 @@ public final class ThreadDetailStore: ObservableObject {
         self.header = ThreadDetailHeader(host: host, row: row)
         self.factory = factory
         self.voiceCapture = voiceCapture
-        self.transcriptionService = transcriptionService
+        self.transcriptionService = transcriptionService ?? RelayTranscriptionClient(host: host)
         self.now = now
         self.state = .idle(ThreadDetailHeader(host: host, row: row))
     }

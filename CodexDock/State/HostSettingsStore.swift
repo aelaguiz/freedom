@@ -62,7 +62,6 @@ public enum HostSettingsError: Error, Equatable, LocalizedError, Sendable {
     case emptyID
     case emptyName
     case invalidEndpoint(String)
-    case missingBearerToken
     case duplicateID(String)
     case missingRegistry
 
@@ -74,8 +73,6 @@ public enum HostSettingsError: Error, Equatable, LocalizedError, Sendable {
             return "Host name is required."
         case let .invalidEndpoint(value):
             return "Host WebSocket URL must be ws:// or wss://: \(value)"
-        case .missingBearerToken:
-            return "Bearer token is required."
         case let .duplicateID(id):
             return "Host ID already exists: \(id)"
         case .missingRegistry:
@@ -91,6 +88,7 @@ public final class HostSettingsStore: ObservableObject {
     @Published private var statuses: [String: HostConnectionTestStatus] = [:]
 
     private let tester: any DockSessionLoading
+    private let configurationStore: any LocalDockConfigurationStoring
     private let now: @Sendable () -> Date
 
     public var rows: [HostSettingsRowViewModel] {
@@ -105,21 +103,25 @@ public final class HostSettingsStore: ObservableObject {
     public init(
         registry: HostRegistry,
         tester: any DockSessionLoading = AppServerDockClient(),
+        configurationStore: any LocalDockConfigurationStoring = FileLocalDockConfigurationStore(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.registry = registry
         self.tester = tester
+        self.configurationStore = configurationStore
         self.now = now
     }
 
     public init(
         configurationError error: Error,
         tester: any DockSessionLoading = AppServerDockClient(),
+        configurationStore: any LocalDockConfigurationStoring = FileLocalDockConfigurationStore(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.registry = nil
         self.configurationError = error.localizedDescription
         self.tester = tester
+        self.configurationStore = configurationStore
         self.now = now
     }
 
@@ -155,16 +157,14 @@ public final class HostSettingsStore: ObservableObject {
         replacing originalID: String?,
         id rawID: String,
         displayName rawDisplayName: String,
-        webSocketURL rawWebSocketURL: String,
-        bearerToken rawBearerToken: String
-    ) throws {
+        webSocketURL rawWebSocketURL: String
+    ) async throws {
         guard var registry else {
             throw HostSettingsError.missingRegistry
         }
 
         let id = normalized(rawID)
         let displayName = normalized(rawDisplayName)
-        let bearerToken = normalized(rawBearerToken)
         let rawWebSocketURL = normalized(rawWebSocketURL)
 
         guard !id.isEmpty else {
@@ -173,14 +173,10 @@ public final class HostSettingsStore: ObservableObject {
         guard !displayName.isEmpty else {
             throw HostSettingsError.emptyName
         }
-        guard !bearerToken.isEmpty else {
-            throw HostSettingsError.missingBearerToken
-        }
-        guard let webSocketURL = URL(string: rawWebSocketURL),
-              let scheme = webSocketURL.scheme?.lowercased(),
-              scheme == "ws" || scheme == "wss",
-              webSocketURL.host?.isEmpty == false
-        else {
+        let webSocketURL: URL
+        do {
+            webSocketURL = try DockHostConfiguration.validatedWebSocketURL(rawWebSocketURL)
+        } catch {
             throw HostSettingsError.invalidEndpoint(rawWebSocketURL)
         }
 
@@ -193,8 +189,16 @@ public final class HostSettingsStore: ObservableObject {
             id: id,
             displayName: displayName,
             webSocketURL: webSocketURL,
-            bearerToken: bearerToken
+            bearerToken: nil
         )
+
+        try await configurationStore.save(
+            LocalRelayConfiguration(
+                displayName: displayName,
+                webSocketURL: webSocketURL
+            )
+        )
+
         if let originalID,
            let index = registry.hosts.firstIndex(where: { $0.id == originalID }) {
             registry = try HostRegistry(

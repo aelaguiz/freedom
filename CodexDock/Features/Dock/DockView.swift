@@ -112,7 +112,7 @@ public struct CodexDockRootView: View {
 
             HostsView(store: hostsStore)
                 .tabItem {
-                    Label("Hosts", systemImage: "desktopcomputer")
+                    Label("Relay", systemImage: "desktopcomputer")
                 }
         }
         .tint(.blue)
@@ -247,7 +247,7 @@ public struct DockView: View {
         case let .configurationError(message):
             DockMessageView(
                 icon: "exclamationmark.triangle",
-                title: "Host not configured",
+                title: "Relay not configured",
                 message: message
             )
         case let .idle(host):

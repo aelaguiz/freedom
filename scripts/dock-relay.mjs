@@ -9,8 +9,20 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import WebSocket, { WebSocketServer } from "ws";
 
+import {
+  buildBonjourAdvertisementArgs,
+  startBonjourAdvertisement,
+} from "./dock-relay-bonjour.mjs";
+import {
+  DEFAULT_TRANSCRIPTION_ENDPOINT,
+  DEFAULT_TRANSCRIPTION_MODEL,
+  decodedAudioTranscribeParams,
+  transcribeAudio,
+} from "./dock-relay-transcription.mjs";
+
 const DEFAULT_TIMEOUT_MS = 5_000;
 const RELAY_VERSION = "0.1.0";
+const DEFAULT_PHONE_AUTH = "none";
 
 function parseArgs(argv) {
   const result = {};
@@ -36,6 +48,48 @@ function readToken(path) {
     throw new Error(`token file is empty: ${path}`);
   }
   return value;
+}
+
+function loadDotEnvFile(path = ".env", environment = process.env) {
+  if (!fs.existsSync(path)) {
+    return {};
+  }
+
+  const loaded = {};
+  const text = fs.readFileSync(path, "utf8");
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) {
+      continue;
+    }
+
+    const key = match[1];
+    let value = match[2].trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"'))
+      || (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    loaded[key] = value;
+    if (environment[key] === undefined) {
+      environment[key] = value;
+    }
+  }
+  return loaded;
+}
+
+function parsePhoneAuthMode(value) {
+  const mode = String(value || DEFAULT_PHONE_AUTH).toLowerCase();
+  if (mode !== "none" && mode !== "bearer") {
+    throw new Error("--phone-auth must be none or bearer");
+  }
+  return mode;
 }
 
 function jsonRpcError(id, code, message, data = undefined) {
@@ -691,6 +745,8 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       return archiveThread(config, params || {});
     case "thread/unarchive":
       return unarchiveThread(config, params || {});
+    case "audio/transcribe":
+      return transcribeAudio(config, params || {});
     case "turn/start":
     case "turn/steer":
     case "turn/interrupt":
@@ -707,20 +763,38 @@ function assertAuthorized(request, token) {
   return header === `Bearer ${token}`;
 }
 
+function isPhoneRequestAuthorized(request, config) {
+  if (config.phoneAuth === "none") {
+    return true;
+  }
+  return assertAuthorized(request, config.relayBearerToken);
+}
+
 function startServer(config) {
+  config.version = config.version || RELAY_VERSION;
+  config.phoneAuth = parsePhoneAuthMode(config.phoneAuth || DEFAULT_PHONE_AUTH);
+  if (config.phoneAuth === "bearer" && !config.relayBearerToken) {
+    throw new Error("relayBearerToken is required when phoneAuth is bearer");
+  }
+
   const server = http.createServer((request, response) => {
     if (request.url === "/readyz" || request.url === "/healthz") {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ok: true, service: "codex-dock-relay" }));
+      response.end(JSON.stringify({
+        ok: true,
+        service: "codex-dock-relay",
+        auth: config.phoneAuth,
+      }));
       return;
     }
     response.writeHead(404, { "content-type": "text/plain" });
     response.end("not found\n");
   });
   const wss = new WebSocketServer({ noServer: true });
+  let advertisement = null;
 
   server.on("upgrade", (request, socket, head) => {
-    if (!assertAuthorized(request, config.relayBearerToken)) {
+    if (!isPhoneRequestAuthorized(request, config)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return;
@@ -774,31 +848,97 @@ function startServer(config) {
     });
   });
 
-  server.listen(config.port, config.listenHost, () => {
-    console.error(
-      `codex-dock-relay listening on ws://${config.listenHost}:${config.port}; history=${config.historyUrl}`,
-    );
+  const listening = new Promise((resolve) => {
+    server.listen(config.port, config.listenHost, () => {
+      const address = server.address();
+      if (address && typeof address === "object") {
+        config.port = address.port;
+      }
+      advertisement = startBonjourAdvertisement(config);
+      resolve(address);
+      console.error(
+        `codex-dock-relay listening on ws://${config.listenHost}:${config.port}; history=${config.historyUrl}; phoneAuth=${config.phoneAuth}`,
+      );
+    });
+  });
+
+  return {
+    server,
+    wss,
+    get advertisement() {
+      return advertisement;
+    },
+    listening,
+    close: () => new Promise((resolve, reject) => {
+      advertisement?.kill();
+      wss.close(() => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      });
+    }),
+  };
+}
+
+function installShutdownHandlers(serverHandle) {
+  let closing = false;
+  const closeAndExit = () => {
+    if (closing) {
+      return;
+    }
+    closing = true;
+    const forceExit = setTimeout(() => process.exit(0), 1_000);
+    forceExit.unref();
+    serverHandle.close()
+      .then(() => process.exit(0))
+      .catch(() => process.exit(1));
+  };
+
+  process.once("SIGTERM", closeAndExit);
+  process.once("SIGINT", closeAndExit);
+  process.once("exit", () => {
+    serverHandle.advertisement?.kill();
   });
 }
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  loadDotEnvFile(args["env-file"] || process.env.CODEX_DOCK_ENV_FILE || ".env");
   const relayTokenFile = args["auth-token-file"] || process.env.CODEX_DOCK_RELAY_TOKEN_FILE;
+  const phoneAuth = parsePhoneAuthMode(
+    args["phone-auth"] || process.env.CODEX_DOCK_PHONE_AUTH || (relayTokenFile ? "bearer" : DEFAULT_PHONE_AUTH),
+  );
   const historyTokenFile = args["history-auth-token-file"] || process.env.CODEX_DOCK_HISTORY_TOKEN_FILE || relayTokenFile;
-  if (!relayTokenFile) {
-    throw new Error("--auth-token-file is required");
+  if (phoneAuth === "bearer" && !relayTokenFile) {
+    throw new Error("--auth-token-file is required when --phone-auth bearer");
   }
   if (!historyTokenFile) {
     throw new Error("--history-auth-token-file is required");
   }
 
-  startServer({
+  const serverHandle = startServer({
     listenHost: args["listen-host"] || process.env.CODEX_DOCK_RELAY_LISTEN_HOST || "0.0.0.0",
     port: parseLimit(args.port || process.env.CODEX_DOCK_RELAY_PORT, 4510),
-    relayBearerToken: readToken(relayTokenFile),
+    phoneAuth,
+    relayBearerToken: relayTokenFile ? readToken(relayTokenFile) : null,
     historyBearerToken: readToken(historyTokenFile),
     historyUrl: args["history-url"] || process.env.CODEX_DOCK_HISTORY_APP_SERVER_WS || "ws://127.0.0.1:4500",
+    bonjourName: args["bonjour-name"] || process.env.CODEX_DOCK_BONJOUR_NAME || `Codex Dock ${os.hostname()}`,
+    advertiseBonjour: (args["advertise-bonjour"] || process.env.CODEX_DOCK_ADVERTISE_BONJOUR || "1") !== "0",
+    openAIAPIKey: process.env.OPENAI_API_KEY,
+    openAITranscriptionModel: args["openai-transcription-model"]
+      || process.env.CODEX_DOCK_OPENAI_TRANSCRIPTION_MODEL
+      || DEFAULT_TRANSCRIPTION_MODEL,
+    openAITranscriptionEndpoint: process.env.CODEX_DOCK_OPENAI_TRANSCRIPTION_ENDPOINT
+      || DEFAULT_TRANSCRIPTION_ENDPOINT,
+    transcriptionMaxBytes: process.env.CODEX_DOCK_TRANSCRIPTION_MAX_BYTES,
+    transcriptionTimeoutMs: process.env.CODEX_DOCK_OPENAI_TRANSCRIPTION_TIMEOUT_MS,
   });
+  installShutdownHandlers(serverHandle);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
@@ -807,9 +947,15 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
 
 export {
   attentionFlagsForServerRequest,
+  buildBonjourAdvertisementArgs,
+  decodedAudioTranscribeParams,
+  isPhoneRequestAuthorized,
+  loadDotEnvFile,
   mergeActiveFlags,
   preferThread,
   sanitizeRelayFields,
   shouldCollectLiveRowsForThreadList,
+  startServer,
   statusPriority,
+  transcribeAudio,
 };
