@@ -14,10 +14,10 @@ related:
 
 # TL;DR
 <!-- bugs:block:tldr:start -->
-- Symptom: Dock All shows old `Limited` rows, while Needs me and Running show no matches despite active Codex processes on `Amir-M5`.
-- Impact: The phone UI is connected to a real host, but not to the live in-memory sessions the user is trying to monitor.
-- Most likely cause: `rtk make app` points the simulator at a standalone LAN Codex app-server on `ws://192.168.50.117:4500`; that server has zero loaded threads. The running Codex sessions are attached to separate loopback app-server processes like `ws://127.0.0.1:<port>`, which the phone cannot reach directly.
-- Next action: Keep the raw app-server and Dock relay running through `rtk make services`; use `rtk make app SIM=...` to launch the simulator against the relay. Rows stay newest-first; filters use the same refreshed real snapshot.
+- Symptom: Dock All can still look stale, and Running can show no matches, even when many Codex CLI/app-server processes exist on `Amir-M5`.
+- Impact: The phone path is real and relay-backed, but the Dock projection hides loaded live sessions behind stored `Limited` history and only treats currently active turns as `Running`.
+- Most likely cause: The old endpoint bug is fixed, but the UI semantics are too narrow: Codex reports most open loaded sessions as `idle`, while Dock `Running` only includes `.running` rows derived from Codex `active` status. All also sorts primarily by last activity, so recent stored `notLoaded` history can appear above live loaded rows.
+- Next action: Keep `Needs me` tied to real app-server attention flags only; `Running` now includes loaded live sessions and All now puts live loaded rows before stored `Limited` history.
 - Status: resolved.
 <!-- bugs:block:tldr:end -->
 
@@ -187,3 +187,84 @@ Verification:
 - Screenshot `/tmp/codex-dock-root-cause-after-make-app.png` shows All with a
   visible `Running` row and the host summary endpoint
   `ws://192.168.50.117:4510`.
+
+# 2026-05-28 Follow-Up 3
+The symptom was rechecked again after the user reported many running Codex
+processes, but stale All / empty Running / empty Needs me in the Dock.
+
+Findings:
+
+- The relay itself is not empty: `ws://192.168.50.117:4510` returned `108`
+  real rows: `1 active`, `18 idle`, and `89 notLoaded`; `thread/loaded/list`
+  returned `19` real loaded IDs.
+- The raw history endpoint still cannot represent the active loopback fleet:
+  the latest recheck of `ws://192.168.50.117:4500` returned `100` rows with
+  `99 notLoaded` and `1 idle`, while `thread/loaded/list` returned only `1`
+  loaded ID.
+- The host process table has many real loopback Codex app-server/client pairs
+  such as `codex app-server --listen ws://127.0.0.1:<port> --enable goals`
+  and clients using `--remote ws://127.0.0.1:<port>`.
+- Codex app-server's own protocol separates `thread/loaded/list` from
+  `ThreadStatus`: loaded sessions can be `idle`, `active`, `systemError`, or
+  `notLoaded`.
+- Codex app-server status code returns `Idle` for loaded sessions that have no
+  running turn and no pending app-server request, and only returns `Active`
+  when `runtime.running` or real pending approval/user-input flags exist.
+- The Dock projection maps Codex `idle` to Dock `.idle`, then
+  `DockFilter.running` only includes `.running`. That excludes most real
+  loaded Codex sessions from the Running tab.
+- The Dock ordering currently uses last-activity time before status priority.
+  A recently touched `notLoaded` history row can therefore appear above loaded
+  live rows in All, making the first viewport look stale.
+- The current `iPhone 17` simulator was also still running an older build at
+  accessibility-extra-large Dynamic Type; screenshots showed stale header
+  layout and heavy truncation. Rebuilding/relaunching is required after the
+  source fix, but stale build state is secondary to the filter semantics bug.
+
+Fix-ready verdict:
+
+- `Needs me` must remain grounded in real app-server attention flags or replayed
+  pending requests. There is no evidence in the current live relay response for
+  fake Needs-me rows, so the fix must not infer Needs-me from process presence.
+- `Running` should represent loaded live Codex sessions for this Dock, not only
+  model turns actively streaming at the exact refresh moment.
+- All should prioritize live loaded statuses before stored `Limited` history so
+  the first viewport answers "what is alive right now?"
+
+Implementation:
+
+- Changed `DockFilter.running` so Running includes loaded live row statuses:
+  `needsMe`, `running`, `idle`, and `failed`; it still excludes `limited`
+  stored history.
+- Changed Dock section and row ordering to sort by status priority before last
+  activity. `Limited` history no longer outranks loaded live rows in All just
+  because its stored timestamp is newer.
+- Kept `Needs me` strict: only real app-server attention flags / pending
+  request enrichment can put a row there.
+- Updated Dock projection tests to encode this contract.
+
+Verification:
+
+- `rtk swift test` passed 72 tests with 5 optional live-host tests skipped.
+- `rtk npm run test:relay` passed all 5 relay tests.
+- `rtk node --check scripts/dock-relay.mjs` passed.
+- `rtk make app SIM='iPhone 17'` rebuilt, installed, and relaunched
+  `com.aelaguiz.CodexDockApp` on
+  `BAD95C8E-3E57-4818-9B90-E4ED22593B4B` against
+  `ws://192.168.50.117:4510`.
+- Screenshot `/tmp/codex-dock-bug-fixed-all.png` shows All headed by real
+  live rows from `ws://192.168.50.117:4510`, with the first viewport showing
+  `Running` / `Idle` rows instead of old `Limited` history.
+- A direct relay verification after the patch returned `108` rows:
+  `19 idle`, `1 active`, and `88 notLoaded`. The new Running filter therefore
+  has `20` real rows, while Needs me correctly has `0` because no current row
+  reported `waitingOnApproval` or `waitingOnUserInput`.
+- `rtk make app SIM='iPhone 17'` was rerun after the fix and printed
+  `launch endpoint: ws://192.168.50.117:4510`.
+- Screenshot `/tmp/codex-dock-root-cause-latest.png` shows All headed by live
+  rows on the relay endpoint, not stored `Limited` history.
+- Screenshot `/tmp/codex-dock-root-cause-running-tab-correct.png` shows the
+  Running tab populated with the same real loaded live rows.
+- Screenshot `/tmp/codex-dock-root-cause-needs-me-tab.png` shows Needs me empty
+  with the correct message because the real relay data has zero attention
+  flags.

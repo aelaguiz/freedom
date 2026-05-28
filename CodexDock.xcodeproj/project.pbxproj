@@ -16,6 +16,7 @@
 		20C85B3C748159B0B528AF6E /* HostSettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A41544D2CBD2C298312F3D3 /* HostSettingsStore.swift */; };
 		24830113F0217C6DEC1EA844 /* ThreadEventNormalizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DC48CE0A2682B2B0F223F12 /* ThreadEventNormalizerTests.swift */; };
 		3101E586A0F08E291A67103D /* ArchiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54671D3A6F294D5E4280D81E /* ArchiveView.swift */; };
+		36AEAB0D1C020E6383F9FB5A /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB8A0894987E6B3EEDB7A78 /* TranscriptionService.swift */; };
 		3AB27D218C22102A68404C7D /* ThreadEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37232256608F5A94E813243A /* ThreadEvent.swift */; };
 		43CB12A8A3DF95391ADD2533 /* ServerRequestCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6F98E6722B55832F8AB7E27 /* ServerRequestCard.swift */; };
 		45667271A740635F7DA6A495 /* CodexDock.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -28,6 +29,7 @@
 		68A4924EA66B7E73782296C8 /* SessionSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23406F25CA882A60E01CB56E /* SessionSummary.swift */; };
 		6B62194AAF786F06DEAB123A /* DockStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E8613594609B20254A5CA44 /* DockStoreTests.swift */; };
 		7620B7A25D86E81210477475 /* AppServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABDB5847612728C391956985 /* AppServerClient.swift */; };
+		8825645412ACF402887DF691 /* VoiceCaptureController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74E0150C92A43EF9216A31F1 /* VoiceCaptureController.swift */; };
 		8A21B73F18333A33FEA9DA97 /* CodexDock.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; };
 		9279CDE0719C660E44CE9AE6 /* HostsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DD37C0E0D19E2FFE67D356E /* HostsView.swift */; };
 		948497183F2A3F44DEBFB7C0 /* CodexDock.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; };
@@ -102,6 +104,7 @@
 		54671D3A6F294D5E4280D81E /* ArchiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveView.swift; sourceTree = "<group>"; };
 		5A268CB6FC21DA9B184409A9 /* RequestCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestCardView.swift; sourceTree = "<group>"; };
 		5DC52B300359BB6026278F44 /* LocalThreadMetadataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalThreadMetadataStore.swift; sourceTree = "<group>"; };
+		74E0150C92A43EF9216A31F1 /* VoiceCaptureController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceCaptureController.swift; sourceTree = "<group>"; };
 		7A42B2061F9E45C1B6935F08 /* DockStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockStore.swift; sourceTree = "<group>"; };
 		7B2F9B8D2B9BB539D75F5CDA /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		7DD37C0E0D19E2FFE67D356E /* HostsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostsView.swift; sourceTree = "<group>"; };
@@ -113,6 +116,7 @@
 		9FACDCA51DD66D50C6A6F145 /* CodexDockApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexDockApp.swift; sourceTree = "<group>"; };
 		ABDB5847612728C391956985 /* AppServerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerClient.swift; sourceTree = "<group>"; };
 		ACA75584AA40FC172ED36E9D /* AppServerMethods.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerMethods.swift; sourceTree = "<group>"; };
+		BBB8A0894987E6B3EEDB7A78 /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
 		D5070CB2076B611D53150818 /* ThreadListDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadListDTO.swift; sourceTree = "<group>"; };
 		D6F98E6722B55832F8AB7E27 /* ServerRequestCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerRequestCard.swift; sourceTree = "<group>"; };
 		D6FC9B9483DB6F49A90F5EC0 /* ServerRequestCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerRequestCardTests.swift; sourceTree = "<group>"; };
@@ -164,6 +168,15 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
+		11B3040EB721DDAFD13AB500 /* Voice */ = {
+			isa = PBXGroup;
+			children = (
+				BBB8A0894987E6B3EEDB7A78 /* TranscriptionService.swift */,
+				74E0150C92A43EF9216A31F1 /* VoiceCaptureController.swift */,
+			);
+			path = Voice;
+			sourceTree = "<group>";
+		};
 		4491443AE184FB131E00EC87 /* Session */ = {
 			isa = PBXGroup;
 			children = (
@@ -182,6 +195,7 @@
 				BDBD782C35EF338B11A202CB /* Features */,
 				0B93787F8097DBA9481D0913 /* Models */,
 				A6C057610A8A64491E8094FF /* State */,
+				11B3040EB721DDAFD13AB500 /* Voice */,
 			);
 			path = CodexDock;
 			sourceTree = "<group>";
@@ -422,7 +436,9 @@
 				99B452E9A8D07C40003708BF /* ThreadDetailStore.swift in Sources */,
 				3AB27D218C22102A68404C7D /* ThreadEvent.swift in Sources */,
 				D1510D6CA7B7B44EDBB04A96 /* ThreadListDTO.swift in Sources */,
+				36AEAB0D1C020E6383F9FB5A /* TranscriptionService.swift in Sources */,
 				0F359E7574542DEBD9781C15 /* TurnDTO.swift in Sources */,
+				8825645412ACF402887DF691 /* VoiceCaptureController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

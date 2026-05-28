@@ -38,14 +38,14 @@ final class DockStoreTests: XCTestCase {
 
         XCTAssertEqual(snapshot.host.displayName, "Amir-M5")
         XCTAssertEqual(snapshot.rowCount, 2)
-        XCTAssertEqual(snapshot.sections.map(\.title), ["feature/dock", "main"])
-        XCTAssertEqual(snapshot.sections[0].rows[0].status, .running)
-        XCTAssertEqual(snapshot.sections[0].rows[0].lastActivity, "2m ago")
-        XCTAssertEqual(snapshot.sections[1].rows[0].status, .needsMe)
+        XCTAssertEqual(snapshot.sections.map(\.title), ["main", "feature/dock"])
+        XCTAssertEqual(snapshot.sections[0].rows[0].status, .needsMe)
+        XCTAssertEqual(snapshot.sections[1].rows[0].status, .running)
+        XCTAssertEqual(snapshot.sections[1].rows[0].lastActivity, "2m ago")
     }
 
     @MainActor
-    func testLoadKeepsMostRecentRowsAheadOfOlderRunningRows() async {
+    func testLoadKeepsLiveRowsAheadOfRecentLimitedHistory() async {
         let host = makeHost()
         let summaries = [
             makeSummary(
@@ -77,9 +77,9 @@ final class DockStoreTests: XCTestCase {
             return XCTFail("Expected loaded state, got \(store.state)")
         }
 
-        XCTAssertEqual(snapshot.sections.map(\.title), ["aaa-old-history", "zzz-live-work"])
-        XCTAssertEqual(snapshot.sections[0].rows[0].status, .limited)
-        XCTAssertEqual(snapshot.sections[1].rows[0].status, .running)
+        XCTAssertEqual(snapshot.sections.map(\.title), ["zzz-live-work", "aaa-old-history"])
+        XCTAssertEqual(snapshot.sections[0].rows[0].status, .running)
+        XCTAssertEqual(snapshot.sections[1].rows[0].status, .limited)
     }
 
     @MainActor
@@ -313,20 +313,22 @@ final class DockStoreTests: XCTestCase {
             .loaded(rowCount: 1),
             .loaded(rowCount: 1)
         ])
-        XCTAssertEqual(snapshot.sections.map(\.title), ["Home / main", "Amir-M5 / main"])
+        XCTAssertEqual(snapshot.sections.map(\.title), ["Amir-M5 / main", "Home / main"])
         XCTAssertEqual(snapshot.sections.map(\.rows.count), [1, 1])
-        XCTAssertEqual(snapshot.sections[0].rows[0].status, .limited)
-        XCTAssertEqual(snapshot.sections[1].rows[0].status, .idle)
+        XCTAssertEqual(snapshot.sections[0].rows[0].status, .idle)
+        XCTAssertEqual(snapshot.sections[1].rows[0].status, .limited)
     }
 
     func testDockFiltersUseNormalizedRowStatus() {
         XCTAssertTrue(DockFilter.all.includes(makeRow(status: .idle)))
         XCTAssertTrue(DockFilter.needsMe.includes(makeRow(status: .needsMe)))
         XCTAssertTrue(DockFilter.running.includes(makeRow(status: .running)))
+        XCTAssertTrue(DockFilter.running.includes(makeRow(status: .idle)))
+        XCTAssertTrue(DockFilter.running.includes(makeRow(status: .needsMe)))
+        XCTAssertTrue(DockFilter.running.includes(makeRow(status: .failed)))
         XCTAssertTrue(DockFilter.limited.includes(makeRow(status: .limited)))
 
         XCTAssertFalse(DockFilter.needsMe.includes(makeRow(status: .running)))
-        XCTAssertFalse(DockFilter.running.includes(makeRow(status: .needsMe)))
         XCTAssertFalse(DockFilter.limited.includes(makeRow(status: .idle)))
     }
 

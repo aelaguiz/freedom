@@ -164,6 +164,30 @@ public struct ThreadDTO: Codable, Equatable, Sendable {
         self.name = name
         self.turns = turns
     }
+
+    public func replacingTurns(_ turns: [JSONValue]?) -> ThreadDTO {
+        ThreadDTO(
+            id: id,
+            sessionId: sessionId,
+            forkedFromId: forkedFromId,
+            preview: preview,
+            ephemeral: ephemeral,
+            modelProvider: modelProvider,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            status: status,
+            path: path,
+            cwd: cwd,
+            cliVersion: cliVersion,
+            source: source,
+            threadSource: threadSource,
+            agentNickname: agentNickname,
+            agentRole: agentRole,
+            gitInfo: gitInfo,
+            name: name,
+            turns: turns
+        )
+    }
 }
 
 public struct ThreadGitInfoDTO: Codable, Equatable, Sendable {

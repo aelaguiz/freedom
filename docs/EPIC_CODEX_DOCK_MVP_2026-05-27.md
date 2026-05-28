@@ -2,7 +2,7 @@
 title: Epic — Codex Dock MVP depth-first implementation plan
 date: 2026-05-27
 doc_type: epic
-status: active
+status: complete
 raw_goal: |
   Now, I want you to break these further apart. Phase one is way too huge. There should be like eight phases here. use ArcEpic divide it up further auto plan all the phases get it through the plan audit depth first, depth first build up. I would suggest the most fundamental thing is is not actually a UI. It's actually JSON RPC communication working. but you know whatever you think is best
 raw_goal_sha256: 7511c828665d9fbf4a77bcdf31c494ea3bb4c3169a372bff191f7b4f37b80383
@@ -153,9 +153,14 @@ or any endpoint a physical phone could not reach.
    transcription, accessibility hardening, visual polish, and final acceptance.
    - DOC_PATH: docs/epic/CODEX_DOCK_MVP_2026-05-27/PHASE_08_VOICE_ACCESSIBILITY_FINAL_POLISH_2026-05-27.md
    - Gate to next: Last sub-plan.
-   - Status: planning
+   - Status: complete
    - Auto-plan status: ready (`READY next=implement-loop`)
-   - Epic-critic verdict: —
+   - Epic-critic verdict: passed — Phase 8 now adds in-place hold/release
+     dictation to the existing composer, routes OpenAI transcription through a
+     narrow provider boundary, keeps Send explicit, verifies accessibility and
+     Dynamic Type on `iPhone 17`, corrects live Dock filtering so Running shows
+     real loaded Codex sessions, and fixes large live thread detail with
+     supported paged turns plus compact resume through the real relay.
 
 # Test Host Notes
 
@@ -235,6 +240,19 @@ reference the mockups only as downstream context.
   request-aware Dock attention enrichment. Verified a real typed send through
   `ws://192.168.50.117:4510`, relaunched on `iPhone 17`, and opened a real
   Dock row to the composer.
+- 2026-05-28 Completed Phase 6 against the real relay path plus an
+  intentionally offline `Home` host. Added shared host registry fan-out,
+  per-host state, branch grouping, filters, local labels/colors keyed by
+  host/backend/thread id, and visible full endpoints.
+- 2026-05-28 Completed Phase 7 against the real relay path. Added
+  `thread/archive`, `thread/unarchive`, Archive and Hosts tabs, and proved a
+  reversible real archive/unarchive round trip on
+  `ws://192.168.50.117:4510`.
+- 2026-05-28 Completed Phase 8 against the real relay path. Added in-place
+  voice transcription, accessibility polish, Dynamic Type checks, live Dock
+  filter correction, and compact detail loading for large live threads. Final
+  app launch on `iPhone 17` used `ws://192.168.50.117:4510` and showed real
+  live rows first.
 
 # Decision Log
 
@@ -281,3 +299,12 @@ reference the mockups only as downstream context.
   `Home` offline. The UI now displays full WebSocket endpoints, and
   `rtk make app` terminates stale Codex Dock processes on other booted
   simulators before launching the selected `iPhone 17`.
+- 2026-05-28 Phase 8 live-Dock correction: Codex reports loaded sessions with
+  no running turn as `idle`, so the Dock's `Running` filter now means loaded
+  live sessions (`needsMe`, `running`, `idle`, and `failed`) while `Needs me`
+  remains reserved for real approval/input flags or replayed pending requests.
+- 2026-05-28 Phase 8 large-detail correction: full-history
+  `thread/read includeTurns:true` and default `thread/resume` can exceed the
+  iOS WebSocket message size for large active threads. Detail now uses
+  `thread/read includeTurns:false`, `thread/turns/list limit:10`, and
+  `thread/resume excludeTurns:true` through the real relay.

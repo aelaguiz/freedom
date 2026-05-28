@@ -10,6 +10,34 @@ public struct ThreadReadParams: Codable, Equatable, Sendable {
     }
 }
 
+public struct ThreadTurnsListParams: Codable, Equatable, Sendable {
+    public let threadId: String
+    public let cursor: String?
+    public let limit: Int?
+
+    public init(threadId: String, cursor: String? = nil, limit: Int? = nil) {
+        self.threadId = threadId
+        self.cursor = cursor
+        self.limit = limit
+    }
+}
+
+public struct ThreadTurnsListResponseDTO: Codable, Equatable, Sendable {
+    public let data: [JSONValue]
+    public let nextCursor: String?
+    public let backwardsCursor: String?
+
+    public init(
+        data: [JSONValue],
+        nextCursor: String? = nil,
+        backwardsCursor: String? = nil
+    ) {
+        self.data = data
+        self.nextCursor = nextCursor
+        self.backwardsCursor = backwardsCursor
+    }
+}
+
 public struct ThreadReadResponseDTO: Codable, Equatable, Sendable {
     public let thread: ThreadDTO
 
@@ -20,9 +48,11 @@ public struct ThreadReadResponseDTO: Codable, Equatable, Sendable {
 
 public struct ThreadResumeParams: Codable, Equatable, Sendable {
     public let threadId: String
+    public let excludeTurns: Bool?
 
-    public init(threadId: String) {
+    public init(threadId: String, excludeTurns: Bool? = nil) {
         self.threadId = threadId
+        self.excludeTurns = excludeTurns
     }
 }
 

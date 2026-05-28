@@ -53,11 +53,12 @@ public struct ArchiveView: View {
                     await store.refresh()
                 }
             } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-                    .labelStyle(.iconOnly)
-                    .frame(width: 34, height: 34)
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.bordered)
+            .accessibilityLabel("Refresh archive")
         }
     }
 

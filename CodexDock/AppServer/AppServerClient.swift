@@ -184,6 +184,18 @@ public actor AppServerClient {
         )
     }
 
+    public func threadTurnsList(
+        params: ThreadTurnsListParams,
+        timeout: Duration = .seconds(10)
+    ) async throws -> ThreadTurnsListResponseDTO {
+        try await sendRequest(
+            method: AppServerMethods.threadTurnsList,
+            params: try JSONValue.encoded(params),
+            timeout: timeout,
+            as: ThreadTurnsListResponseDTO.self
+        )
+    }
+
     public func threadResume(
         params: ThreadResumeParams,
         timeout: Duration = .seconds(10)

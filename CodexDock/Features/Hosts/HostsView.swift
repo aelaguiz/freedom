@@ -45,14 +45,13 @@ public struct HostsView: View {
                     await store.testAll()
                 }
             } label: {
-                Label("Test All", systemImage: "checkmark.circle")
-                    .labelStyle(.titleAndIcon)
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.bordered)
             .disabled(store.rows.isEmpty)
+            .accessibilityLabel("Test all hosts")
         }
     }
 
@@ -171,7 +170,7 @@ private struct HostSettingsRow: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "desktopcomputer")
-                    .font(.title3)
+                    .font(.system(size: 24))
                     .foregroundStyle(statusColor)
                     .frame(width: 30, height: 30)
 
@@ -187,6 +186,7 @@ private struct HostSettingsRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
                 }
+                .layoutPriority(1)
 
                 Spacer(minLength: 8)
 
@@ -196,6 +196,7 @@ private struct HostSettingsRow: View {
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)
                     .background(statusColor.opacity(0.12), in: Capsule())
+                    .fixedSize()
             }
 
             HStack(spacing: 8) {

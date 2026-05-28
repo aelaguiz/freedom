@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - Voice Accessibility Final Polish - Architecture Plan"
 date: 2026-05-27
-status: active
+status: complete
 fallback_policy: forbidden
 owners: [aelaguiz]
 reviewers: [Codex]
@@ -23,6 +23,30 @@ related:
 - Plan: Add fake-service composer state first, then real recording/transcription,
   then final screen polish.
 - Non-negotiables: no auto-submit, no separate voice screen, no AIMGR.
+
+<!-- arch_skill:block:implementation_audit:start -->
+# Implementation Audit (authoritative)
+Date: 2026-05-28
+Verdict (code): COMPLETE
+Manual QA: complete (non-blocking)
+
+## Code blockers (why code is not done)
+- None.
+
+## Reopened phases (false-complete fixes)
+- None.
+
+## Missing items (code gaps; evidence-anchored; no tables)
+- None.
+
+## Non-blocking follow-ups (manual QA / screenshots / human verification)
+- Historical thread detail currently loads one bounded `thread/turns/list`
+  page before live updates. Older-history pagination is a post-MVP expansion if
+  needed.
+- `CodexDockTests/AppServerClientTests.swift` remains a large protocol test
+  file. It was already above 1k lines before Phase 8, but should split by
+  method family if the protocol surface expands again.
+<!-- arch_skill:block:implementation_audit:end -->
 
 <!-- arch_skill:block:planning_passes:start -->
 <!--
@@ -244,9 +268,9 @@ Voice must deepen the existing composer path.
 ## On-disk structure (future)
 - `Voice/VoiceCaptureController.swift`.
 - `Voice/TranscriptionService.swift`.
-- `Voice/OpenAITranscriptionClient.swift`.
+- `OpenAITranscriptionClient` inside `Voice/TranscriptionService.swift`.
 - `Features/Session/ComposerView.swift` extension.
-- `CodexDockTests/ComposerVoiceTests.swift`.
+- `CodexDockTests/ThreadDetailStoreTests.swift` voice coverage.
 ## Control paths (future)
 1. Hold mic records.
 2. Release transcribes.
@@ -309,6 +333,8 @@ Voice must deepen the existing composer path.
 
 ## Implementation slice 1: fake transcription into composer
 
+Status: COMPLETE
+
 Work: Prove voice UI state against the existing composer before touching audio
 or provider integration.
 
@@ -323,7 +349,14 @@ Checklist (must all be done):
 Exit criteria (all required):
 - Test or manual proof shows transcript insertion never auto-submits.
 
+Completed work:
+- Added composer voice state and injectable fake voice/transcription services
+  in `ThreadDetailStoreTests`.
+- Verified transcript insertion and draft appending without auto-submit.
+
 ## Implementation slice 2: real hold/release recording and OpenAI transcription
+
+Status: COMPLETE
 
 Work: Add microphone capture and provider transcription behind a narrow service
 boundary.
@@ -340,7 +373,15 @@ Exit criteria (all required):
 - A real or provider-stubbed transcription path inserts text without sending.
 - Typed composer behavior from Phase 5 remains unchanged.
 
+Completed work:
+- Added iOS microphone capture through `VoiceCaptureController`.
+- Added OpenAI transcription through `OpenAITranscriptionClient`.
+- Added app launch and `.env` model/key wiring without printing key values.
+- Verified voice denial and provider-stubbed transcript insertion paths.
+
 ## Implementation slice 3: accessibility, visual polish, and final acceptance
+
+Status: COMPLETE
 
 Work: Run final quality passes over Dock, Needs-me, Session, Archive, and Hosts.
 
@@ -354,6 +395,14 @@ Checklist (must all be done):
 Exit criteria (all required):
 - Final manual acceptance covers all v2 mockup-backed screens.
 - No separate voice screen, auto-submit path, or AIMGR integration exists.
+
+Completed work:
+- Hardened Dock, Archive, Hosts, and composer controls for hit targets,
+  accessibility labels, and Dynamic Type layout.
+- Corrected Dock live filtering so Running includes real loaded live sessions.
+- Corrected thread detail for large real live threads using compact read,
+  paged turns, and `thread/resume excludeTurns:true`.
+- Verified final V1 exclusions by implementation-code search.
 <!-- arch_skill:block:phase_plan:end -->
 
 # 8) Verification Strategy (common-sense; non-blocking)
@@ -415,3 +464,42 @@ Decision
 
 Consequences
 : This phase must not create a separate submit path.
+
+## 2026-05-28 - Use compact real thread detail for large live rows
+
+Context
+: Real iPhone detail verification on `Amir-M5` exposed `Message too long` when
+  a large active thread returned full turns in one WebSocket response.
+
+Options
+: Increase client/transport message size, invent relay chunking, or use Codex's
+  supported paged history and compact resume APIs.
+
+Decision
+: Use `thread/read includeTurns:false`, `thread/turns/list limit:10`, and
+  `thread/resume excludeTurns:true`.
+
+Consequences
+: Detail remains real and live without a custom payload protocol. Older-history
+  pagination is a post-MVP expansion if needed.
+
+## 2026-05-28 - Running means loaded live sessions
+
+Context
+: Real relay data contained many loaded `idle` Codex sessions and one
+  `active` session, while stored `notLoaded` rows could make All look stale and
+  Running empty.
+
+Options
+: Keep Running as only actively streaming turns, fake Needs-me rows from
+  process presence, or align Running to the Dock user's need: loaded live
+  sessions.
+
+Decision
+: Running includes `needsMe`, `running`, `idle`, and `failed` rows. Needs-me
+  stays strict and only uses real app-server attention flags or replayed
+  pending requests.
+
+Consequences
+: The Dock now shows real loaded Codex sessions without inventing attention
+  status.

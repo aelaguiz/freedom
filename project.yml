@@ -40,6 +40,7 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         NSLocalNetworkUsageDescription: Connect to Codex app-server hosts on your private network.
+        NSMicrophoneUsageDescription: Hold the microphone button to dictate a message into the Codex composer.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
   CodexDockTests:

@@ -7,6 +7,7 @@ public protocol ThreadDetailSession: Sendable {
 
     func connectAndInitialize(params: InitializeParams, timeout: Duration) async throws -> InitializeResponse
     func threadRead(params: ThreadReadParams, timeout: Duration) async throws -> ThreadReadResponseDTO
+    func threadTurnsList(params: ThreadTurnsListParams, timeout: Duration) async throws -> ThreadTurnsListResponseDTO
     func threadResume(params: ThreadResumeParams, timeout: Duration) async throws -> ThreadResumeResponseDTO
     func turnStart(params: TurnStartParams, timeout: Duration) async throws -> TurnStartResponseDTO
     func turnSteer(params: TurnSteerParams, timeout: Duration) async throws -> TurnSteerResponseDTO
@@ -92,15 +93,55 @@ public struct ComposerState: Equatable, Sendable {
     public var draft: String
     public var isSending: Bool
     public var lastError: String?
+    public var voice: ComposerVoiceState
 
-    public init(draft: String = "", isSending: Bool = false, lastError: String? = nil) {
+    public init(
+        draft: String = "",
+        isSending: Bool = false,
+        lastError: String? = nil,
+        voice: ComposerVoiceState = ComposerVoiceState()
+    ) {
         self.draft = draft
         self.isSending = isSending
         self.lastError = lastError
+        self.voice = voice
     }
 
     public var canSend: Bool {
-        !isSending && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !isSending
+            && !voice.phase.isBusy
+            && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+public enum ComposerVoicePhase: Equatable, Sendable {
+    case idle
+    case recording
+    case transcribing
+
+    public var isBusy: Bool {
+        self == .recording || self == .transcribing
+    }
+
+    public var label: String {
+        switch self {
+        case .idle:
+            return "Dictate"
+        case .recording:
+            return "Recording"
+        case .transcribing:
+            return "Transcribing"
+        }
+    }
+}
+
+public struct ComposerVoiceState: Equatable, Sendable {
+    public var phase: ComposerVoicePhase
+    public var lastError: String?
+
+    public init(phase: ComposerVoicePhase = .idle, lastError: String? = nil) {
+        self.phase = phase
+        self.lastError = lastError
     }
 }
 
@@ -114,6 +155,8 @@ public final class ThreadDetailStore: ObservableObject {
     private let row: DockRowViewModel
     private let header: ThreadDetailHeader
     private let factory: any ThreadDetailSessionMaking
+    private let voiceCapture: any VoiceCaptureControlling
+    private let transcriptionService: any TranscriptionServicing
     private let now: @Sendable () -> Date
 
     private var session: (any ThreadDetailSession)?
@@ -128,12 +171,16 @@ public final class ThreadDetailStore: ObservableObject {
         host: DockHostConfiguration,
         row: DockRowViewModel,
         factory: any ThreadDetailSessionMaking = AppServerThreadDetailSessionFactory(),
+        voiceCapture: any VoiceCaptureControlling = VoiceCaptureController(),
+        transcriptionService: any TranscriptionServicing = OpenAITranscriptionClient(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.host = host
         self.row = row
         self.header = ThreadDetailHeader(host: host, row: row)
         self.factory = factory
+        self.voiceCapture = voiceCapture
+        self.transcriptionService = transcriptionService
         self.now = now
         self.state = .idle(ThreadDetailHeader(host: host, row: row))
     }
@@ -175,17 +222,23 @@ public final class ThreadDetailStore: ObservableObject {
             startObservation(session: session)
 
             let readResponse = try await session.threadRead(
-                params: ThreadReadParams(threadId: row.id.threadID, includeTurns: true),
+                params: ThreadReadParams(threadId: row.id.threadID, includeTurns: false),
                 timeout: .seconds(10)
             )
-            try replaceEvents(from: readResponse.thread, liveState: .connecting)
+            let turnsResponse = try await session.threadTurnsList(
+                params: ThreadTurnsListParams(threadId: row.id.threadID, limit: 10),
+                timeout: .seconds(10)
+            )
+            let readThread = readResponse.thread.replacingTurns(turnsResponse.data)
+            try replaceEvents(from: readThread, liveState: .connecting)
 
             do {
                 let resumeResponse = try await session.threadResume(
-                    params: ThreadResumeParams(threadId: row.id.threadID),
+                    params: ThreadResumeParams(threadId: row.id.threadID, excludeTurns: true),
                     timeout: .seconds(10)
                 )
-                try replaceEvents(from: resumeResponse.thread, liveState: .live)
+                let liveThread = resumeResponse.thread.replacingTurns(turnsResponse.data)
+                try replaceEvents(from: liveThread, liveState: .live)
             } catch {
                 liveState = .stale(message(from: error))
                 publishLoaded()
@@ -214,9 +267,67 @@ public final class ThreadDetailStore: ObservableObject {
         composer.lastError = nil
     }
 
+    public func beginVoiceCapture() async {
+        guard !composer.isSending, !composer.voice.phase.isBusy else {
+            return
+        }
+
+        composer.voice = ComposerVoiceState(phase: .recording)
+
+        do {
+            _ = try await voiceCapture.startRecording()
+        } catch {
+            composer.voice = ComposerVoiceState(phase: .idle, lastError: voiceMessage(from: error))
+        }
+    }
+
+    public func finishVoiceCapture() async {
+        guard composer.voice.phase == .recording else {
+            return
+        }
+
+        composer.voice = ComposerVoiceState(phase: .transcribing)
+
+        do {
+            let audioFile = try await voiceCapture.stopRecording()
+            defer {
+                try? FileManager.default.removeItem(at: audioFile)
+            }
+            let transcript = try await transcriptionService.transcribe(audioFile: audioFile)
+            try insertTranscript(transcript)
+            composer.voice = ComposerVoiceState()
+        } catch {
+            composer.voice = ComposerVoiceState(phase: .idle, lastError: voiceMessage(from: error))
+        }
+    }
+
+    public func cancelVoiceCapture() async {
+        await voiceCapture.cancelRecording()
+        composer.voice = ComposerVoiceState()
+    }
+
+    private func insertTranscript(_ transcript: String) throws {
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw TranscriptionServiceError.emptyTranscript
+        }
+
+        let existing = composer.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if existing.isEmpty {
+            composer.draft = trimmed
+        } else {
+            composer.draft = "\(existing) \(trimmed)"
+        }
+        composer.lastError = nil
+    }
+
     public func sendDraft() async {
         guard let session else {
             composer.lastError = "Thread is not connected."
+            return
+        }
+        guard !composer.voice.phase.isBusy else {
+            composer.lastError = "Finish dictation before sending."
             return
         }
 
@@ -468,6 +579,14 @@ public final class ThreadDetailStore: ObservableObject {
             return description
         }
         return error.localizedDescription
+    }
+
+    private func voiceMessage(from error: Error) -> String {
+        if let localizedError = error as? LocalizedError,
+           let description = localizedError.errorDescription {
+            return description
+        }
+        return "Voice input failed."
     }
 }
 

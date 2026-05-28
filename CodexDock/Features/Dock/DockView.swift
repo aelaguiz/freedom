@@ -21,7 +21,10 @@ public enum DockFilter: String, CaseIterable, Identifiable {
         case .needsMe:
             return row.status == .needsMe
         case .running:
-            return row.status == .running
+            return row.status == .needsMe
+                || row.status == .running
+                || row.status == .idle
+                || row.status == .failed
         case .limited:
             return row.status == .limited
         }
@@ -186,14 +189,13 @@ public struct DockView: View {
 
             Button {
             } label: {
-                Label("Host", systemImage: "plus")
-                    .labelStyle(.titleAndIcon)
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                Image(systemName: "plus")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.borderedProminent)
             .disabled(true)
+            .accessibilityLabel("Add host")
         }
     }
 
@@ -438,7 +440,7 @@ public struct DockView: View {
         case .needsMe:
             return "No sessions are waiting for approval or input."
         case .running:
-            return "No sessions are actively running on loaded hosts."
+            return "No live sessions are loaded on reachable hosts."
         case .limited:
             return "No limited history rows are visible."
         }
@@ -467,7 +469,7 @@ struct HostSummaryView: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "desktopcomputer")
-                .font(.title3)
+                .font(.system(size: 24))
                 .foregroundStyle(.blue)
                 .frame(width: 30, height: 30)
 
@@ -479,6 +481,7 @@ struct HostSummaryView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
+            .layoutPriority(1)
 
             Spacer(minLength: 8)
 
@@ -488,6 +491,7 @@ struct HostSummaryView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
                 .background(.blue.opacity(0.12), in: Capsule())
+                .fixedSize()
         }
         .padding(.vertical, 4)
     }

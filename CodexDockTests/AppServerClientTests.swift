@@ -463,9 +463,37 @@ final class AppServerClientTests: XCTestCase {
         let readResponse = try await readTask.value
         XCTAssertEqual(readResponse.thread.id, "thread-1")
 
+        let turnsListTask = Task {
+            try await client.threadTurnsList(
+                params: ThreadTurnsListParams(threadId: "thread-1", limit: 10),
+                timeout: .seconds(1)
+            )
+        }
+        let turnsListRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(turnsListRequest.method, AppServerMethods.threadTurnsList)
+        guard case .object(let turnsListParams) = try XCTUnwrap(turnsListRequest.params) else {
+            return XCTFail("Expected object params")
+        }
+        XCTAssertEqual(turnsListParams["threadId"], .string("thread-1"))
+        XCTAssertEqual(turnsListParams["limit"], .integer(10))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: turnsListRequest.id,
+                    result: try JSONValue.encoded(
+                        ThreadTurnsListResponseDTO(data: [])
+                    )
+                )
+            )
+        )
+
+        let turnsListResponse = try await turnsListTask.value
+        XCTAssertEqual(turnsListResponse.data, [])
+
         let resumeTask = Task {
             try await client.threadResume(
-                params: ThreadResumeParams(threadId: "thread-1"),
+                params: ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
                 timeout: .seconds(1)
             )
         }
@@ -475,6 +503,7 @@ final class AppServerClientTests: XCTestCase {
             return XCTFail("Expected object params")
         }
         XCTAssertEqual(resumeParams["threadId"], .string("thread-1"))
+        XCTAssertEqual(resumeParams["excludeTurns"], .bool(true))
 
         await transport.enqueue(
             .response(
@@ -800,11 +829,15 @@ final class AppServerClientTests: XCTestCase {
         let threadID = try XCTUnwrap(thread.id)
 
         let read = try await client.threadRead(
-            params: ThreadReadParams(threadId: threadID, includeTurns: true),
+            params: ThreadReadParams(threadId: threadID, includeTurns: false),
+            timeout: .seconds(10)
+        )
+        let turns = try await client.threadTurnsList(
+            params: ThreadTurnsListParams(threadId: threadID, limit: 10),
             timeout: .seconds(10)
         )
         let resumed = try await client.threadResume(
-            params: ThreadResumeParams(threadId: threadID),
+            params: ThreadResumeParams(threadId: threadID, excludeTurns: true),
             timeout: .seconds(10)
         )
 
@@ -812,6 +845,7 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(resumed.thread.id, threadID)
         XCTAssertNotNil(read.thread.turns)
         XCTAssertNotNil(resumed.thread.turns)
+        XCTAssertLessThanOrEqual(turns.data.count, 10)
         await client.disconnect()
     }
 

@@ -8,10 +8,13 @@ final class ThreadDetailStoreTests: XCTestCase {
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
             readResult: .success(
-                ThreadReadResponseDTO(thread: makeDetailThread("thread-1", text: "Stored turn"))
+                ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))
+            ),
+            turnsListResult: .success(
+                ThreadTurnsListResponseDTO(data: makeDetailThread("thread-1", text: "Paged turn").turns ?? [])
             ),
             resumeResult: .success(
-                ThreadResumeResponseDTO(thread: makeDetailThread("thread-1", text: "Live turn"))
+                ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))
             )
         )
         let store = ThreadDetailStore(
@@ -29,14 +32,18 @@ final class ThreadDetailStoreTests: XCTestCase {
 
         XCTAssertEqual(snapshot.header.threadID, "thread-1")
         XCTAssertEqual(snapshot.liveState, .live)
-        XCTAssertEqual(snapshot.events.map(\.body), ["Live turn"])
+        XCTAssertEqual(snapshot.events.map(\.body), ["Paged turn"])
         let readParams = await session.readParamsSnapshot()
+        let turnsListParams = await session.turnsListParamsSnapshot()
         let resumeParams = await session.resumeParamsSnapshot()
         XCTAssertEqual(readParams, [
-            ThreadReadParams(threadId: "thread-1", includeTurns: true),
+            ThreadReadParams(threadId: "thread-1", includeTurns: false),
+        ])
+        XCTAssertEqual(turnsListParams, [
+            ThreadTurnsListParams(threadId: "thread-1", limit: 10),
         ])
         XCTAssertEqual(resumeParams, [
-            ThreadResumeParams(threadId: "thread-1"),
+            ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
         ])
     }
 
@@ -46,7 +53,10 @@ final class ThreadDetailStoreTests: XCTestCase {
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
             readResult: .success(
-                ThreadReadResponseDTO(thread: makeDetailThread("thread-1", text: "Stored turn"))
+                ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))
+            ),
+            turnsListResult: .success(
+                ThreadTurnsListResponseDTO(data: makeDetailThread("thread-1", text: "Stored turn").turns ?? [])
             ),
             resumeResult: .failure(.resumeFailed)
         )
@@ -225,8 +235,9 @@ final class ThreadDetailStoreTests: XCTestCase {
             ]
         )
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: thread)),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: thread)),
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            turnsListResult: .success(ThreadTurnsListResponseDTO(data: thread.turns ?? [])),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
             turnSteerResult: .success(TurnSteerResponseDTO(turnId: "active-turn"))
         )
         let store = ThreadDetailStore(
@@ -273,6 +284,96 @@ final class ThreadDetailStoreTests: XCTestCase {
         XCTAssertEqual(store.composer.draft, "Do not lose this")
         XCTAssertEqual(store.composer.isSending, false)
         XCTAssertEqual(store.composer.lastError, "turn failed")
+    }
+
+    @MainActor
+    func testVoiceTranscriptInsertsDraftWithoutSending() async {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: [])))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session),
+            voiceCapture: FakeVoiceCaptureController(),
+            transcriptionService: FakeTranscriptionService(result: .success("Check relay status"))
+        )
+
+        await store.load()
+        await store.beginVoiceCapture()
+        XCTAssertEqual(store.composer.voice.phase, .recording)
+        await store.finishVoiceCapture()
+
+        XCTAssertEqual(store.composer.draft, "Check relay status")
+        XCTAssertEqual(store.composer.voice, ComposerVoiceState())
+        let beforeSendStartParams = await session.turnStartParamsSnapshot()
+        XCTAssertEqual(beforeSendStartParams, [])
+
+        await store.sendDraft()
+        let afterSendStartParams = await session.turnStartParamsSnapshot()
+        XCTAssertEqual(
+            afterSendStartParams,
+            [TurnStartParams.text(threadId: "thread-1", text: "Check relay status")]
+        )
+    }
+
+    @MainActor
+    func testVoiceTranscriptAppendsToEditableDraftWithoutAutoSubmit() async {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: [])))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session),
+            voiceCapture: FakeVoiceCaptureController(),
+            transcriptionService: FakeTranscriptionService(result: .success("then summarize failures"))
+        )
+
+        await store.load()
+        store.updateDraft("Run tests")
+        await store.beginVoiceCapture()
+        await store.finishVoiceCapture()
+
+        XCTAssertEqual(store.composer.draft, "Run tests then summarize failures")
+        store.updateDraft("Run tests and summarize failures")
+        XCTAssertEqual(store.composer.draft, "Run tests and summarize failures")
+        let startParams = await session.turnStartParamsSnapshot()
+        XCTAssertEqual(startParams, [])
+    }
+
+    @MainActor
+    func testVoiceTranscriptionFailureKeepsDraftRecoverable() async {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: [])))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session),
+            voiceCapture: FakeVoiceCaptureController(),
+            transcriptionService: FakeTranscriptionService(result: .failure(.requestFailed(statusCode: 500)))
+        )
+
+        await store.load()
+        store.updateDraft("Keep this")
+        await store.beginVoiceCapture()
+        await store.finishVoiceCapture()
+
+        XCTAssertEqual(store.composer.draft, "Keep this")
+        XCTAssertEqual(store.composer.voice.phase, .idle)
+        XCTAssertEqual(store.composer.voice.lastError, "Transcription request failed.")
+        let startParams = await session.turnStartParamsSnapshot()
+        XCTAssertEqual(startParams, [])
     }
 
     @MainActor
@@ -360,10 +461,12 @@ private actor FakeThreadDetailSession: ThreadDetailSession {
     private let notificationContinuation: AsyncStream<JSONRPCNotification>.Continuation
     private let serverRequestContinuation: AsyncStream<JSONRPCRequest>.Continuation
     private let readResult: Result<ThreadReadResponseDTO, FakeThreadDetailError>
+    private let turnsListResult: Result<ThreadTurnsListResponseDTO, FakeThreadDetailError>
     private let resumeResult: Result<ThreadResumeResponseDTO, FakeThreadDetailError>
     private let turnStartResult: Result<TurnStartResponseDTO, FakeThreadDetailError>
     private let turnSteerResult: Result<TurnSteerResponseDTO, FakeThreadDetailError>
     private var readParams: [ThreadReadParams] = []
+    private var turnsListParams: [ThreadTurnsListParams] = []
     private var resumeParams: [ThreadResumeParams] = []
     private var turnStartParams: [TurnStartParams] = []
     private var turnSteerParams: [TurnSteerParams] = []
@@ -371,6 +474,9 @@ private actor FakeThreadDetailSession: ThreadDetailSession {
 
     init(
         readResult: Result<ThreadReadResponseDTO, FakeThreadDetailError>,
+        turnsListResult: Result<ThreadTurnsListResponseDTO, FakeThreadDetailError> = .success(
+            ThreadTurnsListResponseDTO(data: [])
+        ),
         resumeResult: Result<ThreadResumeResponseDTO, FakeThreadDetailError>,
         turnStartResult: Result<TurnStartResponseDTO, FakeThreadDetailError> = .success(
             TurnStartResponseDTO(
@@ -391,6 +497,7 @@ private actor FakeThreadDetailSession: ThreadDetailSession {
         self.serverRequests = serverRequests.stream
         self.serverRequestContinuation = serverRequests.continuation
         self.readResult = readResult
+        self.turnsListResult = turnsListResult
         self.resumeResult = resumeResult
         self.turnStartResult = turnStartResult
         self.turnSteerResult = turnSteerResult
@@ -414,6 +521,14 @@ private actor FakeThreadDetailSession: ThreadDetailSession {
     ) async throws -> ThreadReadResponseDTO {
         readParams.append(params)
         return try readResult.get()
+    }
+
+    func threadTurnsList(
+        params: ThreadTurnsListParams,
+        timeout: Duration
+    ) async throws -> ThreadTurnsListResponseDTO {
+        turnsListParams.append(params)
+        return try turnsListResult.get()
     }
 
     func threadResume(
@@ -461,6 +576,10 @@ private actor FakeThreadDetailSession: ThreadDetailSession {
         readParams
     }
 
+    func turnsListParamsSnapshot() -> [ThreadTurnsListParams] {
+        turnsListParams
+    }
+
     func resumeParamsSnapshot() -> [ThreadResumeParams] {
         resumeParams
     }
@@ -475,6 +594,36 @@ private actor FakeThreadDetailSession: ThreadDetailSession {
 
     func sentResponsesSnapshot() -> [SentServerResponse] {
         sentResponses
+    }
+}
+
+@MainActor
+private final class FakeVoiceCaptureController: VoiceCaptureControlling {
+    private let audioURL: URL
+
+    init() {
+        self.audioURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("m4a")
+    }
+
+    func startRecording() async throws -> URL {
+        try Data("fake audio".utf8).write(to: audioURL)
+        return audioURL
+    }
+
+    func stopRecording() async throws -> URL {
+        audioURL
+    }
+
+    func cancelRecording() async {}
+}
+
+private struct FakeTranscriptionService: TranscriptionServicing {
+    let result: Result<String, TranscriptionServiceError>
+
+    func transcribe(audioFile: URL) async throws -> String {
+        try result.get()
     }
 }
 

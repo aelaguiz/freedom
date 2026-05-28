@@ -580,6 +580,18 @@ async function aggregateThreadRead(config, params = {}) {
   return readHistoryThread(config, params);
 }
 
+async function listThreadTurns(config, params = {}) {
+  if (!params.threadId) {
+    throw new Error("thread/turns/list requires threadId");
+  }
+  const endpoint = await endpointForThread(config, params.threadId);
+  return withClient(
+    endpoint.url,
+    { bearerToken: endpoint.bearerToken || null },
+    async (client) => client.request("thread/turns/list", params),
+  );
+}
+
 async function endpointForThread(config, threadId) {
   const live = await collectLiveRows();
   const liveRow = live.rows.find((row) => row.id === threadId);
@@ -671,6 +683,8 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       return aggregateLoadedList(params || {});
     case "thread/read":
       return aggregateThreadRead(config, params || {});
+    case "thread/turns/list":
+      return listThreadTurns(config, params || {});
     case "thread/resume":
       return resumeThread(config, params || {}, session, downstreamWs);
     case "thread/archive":

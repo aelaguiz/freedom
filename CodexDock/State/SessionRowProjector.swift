@@ -55,30 +55,30 @@ struct SessionRowProjector {
     }
 
     private func sectionPrecedes(_ lhs: DockSectionViewModel, _ rhs: DockSectionViewModel) -> Bool {
-        let lhsDate = lhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
-        let rhsDate = rhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
-        if lhsDate != rhsDate {
-            return lhsDate > rhsDate
-        }
-
         let lhsPriority = lhs.rows.map { Self.statusPriority($0.status) }.min() ?? Int.max
         let rhsPriority = rhs.rows.map { Self.statusPriority($0.status) }.min() ?? Int.max
         if lhsPriority != rhsPriority {
             return lhsPriority < rhsPriority
         }
 
+        let lhsDate = lhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
+        let rhsDate = rhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
+        if lhsDate != rhsDate {
+            return lhsDate > rhsDate
+        }
+
         return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
     }
 
     private func rowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
-        if lhs.lastActivityDate != rhs.lastActivityDate {
-            return lhs.lastActivityDate > rhs.lastActivityDate
-        }
-
         let lhsPriority = Self.statusPriority(lhs.status)
         let rhsPriority = Self.statusPriority(rhs.status)
         if lhsPriority != rhsPriority {
             return lhsPriority < rhsPriority
+        }
+
+        if lhs.lastActivityDate != rhs.lastActivityDate {
+            return lhs.lastActivityDate > rhs.lastActivityDate
         }
 
         return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
