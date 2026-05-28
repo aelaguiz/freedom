@@ -56,12 +56,13 @@ or any endpoint a physical phone could not reach.
      connected/offline/error state, and prove that protocol code is isolated
      from UI. Scripted transports, local-only Unix sockets, loopback
      WebSockets, and mocks do not satisfy this gate.
-   - Status: reopened — real phone-reachable host proof missing
+   - Status: complete
    - Auto-plan status: ready (`READY next=implement-loop`)
-   - Epic-critic verdict: failed/reopened — previous macOS SwiftPM and
-     `iPhone 17` simulator tests prove the local protocol implementation, but
-     they do not prove that an iPhone can connect to a real Codex app-server on
-     `Amir-M5` or `Home`.
+   - Epic-critic verdict: passed — Phase 1 now proves the local protocol
+     implementation and a real phone-reachable host path. A real Codex
+     app-server ran on `Amir-M5` at `ws://192.168.50.117:4500` with websocket
+     bearer auth; macOS SwiftPM and the `iPhone 17` simulator both completed
+     `initialize`/`initialized` against that endpoint.
 
 2. **Thread-list data pipeline**: Add the first real Codex data method,
    `thread/list`, and normalize thread summaries without depending on final UI.
@@ -133,8 +134,10 @@ or any endpoint a physical phone could not reach.
 # Test Host Notes
 
 - `Amir-M5`: This machine. Use it as the primary local/single-host test target,
-  but the acceptance endpoint must be phone-reachable. Its daemon-managed
-  app-server currently exposes a Unix socket, not a phone-reachable listener.
+  but the acceptance endpoint must be phone-reachable. Phase 1 completed against
+  a direct Codex app-server listener on this host at `ws://192.168.50.117:4500`
+  with websocket bearer auth. Its daemon-managed app-server still exposes a
+  Unix socket, not a phone-reachable listener.
 - `Home`: Secondary server/host. It is SSH-able, but Tailscale daemon and
   Codex app-server reachability may not be ready yet. Keep it as the planned
   second host for multi-host testing, and return to setup if the app cannot
@@ -174,6 +177,11 @@ reference the mockups only as downstream context.
   mocked/scripted handshakes, local Unix sockets, and Mac-loopback WebSockets
   are not enough. Completion requires the iPhone path to connect to a real
   Codex app-server on a real phone-reachable host.
+- 2026-05-28 Completed Phase 1 against a real Codex app-server on `Amir-M5`.
+  Started a direct app-server listener with websocket auth, verified
+  `http://192.168.50.117:4500/readyz`, and ran the `initialize`/`initialized`
+  handshake from macOS SwiftPM and the `iPhone 17` simulator against
+  `ws://192.168.50.117:4500`.
 
 # Decision Log
 

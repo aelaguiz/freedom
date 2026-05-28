@@ -1,10 +1,46 @@
 # Phase 1 Plan Audit Log
 
+## 2026-05-28 - Completion Audit After Real-Host Proof
+
+Mode: `implementation-audit`
+
+Verdict: `complete`
+
+The reopened Phase 1 gate is now satisfied. The client completed
+`initialize` then `initialized` against a real Codex app-server on `Amir-M5`
+using the supported direct WebSocket listener with websocket auth.
+
+Accepted evidence:
+
+- Real host: `Amir-M5`.
+- Bind address: `ws://0.0.0.0:4500`.
+- Client endpoint: `ws://192.168.50.117:4500`.
+- Codex listener mode:
+  `codex app-server --listen ws://0.0.0.0:4500 --ws-auth capability-token --ws-token-file <token-file>`.
+- Health check: `GET http://192.168.50.117:4500/readyz` returned `200 OK`.
+- macOS selected real-host test passed with
+  `CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4500`.
+- `iPhone 17` simulator selected real-host test passed against the same
+  endpoint after setting simulator environment with `simctl launchctl setenv`.
+- Full `swift test` passed with the phone-reachable endpoint configured.
+- Full `xcodebuild test -scheme codex-client -destination 'id=DEF1631B-7125-43C6-BFA3-4423BF103C91'`
+  passed on the `iPhone 17` simulator with the phone-reachable endpoint
+  configured.
+
+Rejected evidence remains rejected:
+
+- Mocks, scripted transports, Unix sockets, `localhost`, `127.0.0.1`, `::1`,
+  and Mac-loopback WebSockets still do not count as Phase 1 acceptance.
+
 ## 2026-05-28 - Completion Correction
 
 Mode: `implementation-audit-correction`
 
 Verdict: `reopened`
+
+Superseded by the 2026-05-28 completion audit above after the real-host proof
+passed. The correction remains here to document why the earlier local-only
+evidence was rejected.
 
 The previous `approve` verdict was too weak for the real requirement. It
 accepted local protocol evidence, including deterministic test transports and

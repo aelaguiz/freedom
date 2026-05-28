@@ -317,6 +317,26 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(state, .connected)
     }
 
+    func testWebSocketTransportAddsBearerAuthorizationHeader() throws {
+        let url = try XCTUnwrap(URL(string: "ws://192.0.2.1:4500"))
+        let transport = URLSessionWebSocketAppServerTransport(
+            url: url,
+            bearerToken: "secret-token"
+        )
+
+        XCTAssertEqual(
+            transport.urlRequest.value(forHTTPHeaderField: "Authorization"),
+            "Bearer secret-token"
+        )
+    }
+
+    func testWebSocketTransportOmitsAuthorizationHeaderWithoutToken() throws {
+        let url = try XCTUnwrap(URL(string: "ws://192.0.2.1:4500"))
+        let transport = URLSessionWebSocketAppServerTransport(url: url)
+
+        XCTAssertNil(transport.urlRequest.value(forHTTPHeaderField: "Authorization"))
+    }
+
     func testLoopbackRealHostInitializeHandshakeWhenEndpointIsProvided() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let endpoint = environment["CODEX_DOCK_LOOPBACK_APP_SERVER_WS"], !endpoint.isEmpty else {
@@ -334,7 +354,11 @@ final class AppServerClientTests: XCTestCase {
             "Loopback smoke endpoint must be localhost, 127.0.0.1, or ::1"
         )
 
-        try await assertRealHostHandshakeSucceeds(url: url, timeout: .seconds(5))
+        try await assertRealHostHandshakeSucceeds(
+            url: url,
+            bearerToken: try appServerBearerToken(from: environment),
+            timeout: .seconds(5)
+        )
     }
 
     func testPhoneReachableRealHostInitializeHandshakeWhenEndpointIsProvided() async throws {
@@ -353,13 +377,25 @@ final class AppServerClientTests: XCTestCase {
             isLoopbackHost(url.host),
             "Phone-reachable handshake endpoint cannot be localhost, 127.0.0.1, or ::1"
         )
+        let bearerToken = try XCTUnwrap(
+            try appServerBearerToken(from: environment),
+            "Set CODEX_DOCK_APP_SERVER_BEARER_TOKEN or CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE for the phone-reachable authenticated app-server"
+        )
 
-        try await assertRealHostHandshakeSucceeds(url: url, timeout: .seconds(5))
+        try await assertRealHostHandshakeSucceeds(
+            url: url,
+            bearerToken: bearerToken,
+            timeout: .seconds(5)
+        )
     }
 }
 
-private func assertRealHostHandshakeSucceeds(url: URL, timeout: Duration) async throws {
-    let client = AppServerClient(webSocketURL: url)
+private func assertRealHostHandshakeSucceeds(
+    url: URL,
+    bearerToken: String?,
+    timeout: Duration
+) async throws {
+    let client = AppServerClient(webSocketURL: url, bearerToken: bearerToken)
 
     let response = try await client.connectAndInitialize(
         params: .codexDock(version: "0.1.0"),
@@ -373,6 +409,20 @@ private func assertRealHostHandshakeSucceeds(url: URL, timeout: Duration) async 
     let state = await client.state
     XCTAssertEqual(state, .connected)
     await client.disconnect()
+}
+
+private func appServerBearerToken(from environment: [String: String]) throws -> String? {
+    if let token = environment["CODEX_DOCK_APP_SERVER_BEARER_TOKEN"], !token.isEmpty {
+        return token
+    }
+
+    guard let tokenFile = environment["CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE"], !tokenFile.isEmpty else {
+        return nil
+    }
+
+    let token = try String(contentsOfFile: tokenFile, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    return token.isEmpty ? nil : token
 }
 
 private func isLoopbackHost(_ host: String?) -> Bool {

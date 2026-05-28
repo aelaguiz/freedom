@@ -75,10 +75,11 @@ ws://<amir-m5-lan-or-tailscale-ip>:4500
 ```
 
 Non-loopback WebSocket listeners require Codex websocket auth. The Swift client
-must send that auth before the real phone proof can pass.
+sends `Authorization: Bearer <token>` when it is configured with a token.
 
 ## Phase 1 Rule
 
 Mocks, scripted transports, Unix sockets, and loopback-only WebSockets do not
-complete Phase 1. Phase 1 is complete only after the iPhone path connects to a
-real Codex app-server on `Amir-M5` or `Home`.
+complete Phase 1. Phase 1 completed on 2026-05-28 after the `iPhone 17`
+simulator path connected to a real Codex app-server on `Amir-M5` at
+`ws://192.168.50.117:4500` with websocket auth.

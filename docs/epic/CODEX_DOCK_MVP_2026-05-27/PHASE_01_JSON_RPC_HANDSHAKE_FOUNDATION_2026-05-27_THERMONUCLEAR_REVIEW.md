@@ -4,11 +4,11 @@ Date: 2026-05-28
 
 Verdict: `approve`
 
-Completion correction: this review still approves the local code structure, but
-it does not approve Phase 1 completion. Phase 1 is reopened until the iPhone
-path connects to a real Codex app-server on `Amir-M5` or `Home`. Mocks,
-scripted transports, Unix sockets, and Mac-loopback WebSocket endpoints are not
-completion evidence.
+Completion correction resolved: this review approves the local code structure,
+and Phase 1 completion is now approved after the `iPhone 17` simulator path
+connected to a real Codex app-server on `Amir-M5` at `ws://192.168.50.117:4500`
+with websocket auth. Mocks, scripted transports, Unix sockets, and Mac-loopback
+WebSocket endpoints remain non-evidence for completion.
 
 ## Findings
 

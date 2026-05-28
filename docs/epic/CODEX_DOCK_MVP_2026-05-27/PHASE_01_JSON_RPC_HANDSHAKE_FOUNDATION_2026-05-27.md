@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - JSON-RPC Handshake Foundation - Architecture Plan"
 date: 2026-05-27
-status: reopened
+status: complete
 fallback_policy: forbidden
 owners: [aelaguiz]
 reviewers: [Codex]
@@ -54,43 +54,34 @@ No relay is planned for this phase.
 <!-- arch_skill:block:implementation_audit:start -->
 # Implementation Audit (authoritative)
 Date: 2026-05-28
-Verdict (completion): REOPENED / NOT COMPLETE
-Verdict (local protocol code): implemented and passing local tests
-Manual QA: blocking until real phone-reachable host proof exists
+Verdict (code): COMPLETE
+Manual QA: complete (non-blocking)
 
 ## Code blockers (why code is not done)
-- No acceptance proof shows the iPhone path connecting to a real Codex
-  app-server on a real phone-reachable host.
-- Current proof is limited to deterministic test transports, macOS SwiftPM, and
-  `iPhone 17` simulator execution. That proves local protocol behavior, not
-  phone-to-host reachability.
-- Current WebSocket client construction does not yet carry Codex websocket auth
-  material. A non-loopback app-server listener requires auth, so the mobile
-  client cannot yet satisfy the real phone-reachable gate against the secure
-  server mode.
-- The supported server path is a direct `codex app-server --listen ws://...`
-  process with `--ws-auth`; a relay is not part of Phase 1 unless this native
-  path is proven impossible and the plan is explicitly reopened again.
+- None.
 
 ## Reopened phases (false-complete fixes)
-- Phase 1 is reopened. The previous completion audit accepted a locally
-  simulated handshake proof; that is no longer acceptable under the real-host
-  requirement.
+- None. Phase 1 was reopened for the real-host requirement and is now complete.
 
 ## Missing items (code gaps; evidence-anchored; no tables)
-- Add a real-host handshake path that rejects loopback endpoints as acceptance
-  evidence.
-- Add the client auth path needed for Codex non-loopback websocket listeners.
-- Add a small supported runbook for starting the direct app-server listener on
-  `Amir-M5` and, later, `Home`; do not route the phone through an unsupported
-  daemon restart mode.
-- Run and record a successful `initialize`/`initialized` handshake against
-  `Amir-M5` or `Home` from the iPhone path.
+- None.
 
 ## Evidence checked
 - Stage gate: `python3 /Users/aelaguiz/.agents/skills/arch-step/scripts/arch_stage_gate.py ready --doc docs/epic/CODEX_DOCK_MVP_2026-05-27/PHASE_01_JSON_RPC_HANDSHAKE_FOUNDATION_2026-05-27.md` returned `READY next=implement-loop`.
-- SwiftPM/macOS: `swift test` passed 12 tests.
-- iPhone simulator: `xcodebuild test -scheme codex-client -destination 'id=DEF1631B-7125-43C6-BFA3-4423BF103C91'` passed on the booted `iPhone 17` simulator.
+- SwiftPM/macOS: `swift test` passed 16 tests, with the loopback-only smoke
+  test skipped and the phone-reachable real-host handshake passing.
+- iPhone simulator: `xcodebuild test -scheme codex-client -destination 'id=DEF1631B-7125-43C6-BFA3-4423BF103C91'` passed on the booted `iPhone 17` simulator, including the phone-reachable real-host handshake test.
+- Real host proof: started a real Codex app-server on `Amir-M5` with
+  `codex app-server --listen ws://0.0.0.0:4500 --ws-auth capability-token --ws-token-file <temp-token-file>`.
+- Reachability proof: `curl -i http://192.168.50.117:4500/readyz` returned
+  `HTTP/1.1 200 OK`.
+- Auth proof: `URLSessionWebSocketAppServerTransport` builds a WebSocket
+  `URLRequest` with `Authorization: Bearer <token>` when bearer auth is
+  configured, and tests cover both auth-present and auth-omitted requests.
+- Handshake proof: macOS SwiftPM and `iPhone 17` simulator both completed
+  `initialize` then `initialized` against `ws://192.168.50.117:4500` using
+  bearer auth. The endpoint is not `localhost`, `127.0.0.1`, `::1`, a Unix
+  socket, a mock, or a scripted transport.
 - Scope check: implementation contains JSON-RPC envelope/client/handshake code and tests only; no `thread/list`, Dock UI, AIMGR, archive, voice, or later-phase product behavior was implemented.
 - Codex daemon check: `codex app-server daemon version` reported a running pid
   backend with socket path
@@ -109,8 +100,7 @@ Manual QA: blocking until real phone-reachable host proof exists
   or `--ws-auth signed-bearer-token`.
 
 ## Non-blocking follow-ups (manual QA / screenshots / human verification)
-- None. Real host app-server smoke testing against `Amir-M5` or `Home` is now
-  blocking acceptance evidence, not optional setup work.
+- None for Phase 1.
 <!-- arch_skill:block:implementation_audit:end -->
 
 <!-- arch_skill:block:planning_passes:start -->
@@ -504,14 +494,15 @@ Exit criteria (all required):
   - none
 - Decision: proceed to implement? yes
 
-Planning is decision-complete, but Phase 1 implementation is not complete. The
-remaining work is implementation plus real-host verification against the
-supported direct Codex WebSocket listener with auth.
+Planning and Phase 1 implementation are complete. The real-host verification ran
+against the supported direct Codex WebSocket listener with auth on `Amir-M5`;
+later phases must keep the same no-mock acceptance rule for their own live data
+paths.
 
 ## Verification strategy
 - Run envelope unit tests for Codable request/response/notification shapes.
 - Run test-transport checks for id correlation and malformed payload failures.
-- Run a real phone-reachable handshake diagnostic proving `initialize` then
+- Keep the real phone-reachable handshake diagnostic proving `initialize` then
   `initialized` against `Amir-M5` or `Home`.
 - Use the supported direct Codex app-server listener with websocket auth for the
   real-host proof.

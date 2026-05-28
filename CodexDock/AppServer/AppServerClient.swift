@@ -83,10 +83,15 @@ public actor AppServerClient {
         self.transport = transport
     }
 
-    public init(webSocketURL: URL, session: URLSession = .shared) {
+    public init(
+        webSocketURL: URL,
+        bearerToken: String? = nil,
+        session: URLSession = .shared
+    ) {
         self.init(
             transport: URLSessionWebSocketAppServerTransport(
                 url: webSocketURL,
+                bearerToken: bearerToken,
                 session: session
             )
         )
@@ -384,16 +389,30 @@ public actor AppServerClient {
 
 public final class URLSessionWebSocketAppServerTransport: AppServerTransport, @unchecked Sendable {
     private let url: URL
+    private let bearerToken: String?
     private let session: URLSession
     private var task: URLSessionWebSocketTask?
 
-    public init(url: URL, session: URLSession = .shared) {
+    public init(
+        url: URL,
+        bearerToken: String? = nil,
+        session: URLSession = .shared
+    ) {
         self.url = url
+        self.bearerToken = bearerToken
         self.session = session
     }
 
+    var urlRequest: URLRequest {
+        var request = URLRequest(url: url)
+        if let bearerToken, !bearerToken.isEmpty {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        return request
+    }
+
     public func connect() async throws {
-        let task = session.webSocketTask(with: url)
+        let task = session.webSocketTask(with: urlRequest)
         self.task = task
         task.resume()
     }

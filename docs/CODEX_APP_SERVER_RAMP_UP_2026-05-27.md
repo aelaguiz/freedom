@@ -9,6 +9,12 @@ Yes, a client can connect to Codex app-server and do real work through it.
 However, the daemon-managed app-server path is local-only. It uses a Unix
 socket, which an iPhone cannot dial over LAN or Tailscale.
 
+Phase 1 proof is complete as of 2026-05-28. The Swift client connected through
+the `iPhone 17` simulator path to a real Codex app-server on `Amir-M5` at
+`ws://192.168.50.117:4500`, using Codex's supported direct TCP WebSocket
+listener with websocket auth. That proof did not use the daemon Unix socket,
+Mac loopback, a relay, a mock, or a scripted transport.
+
 The app server is not a REST API. It is a bidirectional JSON-RPC API. For the
 local daemon, messages travel as WebSocket frames over a Unix socket.
 
@@ -1212,6 +1218,10 @@ For a phone-reachable Codex Dock proof, do not use the loopback example above
 as acceptance evidence. Use a real host-reachable address, for example
 `ws://0.0.0.0:4500` for binding plus the host's LAN/Tailscale IP from the phone,
 and configure websocket auth.
+
+The Phase 1 acceptance run used this mode on `Amir-M5`: Codex bound
+`ws://0.0.0.0:4500`, the tested client endpoint was
+`ws://192.168.50.117:4500`, and the WebSocket used bearer-token auth.
 
 Health probes for the TCP listener:
 
