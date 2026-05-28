@@ -81,8 +81,8 @@ def boot_device(selector):
 
 
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in {"list", "boot"}:
-        print("Usage: sim.py list | boot <sim-name-or-udid>", file=sys.stderr)
+    if len(sys.argv) < 2 or sys.argv[1] not in {"list", "boot", "resolve"}:
+        print("Usage: sim.py list | boot <sim-name-or-udid> | resolve <sim-name-or-udid>", file=sys.stderr)
         sys.exit(2)
 
     if sys.argv[1] == "list":
@@ -93,7 +93,12 @@ def main():
         print("Usage: rtk make sim SIM='iPhone 17'", file=sys.stderr)
         sys.exit(2)
 
-    boot_device(sys.argv[2].strip())
+    selector = sys.argv[2].strip()
+    if sys.argv[1] == "resolve":
+        print(resolve_device(selector)["udid"])
+        return
+
+    boot_device(selector)
 
 
 if __name__ == "__main__":

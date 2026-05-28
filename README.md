@@ -133,6 +133,41 @@ Normal verification should use `rtk make app-server` or
 
 ## Simulator Commands
 
+Build, install, and launch the app in a specific simulator:
+
+```sh
+rtk make app SIM='iPhone 17'
+```
+
+Or use a simulator ID:
+
+```sh
+rtk make app SIM=DEF1631B-7125-43C6-BFA3-4423BF103C91
+```
+
+That command starts/reuses the persistent app-server, boots the simulator,
+builds the app, installs it, and launches it with the real `Amir-M5`
+app-server environment.
+
+Start all local services the app currently needs:
+
+```sh
+rtk make services
+```
+
+Today that means the authenticated LAN app-server. If a proxy or other local
+service becomes required later, it should be added behind this target so
+`rtk make app SIM=...` keeps doing the whole setup idempotently.
+
+The service targets also rewrite `.env` with the current connection settings:
+
+```text
+CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4500
+CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE=/Users/aelaguiz/workspace/codex-client/.codex-dock/app-server.token
+CODEX_DOCK_REAL_HOST_ID=Amir-M5
+CODEX_DOCK_REAL_HOST_NAME=Amir-M5
+```
+
 List available simulators:
 
 ```sh
