@@ -19,11 +19,15 @@ related:
 - Problem: Starting with a Dock shell hides the hardest unknown. The app is only
   real once JSON-RPC communication works against a real phone-reachable host.
 - Approach: Build a small protocol module with envelope encoding, request id
-  correlation, WebSocket lifecycle, and a test/development handshake path.
+  correlation, WebSocket lifecycle, bearer auth for Codex WebSocket upgrade,
+  and a supported direct app-server handshake path.
 - Plan: First create testable envelopes, then connection lifecycle, then
-  initialize/initialized, then visible real-host diagnostic evidence.
+  websocket auth, then initialize/initialized, then visible real-host
+  diagnostic evidence.
 - Non-negotiables: no product UI dependency, no AIMGR, no custom proxy, and no
-  raw JSON-RPC in future SwiftUI views.
+  raw JSON-RPC in future SwiftUI views. Do not build a relay for Phase 1 unless
+  the native Codex WebSocket listener path fails with a concrete recorded
+  blocker.
 
 # HARD REQUIREMENT: NO MOCK COMPLETION
 
@@ -40,6 +44,12 @@ The required acceptance proof is a real `initialize` then `initialized`
 handshake against a real Codex app-server on `Amir-M5` or `Home`, exposed in a
 way the phone can reach, such as LAN or Tailscale. If we have not actually
 connected to the host, we are not done.
+
+Supported transport constraint: do not try to restart the daemon into a port
+listener. The daemon-managed app-server is Unix-socket-only today. The supported
+phone-reachable path for Phase 1 is a direct Codex app-server process started
+with `codex app-server --listen ws://<host-ip>:<port>` and Codex websocket auth.
+No relay is planned for this phase.
 
 <!-- arch_skill:block:implementation_audit:start -->
 # Implementation Audit (authoritative)
@@ -58,6 +68,9 @@ Manual QA: blocking until real phone-reachable host proof exists
   material. A non-loopback app-server listener requires auth, so the mobile
   client cannot yet satisfy the real phone-reachable gate against the secure
   server mode.
+- The supported server path is a direct `codex app-server --listen ws://...`
+  process with `--ws-auth`; a relay is not part of Phase 1 unless this native
+  path is proven impossible and the plan is explicitly reopened again.
 
 ## Reopened phases (false-complete fixes)
 - Phase 1 is reopened. The previous completion audit accepted a locally
@@ -68,6 +81,9 @@ Manual QA: blocking until real phone-reachable host proof exists
 - Add a real-host handshake path that rejects loopback endpoints as acceptance
   evidence.
 - Add the client auth path needed for Codex non-loopback websocket listeners.
+- Add a small supported runbook for starting the direct app-server listener on
+  `Amir-M5` and, later, `Home`; do not route the phone through an unsupported
+  daemon restart mode.
 - Run and record a successful `initialize`/`initialized` handshake against
   `Amir-M5` or `Home` from the iPhone path.
 
@@ -199,6 +215,8 @@ any product UI.
 - A test transport proves request/response matching.
 - A real phone-reachable WebSocket path completes the handshake against
   `Amir-M5` or `Home`.
+- The real path uses supported Codex app-server behavior: a direct WebSocket
+  listener with websocket auth, not a daemon port mode and not a custom relay.
 - Failures are represented as explicit connection states.
 - Mocks, fixtures, deterministic test transports, Unix sockets, and loopback
   WebSockets do not count as acceptance evidence.
@@ -225,8 +243,13 @@ any product UI.
 - The repo is new and can choose a clean Swift layout.
 - The protocol client must support later request and notification work.
 - The daemon-managed app-server is Unix-socket-only; phone reachability requires
-  a separate real WebSocket listener or equivalent host-reachable transport.
+  a direct real WebSocket listener started with `codex app-server --listen
+  ws://...`.
+- The daemon restart command has no supported `--listen ws://...` mode; do not
+  design Phase 1 around daemon reconfiguration.
 - Non-loopback Codex WebSocket listeners require websocket auth.
+- Relay/proxy infrastructure is out of scope for Phase 1 unless the native
+  direct WebSocket listener path is tested and proven insufficient.
 
 ## 1.3 Architectural principles (rules we will enforce)
 
@@ -234,6 +257,8 @@ any product UI.
 - Typed method wrappers sit above generic envelopes.
 - Connection state is explicit.
 - No runtime fallback or shim.
+- Use Codex's native direct WebSocket listener with auth before considering any
+  relay.
 
 ## 1.4 Known tradeoffs (explicit)
 
@@ -299,9 +324,12 @@ The first implementation proof must be JSON-RPC communication itself.
 - Existing grounding / tool / file exposure:
   - Protocol ramp-up doc and current app-server endpoints.
 - Duplicate or drifting paths relevant to this change:
-  - None yet; prevent future drift by making one client owner.
+  - The daemon socket path and direct WebSocket listener path are different
+    supported Codex modes. Phase 1 must not blur them into a fake "restart the
+    daemon on a port" story.
 - Capability-first opportunities before new tooling:
-  - Use the app-server protocol directly before considering any host bridge.
+  - Use the native Codex app-server WebSocket listener with websocket auth before
+    considering any host bridge or relay.
 - Behavior-preservation signals already available:
   - New behavior; use envelope tests, test transport, and local handshake check.
 
@@ -341,7 +369,8 @@ The first implementation proof must be JSON-RPC communication itself.
 - `CodexDockTests/AppServerClientTests.swift` — envelope and handshake tests.
 ## Control paths (future)
 1. Diagnostic/test creates a phone-reachable host endpoint.
-2. `AppServerClient` opens WebSocket.
+2. `AppServerClient` opens WebSocket to a direct Codex app-server listener and
+   sends bearer auth when configured.
 3. Client sends `initialize`, receives result, sends `initialized`.
 4. Client exposes connected/offline/error state.
 5. Evidence records the real host (`Amir-M5` or `Home`) and rejects loopback or
@@ -350,7 +379,7 @@ The first implementation proof must be JSON-RPC communication itself.
 - `JSONRPCRequest`, `JSONRPCResponse`, `JSONRPCNotification`,
   `AppServerClient`, `AppServerConnectionState`.
 ## Invariants and boundaries
-- One protocol owner, no raw JSON in views, no host bridge.
+- One protocol owner, no raw JSON in views, no host bridge or relay in Phase 1.
 ## UI surfaces (ASCII mockups, if UI work)
 - None; downstream UI starts in Phase 3.
 <!-- arch_skill:block:target_architecture:end -->
@@ -363,9 +392,9 @@ The first implementation proof must be JSON-RPC communication itself.
 | Area | File | Symbol / Call site | Current behavior | Required change | Why | New API / contract | Tests impacted |
 | ---- | ---- | ------------------ | ---------------- | --------------- | --- | ------------------ | -------------- |
 | Protocol | `CodexDock/AppServer/JSONRPC.swift` | envelopes | Missing | Add Codable request/response/notification | Protocol foundation | Typed JSON-RPC | Unit |
-| Protocol | `CodexDock/AppServer/AppServerClient.swift` | client | Missing | Add WebSocket send/read and id matching | Highest-risk seam | async client API | Unit/integration |
+| Protocol | `CodexDock/AppServer/AppServerClient.swift` | client | Missing | Add WebSocket send/read, bearer auth on WebSocket upgrade, and id matching | Highest-risk seam | async client API | Unit/integration |
 | Methods | `CodexDock/AppServer/AppServerMethods.swift` | handshake | Missing | Add initialize/initialized | Required app-server lifecycle | typed method wrappers | Unit/integration |
-| Tests | `CodexDockTests/AppServerClientTests.swift` | protocol tests | Missing | Add test transport and handshake tests | Proves first phase | test transport | Unit |
+| Tests | `CodexDockTests/AppServerClientTests.swift` | protocol tests | Missing | Add test transport, loopback smoke, phone-reachable real-host handshake, and auth-header coverage | Proves first phase | test transport plus optional real endpoint tests | Unit/integration |
 ## Migration notes
 * Canonical owner path / shared code path: `AppServerClient`.
 * Deprecated APIs (if any): none.
@@ -373,7 +402,8 @@ The first implementation proof must be JSON-RPC communication itself.
 * Adjacent surfaces tied to the same contract family: all later app-server methods.
 * Compatibility posture / cutover plan: preserve app-server protocol.
 * Capability-replacing harnesses to delete or justify: none.
-* Live docs/comments/instructions to update or delete: none.
+* Live docs/comments/instructions to update or delete: root README/runbook and
+  Codex app-server ramp-up notes must say the supported path plainly.
 * Behavior-preservation signals for refactors: new code; protocol tests.
 ## Pattern Consolidation Sweep (anti-blinders; scoped by plan)
 | Area | File / Symbol | Pattern to adopt | Why (drift prevented) | Proposed scope |
@@ -386,6 +416,8 @@ The first implementation proof must be JSON-RPC communication itself.
 
 - Scope lock: this phase stops at protocol handshake proof. It must not create
   Dock UI, thread-list mapping, or account-rotation support.
+- Supported transport lock: use Codex's direct WebSocket listener with auth.
+  Do not add a relay, proxy, or daemon-port configuration layer for Phase 1.
 - Adjacent-surface check: later phases reuse `AppServerClient`; this phase must
   expose typed connection and request boundaries instead of leaking raw JSON.
 - Failure posture: offline, handshake failure, malformed response, and
@@ -417,10 +449,12 @@ Exit criteria (all required):
 ## Implementation slice 2: WebSocket connection lifecycle
 
 Work: Add `AppServerClient` with connect, send, receive, disconnect, connection
-state, and request id correlation.
+state, bearer auth for WebSocket upgrade, and request id correlation.
 
 Checklist (must all be done):
 - `AppServerClient` owns the WebSocket task and pending requests.
+- URLSession WebSocket transport can send `Authorization: Bearer <token>` during
+  the WebSocket upgrade for Codex websocket auth.
 - Connection state distinguishes idle, connecting, connected, offline, and error.
 - Receive loop keeps reading after request responses so notifications are not
   starved.
@@ -433,9 +467,15 @@ Exit criteria (all required):
 ## Implementation slice 3: initialize/initialized handshake proof
 
 Work: Add typed `initialize` and `initialized` wrappers and a focused
-diagnostic/real-host test path.
+diagnostic/real-host test path using Codex's supported direct WebSocket
+listener.
 
 Checklist (must all be done):
+- Start a real Codex app-server on `Amir-M5` using supported direct listener
+  mode, for example `codex app-server --listen ws://0.0.0.0:<port> --ws-auth
+  capability-token --ws-token-file <absolute-token-path>`.
+- Do not count `codex app-server daemon restart` as the phone-reachable server
+  setup. The daemon restart path remains Unix-socket-only.
 - Client sends `initialize`, handles the result, then sends `initialized`.
 - Diagnostic/test can run against a real phone-reachable app-server endpoint on
   `Amir-M5` or `Home`.
@@ -443,6 +483,8 @@ Checklist (must all be done):
   `localhost`, `127.0.0.1`, and `::1`.
 - Client can send the websocket auth material required by Codex non-loopback
   listeners.
+- No relay/proxy is introduced for Phase 1 unless the direct supported listener
+  is tested and a concrete blocker is recorded in this plan.
 - Success and failure are visible without product UI.
 
 Exit criteria (all required):
@@ -457,18 +499,25 @@ Exit criteria (all required):
 
 ## Decision inventory
 - Decision-complete:
-  - yes for planning; no for Phase 1 completion evidence
+  - yes
 - Unresolved decisions:
-  - none; remaining work is implementation and real-host verification
-- Decision: proceed to implement? yes, with the real phone-reachable host gate
+  - none
+- Decision: proceed to implement? yes
+
+Planning is decision-complete, but Phase 1 implementation is not complete. The
+remaining work is implementation plus real-host verification against the
+supported direct Codex WebSocket listener with auth.
 
 ## Verification strategy
 - Run envelope unit tests for Codable request/response/notification shapes.
 - Run test-transport checks for id correlation and malformed payload failures.
 - Run a real phone-reachable handshake diagnostic proving `initialize` then
   `initialized` against `Amir-M5` or `Home`.
+- Use the supported direct Codex app-server listener with websocket auth for the
+  real-host proof.
 - Confirm acceptance evidence does not use mocks, fixtures, Unix sockets, or
   loopback-only WebSocket endpoints.
+- Confirm no relay/proxy was added for Phase 1.
 - Confirm no product UI depends on raw JSON-RPC.
 
 ## Cold-read consistency checks
@@ -489,7 +538,15 @@ No analytics.
 
 ## 9.3 Operational runbook
 
-Run the focused protocol test or diagnostic against a reachable app-server.
+Run the focused protocol test or diagnostic against a reachable direct Codex
+app-server listener:
+
+```sh
+codex app-server --listen ws://0.0.0.0:<port> --ws-auth capability-token --ws-token-file <absolute-token-path>
+```
+
+The iPhone path connects to the host's LAN or Tailscale IP and supplies the
+same bearer token. Do not use daemon restart as the port-listener setup.
 
 # 10) Decision Log (append-only)
 
@@ -587,3 +644,25 @@ Consequences
 : Local daemon success and `ws://127.0.0.1:*` success do not satisfy Phase 1.
   The Swift client also needs auth support before it can connect to the secure
   non-loopback server mode.
+
+## 2026-05-28 - Supported transport path, no relay first
+
+Context
+: The daemon cannot be restarted into a TCP WebSocket port listener. Codex does
+  support a direct app-server WebSocket listener through `codex app-server
+  --listen ws://IP:PORT`, and non-loopback listeners require websocket auth.
+
+Options
+: Build a relay around the daemon Unix socket, try to configure daemon restart
+  into a port mode, or use Codex's native direct WebSocket listener with auth.
+
+Decision
+: Use the supported native direct WebSocket listener with auth for Phase 1. Do
+  not build a relay, proxy, or daemon-port configuration layer unless that
+  supported path is tested and fails with a concrete blocker recorded in this
+  plan.
+
+Consequences
+: Phase 1 implementation must add WebSocket bearer auth support in the Swift
+  client and prove the handshake against a real host listener. The daemon socket
+  remains useful for local Codex tooling but is not the mobile acceptance path.
