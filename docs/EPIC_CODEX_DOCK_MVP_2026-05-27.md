@@ -70,9 +70,13 @@ or any endpoint a physical phone could not reach.
    - Gate to next: A test or dev diagnostic can call `thread/list`, normalize
      host-scoped session summaries, and prove mapping behavior with real or
      fixture app-server payloads.
-   - Status: planning
+   - Status: complete
    - Auto-plan status: ready (`READY next=implement-loop`)
-   - Epic-critic verdict: —
+   - Epic-critic verdict: passed — Phase 2 now calls `thread/list` through
+     `AppServerClient`, maps protocol DTOs into host-scoped `SessionSummary`
+     values, and proved the live normalization path against the real
+     `Amir-M5` Codex app-server from macOS SwiftPM and the `iPhone 17`
+     simulator.
 
 3. **iPhone shell and single-host Dock**: Create the SwiftUI app shell and
    render the first useful single-host Dock from the proven session summaries.
@@ -136,8 +140,10 @@ or any endpoint a physical phone could not reach.
 - `Amir-M5`: This machine. Use it as the primary local/single-host test target,
   but the acceptance endpoint must be phone-reachable. Phase 1 completed against
   a direct Codex app-server listener on this host at `ws://192.168.50.117:4500`
-  with websocket bearer auth. Its daemon-managed app-server still exposes a
-  Unix socket, not a phone-reachable listener.
+  with websocket bearer auth. Phase 2 reused the same endpoint shape to call
+  live `thread/list` and map the response into host-scoped `SessionSummary`
+  values. Its daemon-managed app-server still exposes a Unix socket, not a
+  phone-reachable listener.
 - `Home`: Secondary server/host. It is SSH-able, but Tailscale daemon and
   Codex app-server reachability may not be ready yet. Keep it as the planned
   second host for multi-host testing, and return to setup if the app cannot
@@ -181,6 +187,11 @@ reference the mockups only as downstream context.
   Started a direct app-server listener with websocket auth, verified
   `http://192.168.50.117:4500/readyz`, and ran the `initialize`/`initialized`
   handshake from macOS SwiftPM and the `iPhone 17` simulator against
+  `ws://192.168.50.117:4500`.
+- 2026-05-28 Completed Phase 2 against the same real host shape. Added
+  `thread/list`, protocol DTOs, host-scoped `SessionSummary` models, and
+  mapper tests. Verified live `thread/list` plus `SessionSummary` mapping from
+  macOS SwiftPM and the `iPhone 17` simulator against
   `ws://192.168.50.117:4500`.
 
 # Decision Log

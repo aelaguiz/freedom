@@ -337,6 +337,99 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertNil(transport.urlRequest.value(forHTTPHeaderField: "Authorization"))
     }
 
+    func testThreadListSendsTypedRequestAndDecodesResponse() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let task = Task {
+            try await client.threadList(
+                params: ThreadListParams(
+                    limit: 2,
+                    sortKey: .updatedAt,
+                    sortDirection: .desc
+                ),
+                timeout: .seconds(1)
+            )
+        }
+        let request = try await transport.nextSentRequest()
+        XCTAssertEqual(request.method, AppServerMethods.threadList)
+
+        guard case .object(let params) = try XCTUnwrap(request.params) else {
+            return XCTFail("Expected object params")
+        }
+        XCTAssertEqual(params["limit"], .integer(2))
+        XCTAssertEqual(params["sortKey"], .string("updated_at"))
+        XCTAssertEqual(params["sortDirection"], .string("desc"))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: request.id,
+                    result: try JSONValue.encoded(
+                        ThreadListResponseDTO(
+                            data: [
+                                ThreadDTO(
+                                    id: "thread-1",
+                                    sessionId: "session-1",
+                                    preview: "Build the Dock",
+                                    createdAt: 1_790_000_000,
+                                    updatedAt: 1_790_000_010,
+                                    status: .idle,
+                                    cwd: "/Users/aelaguiz/workspace/codex-client",
+                                    source: .string("cli"),
+                                    gitInfo: ThreadGitInfoDTO(branch: "main"),
+                                    turns: []
+                                ),
+                            ],
+                            nextCursor: nil,
+                            backwardsCursor: "before-1"
+                        )
+                    )
+                )
+            )
+        )
+
+        let response = try await task.value
+        XCTAssertEqual(response.data.map(\.id), ["thread-1"])
+        XCTAssertEqual(response.data.first?.status, .idle)
+        XCTAssertEqual(response.backwardsCursor, "before-1")
+    }
+
+    func testThreadListMethodFailureSurfacesServerError() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let task = Task {
+            try await client.threadList(timeout: .seconds(1))
+        }
+        let request = try await transport.nextSentRequest()
+        XCTAssertEqual(request.method, AppServerMethods.threadList)
+
+        await transport.enqueue(
+            .error(
+                JSONRPCErrorResponse(
+                    error: JSONRPCErrorObject(
+                        code: -32602,
+                        message: "invalid thread/list params"
+                    ),
+                    id: request.id
+                )
+            )
+        )
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected server error")
+        } catch AppServerClientError.server(let error) {
+            XCTAssertEqual(error.code, -32602)
+            XCTAssertEqual(error.message, "invalid thread/list params")
+        } catch {
+            XCTFail("Expected server error, got \(error)")
+        }
+    }
+
     func testLoopbackRealHostInitializeHandshakeWhenEndpointIsProvided() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let endpoint = environment["CODEX_DOCK_LOOPBACK_APP_SERVER_WS"], !endpoint.isEmpty else {
@@ -387,6 +480,52 @@ final class AppServerClientTests: XCTestCase {
             bearerToken: bearerToken,
             timeout: .seconds(5)
         )
+    }
+
+    func testPhoneReachableRealHostThreadListWhenEndpointIsProvided() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let endpoint = environment["CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS"], !endpoint.isEmpty else {
+            throw XCTSkip(
+                "Set CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS to run the phone-reachable real-host thread/list test"
+            )
+        }
+        let url = try XCTUnwrap(URL(string: endpoint))
+        XCTAssertTrue(
+            ["ws", "wss"].contains(url.scheme?.lowercased()),
+            "Phone-reachable thread/list endpoint must be a WebSocket URL"
+        )
+        XCTAssertFalse(
+            isLoopbackHost(url.host),
+            "Phone-reachable thread/list endpoint cannot be localhost, 127.0.0.1, or ::1"
+        )
+        let bearerToken = try XCTUnwrap(
+            try appServerBearerToken(from: environment),
+            "Set CODEX_DOCK_APP_SERVER_BEARER_TOKEN or CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE for the phone-reachable authenticated app-server"
+        )
+
+        let client = AppServerClient(webSocketURL: url, bearerToken: bearerToken)
+        _ = try await client.connectAndInitialize(
+            params: .codexDock(version: "0.1.0"),
+            timeout: .seconds(5)
+        )
+        let response = try await client.threadList(
+            params: ThreadListParams(limit: 5, sortKey: .updatedAt, sortDirection: .desc),
+            timeout: .seconds(5)
+        )
+        let hostID = environment["CODEX_DOCK_REAL_HOST_ID"] ?? url.host ?? "real-host"
+        let mapping = SessionSummaryMapper.map(response: response, hostID: hostID)
+
+        XCTAssertLessThanOrEqual(response.data.count, 5)
+        for thread in response.data {
+            XCTAssertFalse(thread.id?.isEmpty ?? true)
+            XCTAssertFalse(thread.sessionId?.isEmpty ?? true)
+        }
+        XCTAssertEqual(mapping.failures, [])
+        XCTAssertEqual(mapping.summaries.count, response.data.count)
+        for summary in mapping.summaries {
+            XCTAssertEqual(summary.id.hostID, hostID)
+        }
+        await client.disconnect()
     }
 }
 

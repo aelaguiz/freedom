@@ -149,6 +149,18 @@ public actor AppServerClient {
         try await sendNotification(method: method, params: params, allowsConnecting: false)
     }
 
+    public func threadList(
+        params: ThreadListParams = ThreadListParams(),
+        timeout: Duration = .seconds(10)
+    ) async throws -> ThreadListResponseDTO {
+        try await sendRequest(
+            method: AppServerMethods.threadList,
+            params: try JSONValue.encoded(params),
+            timeout: timeout,
+            as: ThreadListResponseDTO.self
+        )
+    }
+
     private func sendNotification(
         method: String,
         params: JSONValue? = nil,

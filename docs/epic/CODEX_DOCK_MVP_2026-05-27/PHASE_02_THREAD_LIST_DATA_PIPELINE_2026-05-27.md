@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - Thread List Data Pipeline - Architecture Plan"
 date: 2026-05-27
-status: active
+status: complete
 fallback_policy: forbidden
 owners: [aelaguiz]
 reviewers: [Codex]
@@ -23,6 +23,49 @@ related:
   and keep the output UI-independent.
 - Non-negotiables: preserve Phase 1 client boundary, no UI dependency, no
   AIMGR, and no static production data.
+
+<!-- arch_skill:block:implementation_audit:start -->
+# Implementation Audit (authoritative)
+Date: 2026-05-28
+Verdict (code): COMPLETE
+Manual QA: complete (non-blocking)
+
+## Code blockers (why code is not done)
+- None.
+
+## Reopened phases (false-complete fixes)
+- None. Phase 2 is complete.
+
+## Missing items (code gaps; evidence-anchored; no tables)
+- None.
+
+## Evidence checked
+- Stage gate: `python3 /Users/aelaguiz/.agents/skills/arch-step/scripts/arch_stage_gate.py ready --doc docs/epic/CODEX_DOCK_MVP_2026-05-27/PHASE_02_THREAD_LIST_DATA_PIPELINE_2026-05-27.md` returned `READY next=implement-loop`.
+- SwiftPM/macOS fixture proof: `swift test` passed 24 tests, with live endpoint
+  tests skipped when no endpoint env was set.
+- SwiftPM/macOS live proof:
+  `CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4500 CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE=<temp-token-file> CODEX_DOCK_REAL_HOST_ID=Amir-M5 swift test`
+  passed 24 tests with only the loopback-only smoke test skipped.
+- iPhone simulator live proof:
+  `xcodebuild test -scheme codex-client -destination 'id=DEF1631B-7125-43C6-BFA3-4423BF103C91'`
+  passed on the booted `iPhone 17` simulator after simulator env was set for
+  the same real `Amir-M5` endpoint.
+- Real host proof: started a real Codex app-server on `Amir-M5` with
+  `codex app-server --listen ws://0.0.0.0:4500 --ws-auth capability-token --ws-token-file <temp-token-file>`.
+- Reachability proof: `curl -i http://192.168.50.117:4500/readyz` returned
+  `HTTP/1.1 200 OK`.
+- Thread-list proof: macOS SwiftPM and the `iPhone 17` simulator both completed
+  `initialize`/`initialized`, called `thread/list`, decoded the live response,
+  and mapped it into host-scoped `SessionSummary` values against
+  `ws://192.168.50.117:4500`.
+- Scope check: implementation added app-server DTOs, a typed `thread/list`
+  client method, app-facing `SessionSummary` models, mapper tests, and live
+  diagnostic tests only. No Dock UI, thread detail, send/control, archive,
+  voice, AIMGR, relay, or production static data was added.
+
+## Non-blocking follow-ups (manual QA / screenshots / human verification)
+- None for Phase 2.
+<!-- arch_skill:block:implementation_audit:end -->
 
 <!-- arch_skill:block:planning_passes:start -->
 <!--
@@ -158,7 +201,8 @@ and produce normalized `SessionSummary` values keyed by host id.
 
 ## 2.1 What exists today
 
-Phase 1 will prove the connection and handshake. No session data pipeline exists.
+Phase 1 provides the connection and handshake. Before this phase, no session
+data pipeline existed.
 
 ## 2.2 What’s broken / missing (concrete)
 
@@ -296,6 +340,8 @@ Build a data pipeline before product UI.
 
 ## Implementation slice 1: typed `thread/list` method
 
+Status: COMPLETE
+
 Work: Extend the Phase 1 client with the first real data method while preserving
 the protocol boundary.
 
@@ -308,7 +354,14 @@ Exit criteria (all required):
 - `thread/list` can be called through `AppServerClient`.
 - Phase 1 handshake checks still pass.
 
+Completed work:
+- Added `AppServerMethods.threadList` and `AppServerClient.threadList(...)`.
+- Added success, method-error, and phone-reachable real-host `thread/list`
+  coverage through the Phase 1 client boundary.
+
 ## Implementation slice 2: DTO decoding and `SessionSummary`
+
+Status: COMPLETE
 
 Work: Add protocol DTOs and app-facing summary models keyed by host id.
 
@@ -322,7 +375,17 @@ Exit criteria (all required):
 - Mapping tests cover complete and sparse payloads.
 - No mapper drops a valid thread only because optional metadata is absent.
 
+Completed work:
+- Added protocol-facing `ThreadListResponseDTO`, `ThreadDTO`, params, status,
+  active-flag, git-info, sort, and filter DTOs.
+- Added app-facing `HostScopedThreadID`, `SessionSummary`, `SessionStatus`,
+  `SessionActiveFlag`, and `SessionSummaryText`.
+- Added `SessionSummaryMapper` with explicit unknown states and scoped mapping
+  failures.
+
 ## Implementation slice 3: data diagnostic proof
+
+Status: COMPLETE
 
 Work: Produce a focused test/dev proof that prints or asserts normalized rows.
 
@@ -333,6 +396,12 @@ Checklist (must all be done):
 
 Exit criteria (all required):
 - Phase 3 can consume `SessionSummary` without raw protocol knowledge.
+
+Completed work:
+- Added fixture mapping tests for complete, sparse, malformed, and unknown
+  status/flag payloads.
+- Added live `thread/list` proof that maps the real app-server payload into
+  host-scoped `SessionSummary` rows on macOS and the `iPhone 17` simulator.
 <!-- arch_skill:block:phase_plan:end -->
 
 # 8) Verification Strategy (common-sense; non-blocking)
@@ -390,3 +459,19 @@ Decision
 
 Consequences
 : Dock UI starts from real app-facing summaries.
+
+## 2026-05-28 - Phase 2 implementation completed
+
+Context
+: Phase 2 needed to prove the first real data method and normalized summaries
+  before any Dock UI could depend on session rows.
+
+Decision
+: Implemented `thread/list` directly through `AppServerClient`, kept app-server
+  DTOs protocol-facing, and added `SessionSummary` as the app-facing data model
+  for Phase 3.
+
+Consequences
+: Phase 3 can consume `SessionSummary` without raw JSON-RPC or protocol DTO
+  knowledge. Real-host proof remains on `Amir-M5`; `Home` stays planned for the
+  later multi-host phase.
