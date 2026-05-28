@@ -11,8 +11,20 @@ APP_SERVER_TOKEN := $(APP_SERVER_ABS_DIR)/app-server.token
 APP_SERVER_LOG := $(APP_SERVER_ABS_DIR)/app-server.log
 APP_SERVER_ERR_LOG := $(APP_SERVER_ABS_DIR)/app-server.err.log
 APP_SERVER_PLIST := $(APP_SERVER_ABS_DIR)/$(APP_SERVER_LABEL).plist
+SIM ?= iPhone 17
 
-.PHONY: app-server app-server-status app-server-env app-server-stop app-server-restart
+.DEFAULT_GOAL := help
+
+.PHONY: help app-server app-server-status app-server-env app-server-stop app-server-restart sims sim sim-list sim-boot
+
+help:
+	@printf "%s\n" "Codex Dock commands:"
+	@printf "%s\n" "  rtk make app-server        Start/reuse the persistent LAN app-server"
+	@printf "%s\n" "  rtk make app-server-status Check app-server PID and readyz"
+	@printf "%s\n" "  rtk make app-server-env    Print env for tests/app launch"
+	@printf "%s\n" "  rtk make sims              List available simulators"
+	@printf "%s\n" "  rtk make sim SIM='iPhone 17' Boot/open a simulator by name"
+	@printf "%s\n" "  rtk make sim SIM=<UDID>    Boot/open a simulator by ID"
 
 app-server:
 	@rtk mkdir -p "$(APP_SERVER_ABS_DIR)"
@@ -33,3 +45,13 @@ app-server-stop:
 	@rtk sh -c 'set -eu; service="gui/$$(id -u)/$(APP_SERVER_LABEL)"; if launchctl bootout "gui/$$(id -u)" "$(APP_SERVER_PLIST)" >/dev/null 2>&1 || launchctl bootout "$$service" >/dev/null 2>&1; then echo "stopped launch agent $(APP_SERVER_LABEL)"; else echo "codex app-server launch agent was not loaded"; fi; rm -f "$(APP_SERVER_PID)"'
 
 app-server-restart: app-server-stop app-server
+
+sims:
+	@rtk python3 scripts/sim.py list
+
+sim:
+	@rtk python3 scripts/sim.py boot "$(SIM)"
+
+sim-list: sims
+
+sim-boot: sim
