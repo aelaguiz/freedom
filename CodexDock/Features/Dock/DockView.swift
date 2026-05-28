@@ -29,40 +29,114 @@ public enum DockFilter: String, CaseIterable, Identifiable {
 }
 
 public struct CodexDockRootView: View {
-    @StateObject private var store: DockStore
+    @StateObject private var dockStore: DockStore
+    @StateObject private var archiveStore: ArchiveStore
+    @StateObject private var hostsStore: HostSettingsStore
 
     public init(store: DockStore) {
-        _store = StateObject(wrappedValue: store)
+        _dockStore = StateObject(wrappedValue: store)
+        if let host = store.hostConfiguration,
+           let registry = try? HostRegistry(hosts: [host]) {
+            _archiveStore = StateObject(wrappedValue: ArchiveStore(registry: registry))
+            _hostsStore = StateObject(wrappedValue: HostSettingsStore(registry: registry))
+        } else {
+            let error = DockHostConfigurationError.missingEndpoint
+            _archiveStore = StateObject(wrappedValue: ArchiveStore(configurationError: error))
+            _hostsStore = StateObject(wrappedValue: HostSettingsStore(configurationError: error))
+        }
+    }
+
+    public init(
+        registry: HostRegistry,
+        client: AppServerDockClient = AppServerDockClient(),
+        metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        _dockStore = StateObject(
+            wrappedValue: DockStore(
+                registry: registry,
+                loader: client,
+                archiver: client,
+                metadataStore: metadataStore,
+                now: now
+            )
+        )
+        _archiveStore = StateObject(
+            wrappedValue: ArchiveStore(
+                registry: registry,
+                loader: client,
+                archiver: client,
+                metadataStore: metadataStore,
+                now: now
+            )
+        )
+        _hostsStore = StateObject(
+            wrappedValue: HostSettingsStore(
+                registry: registry,
+                tester: client,
+                now: now
+            )
+        )
+    }
+
+    public init(configurationError error: Error) {
+        _dockStore = StateObject(wrappedValue: DockStore(configurationError: error))
+        _archiveStore = StateObject(wrappedValue: ArchiveStore(configurationError: error))
+        _hostsStore = StateObject(wrappedValue: HostSettingsStore(configurationError: error))
     }
 
     public var body: some View {
         TabView {
-            DockView(store: store)
+            DockView(
+                store: dockStore,
+                onArchiveSucceeded: {
+                    await archiveStore.refresh()
+                }
+            )
                 .tabItem {
                     Label("Dock", systemImage: "rectangle.stack")
                 }
 
-            ContentUnavailableView("Archive", systemImage: "archivebox")
+            ArchiveView(
+                store: archiveStore,
+                onRestoreSucceeded: {
+                    await dockStore.refresh()
+                }
+            )
                 .tabItem {
                     Label("Archive", systemImage: "archivebox")
                 }
 
-            ContentUnavailableView("Hosts", systemImage: "desktopcomputer")
+            HostsView(store: hostsStore)
                 .tabItem {
                     Label("Hosts", systemImage: "desktopcomputer")
                 }
         }
         .tint(.blue)
+        .onChange(of: hostsStore.registry) { _, registry in
+            guard let registry else {
+                return
+            }
+            Task {
+                await dockStore.updateRegistry(registry)
+                await archiveStore.updateRegistry(registry)
+            }
+        }
     }
 }
 
 public struct DockView: View {
     @ObservedObject private var store: DockStore
+    private let onArchiveSucceeded: @MainActor () async -> Void
     @State private var filter: DockFilter = .all
     @State private var searchText = ""
 
-    public init(store: DockStore) {
+    public init(
+        store: DockStore,
+        onArchiveSucceeded: @escaping @MainActor () async -> Void = {}
+    ) {
         self.store = store
+        self.onArchiveSucceeded = onArchiveSucceeded
     }
 
     public var body: some View {
@@ -214,6 +288,10 @@ public struct DockView: View {
                 HostSummaryView(hostState: hostState)
             }
 
+            if let actionError = store.actionError {
+                ActionErrorBanner(message: actionError)
+            }
+
             if !snapshot.mappingFailures.isEmpty {
                 MappingFailureBanner(count: snapshot.mappingFailures.count)
             }
@@ -276,6 +354,16 @@ public struct DockView: View {
             }
         } label: {
             Label("Clear Label", systemImage: "tag.slash")
+        }
+
+        Button(role: .destructive) {
+            Task {
+                if await store.archive(row) {
+                    await onArchiveSucceeded()
+                }
+            }
+        } label: {
+            Label("Archive", systemImage: "archivebox")
         }
 
         Menu {
@@ -357,7 +445,7 @@ public struct DockView: View {
     }
 }
 
-private struct HostSummaryView: View {
+struct HostSummaryView: View {
     let host: DockHostViewModel
     let subtitle: String
 
@@ -405,7 +493,7 @@ private struct HostSummaryView: View {
     }
 }
 
-private struct MappingFailureBanner: View {
+struct MappingFailureBanner: View {
     let count: Int
 
     var body: some View {
@@ -422,7 +510,25 @@ private struct MappingFailureBanner: View {
     }
 }
 
-private struct DockMessageView: View {
+struct ActionErrorBanner: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.circle")
+                .foregroundStyle(.red)
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+            Spacer()
+        }
+        .padding(12)
+        .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+struct DockMessageView: View {
     let icon: String
     let title: String
     let message: String
@@ -445,7 +551,7 @@ private struct DockMessageView: View {
     }
 }
 
-private struct DockRowView: View {
+struct DockRowView: View {
     let row: DockRowViewModel
 
     var body: some View {
@@ -568,7 +674,7 @@ private extension DockRowRail {
     }
 }
 
-private extension View {
+extension View {
     @ViewBuilder
     func dockNavigationChrome() -> some View {
         #if os(iOS)
@@ -592,8 +698,14 @@ private extension View {
 }
 
 private struct PreviewDockSessionLoader: DockSessionLoading {
-    func loadSessions(for host: DockHostConfiguration) async throws -> DockLoadResult {
-        DockLoadResult(
+    func loadSessions(
+        for host: DockHostConfiguration,
+        archived: Bool
+    ) async throws -> DockLoadResult {
+        if archived {
+            return DockLoadResult(summaries: [])
+        }
+        return DockLoadResult(
             summaries: [
                 SessionSummary(
                     id: HostScopedThreadID(hostID: host.id, threadID: "preview-running"),

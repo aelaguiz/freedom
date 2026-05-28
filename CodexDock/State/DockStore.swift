@@ -15,7 +15,21 @@ public struct DockLoadResult: Equatable, Sendable {
 }
 
 public protocol DockSessionLoading: Sendable {
-    func loadSessions(for host: DockHostConfiguration) async throws -> DockLoadResult
+    func loadSessions(
+        for host: DockHostConfiguration,
+        archived: Bool
+    ) async throws -> DockLoadResult
+}
+
+public extension DockSessionLoading {
+    func loadSessions(for host: DockHostConfiguration) async throws -> DockLoadResult {
+        try await loadSessions(for: host, archived: false)
+    }
+}
+
+public protocol DockSessionArchiving: Sendable {
+    func archiveThread(_ threadID: String, on host: DockHostConfiguration) async throws
+    func unarchiveThread(_ threadID: String, on host: DockHostConfiguration) async throws
 }
 
 public enum DockLoadFailure: Error, Equatable, LocalizedError, Sendable {
@@ -30,12 +44,57 @@ public enum DockLoadFailure: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
-public struct AppServerDockClient: DockSessionLoading {
+public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
     private let sessionPageLimit = 200
 
     public init() {}
 
-    public func loadSessions(for host: DockHostConfiguration) async throws -> DockLoadResult {
+    public func loadSessions(
+        for host: DockHostConfiguration,
+        archived: Bool = false
+    ) async throws -> DockLoadResult {
+        try await withClient(for: host) { client in
+            let response = try await client.threadList(
+                params: ThreadListParams(
+                    limit: sessionPageLimit,
+                    sortKey: .updatedAt,
+                    sortDirection: .desc,
+                    modelProviders: [],
+                    archived: archived
+                ),
+                timeout: .seconds(10)
+            )
+            let mapped = SessionSummaryMapper.map(response: response, hostID: host.id)
+
+            return DockLoadResult(
+                summaries: mapped.summaries,
+                mappingFailures: mapped.failures
+            )
+        }
+    }
+
+    public func archiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
+        _ = try await withClient(for: host) { client in
+            try await client.threadArchive(
+                params: ThreadArchiveParams(threadId: threadID),
+                timeout: .seconds(10)
+            )
+        }
+    }
+
+    public func unarchiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
+        _ = try await withClient(for: host) { client in
+            try await client.threadUnarchive(
+                params: ThreadUnarchiveParams(threadId: threadID),
+                timeout: .seconds(10)
+            )
+        }
+    }
+
+    private func withClient<Value>(
+        for host: DockHostConfiguration,
+        operation: (AppServerClient) async throws -> Value
+    ) async throws -> Value {
         let client = AppServerClient(
             webSocketURL: host.webSocketURL,
             bearerToken: host.bearerToken
@@ -46,23 +105,9 @@ public struct AppServerDockClient: DockSessionLoading {
                 params: .codexDock(version: "0.1.0"),
                 timeout: .seconds(5)
             )
-
-            let response = try await client.threadList(
-                params: ThreadListParams(
-                    limit: sessionPageLimit,
-                    sortKey: .updatedAt,
-                    sortDirection: .desc,
-                    modelProviders: []
-                ),
-                timeout: .seconds(10)
-            )
-            let mapped = SessionSummaryMapper.map(response: response, hostID: host.id)
+            let value = try await operation(client)
             await client.disconnect()
-
-            return DockLoadResult(
-                summaries: mapped.summaries,
-                mappingFailures: mapped.failures
-            )
+            return value
         } catch {
             await client.disconnect()
             throw mapLoadFailure(error)
@@ -236,9 +281,11 @@ public final class DockStore: ObservableObject {
     public static let defaultAutoRefreshInterval: Duration = .seconds(5)
 
     @Published public private(set) var state: DockStoreState
+    @Published public private(set) var actionError: String?
 
-    private let hosts: [DockHostConfiguration]
+    private var hosts: [DockHostConfiguration]
     private let loader: any DockSessionLoading
+    private let archiver: any DockSessionArchiving
     private let metadataStore: any LocalThreadMetadataStoring
     private let now: @Sendable () -> Date
     private var isLoading = false
@@ -255,11 +302,13 @@ public final class DockStore: ObservableObject {
     public init(
         host: DockHostConfiguration,
         loader: any DockSessionLoading = AppServerDockClient(),
+        archiver: any DockSessionArchiving = AppServerDockClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.hosts = [host]
         self.loader = loader
+        self.archiver = archiver
         self.metadataStore = metadataStore
         self.now = now
         self.state = .idle(DockHostViewModel(host: host))
@@ -268,11 +317,13 @@ public final class DockStore: ObservableObject {
     public init(
         registry: HostRegistry,
         loader: any DockSessionLoading = AppServerDockClient(),
+        archiver: any DockSessionArchiving = AppServerDockClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.hosts = registry.hosts
         self.loader = loader
+        self.archiver = archiver
         self.metadataStore = metadataStore
         self.now = now
         self.state = .idle(DockHostViewModel(host: registry.hosts[0]))
@@ -281,14 +332,23 @@ public final class DockStore: ObservableObject {
     public init(
         configurationError error: Error,
         loader: any DockSessionLoading = AppServerDockClient(),
+        archiver: any DockSessionArchiving = AppServerDockClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.hosts = []
         self.loader = loader
+        self.archiver = archiver
         self.metadataStore = metadataStore
         self.now = now
         self.state = .configurationError(error.localizedDescription)
+    }
+
+    public func updateRegistry(_ registry: HostRegistry) async {
+        hosts = registry.hosts
+        actionError = nil
+        state = .idle(DockHostViewModel(host: registry.hosts[0]))
+        await reload(showLoading: true)
     }
 
     public func load() async {
@@ -309,6 +369,24 @@ public final class DockStore: ObservableObject {
         var metadata = localMetadata[row.metadataKey] ?? LocalThreadMetadata()
         metadata.rail = rail
         await save(metadata: metadata, for: row.metadataKey)
+    }
+
+    @discardableResult
+    public func archive(_ row: DockRowViewModel) async -> Bool {
+        guard let host = hostConfiguration(for: row.id.hostID) else {
+            actionError = "Host \(row.id.hostID) is no longer configured."
+            return false
+        }
+
+        do {
+            try await archiver.archiveThread(row.id.threadID, on: host)
+            actionError = nil
+            await refresh()
+            return true
+        } catch {
+            actionError = error.localizedDescription
+            return false
+        }
     }
 
     private func reload(showLoading: Bool) async {
@@ -370,7 +448,7 @@ public final class DockStore: ObservableObject {
                     do {
                         return HostLoadOutcome(
                             host: host,
-                            result: .success(try await loader.loadSessions(for: host))
+                            result: .success(try await loader.loadSessions(for: host, archived: false))
                         )
                     } catch {
                         return HostLoadOutcome(
@@ -427,17 +505,11 @@ public final class DockStore: ObservableObject {
             }
         }
 
-        let rows = summaries.map(makeRow)
-        let groupedRows = Dictionary(grouping: rows, by: sectionID(for:))
-        let sections = groupedRows
-            .map { sectionID, rows in
-                DockSectionViewModel(
-                    id: sectionID,
-                    title: sectionTitle(for: rows[0]),
-                    rows: rows.sorted(by: rowPrecedes)
-                )
-            }
-            .sorted(by: sectionPrecedes)
+        let sections = SessionRowProjector(
+            hosts: hosts,
+            localMetadata: localMetadata,
+            now: now
+        ).sections(from: summaries)
 
         return DockSnapshot(
             host: DockHostViewModel(host: hosts[0]),
@@ -446,165 +518,6 @@ public final class DockStore: ObservableObject {
             sections: sections,
             mappingFailures: mappingFailures
         )
-    }
-
-    private func sectionPrecedes(_ lhs: DockSectionViewModel, _ rhs: DockSectionViewModel) -> Bool {
-        let lhsDate = lhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
-        let rhsDate = rhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
-        if lhsDate != rhsDate {
-            return lhsDate > rhsDate
-        }
-
-        let lhsPriority = lhs.rows.map { statusPriority($0.status) }.min() ?? Int.max
-        let rhsPriority = rhs.rows.map { statusPriority($0.status) }.min() ?? Int.max
-        if lhsPriority != rhsPriority {
-            return lhsPriority < rhsPriority
-        }
-
-        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-    }
-
-    private func rowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
-        if lhs.lastActivityDate != rhs.lastActivityDate {
-            return lhs.lastActivityDate > rhs.lastActivityDate
-        }
-
-        let lhsPriority = statusPriority(lhs.status)
-        let rhsPriority = statusPriority(rhs.status)
-        if lhsPriority != rhsPriority {
-            return lhsPriority < rhsPriority
-        }
-
-        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-    }
-
-    private func statusPriority(_ status: DockRowStatusKind) -> Int {
-        switch status {
-        case .needsMe:
-            return 0
-        case .running:
-            return 1
-        case .failed:
-            return 2
-        case .idle:
-            return 3
-        case .unknown:
-            return 4
-        case .limited:
-            return 5
-        }
-    }
-
-    private func makeRow(summary: SessionSummary) -> DockRowViewModel {
-        let metadata = localMetadata[
-            LocalThreadMetadataKey(
-                hostID: summary.id.hostID,
-                backendSessionID: summary.backendSessionID,
-                threadID: summary.id.threadID
-            )
-        ]
-        return DockRowViewModel(
-            id: summary.id,
-            backendSessionID: summary.backendSessionID,
-            title: title(for: summary),
-            repository: repository(for: summary),
-            branch: text(summary.branch, fallback: "No branch"),
-            status: status(for: summary),
-            lastActivity: relativeTime(since: summary.lastActivity),
-            lastActivityDate: summary.lastActivity,
-            summary: latestSummary(for: summary),
-            rail: metadata?.rail ?? rail(for: summary),
-            label: metadata?.label
-        )
-    }
-
-    private func sectionID(for row: DockRowViewModel) -> String {
-        hosts.count > 1 ? "\(row.id.hostID)::\(row.branch)" : row.branch
-    }
-
-    private func sectionTitle(for row: DockRowViewModel) -> String {
-        guard hosts.count > 1 else {
-            return row.branch
-        }
-        let hostName = hosts.first { $0.id == row.id.hostID }?.displayName ?? row.id.hostID
-        return "\(hostName) / \(row.branch)"
-    }
-
-    private func title(for summary: SessionSummary) -> String {
-        nonEmpty(summary.displayTitle) ?? summary.id.threadID
-    }
-
-    private func repository(for summary: SessionSummary) -> String {
-        if let repo = nonEmpty(text(summary.repository, fallback: "")) {
-            return repo
-        }
-
-        return text(summary.workingDirectory, fallback: "Unknown workspace")
-    }
-
-    private func latestSummary(for summary: SessionSummary) -> String {
-        if let eventSummary = nonEmpty(text(summary.shortEventSummary, fallback: "")) {
-            return eventSummary
-        }
-
-        return summary.displayTitle
-    }
-
-    private func status(for summary: SessionSummary) -> DockRowStatusKind {
-        switch summary.status {
-        case .idle:
-            return .idle
-        case .active(let activeFlags):
-            return activeFlags.contains(.waitingOnApproval) || activeFlags.contains(.waitingOnUserInput)
-                ? .needsMe
-                : .running
-        case .notLoaded:
-            return .limited
-        case .systemError:
-            return .failed
-        case .unknown:
-            return .unknown
-        }
-    }
-
-    private func relativeTime(since date: Date) -> String {
-        let seconds = max(0, Int(now().timeIntervalSince(date)))
-
-        switch seconds {
-        case 0..<60:
-            return "now"
-        case 60..<3_600:
-            return "\(seconds / 60)m ago"
-        case 3_600..<86_400:
-            return "\(seconds / 3_600)h ago"
-        default:
-            return "\(seconds / 86_400)d ago"
-        }
-    }
-
-    private func rail(for summary: SessionSummary) -> DockRowRail {
-        let rails = DockRowRail.allCases
-        let checksum = summary.id.threadID.utf8.reduce(UInt64(0)) { partial, byte in
-            (partial &* 31) &+ UInt64(byte)
-        }
-        return rails[Int(checksum % UInt64(rails.count))]
-    }
-
-    private func text(_ value: SessionSummaryText, fallback: String) -> String {
-        switch value {
-        case let .known(text):
-            return nonEmpty(text) ?? fallback
-        case .unknown:
-            return fallback
-        }
-    }
-
-    private func nonEmpty(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let trimmed, !trimmed.isEmpty {
-            return trimmed
-        }
-        return nil
     }
 
     private func hostIndex(_ hostID: String) -> Int {

@@ -491,6 +491,64 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(resumeResponse.thread.id, "thread-1")
     }
 
+    func testThreadArchiveAndUnarchiveSendTypedRequests() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let archiveTask = Task {
+            try await client.threadArchive(
+                params: ThreadArchiveParams(threadId: "thread-1"),
+                timeout: .seconds(1)
+            )
+        }
+        let archiveRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(archiveRequest.method, AppServerMethods.threadArchive)
+        guard case .object(let archiveParams) = try XCTUnwrap(archiveRequest.params) else {
+            return XCTFail("Expected object params")
+        }
+        XCTAssertEqual(archiveParams["threadId"], .string("thread-1"))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: archiveRequest.id,
+                    result: try JSONValue.encoded(ThreadArchiveResponseDTO())
+                )
+            )
+        )
+        _ = try await archiveTask.value
+
+        let unarchiveTask = Task {
+            try await client.threadUnarchive(
+                params: ThreadUnarchiveParams(threadId: "thread-1"),
+                timeout: .seconds(1)
+            )
+        }
+        let unarchiveRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(unarchiveRequest.method, AppServerMethods.threadUnarchive)
+        guard case .object(let unarchiveParams) = try XCTUnwrap(unarchiveRequest.params) else {
+            return XCTFail("Expected object params")
+        }
+        XCTAssertEqual(unarchiveParams["threadId"], .string("thread-1"))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: unarchiveRequest.id,
+                    result: try JSONValue.encoded(
+                        ThreadUnarchiveResponseDTO(
+                            thread: ThreadDTO(id: "thread-1", sessionId: "session-1", turns: [])
+                        )
+                    )
+                )
+            )
+        )
+
+        let unarchiveResponse = try await unarchiveTask.value
+        XCTAssertEqual(unarchiveResponse.thread.id, "thread-1")
+    }
+
     func testServerRequestStreamReceivesRequestsWithoutFailingConnection() async throws {
         let transport = ScriptedAppServerTransport()
         let client = AppServerClient(transport: transport)
@@ -754,6 +812,107 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(resumed.thread.id, threadID)
         XCTAssertNotNil(read.thread.turns)
         XCTAssertNotNil(resumed.thread.turns)
+        await client.disconnect()
+    }
+
+    func testPhoneReachableRealHostArchiveUnarchiveRoundTripWhenExplicitlyEnabled() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["CODEX_DOCK_RUN_ARCHIVE_ROUND_TRIP"] == "1" else {
+            throw XCTSkip(
+                "Set CODEX_DOCK_RUN_ARCHIVE_ROUND_TRIP=1 to run the reversible real-host archive smoke test"
+            )
+        }
+        let endpoint = try XCTUnwrap(environment["CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS"])
+        let url = try XCTUnwrap(URL(string: endpoint))
+        XCTAssertTrue(
+            ["ws", "wss"].contains(url.scheme?.lowercased()),
+            "Phone-reachable archive endpoint must be a WebSocket URL"
+        )
+        XCTAssertFalse(
+            isLoopbackHost(url.host),
+            "Phone-reachable archive endpoint cannot be localhost, 127.0.0.1, or ::1"
+        )
+        let bearerToken = try XCTUnwrap(
+            try appServerBearerToken(from: environment),
+            "Set CODEX_DOCK_APP_SERVER_BEARER_TOKEN or CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE for the phone-reachable authenticated app-server"
+        )
+
+        let client = AppServerClient(webSocketURL: url, bearerToken: bearerToken)
+        _ = try await client.connectAndInitialize(
+            params: .codexDock(version: "0.1.0"),
+            timeout: .seconds(5)
+        )
+        var archivedThreadID: String?
+
+        do {
+            let list = try await client.threadList(
+                params: ThreadListParams(
+                    limit: 200,
+                    sortKey: .updatedAt,
+                    sortDirection: .desc,
+                    archived: false
+                ),
+                timeout: .seconds(10)
+            )
+            let thread = try XCTUnwrap(
+                list.data.first { thread in
+                    thread.status == .notLoaded && thread.id?.isEmpty == false
+                },
+                "Real-host archive smoke test requires one notLoaded thread"
+            )
+            let threadID = try XCTUnwrap(thread.id)
+
+            _ = try await client.threadArchive(
+                params: ThreadArchiveParams(threadId: threadID),
+                timeout: .seconds(10)
+            )
+            archivedThreadID = threadID
+
+            let archived = try await client.threadList(
+                params: ThreadListParams(
+                    limit: 200,
+                    sortKey: .updatedAt,
+                    sortDirection: .desc,
+                    archived: true
+                ),
+                timeout: .seconds(10)
+            )
+            XCTAssertTrue(
+                archived.data.contains { $0.id == threadID },
+                "Archived list should include \(threadID) after thread/archive"
+            )
+
+            let restored = try await client.threadUnarchive(
+                params: ThreadUnarchiveParams(threadId: threadID),
+                timeout: .seconds(10)
+            )
+            archivedThreadID = nil
+            XCTAssertEqual(restored.thread.id, threadID)
+
+            let unarchived = try await client.threadList(
+                params: ThreadListParams(
+                    limit: 200,
+                    sortKey: .updatedAt,
+                    sortDirection: .desc,
+                    archived: false
+                ),
+                timeout: .seconds(10)
+            )
+            XCTAssertTrue(
+                unarchived.data.contains { $0.id == threadID },
+                "Default list should include \(threadID) after thread/unarchive"
+            )
+        } catch {
+            if let archivedThreadID {
+                _ = try? await client.threadUnarchive(
+                    params: ThreadUnarchiveParams(threadId: archivedThreadID),
+                    timeout: .seconds(10)
+                )
+            }
+            await client.disconnect()
+            throw error
+        }
+
         await client.disconnect()
     }
 }

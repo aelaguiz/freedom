@@ -196,6 +196,30 @@ public actor AppServerClient {
         )
     }
 
+    public func threadArchive(
+        params: ThreadArchiveParams,
+        timeout: Duration = .seconds(10)
+    ) async throws -> ThreadArchiveResponseDTO {
+        try await sendRequest(
+            method: AppServerMethods.threadArchive,
+            params: try JSONValue.encoded(params),
+            timeout: timeout,
+            as: ThreadArchiveResponseDTO.self
+        )
+    }
+
+    public func threadUnarchive(
+        params: ThreadUnarchiveParams,
+        timeout: Duration = .seconds(10)
+    ) async throws -> ThreadUnarchiveResponseDTO {
+        try await sendRequest(
+            method: AppServerMethods.threadUnarchive,
+            params: try JSONValue.encoded(params),
+            timeout: timeout,
+            as: ThreadUnarchiveResponseDTO.self
+        )
+    }
+
     public func turnStart(
         params: TurnStartParams,
         timeout: Duration = .seconds(10)

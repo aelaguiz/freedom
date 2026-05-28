@@ -6,6 +6,8 @@ public enum AppServerMethods {
     public static let threadList = "thread/list"
     public static let threadRead = "thread/read"
     public static let threadResume = "thread/resume"
+    public static let threadArchive = "thread/archive"
+    public static let threadUnarchive = "thread/unarchive"
     public static let turnStart = "turn/start"
     public static let turnSteer = "turn/steer"
     public static let turnInterrupt = "turn/interrupt"

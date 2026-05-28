@@ -4,23 +4,23 @@ import SwiftUI
 @main
 @MainActor
 struct CodexDockApp: App {
-    private let store: DockStore
+    private let rootView: CodexDockRootView
 
     init() {
-        self.store = Self.makeStore()
+        self.rootView = Self.makeRootView()
     }
 
     var body: some Scene {
         WindowGroup {
-            CodexDockRootView(store: store)
+            rootView
         }
     }
 
-    private static func makeStore() -> DockStore {
+    private static func makeRootView() -> CodexDockRootView {
         do {
-            return DockStore(registry: try HostRegistry.fromEnvironment())
+            return CodexDockRootView(registry: try HostRegistry.fromEnvironment())
         } catch {
-            return DockStore(configurationError: error)
+            return CodexDockRootView(configurationError: error)
         }
     }
 }

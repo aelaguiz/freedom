@@ -405,6 +405,165 @@ final class DockStoreTests: XCTestCase {
 
         XCTAssertEqual(values[key], LocalThreadMetadata(label: "Watch", rail: .red))
     }
+
+    @MainActor
+    func testArchiveRemovesDockRowOnlyAfterServerSuccessAndRefresh() async {
+        let host = makeHost()
+        let loader = SequencedDockSessionLoader(results: [
+            .success(DockLoadResult(summaries: [
+                makeSummary(
+                    hostID: host.id,
+                    threadID: "thread-archive",
+                    branch: "main",
+                    status: .idle,
+                    lastActivity: Date(timeIntervalSince1970: 1_900),
+                    prompt: "Archive me"
+                )
+            ])),
+            .success(DockLoadResult(summaries: []))
+        ])
+        let archiver = RecordingDockArchiver()
+        let store = DockStore(host: host, loader: loader, archiver: archiver)
+
+        await store.load()
+        guard case let .loaded(initialSnapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+
+        let row = initialSnapshot.sections[0].rows[0]
+        let archived = await store.archive(row)
+
+        XCTAssertTrue(archived)
+        let archivedIDs = await archiver.archivedIDs()
+        XCTAssertEqual(archivedIDs, ["thread-archive"])
+        XCTAssertEqual(store.state, .empty(DockHostViewModel(host: host)))
+    }
+
+    @MainActor
+    func testFailedArchiveKeepsDockRowRecoverable() async {
+        let host = makeHost()
+        let loader = FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [
+            makeSummary(
+                hostID: host.id,
+                threadID: "thread-keep",
+                branch: "main",
+                status: .idle,
+                lastActivity: Date(timeIntervalSince1970: 1_900),
+                prompt: "Keep me"
+            )
+        ])))
+        let archiver = RecordingDockArchiver(mode: .failure(.error("archive failed")))
+        let store = DockStore(host: host, loader: loader, archiver: archiver)
+
+        await store.load()
+        guard case let .loaded(initialSnapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+
+        let row = initialSnapshot.sections[0].rows[0]
+        let archived = await store.archive(row)
+
+        XCTAssertFalse(archived)
+        XCTAssertEqual(store.actionError, "archive failed")
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected row to remain loaded, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.sections[0].rows[0].id.threadID, "thread-keep")
+    }
+
+    @MainActor
+    func testArchiveStoreLoadsArchivedRowsAndRestoreRefreshes() async throws {
+        let host = makeHost()
+        let registry = try HostRegistry(hosts: [host])
+        let loader = RecordingDockSessionLoader(results: [
+            .success(DockLoadResult(summaries: [
+                makeSummary(
+                    hostID: host.id,
+                    threadID: "thread-restore",
+                    branch: "main",
+                    status: .notLoaded,
+                    lastActivity: Date(timeIntervalSince1970: 1_900),
+                    prompt: "Restore me"
+                )
+            ])),
+            .success(DockLoadResult(summaries: []))
+        ])
+        let archiver = RecordingDockArchiver()
+        let store = ArchiveStore(registry: registry, loader: loader, archiver: archiver)
+
+        await store.load()
+
+        guard case let .loaded(initialSnapshot) = store.state else {
+            return XCTFail("Expected archived rows, got \(store.state)")
+        }
+        let initialArchiveRequests = await loader.archivedRequests()
+        XCTAssertEqual(initialArchiveRequests, [true])
+
+        let restored = await store.restore(initialSnapshot.sections[0].rows[0])
+
+        XCTAssertTrue(restored)
+        let unarchivedIDs = await archiver.unarchivedIDs()
+        let finalArchiveRequests = await loader.archivedRequests()
+        XCTAssertEqual(unarchivedIDs, ["thread-restore"])
+        XCTAssertEqual(finalArchiveRequests, [true, true])
+        guard case let .empty(snapshot) = store.state else {
+            return XCTFail("Expected empty archive after restore, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.rowCount, 0)
+    }
+
+    @MainActor
+    func testHostSettingsSaveEditAndTestUseSharedRegistry() async throws {
+        let host = makeHost()
+        let registry = try HostRegistry(hosts: [host])
+        let loader = HostRoutedDockSessionLoader(results: [
+            host.id: .success(DockLoadResult(summaries: [
+                makeSummary(
+                    hostID: host.id,
+                    threadID: "thread-live",
+                    branch: "main",
+                    status: .idle,
+                    lastActivity: Date(timeIntervalSince1970: 1_900),
+                    prompt: "Live host"
+                )
+            ])),
+            "Home": .failure(.offline("Home unreachable"))
+        ])
+        let store = HostSettingsStore(
+            registry: registry,
+            tester: loader,
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+
+        try store.saveHost(
+            replacing: nil,
+            id: "Home",
+            displayName: "Home",
+            webSocketURL: "ws://100.66.11.7:4510",
+            bearerToken: "home-token"
+        )
+
+        XCTAssertEqual(store.registry?.hosts.map(\.id), ["Amir-M5", "Home"])
+
+        await store.test("Home")
+        XCTAssertEqual(
+            store.rows.first(where: { $0.id == "Home" })?.status,
+            .offline("Home unreachable", checkedAt: Date(timeIntervalSince1970: 2_000))
+        )
+
+        try store.saveHost(
+            replacing: "Home",
+            id: "Home",
+            displayName: "Home Server",
+            webSocketURL: "ws://100.66.11.7:4520",
+            bearerToken: "home-token-2"
+        )
+
+        let edited = try XCTUnwrap(store.registry?.hosts.first(where: { $0.id == "Home" }))
+        XCTAssertEqual(edited.displayName, "Home Server")
+        XCTAssertEqual(edited.webSocketURL.absoluteString, "ws://100.66.11.7:4520")
+        XCTAssertEqual(edited.bearerToken, "home-token-2")
+    }
 }
 
 private enum FakeMode: Sendable {
@@ -415,7 +574,10 @@ private enum FakeMode: Sendable {
 private struct FakeDockSessionLoader: DockSessionLoading {
     let mode: FakeMode
 
-    func loadSessions(for host: DockHostConfiguration) async throws -> DockLoadResult {
+    func loadSessions(
+        for host: DockHostConfiguration,
+        archived: Bool
+    ) async throws -> DockLoadResult {
         switch mode {
         case let .success(result):
             return result
@@ -437,7 +599,10 @@ private actor SequencedDockSessionLoader: DockSessionLoading {
         loadCount
     }
 
-    func loadSessions(for host: DockHostConfiguration) async throws -> DockLoadResult {
+    func loadSessions(
+        for host: DockHostConfiguration,
+        archived: Bool
+    ) async throws -> DockLoadResult {
         loadCount += 1
         let result = results.isEmpty ? nil : results.removeFirst()
 
@@ -459,7 +624,10 @@ private actor HostRoutedDockSessionLoader: DockSessionLoading {
         self.results = results
     }
 
-    func loadSessions(for host: DockHostConfiguration) async throws -> DockLoadResult {
+    func loadSessions(
+        for host: DockHostConfiguration,
+        archived: Bool
+    ) async throws -> DockLoadResult {
         switch results[host.id] {
         case let .success(result):
             return result
@@ -467,6 +635,70 @@ private actor HostRoutedDockSessionLoader: DockSessionLoading {
             throw error
         case nil:
             return DockLoadResult(summaries: [])
+        }
+    }
+}
+
+private actor RecordingDockSessionLoader: DockSessionLoading {
+    private var results: [FakeMode]
+    private var archivedFlags: [Bool] = []
+
+    init(results: [FakeMode]) {
+        self.results = results
+    }
+
+    func archivedRequests() -> [Bool] {
+        archivedFlags
+    }
+
+    func loadSessions(
+        for host: DockHostConfiguration,
+        archived: Bool
+    ) async throws -> DockLoadResult {
+        archivedFlags.append(archived)
+        let result = results.isEmpty ? nil : results.removeFirst()
+
+        switch result {
+        case let .success(result):
+            return result
+        case let .failure(error):
+            throw error
+        case nil:
+            return DockLoadResult(summaries: [])
+        }
+    }
+}
+
+private actor RecordingDockArchiver: DockSessionArchiving {
+    private let mode: FakeMode
+    private var archived: [String] = []
+    private var unarchived: [String] = []
+
+    init(mode: FakeMode = .success(DockLoadResult(summaries: []))) {
+        self.mode = mode
+    }
+
+    func archivedIDs() -> [String] {
+        archived
+    }
+
+    func unarchivedIDs() -> [String] {
+        unarchived
+    }
+
+    func archiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
+        archived.append(threadID)
+        try throwIfNeeded()
+    }
+
+    func unarchiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
+        unarchived.append(threadID)
+        try throwIfNeeded()
+    }
+
+    private func throwIfNeeded() throws {
+        if case let .failure(error) = mode {
+            throw error
         }
     }
 }

@@ -139,9 +139,15 @@ or any endpoint a physical phone could not reach.
    - Gate to next: A session can be archived out of the Dock and restored from
      Archive, and the Hosts screen uses the same host registry/state without
      introducing AIMGR.
-   - Status: planning
+   - Status: complete
    - Auto-plan status: ready (`READY next=implement-loop`)
-   - Epic-critic verdict: —
+   - Epic-critic verdict: passed — Phase 7 now calls supported
+     `thread/archive` and `thread/unarchive` methods through the
+     phone-reachable relay on `Amir-M5`, proves a real reversible
+     archive/unarchive round trip at `ws://192.168.50.117:4510`, adds the
+     Archive tab from archived `thread/list` state, and adds a Hosts tab that
+     edits/tests the shared host registry without AIMGR, Rotate, or account
+     switching.
 
 8. **Voice, accessibility, and final MVP polish**: Add in-place push-to-talk
    transcription, accessibility hardening, visual polish, and final acceptance.

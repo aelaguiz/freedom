@@ -480,7 +480,19 @@ function sanitizeRelayFields(thread) {
   return clean;
 }
 
+function shouldCollectLiveRowsForThreadList(params = {}) {
+  return params.archived !== true;
+}
+
 async function aggregateThreadList(config, params = {}) {
+  if (!shouldCollectLiveRowsForThreadList(params)) {
+    const history = await readHistoryThreadList(config, params);
+    console.error(
+      `dock-relay: thread/list archived history=${history.data?.length || 0} live=0 returned=${history.data?.length || 0}`,
+    );
+    return history;
+  }
+
   const [historyResult, liveResult] = await Promise.allSettled([
     readHistoryThreadList(config, params),
     collectLiveRows(),
@@ -568,6 +580,41 @@ async function aggregateThreadRead(config, params = {}) {
   return readHistoryThread(config, params);
 }
 
+async function endpointForThread(config, threadId) {
+  const live = await collectLiveRows();
+  const liveRow = live.rows.find((row) => row.id === threadId);
+  if (liveRow?.dockRelaySource) {
+    return liveRow.dockRelaySource;
+  }
+  return {
+    url: config.historyUrl,
+    bearerToken: config.historyBearerToken,
+  };
+}
+
+async function archiveThread(config, params = {}) {
+  if (!params.threadId) {
+    throw new Error("thread/archive requires threadId");
+  }
+  const endpoint = await endpointForThread(config, params.threadId);
+  return withClient(
+    endpoint.url,
+    { bearerToken: endpoint.bearerToken || null },
+    async (client) => client.request("thread/archive", params),
+  );
+}
+
+async function unarchiveThread(config, params = {}) {
+  if (!params.threadId) {
+    throw new Error("thread/unarchive requires threadId");
+  }
+  return withClient(
+    config.historyUrl,
+    { bearerToken: config.historyBearerToken },
+    async (client) => client.request("thread/unarchive", params),
+  );
+}
+
 async function resumeThread(config, params = {}, session, downstreamWs) {
   if (!params.threadId) {
     throw new Error("thread/resume requires threadId");
@@ -626,6 +673,10 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       return aggregateThreadRead(config, params || {});
     case "thread/resume":
       return resumeThread(config, params || {}, session, downstreamWs);
+    case "thread/archive":
+      return archiveThread(config, params || {});
+    case "thread/unarchive":
+      return unarchiveThread(config, params || {});
     case "turn/start":
     case "turn/steer":
     case "turn/interrupt":
@@ -744,5 +795,7 @@ export {
   attentionFlagsForServerRequest,
   mergeActiveFlags,
   preferThread,
+  sanitizeRelayFields,
+  shouldCollectLiveRowsForThreadList,
   statusPriority,
 };

@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - Archive Hosts Surfaces - Architecture Plan"
 date: 2026-05-27
-status: active
+status: complete
 fallback_policy: forbidden
 owners: [aelaguiz]
 reviewers: [Codex]
@@ -390,3 +390,20 @@ Decision
 
 Consequences
 : Hosts remains smaller and avoids unknown account-rotation scope.
+
+## 2026-05-28 - Phase 7 implemented against real relay path
+
+Context
+: Archive/Hosts implementation needed to reuse the Phase 6 phone-reachable
+  relay and host registry path, not local-only hiding or mock archive state.
+
+Decision
+: Add typed `thread/archive` and `thread/unarchive` Swift client wrappers,
+  relay forwarding for both methods, archived `thread/list` support through
+  the relay, `ArchiveStore`, `HostSettingsStore`, and real Archive/Hosts tabs.
+
+Consequences
+: A real `Amir-M5` thread can round-trip through archive/unarchive via
+  `ws://192.168.50.117:4510`, Archive reads `archived: true`, Dock removes
+  rows only after app-server archive success plus refresh, and Hosts updates
+  Dock/Archive through the shared registry state.
