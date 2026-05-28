@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - iPhone Shell Single-Host Dock - Architecture Plan"
 date: 2026-05-27
-status: active
+status: complete
 fallback_policy: forbidden
 owners: [aelaguiz]
 reviewers: [Codex]
@@ -22,6 +22,40 @@ related:
   the Dock to the v2 mockup.
 - Non-negotiables: no static production rows, no AIMGR, no final breadth before
   one live Dock works.
+
+<!-- arch_skill:block:implementation_audit:start -->
+# Implementation Audit (authoritative)
+Date: 2026-05-28
+Verdict (code): COMPLETE
+Manual QA: complete
+
+## Code blockers (why code is not done)
+- None.
+
+## Reopened phases (false-complete fixes)
+- None. Phase 3 is complete.
+
+## Missing items (code gaps; evidence-anchored; no tables)
+- None.
+
+## Evidence checked
+- Stage gate: `rtk python3 /Users/aelaguiz/.agents/skills/arch-step/scripts/arch_stage_gate.py ready --doc docs/epic/CODEX_DOCK_MVP_2026-05-27/PHASE_03_IPHONE_SHELL_SINGLE_HOST_DOCK_2026-05-27.md` returned `READY next=implement-loop`.
+- Tooling: installed XcodeGen 2.45.4 with `rtk brew install xcodegen`; this is allowed by the epic-level permission to install needed tools.
+- Project generation: `rtk xcodegen generate --spec project.yml` created `CodexDock.xcodeproj` from the checked-in `project.yml`.
+- App-server runbook: added `Makefile` target `rtk make app-server` as the canonical start path. It installs/uses a per-repo LaunchAgent for the authenticated LAN app-server and leaves it running with plist/PID/token/log files under `.codex-dock/`.
+- SwiftPM proof: `rtk swift test` passed 31 tests with 3 optional live endpoint tests skipped when no endpoint env was set.
+- iOS build proof: `rtk xcodebuild -project CodexDock.xcodeproj -scheme CodexDockApp -destination 'id=DEF1631B-7125-43C6-BFA3-4423BF103C91' -derivedDataPath /tmp/codex-dock-phase3-derived build` passed on the booted `iPhone 17` simulator.
+- iOS generated-project test proof: `rtk xcodebuild test -project CodexDock.xcodeproj -scheme CodexDockApp -destination 'id=DEF1631B-7125-43C6-BFA3-4423BF103C91' -derivedDataPath /tmp/codex-dock-phase3-derived` passed.
+- Real host proof: started a real Codex app-server on `Amir-M5` with `rtk codex app-server --listen ws://0.0.0.0:4500 --ws-auth capability-token --ws-token-file <temp-token-file>`.
+- Reachability proof: `rtk curl -i --max-time 5 http://192.168.50.117:4500/readyz` returned `HTTP/1.1 200 OK`.
+- Real data proof: `rtk env CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4500 CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE=<temp-token-file> CODEX_DOCK_REAL_HOST_ID=Amir-M5 swift test --filter AppServerClientTests/testPhoneReachableRealHost` passed the phone-reachable handshake and `thread/list` tests.
+- App live-host proof: installed and launched `com.aelaguiz.CodexDockApp` on the booted `iPhone 17` simulator with `SIMCTL_CHILD_CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4500`, bearer token, and host env. Screenshot `/tmp/codex-dock-phase3-live-host-no-arbitrary-loads.png` showed `Amir-M5`, `192.168.50.117`, and 50 real sessions rendered in the Dock after ATS was tightened to local networking only.
+- App offline proof: stopped the same real app-server, relaunched the installed app against the same endpoint, and screenshot `/tmp/codex-dock-phase3-offline.png` showed `Amir-M5 · Offline` plus the transport error instead of demo rows.
+- Scope check: implementation added app target/project generation, app host configuration, `DockStore`, Dock SwiftUI views, and store/config tests only. No thread detail, multi-host fan-out, Archive implementation, Hosts implementation, voice, AIMGR, relay, or production static rows were added.
+
+## Non-blocking follow-ups (manual QA / screenshots / human verification)
+- None for Phase 3.
+<!-- arch_skill:block:implementation_audit:end -->
 
 <!-- arch_skill:block:planning_passes:start -->
 <!--
@@ -229,8 +263,8 @@ The first UI should consume real summaries, not invent a separate data path.
 <!-- arch_skill:block:target_architecture:start -->
 # Target Architecture (to-be)
 ## On-disk structure (future)
-- `CodexDock.xcodeproj` or equivalent SwiftPM/Xcode app structure.
-- `CodexDock/CodexDockApp.swift`.
+- `project.yml` as the source of truth for generating `CodexDock.xcodeproj`.
+- `CodexDockApp/CodexDockApp.swift`.
 - `CodexDock/State/DockStore.swift`.
 - `CodexDock/Features/Dock/DockView.swift`.
 - `CodexDockTests/DockStoreTests.swift`.
@@ -371,6 +405,32 @@ No analytics.
 
 Run the app against one configured app-server host.
 
+Required runtime env:
+
+- `CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS`: phone/simulator-reachable `ws://`
+  or `wss://` endpoint.
+- `CODEX_DOCK_APP_SERVER_BEARER_TOKEN` or
+  `CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE`: websocket auth token.
+- `CODEX_DOCK_REAL_HOST_ID`: stable host id, currently `Amir-M5` for this
+  machine.
+- `CODEX_DOCK_REAL_HOST_NAME`: display name, currently `Amir-M5`.
+
+Phase 3 simulator target: `iPhone 17`
+`DEF1631B-7125-43C6-BFA3-4423BF103C91`.
+
+Tooling note: Phase 3 uses XcodeGen. If missing, install it with
+`rtk brew install xcodegen`; this was done during implementation.
+
+Canonical app-server start:
+
+- `rtk make app-server`: start or reuse the authenticated LAN app-server and
+  leave it running under launchd.
+- `rtk make app-server-status`: check PID and `/readyz` without restarting.
+- `rtk make app-server-env`: print environment variables for Swift tests and
+  app launch.
+- `rtk make app-server-stop`: stop it only when intentionally done with the
+  server.
+
 # 10) Decision Log (append-only)
 
 ## 2026-05-27 - UI waits for protocol and data
@@ -386,3 +446,19 @@ Decision
 
 Consequences
 : Dock implementation can be thinner and more truthful.
+
+## 2026-05-28 - Phase 3 implementation completed
+
+Context
+: Phase 3 needed the first real iPhone app shell and a single-host Dock backed
+  by live `SessionSummary` data.
+
+Decision
+: Use XcodeGen for the generated Xcode project and keep `project.yml` checked in
+  as the editable source of truth. Configure the app at launch from environment
+  variables rather than adding unsupported Codex daemon behavior.
+
+Consequences
+: The app can be built, installed, and launched on `iPhone 17`; production rows
+  come from the real app-server pipeline, while preview rows remain isolated to
+  SwiftUI previews.
