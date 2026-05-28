@@ -4,7 +4,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
+import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import WebSocket, { WebSocketServer } from "ws";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
@@ -80,6 +82,50 @@ function statusPriority(thread) {
     return 5;
   }
   return 4;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function attentionFlagsForServerRequest(message) {
+  switch (message?.method) {
+    case "item/commandExecution/requestApproval":
+    case "item/fileChange/requestApproval":
+    case "item/permissions/requestApproval":
+    case "applyPatchApproval":
+    case "execCommandApproval":
+      return ["waitingOnApproval"];
+    case "item/tool/requestUserInput":
+    case "mcpServer/elicitation/request":
+    case "item/tool/call":
+    case "account/chatgptAuthTokens/refresh":
+    case "attestation/generate":
+      return ["waitingOnUserInput"];
+    default:
+      return [];
+  }
+}
+
+function mergeActiveFlags(thread, additionalFlags) {
+  if (!additionalFlags.length) {
+    return thread;
+  }
+  const activeFlags = new Set(
+    thread?.status?.type === "active" ? thread.status.activeFlags || [] : [],
+  );
+  for (const flag of additionalFlags) {
+    activeFlags.add(flag);
+  }
+  return {
+    ...thread,
+    status: {
+      type: "active",
+      activeFlags: [...activeFlags],
+    },
+  };
 }
 
 function rowTimestamp(thread) {
@@ -330,8 +376,51 @@ async function readLoadedRows(endpoint) {
         rows.push({ ...result.value.thread, dockRelaySource: endpoint });
       }
     }
-    return rows;
+    return Promise.all(rows.map((row) => enrichRowAttention(row, endpoint)));
   });
+}
+
+async function pendingRequestsForActiveThread(endpoint, threadId) {
+  const requests = [];
+  const client = new JsonRpcWebSocketClient(endpoint.url, {
+    bearerToken: endpoint.bearerToken || null,
+    onRequest: (message) => {
+      if (message?.params?.threadId === threadId) {
+        requests.push(message);
+      }
+    },
+  });
+  try {
+    await initializeClient(client);
+    await client.request("thread/resume", { threadId });
+    await sleep(100);
+    return requests;
+  } finally {
+    client.close();
+  }
+}
+
+async function enrichRowAttention(row, endpoint) {
+  if (row?.status?.type !== "active") {
+    return row;
+  }
+  const existingFlags = new Set(row.status.activeFlags || []);
+  if (existingFlags.has("waitingOnApproval") || existingFlags.has("waitingOnUserInput")) {
+    return row;
+  }
+
+  let requests;
+  try {
+    requests = await pendingRequestsForActiveThread(endpoint, row.id);
+  } catch (error) {
+    console.error(
+      `dock-relay: failed to inspect pending requests for ${row.id} from ${endpoint.url}: ${error.message || error}`,
+    );
+    return row;
+  }
+
+  const flags = requests.flatMap(attentionFlagsForServerRequest);
+  return mergeActiveFlags(row, flags);
 }
 
 async function collectLiveRows() {
@@ -392,10 +481,33 @@ function sanitizeRelayFields(thread) {
 }
 
 async function aggregateThreadList(config, params = {}) {
-  const [history, live] = await Promise.all([
+  const [historyResult, liveResult] = await Promise.allSettled([
     readHistoryThreadList(config, params),
     collectLiveRows(),
   ]);
+  if (historyResult.status === "rejected" && liveResult.status === "rejected") {
+    throw new Error(
+      `thread/list failed for history and live sources: history=${historyResult.reason?.message || historyResult.reason}; live=${liveResult.reason?.message || liveResult.reason}`,
+    );
+  }
+
+  const history = historyResult.status === "fulfilled"
+    ? historyResult.value
+    : { data: [] };
+  const live = liveResult.status === "fulfilled"
+    ? liveResult.value
+    : { endpoints: [], failedEndpoints: 1, rows: [] };
+
+  if (historyResult.status === "rejected") {
+    console.error(
+      `dock-relay: history thread/list failed: ${historyResult.reason?.message || historyResult.reason}`,
+    );
+  }
+  if (liveResult.status === "rejected") {
+    console.error(
+      `dock-relay: live thread/list failed: ${liveResult.reason?.message || liveResult.reason}`,
+    );
+  }
 
   const liveIds = new Set(live.rows.map((row) => row.id));
   const merged = [];
@@ -490,6 +602,13 @@ async function resumeThread(config, params = {}, session, downstreamWs) {
   }
 }
 
+async function forwardToActiveUpstream(session, method, params = {}) {
+  if (!session.upstream) {
+    throw new Error(`${method} requires thread/resume on this connection first`);
+  }
+  return session.upstream.request(method, params);
+}
+
 async function handleRequest(config, method, params, session, downstreamWs) {
   switch (method) {
     case "initialize":
@@ -507,6 +626,10 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       return aggregateThreadRead(config, params || {});
     case "thread/resume":
       return resumeThread(config, params || {}, session, downstreamWs);
+    case "turn/start":
+    case "turn/steer":
+    case "turn/interrupt":
+      return forwardToActiveUpstream(session, method, params || {});
     default:
       throw Object.assign(new Error(`unsupported method: ${method}`), {
         code: -32601,
@@ -593,20 +716,33 @@ function startServer(config) {
   });
 }
 
-const args = parseArgs(process.argv.slice(2));
-const relayTokenFile = args["auth-token-file"] || process.env.CODEX_DOCK_RELAY_TOKEN_FILE;
-const historyTokenFile = args["history-auth-token-file"] || process.env.CODEX_DOCK_HISTORY_TOKEN_FILE || relayTokenFile;
-if (!relayTokenFile) {
-  throw new Error("--auth-token-file is required");
-}
-if (!historyTokenFile) {
-  throw new Error("--history-auth-token-file is required");
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const relayTokenFile = args["auth-token-file"] || process.env.CODEX_DOCK_RELAY_TOKEN_FILE;
+  const historyTokenFile = args["history-auth-token-file"] || process.env.CODEX_DOCK_HISTORY_TOKEN_FILE || relayTokenFile;
+  if (!relayTokenFile) {
+    throw new Error("--auth-token-file is required");
+  }
+  if (!historyTokenFile) {
+    throw new Error("--history-auth-token-file is required");
+  }
+
+  startServer({
+    listenHost: args["listen-host"] || process.env.CODEX_DOCK_RELAY_LISTEN_HOST || "0.0.0.0",
+    port: parseLimit(args.port || process.env.CODEX_DOCK_RELAY_PORT, 4510),
+    relayBearerToken: readToken(relayTokenFile),
+    historyBearerToken: readToken(historyTokenFile),
+    historyUrl: args["history-url"] || process.env.CODEX_DOCK_HISTORY_APP_SERVER_WS || "ws://127.0.0.1:4500",
+  });
 }
 
-startServer({
-  listenHost: args["listen-host"] || process.env.CODEX_DOCK_RELAY_LISTEN_HOST || "0.0.0.0",
-  port: parseLimit(args.port || process.env.CODEX_DOCK_RELAY_PORT, 4510),
-  relayBearerToken: readToken(relayTokenFile),
-  historyBearerToken: readToken(historyTokenFile),
-  historyUrl: args["history-url"] || process.env.CODEX_DOCK_HISTORY_APP_SERVER_WS || "ws://127.0.0.1:4500",
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  main();
+}
+
+export {
+  attentionFlagsForServerRequest,
+  mergeActiveFlags,
+  preferThread,
+  statusPriority,
+};

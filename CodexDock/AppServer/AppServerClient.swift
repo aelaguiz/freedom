@@ -155,6 +155,11 @@ public actor AppServerClient {
         try await sendNotification(method: method, params: params, allowsConnecting: false)
     }
 
+    public func sendResponse(id: JSONRPCRequestID, result: JSONValue) async throws {
+        try ensureCanSend(allowsConnecting: false)
+        try await send(.response(JSONRPCResponse(id: id, result: result)))
+    }
+
     public func threadList(
         params: ThreadListParams = ThreadListParams(),
         timeout: Duration = .seconds(10)
@@ -188,6 +193,30 @@ public actor AppServerClient {
             params: try JSONValue.encoded(params),
             timeout: timeout,
             as: ThreadResumeResponseDTO.self
+        )
+    }
+
+    public func turnStart(
+        params: TurnStartParams,
+        timeout: Duration = .seconds(10)
+    ) async throws -> TurnStartResponseDTO {
+        try await sendRequest(
+            method: AppServerMethods.turnStart,
+            params: try JSONValue.encoded(params),
+            timeout: timeout,
+            as: TurnStartResponseDTO.self
+        )
+    }
+
+    public func turnSteer(
+        params: TurnSteerParams,
+        timeout: Duration = .seconds(10)
+    ) async throws -> TurnSteerResponseDTO {
+        try await sendRequest(
+            method: AppServerMethods.turnSteer,
+            params: try JSONValue.encoded(params),
+            timeout: timeout,
+            as: TurnSteerResponseDTO.self
         )
     }
 

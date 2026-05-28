@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dock-relay": "node scripts/dock-relay.mjs"
+    "dock-relay": "node scripts/dock-relay.mjs",
+    "test:relay": "node --test scripts/dock-relay.test.mjs"
   },
   "dependencies": {
     "ws": "^8.18.3"

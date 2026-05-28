@@ -110,9 +110,13 @@ or any endpoint a physical phone could not reach.
    - Gate to next: The user can send typed text through the app-server and
      supported request cards can be answered, while unsupported requests remain
      visible as "Needs desktop".
-   - Status: planning
+   - Status: complete
    - Auto-plan status: ready (`READY next=implement-loop`)
-   - Epic-critic verdict: —
+   - Epic-critic verdict: passed — Phase 5 now sends typed text through the
+     real app-server path, preserves failed send text, renders supported and
+     unsupported request cards, responds to supported requests by JSON-RPC
+     request id, and keeps Dock `Needs me` tied to real pending app-server
+     request signals instead of mocked status.
 
 6. **Multi-host Dock scan expansion**: Widen the working list/detail/control
    path to multiple hosts, filters, branch grouping, and app-local labels/colors.
@@ -214,6 +218,12 @@ reference the mockups only as downstream context.
   through `ws://192.168.50.117:4510`, ran the optional real-host read/resume
   XCTest, launched on `iPhone 17`, and tapped a real Dock row into Thread
   detail.
+- 2026-05-28 Completed Phase 5 against the real relay path. Added typed
+  `turn/start` and `turn/steer`, the session composer, minimal request cards,
+  JSON-RPC server-request responses, relay turn forwarding, and relay
+  request-aware Dock attention enrichment. Verified a real typed send through
+  `ws://192.168.50.117:4510`, relaunched on `iPhone 17`, and opened a real
+  Dock row to the composer.
 
 # Decision Log
 
@@ -248,3 +258,9 @@ reference the mockups only as downstream context.
   `thread/resume`, notifications, and server requests to a real owning
   app-server process, then expose that real stream through the same
   phone-reachable endpoint used by the app.
+- 2026-05-28 Phase 5 attention correction: `Needs me` must not be inferred from
+  the mere presence of a Codex process or from stale history. It is populated
+  only from real app-server attention signals: active status flags or replayed
+  pending server requests from the owning app-server. A live check on
+  `Amir-M5` returned `3 active`, `15 idle`, and `89 notLoaded` rows with zero
+  waiting flags, so the empty `Needs me` filter was correct for that moment.

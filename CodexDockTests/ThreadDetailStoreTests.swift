@@ -170,6 +170,155 @@ final class ThreadDetailStoreTests: XCTestCase {
                 && snapshot.events[0].kind == .request
                 && snapshot.events[0].body == "make test"
         }
+        XCTAssertEqual(store.requestCards.count, 1)
+        XCTAssertEqual(store.requestCards[0].kind, .commandApproval)
+    }
+
+    @MainActor
+    func testSendDraftStartsTurnWhenNoActiveTurnAndClearsDraft() async {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            turnStartResult: .success(
+                TurnStartResponseDTO(
+                    turn: .object([
+                        "id": .string("turn-new"),
+                        "status": .string("inProgress"),
+                    ])
+                )
+            )
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session)
+        )
+
+        await store.load()
+        store.updateDraft("Run the smoke test")
+        await store.sendDraft()
+
+        XCTAssertEqual(store.composer.draft, "")
+        XCTAssertEqual(store.composer.lastError, nil)
+        let startParams = await session.turnStartParamsSnapshot()
+        let steerParams = await session.turnSteerParamsSnapshot()
+        XCTAssertEqual(startParams, [
+            TurnStartParams.text(threadId: "thread-1", text: "Run the smoke test"),
+        ])
+        XCTAssertEqual(steerParams, [])
+    }
+
+    @MainActor
+    func testSendDraftSteersKnownActiveTurn() async {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let thread = ThreadDTO(
+            id: "thread-1",
+            turns: [
+                .object([
+                    "id": .string("active-turn"),
+                    "status": .string("inProgress"),
+                    "items": .array([]),
+                ]),
+            ]
+        )
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: thread)),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: thread)),
+            turnSteerResult: .success(TurnSteerResponseDTO(turnId: "active-turn"))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session)
+        )
+
+        await store.load()
+        store.updateDraft("Also check the relay")
+        await store.sendDraft()
+
+        let startParams = await session.turnStartParamsSnapshot()
+        let steerParams = await session.turnSteerParamsSnapshot()
+        XCTAssertEqual(startParams, [])
+        XCTAssertEqual(steerParams, [
+            TurnSteerParams.text(
+                threadId: "thread-1",
+                text: "Also check the relay",
+                expectedTurnId: "active-turn"
+            ),
+        ])
+    }
+
+    @MainActor
+    func testSendDraftFailurePreservesDraftAndPublishesError() async {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            turnStartResult: .failure(.turnFailed)
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session)
+        )
+
+        await store.load()
+        store.updateDraft("Do not lose this")
+        await store.sendDraft()
+
+        XCTAssertEqual(store.composer.draft, "Do not lose this")
+        XCTAssertEqual(store.composer.isSending, false)
+        XCTAssertEqual(store.composer.lastError, "turn failed")
+    }
+
+    @MainActor
+    func testRespondingToRequestCardSendsJsonRPCResponseAndMarksResolved() async throws {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: [])))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session)
+        )
+
+        await store.load()
+        await session.emitServerRequest(
+            JSONRPCRequest(
+                id: .string("approval-1"),
+                method: "item/commandExecution/requestApproval",
+                params: .object([
+                    "threadId": .string("thread-1"),
+                    "turnId": .string("turn-1"),
+                    "itemId": .string("cmd-1"),
+                    "command": .string("swift test"),
+                ])
+            )
+        )
+        try await waitForDetailStore {
+            store.requestCards.count == 1
+        }
+
+        await store.respond(to: "request-approval-1", action: .accept)
+
+        let sentResponses = await session.sentResponsesSnapshot()
+        XCTAssertEqual(
+            sentResponses,
+            [
+                SentServerResponse(
+                    id: .string("approval-1"),
+                    result: .object(["decision": .string("accept")])
+                ),
+            ]
+        )
+        XCTAssertEqual(store.requestCards[0].status, .resolved)
     }
 
     @MainActor
@@ -212,12 +361,28 @@ private actor FakeThreadDetailSession: ThreadDetailSession {
     private let serverRequestContinuation: AsyncStream<JSONRPCRequest>.Continuation
     private let readResult: Result<ThreadReadResponseDTO, FakeThreadDetailError>
     private let resumeResult: Result<ThreadResumeResponseDTO, FakeThreadDetailError>
+    private let turnStartResult: Result<TurnStartResponseDTO, FakeThreadDetailError>
+    private let turnSteerResult: Result<TurnSteerResponseDTO, FakeThreadDetailError>
     private var readParams: [ThreadReadParams] = []
     private var resumeParams: [ThreadResumeParams] = []
+    private var turnStartParams: [TurnStartParams] = []
+    private var turnSteerParams: [TurnSteerParams] = []
+    private var sentResponses: [SentServerResponse] = []
 
     init(
         readResult: Result<ThreadReadResponseDTO, FakeThreadDetailError>,
-        resumeResult: Result<ThreadResumeResponseDTO, FakeThreadDetailError>
+        resumeResult: Result<ThreadResumeResponseDTO, FakeThreadDetailError>,
+        turnStartResult: Result<TurnStartResponseDTO, FakeThreadDetailError> = .success(
+            TurnStartResponseDTO(
+                turn: .object([
+                    "id": .string("turn-started"),
+                    "status": .string("inProgress"),
+                ])
+            )
+        ),
+        turnSteerResult: Result<TurnSteerResponseDTO, FakeThreadDetailError> = .success(
+            TurnSteerResponseDTO(turnId: "turn-started")
+        )
     ) {
         let notifications = AsyncStream.makeStream(of: JSONRPCNotification.self)
         let serverRequests = AsyncStream.makeStream(of: JSONRPCRequest.self)
@@ -227,6 +392,8 @@ private actor FakeThreadDetailSession: ThreadDetailSession {
         self.serverRequestContinuation = serverRequests.continuation
         self.readResult = readResult
         self.resumeResult = resumeResult
+        self.turnStartResult = turnStartResult
+        self.turnSteerResult = turnSteerResult
     }
 
     func connectAndInitialize(
@@ -257,6 +424,26 @@ private actor FakeThreadDetailSession: ThreadDetailSession {
         return try resumeResult.get()
     }
 
+    func turnStart(
+        params: TurnStartParams,
+        timeout: Duration
+    ) async throws -> TurnStartResponseDTO {
+        turnStartParams.append(params)
+        return try turnStartResult.get()
+    }
+
+    func turnSteer(
+        params: TurnSteerParams,
+        timeout: Duration
+    ) async throws -> TurnSteerResponseDTO {
+        turnSteerParams.append(params)
+        return try turnSteerResult.get()
+    }
+
+    func sendResponse(id: JSONRPCRequestID, result: JSONValue) async throws {
+        sentResponses.append(SentServerResponse(id: id, result: result))
+    }
+
     func disconnect() async {
         notificationContinuation.finish()
         serverRequestContinuation.finish()
@@ -277,17 +464,37 @@ private actor FakeThreadDetailSession: ThreadDetailSession {
     func resumeParamsSnapshot() -> [ThreadResumeParams] {
         resumeParams
     }
+
+    func turnStartParamsSnapshot() -> [TurnStartParams] {
+        turnStartParams
+    }
+
+    func turnSteerParamsSnapshot() -> [TurnSteerParams] {
+        turnSteerParams
+    }
+
+    func sentResponsesSnapshot() -> [SentServerResponse] {
+        sentResponses
+    }
 }
 
 private enum FakeThreadDetailError: Error, LocalizedError, Sendable {
     case resumeFailed
+    case turnFailed
 
     var errorDescription: String? {
         switch self {
         case .resumeFailed:
             return "resume failed"
+        case .turnFailed:
+            return "turn failed"
         }
     }
+}
+
+private struct SentServerResponse: Equatable, Sendable {
+    let id: JSONRPCRequestID
+    let result: JSONValue
 }
 
 private func makeDetailHost() -> DockHostConfiguration {

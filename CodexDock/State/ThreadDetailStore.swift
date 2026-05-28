@@ -8,6 +8,9 @@ public protocol ThreadDetailSession: Sendable {
     func connectAndInitialize(params: InitializeParams, timeout: Duration) async throws -> InitializeResponse
     func threadRead(params: ThreadReadParams, timeout: Duration) async throws -> ThreadReadResponseDTO
     func threadResume(params: ThreadResumeParams, timeout: Duration) async throws -> ThreadResumeResponseDTO
+    func turnStart(params: TurnStartParams, timeout: Duration) async throws -> TurnStartResponseDTO
+    func turnSteer(params: TurnSteerParams, timeout: Duration) async throws -> TurnSteerResponseDTO
+    func sendResponse(id: JSONRPCRequestID, result: JSONValue) async throws
     func disconnect() async
 }
 
@@ -85,9 +88,27 @@ public enum ThreadDetailStoreState: Equatable, Sendable {
     case error(ThreadDetailHeader, String)
 }
 
+public struct ComposerState: Equatable, Sendable {
+    public var draft: String
+    public var isSending: Bool
+    public var lastError: String?
+
+    public init(draft: String = "", isSending: Bool = false, lastError: String? = nil) {
+        self.draft = draft
+        self.isSending = isSending
+        self.lastError = lastError
+    }
+
+    public var canSend: Bool {
+        !isSending && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
 @MainActor
 public final class ThreadDetailStore: ObservableObject {
     @Published public private(set) var state: ThreadDetailStoreState
+    @Published public private(set) var composer = ComposerState()
+    @Published public private(set) var requestCards: [ServerRequestCard] = []
 
     private let host: DockHostConfiguration
     private let row: DockRowViewModel
@@ -100,6 +121,7 @@ public final class ThreadDetailStore: ObservableObject {
     private var requestTask: Task<Void, Never>?
     private var events: [ThreadEvent] = []
     private var liveState: ThreadDetailLiveState = .connecting
+    private var activeTurnID: String?
     private var didLoad = false
 
     public init(
@@ -187,6 +209,84 @@ public final class ThreadDetailStore: ObservableObject {
         }
     }
 
+    public func updateDraft(_ draft: String) {
+        composer.draft = draft
+        composer.lastError = nil
+    }
+
+    public func sendDraft() async {
+        guard let session else {
+            composer.lastError = "Thread is not connected."
+            return
+        }
+
+        let text = composer.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            return
+        }
+
+        composer.isSending = true
+        composer.lastError = nil
+
+        do {
+            if let activeTurnID {
+                let response = try await session.turnSteer(
+                    params: .text(
+                        threadId: row.id.threadID,
+                        text: text,
+                        expectedTurnId: activeTurnID
+                    ),
+                    timeout: .seconds(10)
+                )
+                self.activeTurnID = response.turnId
+            } else {
+                let response = try await session.turnStart(
+                    params: .text(threadId: row.id.threadID, text: text),
+                    timeout: .seconds(10)
+                )
+                activeTurnID = turnID(from: response.turn) ?? activeTurnID
+            }
+            composer.draft = ""
+            composer.isSending = false
+        } catch {
+            composer.isSending = false
+            composer.lastError = message(from: error)
+        }
+    }
+
+    public func updateRequestCardInput(cardID: String, draft: String) {
+        guard let index = requestCards.firstIndex(where: { $0.id == cardID }) else {
+            return
+        }
+        requestCards[index].inputDraft = draft
+        if case .failed = requestCards[index].status {
+            requestCards[index].status = .pending
+        }
+    }
+
+    public func respond(to cardID: String, action: ServerRequestCardAction) async {
+        guard let session else {
+            setCardStatus(cardID: cardID, status: .failed("Thread is not connected."))
+            return
+        }
+        guard let index = requestCards.firstIndex(where: { $0.id == cardID }) else {
+            return
+        }
+        let card = requestCards[index]
+        guard let payload = card.responsePayload(for: action) else {
+            setCardStatus(cardID: cardID, status: .failed("This request cannot be answered on phone."))
+            return
+        }
+
+        setCardStatus(cardID: cardID, status: .responding)
+        do {
+            try await session.sendResponse(id: card.requestID, result: payload)
+            setCardStatus(cardID: cardID, status: .resolved)
+        } catch {
+            setCardStatus(cardID: cardID, status: .failed(message(from: error)))
+        }
+    }
+
     private func startObservation(session: any ThreadDetailSession) {
         notificationTask?.cancel()
         requestTask?.cancel()
@@ -207,6 +307,7 @@ public final class ThreadDetailStore: ObservableObject {
     private func replaceEvents(from thread: ThreadDTO, liveState: ThreadDetailLiveState) throws {
         try validate(thread: thread)
         events = ThreadEventNormalizer.events(from: thread)
+        activeTurnID = activeTurnID(from: thread)
         self.liveState = liveState
         publishLoaded()
     }
@@ -224,6 +325,9 @@ public final class ThreadDetailStore: ObservableObject {
         guard ThreadEventNormalizer.threadId(from: notification) == row.id.threadID else {
             return
         }
+
+        updateActiveTurn(from: notification)
+        resolveRequestCard(from: notification)
 
         if notification.method == "thread/closed" {
             liveState = .closed
@@ -245,6 +349,7 @@ public final class ThreadDetailStore: ObservableObject {
         }
 
         liveState = .live
+        upsertRequestCard(ServerRequestCard.make(from: request, now: now()))
         appendOrMerge(ThreadEventNormalizer.event(from: request, now: now()))
         publishLoaded()
     }
@@ -270,6 +375,91 @@ public final class ThreadDetailStore: ObservableObject {
                 events: events
             )
         )
+    }
+
+    private func setCardStatus(cardID: String, status: ServerRequestCardStatus) {
+        guard let index = requestCards.firstIndex(where: { $0.id == cardID }) else {
+            return
+        }
+        requestCards[index].status = status
+    }
+
+    private func upsertRequestCard(_ card: ServerRequestCard) {
+        if let index = requestCards.firstIndex(where: { $0.id == card.id }) {
+            let existing = requestCards[index]
+            requestCards[index] = ServerRequestCard(
+                id: card.id,
+                requestID: card.requestID,
+                method: card.method,
+                threadID: card.threadID,
+                turnID: card.turnID,
+                itemID: card.itemID,
+                kind: card.kind,
+                title: card.title,
+                summary: card.summary,
+                detail: card.detail,
+                params: card.params,
+                requestedAt: card.requestedAt,
+                inputDraft: existing.inputDraft,
+                status: existing.status
+            )
+        } else {
+            requestCards.append(card)
+        }
+    }
+
+    private func resolveRequestCard(from notification: JSONRPCNotification) {
+        guard notification.method == "serverRequest/resolved",
+              let requestID = notification.params?.objectValue?["requestId"],
+              let cardID = cardID(from: requestID) else {
+            return
+        }
+        setCardStatus(cardID: cardID, status: .resolved)
+    }
+
+    private func updateActiveTurn(from notification: JSONRPCNotification) {
+        guard let params = notification.params?.objectValue else {
+            return
+        }
+
+        switch notification.method {
+        case "turn/started":
+            if let turn = params["turn"] {
+                activeTurnID = turnID(from: turn)
+            }
+        case "turn/completed":
+            if let turn = params["turn"], activeTurnID == turnID(from: turn) {
+                activeTurnID = nil
+            }
+        default:
+            return
+        }
+    }
+
+    private func activeTurnID(from thread: ThreadDTO) -> String? {
+        thread.turns?
+            .compactMap { turn -> String? in
+                guard let object = turn.objectValue,
+                      object["status"]?.stringValue == "inProgress" else {
+                    return nil
+                }
+                return object["id"]?.stringValue
+            }
+            .last
+    }
+
+    private func turnID(from turn: JSONValue) -> String? {
+        turn.objectValue?["id"]?.stringValue
+    }
+
+    private func cardID(from requestID: JSONValue) -> String? {
+        if let value = requestID.stringValue {
+            return "request-\(value)"
+        }
+        if let value = requestID.numberValue {
+            return "request-\(Int64(value))"
+        }
+        return nil
     }
 
     private func message(from error: Error) -> String {

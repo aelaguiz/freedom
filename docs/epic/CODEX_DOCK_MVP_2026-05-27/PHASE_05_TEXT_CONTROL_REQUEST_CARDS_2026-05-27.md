@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - Text Control Request Cards - Architecture Plan"
 date: 2026-05-27
-status: active
+status: complete
 fallback_policy: forbidden
 owners: [aelaguiz]
 reviewers: [Codex]
@@ -124,6 +124,32 @@ stay visible.
 - Failed send preserves user text.
 - Supported cards can respond.
 - Unsupported request methods render "Needs desktop".
+
+## 0.6 Implementation evidence
+
+- Added typed `turn/start` and `turn/steer` wrappers plus JSON-RPC server
+  response sending in `AppServerClient`.
+- Added one composer path in `ThreadDetailStore`; it preserves draft text on
+  send failure, clears only after a successful send, starts a new turn when no
+  active turn is known, and steers the known active turn otherwise.
+- Added `ServerRequestCard` plus request-card UI for command approval, file
+  approval, permission approval, user input, MCP elicitation decline, and
+  unsupported "Needs desktop" cards.
+- Extended the relay to forward `turn/start`, `turn/steer`, `turn/interrupt`,
+  and raw JSON-RPC server-request responses to the owning real app-server after
+  `thread/resume`.
+- Extended the relay's Dock list enrichment so active live threads can derive
+  `Needs me` from real replayed pending app-server requests; the current live
+  fleet reported no pending attention flags, so an empty `Needs me` filter is
+  correct and not faked.
+- Verified a real typed send through `ws://192.168.50.117:4510` on
+  `Amir-M5`: selected real thread
+  `019e6c7f-7bce-76a0-8db9-131b8905c9a5`, sent a `turn/start`, received
+  turn `019e6c9a-0664-7fc3-a8cb-fd243120af30`, and observed
+  `turn/completed`.
+- Verified the `iPhone 17` simulator
+  `BAD95C8E-3E57-4818-9B90-E4ED22593B4B` against the real relay endpoint.
+  Screenshot evidence: `/tmp/codex-dock-phase5-root-cause-composer.png`.
 
 ## 0.5 Key invariants (fix immediately if violated)
 

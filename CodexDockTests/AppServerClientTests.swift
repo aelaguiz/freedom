@@ -523,6 +523,90 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(state, .connected)
     }
 
+    func testTurnStartAndSteerSendTypedTextInput() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let startTask = Task {
+            try await client.turnStart(
+                params: .text(threadId: "thread-1", text: "Do the thing"),
+                timeout: .seconds(1)
+            )
+        }
+        let startRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(startRequest.method, AppServerMethods.turnStart)
+        guard case .object(let startParams) = try XCTUnwrap(startRequest.params),
+              case .array(let startInput) = try XCTUnwrap(startParams["input"]),
+              case .object(let textInput) = try XCTUnwrap(startInput.first) else {
+            return XCTFail("Expected turn/start text input params")
+        }
+        XCTAssertEqual(startParams["threadId"], .string("thread-1"))
+        XCTAssertEqual(textInput["type"], .string("text"))
+        XCTAssertEqual(textInput["text"], .string("Do the thing"))
+        XCTAssertEqual(textInput["text_elements"], .array([]))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: startRequest.id,
+                    result: .object([
+                        "turn": .object([
+                            "id": .string("turn-1"),
+                            "status": .string("inProgress"),
+                        ]),
+                    ])
+                )
+            )
+        )
+        let startResponse = try await startTask.value
+        XCTAssertEqual(startResponse.turn.objectValue?["id"], .string("turn-1"))
+
+        let steerTask = Task {
+            try await client.turnSteer(
+                params: .text(
+                    threadId: "thread-1",
+                    text: "Add this too",
+                    expectedTurnId: "turn-1"
+                ),
+                timeout: .seconds(1)
+            )
+        }
+        let steerRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(steerRequest.method, AppServerMethods.turnSteer)
+        guard case .object(let steerParams) = try XCTUnwrap(steerRequest.params) else {
+            return XCTFail("Expected turn/steer params")
+        }
+        XCTAssertEqual(steerParams["threadId"], .string("thread-1"))
+        XCTAssertEqual(steerParams["expectedTurnId"], .string("turn-1"))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: steerRequest.id,
+                    result: .object(["turnId": .string("turn-1")])
+                )
+            )
+        )
+        let steerResponse = try await steerTask.value
+        XCTAssertEqual(steerResponse.turnId, "turn-1")
+    }
+
+    func testSendResponseSendsJsonRPCResponseForServerRequestID() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        try await client.sendResponse(
+            id: .string("approval-1"),
+            result: .object(["decision": .string("accept")])
+        )
+
+        let response = try await transport.nextSentResponse()
+        XCTAssertEqual(response.id, .string("approval-1"))
+        XCTAssertEqual(response.result, .object(["decision": .string("accept")]))
+    }
+
     func testLoopbackRealHostInitializeHandshakeWhenEndpointIsProvided() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let endpoint = environment["CODEX_DOCK_LOOPBACK_APP_SERVER_WS"], !endpoint.isEmpty else {
@@ -806,6 +890,14 @@ private actor ScriptedAppServerTransport: AppServerTransport {
             throw TestTransportError.unexpectedSentMessage
         }
         return notification
+    }
+
+    func nextSentResponse() async throws -> JSONRPCResponse {
+        let message = try await nextSentMessage()
+        guard case .response(let response) = message else {
+            throw TestTransportError.unexpectedSentMessage
+        }
+        return response
     }
 
     private func enqueueResult(_ result: Result<String?, Error>) {

@@ -53,6 +53,8 @@ public struct SessionDetailView: View {
                     message: message
                 )
             }
+            ComposerView(store: store)
+            RequestCardsView(store: store)
             EventTimelineView(events: snapshot.events)
         case let .error(header, message):
             DetailHeaderView(header: header, liveState: .stale(message))

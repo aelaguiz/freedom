@@ -119,3 +119,31 @@ Add a small host-side relay behind `rtk make services`:
   The All tab is newest-first; the relay proof shows real active rows available
   for the Running filter.
 - Raw app-server and relay were left running.
+
+# 2026-05-28 Follow-Up
+The same symptom was rechecked while Phase 5 was in progress.
+
+Findings:
+
+- The canonical `iPhone 17` simulator is
+  `BAD95C8E-3E57-4818-9B90-E4ED22593B4B`.
+- A second booted simulator named
+  `feat_remount-disposal-lifecycle-post-audit - iPhone 17`
+  also existed, and a stale `CodexDockApp` process was still visible for it.
+- The canonical simulator was connected to the relay at
+  `ws://192.168.50.117:4510` and showed real `Running` rows in the All feed.
+- A relay query returned `107` real rows: `3 active`, `15 idle`, and
+  `89 notLoaded`.
+- The active rows all had empty `activeFlags`; no live row reported
+  `waitingOnApproval` or `waitingOnUserInput`.
+- Therefore an empty `Needs me` filter is correct for the current live data.
+  It must not be filled from process presence alone.
+
+Follow-up fix:
+
+- The relay now inspects active live threads for replayed pending app-server
+  requests via real `thread/resume` behavior.
+- If a pending approval/input/elicitation request exists, the relay merges the
+  supported app-server attention flags into that thread's returned status.
+- This keeps Dock `Needs me` derived from real pending request signals, not
+  mocked rows or guessed process state.
