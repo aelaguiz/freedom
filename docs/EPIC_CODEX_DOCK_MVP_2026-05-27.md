@@ -124,9 +124,14 @@ or any endpoint a physical phone could not reach.
    - Gate to next: The app can show at least two configured hosts in one Dock,
      tolerate one offline host, filter sessions, and preserve app-local
      labels/colors by host/backend/thread id.
-   - Status: planning
+   - Status: complete
    - Auto-plan status: ready (`READY next=implement-loop`)
-   - Epic-critic verdict: —
+   - Epic-critic verdict: passed — Phase 6 now uses a host registry, loads
+     hosts independently, shows per-host state, keeps a live host visible when
+     another host is offline, groups by host/branch, filters over normalized
+     row status, persists app-local labels/colors by host/backend/thread id,
+     and exposes the full relay endpoint so `:4500` vs `:4510` cannot be
+     hidden.
 
 7. **Archive and Hosts surfaces**: Add reversible archive/unarchive and the
    Hosts screen after multi-host state exists.
@@ -264,3 +269,9 @@ reference the mockups only as downstream context.
   pending server requests from the owning app-server. A live check on
   `Amir-M5` returned `3 active`, `15 idle`, and `89 notLoaded` rows with zero
   waiting flags, so the empty `Needs me` filter was correct for that moment.
+- 2026-05-28 Phase 6 multi-host correction: a live two-host proof used
+  `Amir-M5` on `ws://192.168.50.117:4510` plus intentionally offline `Home` at
+  `ws://192.168.50.117:9`. The Dock kept `Amir-M5` rows visible and showed
+  `Home` offline. The UI now displays full WebSocket endpoints, and
+  `rtk make app` terminates stale Codex Dock processes on other booted
+  simulators before launching the selected `iPhone 17`.

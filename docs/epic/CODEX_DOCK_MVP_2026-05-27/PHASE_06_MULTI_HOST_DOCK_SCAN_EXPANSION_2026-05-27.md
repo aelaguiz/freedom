@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - Multi-Host Dock Scan Expansion - Architecture Plan"
 date: 2026-05-27
-status: active
+status: complete
 fallback_policy: forbidden
 owners: [aelaguiz]
 reviewers: [Codex]
@@ -380,6 +380,22 @@ No analytics.
 
 Configure two hosts or one live host plus one intentionally offline host.
 
+## 9.4 Implementation evidence
+
+- Implemented `HostRegistry`, multi-host `DockStore` fan-out, per-host load
+  states, host/branch grouping, filter projection, and app-local
+  host/backend/thread keyed labels/colors.
+- `CodexDockApp` now constructs the store from `HostRegistry.fromEnvironment()`.
+- `rtk make app` launches with the host-registry env shape, prints endpoint and
+  hosts, and terminates stale Codex Dock processes on other booted simulators.
+- Real simulator proof used `Amir-M5` live plus `Home` intentionally offline.
+- Worklog:
+  `PHASE_06_MULTI_HOST_DOCK_SCAN_EXPANSION_2026-05-27_WORKLOG.md`.
+- Implementation audit:
+  `PHASE_06_MULTI_HOST_DOCK_SCAN_EXPANSION_2026-05-27_PLAN_AUDIT.md`.
+- Thermonuclear review:
+  `PHASE_06_MULTI_HOST_DOCK_SCAN_EXPANSION_2026-05-27_THERMONUCLEAR_REVIEW.md`.
+
 # 10) Decision Log (append-only)
 
 ## 2026-05-27 - Multi-host after control
@@ -395,3 +411,39 @@ Decision
 
 Consequences
 : Breadth expands from a proven vertical slice.
+
+## 2026-05-28 - Keep `DockStore` as the widened state owner
+
+Context
+: The Phase 6 plan named a `MultiHostSessionStore`, but the repo already had a
+working `DockStore` that owned single-host state, row projection, refresh, and
+detail navigation inputs.
+
+Options
+: Add a parallel multi-host store, or widen `DockStore` and keep the single-host
+initializer as an adapter.
+
+Decision
+: Widen `DockStore` into the canonical multi-host Dock state owner.
+
+Consequences
+: Phase 7 must reuse this registry/state path and should extract projection
+helpers if Archive/Hosts would otherwise add surface-specific logic to
+`DockStore`.
+
+## 2026-05-28 - Surface the real endpoint in the UI
+
+Context
+: Live debugging showed that `ws://192.168.50.117:4500` returns only
+`notLoaded` history while `ws://192.168.50.117:4510` returns live active rows.
+The prior host summary hid the port.
+
+Options
+: Keep displaying only the host name, or display the full WebSocket endpoint.
+
+Decision
+: Display the full endpoint including scheme, host, port, and path.
+
+Consequences
+: The Dock makes wrong-endpoint launches visible instead of turning them into a
+status-filter mystery.

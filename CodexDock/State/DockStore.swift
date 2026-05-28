@@ -119,7 +119,7 @@ public enum DockRowStatusKind: String, Equatable, Sendable, CaseIterable {
     }
 }
 
-public enum DockRowRail: String, Equatable, Sendable, CaseIterable {
+public enum DockRowRail: String, Codable, Equatable, Sendable, CaseIterable {
     case blue
     case green
     case orange
@@ -129,6 +129,7 @@ public enum DockRowRail: String, Equatable, Sendable, CaseIterable {
 
 public struct DockRowViewModel: Equatable, Identifiable, Sendable {
     public let id: HostScopedThreadID
+    public let backendSessionID: String
     public let title: String
     public let repository: String
     public let branch: String
@@ -137,6 +138,15 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
     public let lastActivityDate: Date
     public let summary: String
     public let rail: DockRowRail
+    public let label: String?
+
+    public var metadataKey: LocalThreadMetadataKey {
+        LocalThreadMetadataKey(
+            hostID: id.hostID,
+            backendSessionID: backendSessionID,
+            threadID: id.threadID
+        )
+    }
 }
 
 public struct DockSectionViewModel: Equatable, Identifiable, Sendable {
@@ -153,12 +163,22 @@ public struct DockHostViewModel: Equatable, Identifiable, Sendable {
     public init(host: DockHostConfiguration) {
         self.id = host.id
         self.displayName = host.displayName
-        self.endpoint = host.webSocketURL.host ?? host.webSocketURL.absoluteString
+        self.endpoint = Self.displayEndpoint(for: host.webSocketURL)
+    }
+
+    private static func displayEndpoint(for url: URL) -> String {
+        let scheme = url.scheme.map { "\($0)://" } ?? ""
+        let host = url.host ?? url.absoluteString
+        let port = url.port.map { ":\($0)" } ?? ""
+        let path = url.path.isEmpty || url.path == "/" ? "" : url.path
+        return "\(scheme)\(host)\(port)\(path)"
     }
 }
 
 public struct DockSnapshot: Equatable, Sendable {
     public let host: DockHostViewModel
+    public let hosts: [DockHostViewModel]
+    public let hostStates: [DockHostStateViewModel]
     public let sections: [DockSectionViewModel]
     public let mappingFailures: [SessionSummaryMappingFailure]
 
@@ -166,6 +186,38 @@ public struct DockSnapshot: Equatable, Sendable {
         sections.reduce(0) { count, section in
             count + section.rows.count
         }
+    }
+}
+
+public enum DockHostLoadStatus: Equatable, Sendable {
+    case loaded(rowCount: Int)
+    case empty
+    case offline(String)
+    case error(String)
+
+    public var subtitle: String {
+        switch self {
+        case .loaded(let rowCount):
+            return "\(rowCount) sessions"
+        case .empty:
+            return "Online, no sessions"
+        case .offline:
+            return "Offline"
+        case .error:
+            return "Error"
+        }
+    }
+}
+
+public struct DockHostStateViewModel: Equatable, Identifiable, Sendable {
+    public let id: String
+    public let host: DockHostViewModel
+    public let status: DockHostLoadStatus
+
+    public init(host: DockHostViewModel, status: DockHostLoadStatus) {
+        self.id = host.id
+        self.host = host
+        self.status = status
     }
 }
 
@@ -185,33 +237,56 @@ public final class DockStore: ObservableObject {
 
     @Published public private(set) var state: DockStoreState
 
-    private let host: DockHostConfiguration?
+    private let hosts: [DockHostConfiguration]
     private let loader: any DockSessionLoading
+    private let metadataStore: any LocalThreadMetadataStoring
     private let now: @Sendable () -> Date
     private var isLoading = false
+    private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
 
     public var hostConfiguration: DockHostConfiguration? {
-        host
+        hosts.first
+    }
+
+    public func hostConfiguration(for hostID: String) -> DockHostConfiguration? {
+        hosts.first { $0.id == hostID }
     }
 
     public init(
         host: DockHostConfiguration,
         loader: any DockSessionLoading = AppServerDockClient(),
+        metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
-        self.host = host
+        self.hosts = [host]
         self.loader = loader
+        self.metadataStore = metadataStore
         self.now = now
         self.state = .idle(DockHostViewModel(host: host))
     }
 
     public init(
-        configurationError error: Error,
+        registry: HostRegistry,
         loader: any DockSessionLoading = AppServerDockClient(),
+        metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
-        self.host = nil
+        self.hosts = registry.hosts
         self.loader = loader
+        self.metadataStore = metadataStore
+        self.now = now
+        self.state = .idle(DockHostViewModel(host: registry.hosts[0]))
+    }
+
+    public init(
+        configurationError error: Error,
+        loader: any DockSessionLoading = AppServerDockClient(),
+        metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.hosts = []
+        self.loader = loader
+        self.metadataStore = metadataStore
         self.now = now
         self.state = .configurationError(error.localizedDescription)
     }
@@ -224,8 +299,20 @@ public final class DockStore: ObservableObject {
         await reload(showLoading: false)
     }
 
+    public func setLabel(_ label: String?, for row: DockRowViewModel) async {
+        var metadata = localMetadata[row.metadataKey] ?? LocalThreadMetadata()
+        metadata.label = label
+        await save(metadata: metadata, for: row.metadataKey)
+    }
+
+    public func setRail(_ rail: DockRowRail?, for row: DockRowViewModel) async {
+        var metadata = localMetadata[row.metadataKey] ?? LocalThreadMetadata()
+        metadata.rail = rail
+        await save(metadata: metadata, for: row.metadataKey)
+    }
+
     private func reload(showLoading: Bool) async {
-        guard let host else {
+        guard !hosts.isEmpty else {
             return
         }
         guard !isLoading else {
@@ -235,50 +322,127 @@ public final class DockStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
-        let hostViewModel = DockHostViewModel(host: host)
+        let hostViewModel = DockHostViewModel(host: hosts[0])
         if showLoading {
             state = .loading(hostViewModel)
         }
 
         do {
-            let result = try await loader.loadSessions(for: host)
-            let snapshot = makeSnapshot(
-                host: hostViewModel,
-                summaries: result.summaries,
-                mappingFailures: result.mappingFailures
-            )
-            state = snapshot.rowCount == 0 ? .empty(hostViewModel) : .loaded(snapshot)
-        } catch let failure as DockLoadFailure {
-            switch failure {
-            case let .offline(message):
-                state = .offline(hostViewModel, message)
-            case let .error(message):
-                state = .error(hostViewModel, message)
-            }
+            localMetadata = try await metadataStore.load()
         } catch {
-            state = .error(hostViewModel, error.localizedDescription)
+            localMetadata = [:]
+        }
+
+        let results = await loadAllHosts()
+        let snapshot = makeSnapshot(results: results)
+
+        if hosts.count == 1, let first = results.first {
+            switch first.result {
+            case .success(let result):
+                state = snapshot.rowCount == 0
+                    ? .empty(hostViewModel)
+                    : .loaded(snapshot)
+                if result.summaries.isEmpty, !result.mappingFailures.isEmpty {
+                    state = .loaded(snapshot)
+                }
+            case .failure(let failure):
+                switch failure {
+                case .offline(let message):
+                    state = .offline(hostViewModel, message)
+                case .error(let message):
+                    state = .error(hostViewModel, message)
+                }
+            }
+        } else {
+            state = .loaded(snapshot)
         }
     }
 
-    private func makeSnapshot(
-        host: DockHostViewModel,
-        summaries: [SessionSummary],
-        mappingFailures: [SessionSummaryMappingFailure]
-    ) -> DockSnapshot {
+    private struct HostLoadOutcome: Sendable {
+        let host: DockHostConfiguration
+        let result: Result<DockLoadResult, DockLoadFailure>
+    }
+
+    private func loadAllHosts() async -> [HostLoadOutcome] {
+        await withTaskGroup(of: HostLoadOutcome.self) { group in
+            for host in hosts {
+                group.addTask { [loader] in
+                    do {
+                        return HostLoadOutcome(
+                            host: host,
+                            result: .success(try await loader.loadSessions(for: host))
+                        )
+                    } catch {
+                        return HostLoadOutcome(
+                            host: host,
+                            result: .failure(Self.mapLoadFailure(error))
+                        )
+                    }
+                }
+            }
+
+            var outcomes: [HostLoadOutcome] = []
+            for await outcome in group {
+                outcomes.append(outcome)
+            }
+            return outcomes.sorted { lhs, rhs in
+                hostIndex(lhs.host.id) < hostIndex(rhs.host.id)
+            }
+        }
+    }
+
+    private nonisolated static func mapLoadFailure(_ error: Error) -> DockLoadFailure {
+        if let failure = error as? DockLoadFailure {
+            return failure
+        }
+        return .error(error.localizedDescription)
+    }
+
+    private func makeSnapshot(results: [HostLoadOutcome]) -> DockSnapshot {
+        var summaries: [SessionSummary] = []
+        var mappingFailures: [SessionSummaryMappingFailure] = []
+        var hostStates: [DockHostStateViewModel] = []
+
+        for outcome in results {
+            let host = DockHostViewModel(host: outcome.host)
+            switch outcome.result {
+            case .success(let result):
+                summaries.append(contentsOf: result.summaries)
+                mappingFailures.append(contentsOf: result.mappingFailures)
+                hostStates.append(
+                    DockHostStateViewModel(
+                        host: host,
+                        status: result.summaries.isEmpty
+                            ? .empty
+                            : .loaded(rowCount: result.summaries.count)
+                    )
+                )
+            case .failure(let failure):
+                switch failure {
+                case .offline(let message):
+                    hostStates.append(DockHostStateViewModel(host: host, status: .offline(message)))
+                case .error(let message):
+                    hostStates.append(DockHostStateViewModel(host: host, status: .error(message)))
+                }
+            }
+        }
+
         let rows = summaries.map(makeRow)
-        let groupedRows = Dictionary(grouping: rows, by: \.branch)
+        let groupedRows = Dictionary(grouping: rows, by: sectionID(for:))
         let sections = groupedRows
-            .map { branch, rows in
+            .map { sectionID, rows in
                 DockSectionViewModel(
-                    id: branch,
-                    title: branch,
+                    id: sectionID,
+                    title: sectionTitle(for: rows[0]),
                     rows: rows.sorted(by: rowPrecedes)
                 )
             }
             .sorted(by: sectionPrecedes)
 
         return DockSnapshot(
-            host: host,
+            host: DockHostViewModel(host: hosts[0]),
+            hosts: hosts.map(DockHostViewModel.init),
+            hostStates: hostStates,
             sections: sections,
             mappingFailures: mappingFailures
         )
@@ -332,8 +496,16 @@ public final class DockStore: ObservableObject {
     }
 
     private func makeRow(summary: SessionSummary) -> DockRowViewModel {
-        DockRowViewModel(
+        let metadata = localMetadata[
+            LocalThreadMetadataKey(
+                hostID: summary.id.hostID,
+                backendSessionID: summary.backendSessionID,
+                threadID: summary.id.threadID
+            )
+        ]
+        return DockRowViewModel(
             id: summary.id,
+            backendSessionID: summary.backendSessionID,
             title: title(for: summary),
             repository: repository(for: summary),
             branch: text(summary.branch, fallback: "No branch"),
@@ -341,8 +513,21 @@ public final class DockStore: ObservableObject {
             lastActivity: relativeTime(since: summary.lastActivity),
             lastActivityDate: summary.lastActivity,
             summary: latestSummary(for: summary),
-            rail: rail(for: summary)
+            rail: metadata?.rail ?? rail(for: summary),
+            label: metadata?.label
         )
+    }
+
+    private func sectionID(for row: DockRowViewModel) -> String {
+        hosts.count > 1 ? "\(row.id.hostID)::\(row.branch)" : row.branch
+    }
+
+    private func sectionTitle(for row: DockRowViewModel) -> String {
+        guard hosts.count > 1 else {
+            return row.branch
+        }
+        let hostName = hosts.first { $0.id == row.id.hostID }?.displayName ?? row.id.hostID
+        return "\(hostName) / \(row.branch)"
     }
 
     private func title(for summary: SessionSummary) -> String {
@@ -420,5 +605,18 @@ public final class DockStore: ObservableObject {
             return trimmed
         }
         return nil
+    }
+
+    private func hostIndex(_ hostID: String) -> Int {
+        hosts.firstIndex { $0.id == hostID } ?? Int.max
+    }
+
+    private func save(metadata: LocalThreadMetadata, for key: LocalThreadMetadataKey) async {
+        do {
+            localMetadata = try await metadataStore.save(metadata.isEmpty ? nil : metadata, for: key)
+            await refresh()
+        } catch {
+            state = .error(DockHostViewModel(host: hosts[0]), error.localizedDescription)
+        }
     }
 }

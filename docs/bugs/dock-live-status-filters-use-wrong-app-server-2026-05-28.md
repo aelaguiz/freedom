@@ -147,3 +147,43 @@ Follow-up fix:
   supported app-server attention flags into that thread's returned status.
 - This keeps Dock `Needs me` derived from real pending request signals, not
   mocked rows or guessed process state.
+
+# 2026-05-28 Follow-Up 2
+The symptom was rechecked again after the user reported that All still looked
+old and Needs me / Running showed no matches.
+
+Findings:
+
+- `ws://192.168.50.117:4510` returned `108` real rows: `3 active`, `16 idle`,
+  and `89 notLoaded`.
+- `ws://192.168.50.117:4500` returned `100` real rows, all `notLoaded`.
+- That raw `:4500` shape exactly matches the bad UI: All looks like old
+  Limited history, Running is empty, and Needs me is empty.
+- The canonical plain `iPhone 17` simulator was
+  `BAD95C8E-3E57-4818-9B90-E4ED22593B4B`.
+- Another booted simulator named
+  `feat_remount-disposal-lifecycle-post-audit - iPhone 17` had Codex Dock
+  installed and a stale process, but no relay socket.
+- A process socket check confirmed the canonical simulator app had previously
+  connected to `:4510`; the stale duplicate simulator was a plausible source
+  of operator confusion.
+
+Guardrail fix:
+
+- The Dock host summary now displays the full WebSocket endpoint including the
+  port, for example `ws://192.168.50.117:4510`.
+- `rtk make app SIM='iPhone 17'` now terminates Codex Dock on other booted
+  simulators before launching the selected simulator.
+- `rtk make app` prints `launch endpoint: ws://192.168.50.117:4510` during
+  launch, so a raw `:4500` launch is visible in command output.
+
+Verification:
+
+- `rtk swift test` passed 56 tests with 4 optional live endpoint tests skipped.
+- `rtk npm run test:relay` passed all 3 relay tests.
+- `rtk make app SIM='iPhone 17'` rebuilt, installed, and launched
+  `com.aelaguiz.CodexDockApp` on
+  `BAD95C8E-3E57-4818-9B90-E4ED22593B4B`.
+- Screenshot `/tmp/codex-dock-root-cause-after-make-app.png` shows All with a
+  visible `Running` row and the host summary endpoint
+  `ws://192.168.50.117:4510`.

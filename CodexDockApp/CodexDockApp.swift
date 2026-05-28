@@ -18,7 +18,7 @@ struct CodexDockApp: App {
 
     private static func makeStore() -> DockStore {
         do {
-            return DockStore(host: try DockHostConfiguration.fromEnvironment())
+            return DockStore(registry: try HostRegistry.fromEnvironment())
         } catch {
             return DockStore(configurationError: error)
         }

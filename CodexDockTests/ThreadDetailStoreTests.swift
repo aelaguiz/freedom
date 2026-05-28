@@ -509,6 +509,7 @@ private func makeDetailHost() -> DockHostConfiguration {
 private func makeDetailRow(hostID: String, threadID: String) -> DockRowViewModel {
     DockRowViewModel(
         id: HostScopedThreadID(hostID: hostID, threadID: threadID),
+        backendSessionID: "\(threadID)-session",
         title: "Build live detail",
         repository: "codex-client",
         branch: "main",
@@ -516,7 +517,8 @@ private func makeDetailRow(hostID: String, threadID: String) -> DockRowViewModel
         lastActivity: "now",
         lastActivityDate: Date(timeIntervalSince1970: 2_000),
         summary: "Open a real thread",
-        rail: .blue
+        rail: .blue,
+        label: nil
     )
 }
 

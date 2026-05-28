@@ -20,6 +20,7 @@
 		48D9A54C1E505B0CC65E4654 /* CodexDockApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FACDCA51DD66D50C6A6F145 /* CodexDockApp.swift */; };
 		4D9CD10593ABDDD5F6E74BD9 /* ThreadDetailDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECA148D7F9C96BD5EDF6D709 /* ThreadDetailDTO.swift */; };
 		525C4D2542BCD14F9EFDE571 /* JSONRPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9C4FD936A8FB869F14F7F61 /* JSONRPC.swift */; };
+		5B5103973B19887BEA32843D /* HostRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26B07B009451AB1728472ADB /* HostRegistry.swift */; };
 		5F045E715AFE5F40D383E82D /* SessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AC280DBF1FD9245AD8CD686 /* SessionDetailView.swift */; };
 		68A4924EA66B7E73782296C8 /* SessionSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23406F25CA882A60E01CB56E /* SessionSummary.swift */; };
 		6B62194AAF786F06DEAB123A /* DockStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E8613594609B20254A5CA44 /* DockStoreTests.swift */; };
@@ -28,6 +29,7 @@
 		948497183F2A3F44DEBFB7C0 /* CodexDock.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; };
 		99B452E9A8D07C40003708BF /* ThreadDetailStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D0EBB21C932928CC08AEA0D /* ThreadDetailStore.swift */; };
 		99D3191813C0AE1FEB26FEE5 /* RequestCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A268CB6FC21DA9B184409A9 /* RequestCardView.swift */; };
+		AEAC4E8DC982EB5144DAAAC2 /* LocalThreadMetadataStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DC52B300359BB6026278F44 /* LocalThreadMetadataStore.swift */; };
 		D04A2A41E6D1672534665C4A /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056F8C4CC7919C3F3EE29D9F /* ComposerView.swift */; };
 		D1510D6CA7B7B44EDBB04A96 /* ThreadListDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5070CB2076B611D53150818 /* ThreadListDTO.swift */; };
 		D265D19D042CE35098EF5521 /* AppServerClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FABBE94F4FF90D41C42F5683 /* AppServerClientTests.swift */; };
@@ -83,6 +85,7 @@
 		0549BF0ED081727D34323CBA /* TurnDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnDTO.swift; sourceTree = "<group>"; };
 		056F8C4CC7919C3F3EE29D9F /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
 		23406F25CA882A60E01CB56E /* SessionSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSummary.swift; sourceTree = "<group>"; };
+		26B07B009451AB1728472ADB /* HostRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostRegistry.swift; sourceTree = "<group>"; };
 		2E8613594609B20254A5CA44 /* DockStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockStoreTests.swift; sourceTree = "<group>"; };
 		37232256608F5A94E813243A /* ThreadEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadEvent.swift; sourceTree = "<group>"; };
 		3AC280DBF1FD9245AD8CD686 /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
@@ -91,6 +94,7 @@
 		4A92948E4571E0CEE65CAE35 /* DockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockView.swift; sourceTree = "<group>"; };
 		52C72CBCF6924E26CAC9D3AE /* DockHostConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockHostConfiguration.swift; sourceTree = "<group>"; };
 		5A268CB6FC21DA9B184409A9 /* RequestCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestCardView.swift; sourceTree = "<group>"; };
+		5DC52B300359BB6026278F44 /* LocalThreadMetadataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalThreadMetadataStore.swift; sourceTree = "<group>"; };
 		7A42B2061F9E45C1B6935F08 /* DockStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockStore.swift; sourceTree = "<group>"; };
 		7B2F9B8D2B9BB539D75F5CDA /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		8B717287F11303537B392BB6 /* CodexDockApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CodexDockApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -199,6 +203,7 @@
 			isa = PBXGroup;
 			children = (
 				52C72CBCF6924E26CAC9D3AE /* DockHostConfiguration.swift */,
+				26B07B009451AB1728472ADB /* HostRegistry.swift */,
 			);
 			path = Configuration;
 			sourceTree = "<group>";
@@ -207,6 +212,7 @@
 			isa = PBXGroup;
 			children = (
 				7A42B2061F9E45C1B6935F08 /* DockStore.swift */,
+				5DC52B300359BB6026278F44 /* LocalThreadMetadataStore.swift */,
 				9D0EBB21C932928CC08AEA0D /* ThreadDetailStore.swift */,
 			);
 			path = State;
@@ -368,7 +374,9 @@
 				E8B4F584399DE2B51D9E3B1A /* DockHostConfiguration.swift in Sources */,
 				08C32D79593965966136996A /* DockStore.swift in Sources */,
 				486650859FCE02D4B036B60B /* DockView.swift in Sources */,
+				5B5103973B19887BEA32843D /* HostRegistry.swift in Sources */,
 				525C4D2542BCD14F9EFDE571 /* JSONRPC.swift in Sources */,
+				AEAC4E8DC982EB5144DAAAC2 /* LocalThreadMetadataStore.swift in Sources */,
 				99D3191813C0AE1FEB26FEE5 /* RequestCardView.swift in Sources */,
 				43CB12A8A3DF95391ADD2533 /* ServerRequestCard.swift in Sources */,
 				5F045E715AFE5F40D383E82D /* SessionDetailView.swift in Sources */,

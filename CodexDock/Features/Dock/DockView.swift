@@ -14,7 +14,7 @@ public enum DockFilter: String, CaseIterable, Identifiable {
 
     public var id: String { rawValue }
 
-    fileprivate func includes(_ row: DockRowViewModel) -> Bool {
+    func includes(_ row: DockRowViewModel) -> Bool {
         switch self {
         case .all:
             return true
@@ -210,10 +210,9 @@ public struct DockView: View {
         let sections = filteredSections(snapshot.sections)
 
         return VStack(alignment: .leading, spacing: 16) {
-            HostSummaryView(
-                host: snapshot.host,
-                subtitle: "\(snapshot.rowCount) sessions"
-            )
+            ForEach(snapshot.hostStates) { hostState in
+                HostSummaryView(hostState: hostState)
+            }
 
             if !snapshot.mappingFailures.isEmpty {
                 MappingFailureBanner(count: snapshot.mappingFailures.count)
@@ -222,8 +221,8 @@ public struct DockView: View {
             if sections.isEmpty {
                 DockMessageView(
                     icon: "line.3.horizontal.decrease.circle",
-                    title: "No matches",
-                    message: "No sessions match the current filter."
+                    title: emptyStateTitle,
+                    message: emptyStateMessage
                 )
             } else {
                 ForEach(sections) { section in
@@ -235,7 +234,7 @@ public struct DockView: View {
 
                         VStack(spacing: 10) {
                             ForEach(section.rows) { row in
-                                if let host = store.hostConfiguration {
+                                if let host = store.hostConfiguration(for: row.id.hostID) {
                                     NavigationLink {
                                         SessionDetailView(
                                             store: ThreadDetailStore(host: host, row: row)
@@ -244,14 +243,61 @@ public struct DockView: View {
                                         DockRowView(row: row)
                                     }
                                     .buttonStyle(.plain)
+                                    .contextMenu {
+                                        rowContextMenu(row)
+                                    }
                                 } else {
                                     DockRowView(row: row)
+                                        .contextMenu {
+                                            rowContextMenu(row)
+                                        }
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func rowContextMenu(_ row: DockRowViewModel) -> some View {
+        Button {
+            Task {
+                await store.setLabel("Watch", for: row)
+            }
+        } label: {
+            Label("Mark Watch", systemImage: "tag")
+        }
+
+        Button {
+            Task {
+                await store.setLabel(nil, for: row)
+            }
+        } label: {
+            Label("Clear Label", systemImage: "tag.slash")
+        }
+
+        Menu {
+            ForEach(DockRowRail.allCases, id: \.self) { rail in
+                Button {
+                    Task {
+                        await store.setRail(rail, for: row)
+                    }
+                } label: {
+                    Label(rail.label, systemImage: rail.systemImage)
+                }
+            }
+
+            Button {
+                Task {
+                    await store.setRail(nil, for: row)
+                }
+            } label: {
+                Label("Clear Color", systemImage: "circle.slash")
+            }
+        } label: {
+            Label("Color", systemImage: "paintpalette")
         }
     }
 
@@ -278,11 +324,57 @@ public struct DockView: View {
                 value.localizedCaseInsensitiveContains(query)
             }
     }
+
+    private var emptyStateTitle: String {
+        switch filter {
+        case .all:
+            return "No matches"
+        case .needsMe:
+            return "Nothing needs you"
+        case .running:
+            return "Nothing running"
+        case .limited:
+            return "No limited rows"
+        }
+    }
+
+    private var emptyStateMessage: String {
+        let hasSearch = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if hasSearch {
+            return "No sessions match this filter and search."
+        }
+
+        switch filter {
+        case .all:
+            return "No sessions match the current filter."
+        case .needsMe:
+            return "No sessions are waiting for approval or input."
+        case .running:
+            return "No sessions are actively running on loaded hosts."
+        case .limited:
+            return "No limited history rows are visible."
+        }
+    }
 }
 
 private struct HostSummaryView: View {
     let host: DockHostViewModel
     let subtitle: String
+
+    init(host: DockHostViewModel, subtitle: String) {
+        self.host = host
+        self.subtitle = subtitle
+    }
+
+    init(hostState: DockHostStateViewModel) {
+        self.host = hostState.host
+        switch hostState.status {
+        case .loaded, .empty:
+            self.subtitle = hostState.status.subtitle
+        case .offline(let message), .error(let message):
+            self.subtitle = "\(hostState.status.subtitle): \(message)"
+        }
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -297,7 +389,7 @@ private struct HostSummaryView: View {
                 Text("\(host.endpoint) · \(subtitle)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
             }
 
             Spacer(minLength: 8)
@@ -383,6 +475,13 @@ private struct DockRowView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
+                if let label = row.label {
+                    Label(label, systemImage: "tag")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
                 Text(row.summary)
                     .font(.footnote)
                     .foregroundStyle(.primary)
@@ -433,6 +532,38 @@ private struct DockRowView: View {
             return .red
         case .unknown:
             return .secondary
+        }
+    }
+}
+
+private extension DockRowRail {
+    var label: String {
+        switch self {
+        case .blue:
+            return "Blue"
+        case .green:
+            return "Green"
+        case .orange:
+            return "Orange"
+        case .red:
+            return "Red"
+        case .violet:
+            return "Violet"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .blue:
+            return "circle.fill"
+        case .green:
+            return "circle.fill"
+        case .orange:
+            return "circle.fill"
+        case .red:
+            return "circle.fill"
+        case .violet:
+            return "circle.fill"
         }
     }
 }

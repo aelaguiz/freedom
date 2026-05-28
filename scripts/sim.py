@@ -80,13 +80,38 @@ def boot_device(selector):
     print(f"booted {device['name']} ({udid})")
 
 
+def terminate_app_on_other_booted_devices(selector, bundle_id):
+    target = resolve_device(selector)
+    for device in sorted(load_devices(), key=lambda item: (item["name"], item["udid"])):
+        if device["udid"] == target["udid"] or device["state"] != "Booted":
+            continue
+
+        result = subprocess.run(
+            ["xcrun", "simctl", "terminate", device["udid"], bundle_id],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            print(f"terminated {bundle_id} on {device['name']} ({device['udid']})")
+
+
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in {"list", "boot", "resolve"}:
-        print("Usage: sim.py list | boot <sim-name-or-udid> | resolve <sim-name-or-udid>", file=sys.stderr)
+    if len(sys.argv) < 2 or sys.argv[1] not in {"list", "boot", "resolve", "terminate-others"}:
+        print(
+            "Usage: sim.py list | boot <sim-name-or-udid> | resolve <sim-name-or-udid> | terminate-others <sim-name-or-udid> <bundle-id>",
+            file=sys.stderr,
+        )
         sys.exit(2)
 
     if sys.argv[1] == "list":
         list_devices()
+        return
+
+    if sys.argv[1] == "terminate-others":
+        if len(sys.argv) != 4 or not sys.argv[2].strip() or not sys.argv[3].strip():
+            print("Usage: sim.py terminate-others <sim-name-or-udid> <bundle-id>", file=sys.stderr)
+            sys.exit(2)
+        terminate_app_on_other_booted_devices(sys.argv[2].strip(), sys.argv[3].strip())
         return
 
     if len(sys.argv) != 3 or not sys.argv[2].strip():
