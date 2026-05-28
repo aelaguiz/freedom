@@ -317,6 +317,26 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(state, .connected)
     }
 
+    func testLoopbackRealHostInitializeHandshakeWhenEndpointIsProvided() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let endpoint = environment["CODEX_DOCK_LOOPBACK_APP_SERVER_WS"], !endpoint.isEmpty else {
+            throw XCTSkip(
+                "Set CODEX_DOCK_LOOPBACK_APP_SERVER_WS to run the loopback real-host smoke test"
+            )
+        }
+        let url = try XCTUnwrap(URL(string: endpoint))
+        XCTAssertTrue(
+            ["ws", "wss"].contains(url.scheme?.lowercased()),
+            "Loopback handshake endpoint must be a WebSocket URL"
+        )
+        XCTAssertTrue(
+            isLoopbackHost(url.host),
+            "Loopback smoke endpoint must be localhost, 127.0.0.1, or ::1"
+        )
+
+        try await assertRealHostHandshakeSucceeds(url: url, timeout: .seconds(5))
+    }
+
     func testPhoneReachableRealHostInitializeHandshakeWhenEndpointIsProvided() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let endpoint = environment["CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS"], !endpoint.isEmpty else {
@@ -333,21 +353,26 @@ final class AppServerClientTests: XCTestCase {
             isLoopbackHost(url.host),
             "Phone-reachable handshake endpoint cannot be localhost, 127.0.0.1, or ::1"
         )
-        let client = AppServerClient(webSocketURL: url)
 
-        let response = try await client.connectAndInitialize(
-            params: .codexDock(version: "0.1.0"),
-            timeout: .seconds(5)
-        )
-
-        XCTAssertFalse(response.userAgent.isEmpty)
-        XCTAssertFalse(response.codexHome.isEmpty)
-        XCTAssertFalse(response.platformFamily.isEmpty)
-        XCTAssertFalse(response.platformOs.isEmpty)
-        let state = await client.state
-        XCTAssertEqual(state, .connected)
-        await client.disconnect()
+        try await assertRealHostHandshakeSucceeds(url: url, timeout: .seconds(5))
     }
+}
+
+private func assertRealHostHandshakeSucceeds(url: URL, timeout: Duration) async throws {
+    let client = AppServerClient(webSocketURL: url)
+
+    let response = try await client.connectAndInitialize(
+        params: .codexDock(version: "0.1.0"),
+        timeout: timeout
+    )
+
+    XCTAssertFalse(response.userAgent.isEmpty)
+    XCTAssertFalse(response.codexHome.isEmpty)
+    XCTAssertFalse(response.platformFamily.isEmpty)
+    XCTAssertFalse(response.platformOs.isEmpty)
+    let state = await client.state
+    XCTAssertEqual(state, .connected)
+    await client.disconnect()
 }
 
 private func isLoopbackHost(_ host: String?) -> Bool {
