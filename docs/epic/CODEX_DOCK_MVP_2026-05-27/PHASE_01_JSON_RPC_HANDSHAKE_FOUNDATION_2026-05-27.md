@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - JSON-RPC Handshake Foundation - Architecture Plan"
 date: 2026-05-27
-status: complete
+status: reopened
 fallback_policy: forbidden
 owners: [aelaguiz]
 reviewers: [Codex]
@@ -14,40 +14,87 @@ related:
 # TL;DR
 
 - Outcome: Prove the fundamental runtime seam before UI: a Swift client can
-  connect to Codex app-server over WebSocket JSON-RPC, complete
-  `initialize`/`initialized`, and report connection state.
+  connect from the iPhone path to a real Codex app-server over WebSocket
+  JSON-RPC, complete `initialize`/`initialized`, and report connection state.
 - Problem: Starting with a Dock shell hides the hardest unknown. The app is only
-  real once JSON-RPC communication works.
+  real once JSON-RPC communication works against a real phone-reachable host.
 - Approach: Build a small protocol module with envelope encoding, request id
   correlation, WebSocket lifecycle, and a test/development handshake path.
 - Plan: First create testable envelopes, then connection lifecycle, then
-  initialize/initialized, then visible diagnostic evidence.
+  initialize/initialized, then visible real-host diagnostic evidence.
 - Non-negotiables: no product UI dependency, no AIMGR, no custom proxy, and no
   raw JSON-RPC in future SwiftUI views.
+
+# HARD REQUIREMENT: NO MOCK COMPLETION
+
+THIS PHASE IS NOT COMPLETE UNTIL THE IPHONE PATH CONNECTS TO A REAL CODEX
+APP-SERVER ON A REAL PHONE-REACHABLE HOST.
+
+Mocks, scripted transports, simulated app-server responses, local-only Unix
+sockets, and Mac-loopback WebSockets are useful development tests, but they are
+not done. `localhost`, `127.0.0.1`, `::1`, and
+`/Users/aelaguiz/.codex/app-server-control/app-server-control.sock` do not
+prove phone reachability.
+
+The required acceptance proof is a real `initialize` then `initialized`
+handshake against a real Codex app-server on `Amir-M5` or `Home`, exposed in a
+way the phone can reach, such as LAN or Tailscale. If we have not actually
+connected to the host, we are not done.
 
 <!-- arch_skill:block:implementation_audit:start -->
 # Implementation Audit (authoritative)
 Date: 2026-05-28
-Verdict (code): COMPLETE
-Manual QA: n/a (non-blocking)
+Verdict (completion): REOPENED / NOT COMPLETE
+Verdict (local protocol code): implemented and passing local tests
+Manual QA: blocking until real phone-reachable host proof exists
 
 ## Code blockers (why code is not done)
-- None.
+- No acceptance proof shows the iPhone path connecting to a real Codex
+  app-server on a real phone-reachable host.
+- Current proof is limited to deterministic test transports, macOS SwiftPM, and
+  `iPhone 17` simulator execution. That proves local protocol behavior, not
+  phone-to-host reachability.
+- Current WebSocket client construction does not yet carry Codex websocket auth
+  material. A non-loopback app-server listener requires auth, so the mobile
+  client cannot yet satisfy the real phone-reachable gate against the secure
+  server mode.
 
 ## Reopened phases (false-complete fixes)
-- None.
+- Phase 1 is reopened. The previous completion audit accepted a locally
+  simulated handshake proof; that is no longer acceptable under the real-host
+  requirement.
 
 ## Missing items (code gaps; evidence-anchored; no tables)
-- None.
+- Add a real-host handshake path that rejects loopback endpoints as acceptance
+  evidence.
+- Add the client auth path needed for Codex non-loopback websocket listeners.
+- Run and record a successful `initialize`/`initialized` handshake against
+  `Amir-M5` or `Home` from the iPhone path.
 
 ## Evidence checked
 - Stage gate: `python3 /Users/aelaguiz/.agents/skills/arch-step/scripts/arch_stage_gate.py ready --doc docs/epic/CODEX_DOCK_MVP_2026-05-27/PHASE_01_JSON_RPC_HANDSHAKE_FOUNDATION_2026-05-27.md` returned `READY next=implement-loop`.
 - SwiftPM/macOS: `swift test` passed 12 tests.
 - iPhone simulator: `xcodebuild test -scheme codex-client -destination 'id=DEF1631B-7125-43C6-BFA3-4423BF103C91'` passed on the booted `iPhone 17` simulator.
 - Scope check: implementation contains JSON-RPC envelope/client/handshake code and tests only; no `thread/list`, Dock UI, AIMGR, archive, voice, or later-phase product behavior was implemented.
+- Codex daemon check: `codex app-server daemon version` reported a running pid
+  backend with socket path
+  `/Users/aelaguiz/.codex/app-server-control/app-server-control.sock`.
+- Daemon settings check:
+  `/Users/aelaguiz/.codex/app-server-daemon/settings.json` contains
+  `{"remoteControlEnabled": true}`.
+- Codex source check:
+  `/Users/aelaguiz/workspace/codex/codex-rs/app-server-daemon/src/backend/pid.rs`
+  hardcodes daemon-managed app-server startup to
+  `app-server --remote-control --listen unix://` when remote control is enabled
+  and `app-server --listen unix://` when it is not.
+- Codex transport check:
+  `/Users/aelaguiz/workspace/codex/codex-rs/app-server-transport/src/transport/websocket.rs`
+  refuses non-loopback WebSocket listeners without `--ws-auth capability-token`
+  or `--ws-auth signed-bearer-token`.
 
 ## Non-blocking follow-ups (manual QA / screenshots / human verification)
-- Real host app-server smoke testing against `Amir-M5` or `Home` remains optional setup work outside the Phase 1 code-completeness gate because this phase permits a locally simulated handshake proof.
+- None. Real host app-server smoke testing against `Amir-M5` or `Home` is now
+  blocking acceptance evidence, not optional setup work.
 <!-- arch_skill:block:implementation_audit:end -->
 
 <!-- arch_skill:block:planning_passes:start -->
@@ -125,8 +172,9 @@ note: This block tracks stage order only. It never overrides readiness blockers 
 ## 0.1 The claim (falsifiable)
 
 A developer can run a focused test or local dev diagnostic that connects to a
-Codex app-server endpoint, completes the initialization handshake, and surfaces
-connected/offline/error state without any product UI.
+real phone-reachable Codex app-server endpoint from the iPhone path, completes
+the initialization handshake, and surfaces connected/offline/error state without
+any product UI.
 
 ## 0.2 In scope
 
@@ -135,7 +183,8 @@ connected/offline/error state without any product UI.
 - Request id correlation.
 - WebSocket connect/read/send lifecycle.
 - `initialize` and `initialized`.
-- Diagnostic/test evidence for success and failure.
+- Diagnostic/test evidence for success and failure against a real
+  phone-reachable host.
 
 ## 0.3 Out of scope
 
@@ -148,8 +197,11 @@ connected/offline/error state without any product UI.
 
 - Protocol envelope unit tests pass.
 - A test transport proves request/response matching.
-- A real or locally simulated WebSocket path completes the handshake.
+- A real phone-reachable WebSocket path completes the handshake against
+  `Amir-M5` or `Home`.
 - Failures are represented as explicit connection states.
+- Mocks, fixtures, deterministic test transports, Unix sockets, and loopback
+  WebSockets do not count as acceptance evidence.
 
 ## 0.5 Key invariants (fix immediately if violated)
 
@@ -172,6 +224,9 @@ connected/offline/error state without any product UI.
 - App-server uses WebSocket-framed JSON-RPC, not raw JSONL.
 - The repo is new and can choose a clean Swift layout.
 - The protocol client must support later request and notification work.
+- The daemon-managed app-server is Unix-socket-only; phone reachability requires
+  a separate real WebSocket listener or equivalent host-reachable transport.
+- Non-loopback Codex WebSocket listeners require websocket auth.
 
 ## 1.3 Architectural principles (rules we will enforce)
 
@@ -190,13 +245,15 @@ connected/offline/error state without any product UI.
 
 ## 2.1 What exists today
 
-The repo has docs and mockups, but no app code. The app-server protocol is
-documented in `../../CODEX_APP_SERVER_RAMP_UP_2026-05-27.md`.
+The repo now has the local Phase 1 protocol client implementation, docs, and
+mockups. The app-server protocol is documented in
+`../../CODEX_APP_SERVER_RAMP_UP_2026-05-27.md`.
 
 ## 2.2 What’s broken / missing (concrete)
 
-No client exists that can talk to Codex app-server. UI work before this would
-risk building a shell around an unproven transport.
+The local client can exercise the protocol shape, but no proof shows the iPhone
+path connecting to a real phone-reachable Codex app-server. UI work before this
+would risk building a shell around a transport that only works locally.
 
 ## 2.3 Constraints implied by the problem
 
@@ -218,6 +275,12 @@ The first implementation proof must be JSON-RPC communication itself.
   - `../../CODEX_APP_SERVER_RAMP_UP_2026-05-27.md` — app-server uses
     WebSocket-framed JSON-RPC, starts with `initialize` then `initialized`, and
     requires clients to keep reading notifications.
+  - `/Users/aelaguiz/workspace/codex/codex-rs/app-server-daemon/src/backend/pid.rs`
+    — daemon-managed app-server startup uses `--listen unix://`, so the daemon
+    socket cannot satisfy phone reachability.
+  - `/Users/aelaguiz/workspace/codex/codex-rs/app-server-transport/src/transport/websocket.rs`
+    — non-loopback WebSocket listeners are refused unless websocket auth is
+    configured.
   - `../../CODEX_DOCK_IPHONE_UX_SPEC_2026-05-27.md` — V1 excludes AIMGR and
     needs a mobile client over Codex app-server.
 - Canonical path / owner to reuse:
@@ -251,14 +314,18 @@ The first implementation proof must be JSON-RPC communication itself.
 <!-- arch_skill:block:current_architecture:start -->
 # Current Architecture (as-is)
 ## On-disk structure
-- Planning docs and mockups exist; no Swift protocol module exists.
+- Planning docs, mockups, and the Swift protocol module exist.
 ## Control paths (runtime)
-- No runtime path exists yet.
+- Local deterministic tests exist.
+- Simulator tests exist.
+- No accepted phone-reachable host runtime path exists yet.
 ## Object model + key abstractions
-- Protocol concepts exist only in docs: JSON-RPC request/response,
-  notification, initialize lifecycle.
+- `AppServerClient` owns JSON-RPC request/response, notification, connection
+  state, and initialize lifecycle.
 ## Observability + failure behavior today
-- No connection state or diagnostics exist.
+- No phone-reachable app-server proof exists.
+- Existing local diagnostics do not yet prove that the iPhone can reach a real
+  host.
 ## UI surfaces (ASCII mockups, if UI work)
 - No UI is in scope for this phase.
 <!-- arch_skill:block:current_architecture:end -->
@@ -273,10 +340,12 @@ The first implementation proof must be JSON-RPC communication itself.
 - `CodexDock/AppServer/AppServerMethods.swift` — `initialize`/`initialized`.
 - `CodexDockTests/AppServerClientTests.swift` — envelope and handshake tests.
 ## Control paths (future)
-1. Diagnostic/test creates a host endpoint.
+1. Diagnostic/test creates a phone-reachable host endpoint.
 2. `AppServerClient` opens WebSocket.
 3. Client sends `initialize`, receives result, sends `initialized`.
 4. Client exposes connected/offline/error state.
+5. Evidence records the real host (`Amir-M5` or `Home`) and rejects loopback or
+   mock endpoints as completion evidence.
 ## Object model + abstractions (future)
 - `JSONRPCRequest`, `JSONRPCResponse`, `JSONRPCNotification`,
   `AppServerClient`, `AppServerConnectionState`.
@@ -364,15 +433,20 @@ Exit criteria (all required):
 ## Implementation slice 3: initialize/initialized handshake proof
 
 Work: Add typed `initialize` and `initialized` wrappers and a focused
-diagnostic/local test path.
+diagnostic/real-host test path.
 
 Checklist (must all be done):
 - Client sends `initialize`, handles the result, then sends `initialized`.
-- Diagnostic/test can run against a local or simulated app-server endpoint.
+- Diagnostic/test can run against a real phone-reachable app-server endpoint on
+  `Amir-M5` or `Home`.
+- Acceptance evidence rejects mocks, scripted transports, Unix sockets,
+  `localhost`, `127.0.0.1`, and `::1`.
+- Client can send the websocket auth material required by Codex non-loopback
+  listeners.
 - Success and failure are visible without product UI.
 
 Exit criteria (all required):
-- A test or local dev run proves the handshake.
+- A real iPhone-path run proves the handshake against a real host.
 - Phase 2 can call methods through the same client boundary.
 <!-- arch_skill:block:phase_plan:end -->
 
@@ -383,16 +457,18 @@ Exit criteria (all required):
 
 ## Decision inventory
 - Decision-complete:
-  - yes
+  - yes for planning; no for Phase 1 completion evidence
 - Unresolved decisions:
-  - none
-- Decision: proceed to implement? yes
+  - none; remaining work is implementation and real-host verification
+- Decision: proceed to implement? yes, with the real phone-reachable host gate
 
 ## Verification strategy
 - Run envelope unit tests for Codable request/response/notification shapes.
 - Run test-transport checks for id correlation and malformed payload failures.
-- Run a local or simulated handshake diagnostic proving `initialize` then
-  `initialized`.
+- Run a real phone-reachable handshake diagnostic proving `initialize` then
+  `initialized` against `Amir-M5` or `Home`.
+- Confirm acceptance evidence does not use mocks, fixtures, Unix sockets, or
+  loopback-only WebSocket endpoints.
 - Confirm no product UI depends on raw JSON-RPC.
 
 ## Cold-read consistency checks
@@ -466,3 +542,48 @@ Decision
 Consequences
 : Phase 1 verification should include macOS SwiftPM tests plus an iOS simulator
   build/test pass on `iPhone 17` when Xcode exposes that destination.
+
+## 2026-05-28 - Phase reopened for real host acceptance
+
+Context
+: User clarified that mocks, scripted handshakes, and local-only endpoints are
+  unacceptable as completion evidence. If the phone cannot connect to a real
+  server, the requirement is not met.
+
+Options
+: Keep the previous simulated/local completion gate, or reopen the phase and
+  require a real phone-reachable Codex app-server handshake.
+
+Decision
+: Reopen Phase 1. Completion requires an iPhone-path connection to a real
+  Codex app-server on `Amir-M5` or `Home`. Simulator tests still matter, but
+  they are not enough if they use Mac loopback or mocks.
+
+Consequences
+: Phase 1 cannot advance to Phase 2 until the real-host handshake is proven and
+  recorded.
+
+## 2026-05-28 - Codex daemon transport reality
+
+Context
+: The current local Codex daemon is running and
+  `/Users/aelaguiz/.codex/app-server-daemon/settings.json` has
+  `remoteControlEnabled: true`, but the phone still cannot use the daemon
+  socket.
+
+Options
+: Look for a `config.toml` listener setting, use the daemon Unix socket, or use
+  the Codex app-server WebSocket listener mode.
+
+Decision
+: Treat the daemon-managed app-server as Unix-socket-only for this phase.
+  `/Users/aelaguiz/workspace/codex/codex-rs/app-server-daemon/src/backend/pid.rs`
+  hardcodes daemon startup to `--listen unix://`. `config.toml` is not the
+  reason. A phone-reachable proof must use a real WebSocket listener such as
+  `ws://0.0.0.0:<port>` or a host/Tailscale IP, with Codex websocket auth for
+  non-loopback listeners.
+
+Consequences
+: Local daemon success and `ws://127.0.0.1:*` success do not satisfy Phase 1.
+  The Swift client also needs auth support before it can connect to the secure
+  non-loopback server mode.

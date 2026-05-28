@@ -18,11 +18,32 @@ auto_execution: null
 
 Build the Codex Dock MVP through eight smaller depth-first sub-plans. The first
 proof is not UI: it is a JSON-RPC client that can connect to a Codex
-app-server and complete the handshake. Only after that do we add `thread/list`,
-then the iPhone Dock, then thread reading, then text/request control, then
-multi-host scanning, then archive/host management, and finally in-place voice
-plus accessibility polish. Every sub-plan owns a full canonical `$arch-step`
-plan doc and must pass the `auto-plan` receipt/ready gate before implementation.
+app-server and complete the handshake from a phone-reachable path. Only after
+that do we add `thread/list`, then the iPhone Dock, then thread reading, then
+text/request control, then multi-host scanning, then archive/host management,
+and finally in-place voice plus accessibility polish. Every sub-plan owns a
+full canonical `$arch-step` plan doc and must pass the `auto-plan`
+receipt/ready gate before implementation.
+
+# HARD REQUIREMENT: REAL PHONE-REACHABLE SERVER
+
+PHASE 1 IS NOT COMPLETE UNTIL AN IPHONE CAN CONNECT TO A REAL CODEX APP-SERVER
+ON A REAL HOST.
+
+Mocks, scripted transports, fake app-server fixtures, local-only Unix sockets,
+and Mac-loopback WebSocket endpoints do not satisfy implementation completion.
+They can help developer tests, but they are not acceptance evidence.
+`ws://127.0.0.1:*`, `localhost`, and the daemon Unix socket prove only the
+Mac/simulator-local path; they do not prove that a phone can reach the server.
+
+The completion endpoint must be a real Codex app-server on `Amir-M5` or `Home`,
+exposed over a phone-reachable network path such as LAN or Tailscale. If we
+have not actually connected to that host from the iPhone path, the phase remains
+open.
+
+The `iPhone 17` simulator is the simulator build/test target for this phase, but
+simulator-only evidence is not enough if it uses Mac loopback, mocks, fixtures,
+or any endpoint a physical phone could not reach.
 
 # Decomposition
 
@@ -30,14 +51,17 @@ plan doc and must pass the `auto-plan` receipt/ready gate before implementation.
    WebSocket JSON-RPC envelopes, request ids, connection state, and
    `initialize`/`initialized`, with no product UI requirement.
    - DOC_PATH: docs/epic/CODEX_DOCK_MVP_2026-05-27/PHASE_01_JSON_RPC_HANDSHAKE_FOUNDATION_2026-05-27.md
-   - Gate to next: A test or local dev run can connect to a Codex app-server,
-     complete the handshake, surface connected/offline/error state, and prove
-     that protocol code is isolated from UI.
-   - Status: complete
+   - Gate to next: The iPhone path can connect to a real Codex app-server on a
+     real phone-reachable host, complete the handshake, surface
+     connected/offline/error state, and prove that protocol code is isolated
+     from UI. Scripted transports, local-only Unix sockets, loopback
+     WebSockets, and mocks do not satisfy this gate.
+   - Status: reopened — real phone-reachable host proof missing
    - Auto-plan status: ready (`READY next=implement-loop`)
-   - Epic-critic verdict: passed — Phase 1 implementation, plan-audit
-     implementation check, thermonuclear review, macOS SwiftPM tests, and
-     `iPhone 17` simulator tests are complete; no Phase 2+ scope was built.
+   - Epic-critic verdict: failed/reopened — previous macOS SwiftPM and
+     `iPhone 17` simulator tests prove the local protocol implementation, but
+     they do not prove that an iPhone can connect to a real Codex app-server on
+     `Amir-M5` or `Home`.
 
 2. **Thread-list data pipeline**: Add the first real Codex data method,
    `thread/list`, and normalize thread summaries without depending on final UI.
@@ -108,11 +132,15 @@ plan doc and must pass the `auto-plan` receipt/ready gate before implementation.
 
 # Test Host Notes
 
-- `Amir-M5`: This machine. Use it as the primary local/single-host test target.
+- `Amir-M5`: This machine. Use it as the primary local/single-host test target,
+  but the acceptance endpoint must be phone-reachable. Its daemon-managed
+  app-server currently exposes a Unix socket, not a phone-reachable listener.
 - `Home`: Secondary server/host. It is SSH-able, but Tailscale daemon and
   Codex app-server reachability may not be ready yet. Keep it as the planned
   second host for multi-host testing, and return to setup if the app cannot
   speak to it immediately.
+- `iPhone 17` simulator: Use this simulator for simulator checks in this phase.
+  Do not count simulator-only loopback, mock, or fixture evidence as completion.
 
 # Mockup Index
 
@@ -142,6 +170,10 @@ reference the mockups only as downstream context.
   boundary, request correlation, connection state, initialize/initialized
   handshake, deterministic test transport, and focused tests. Ran
   `swift test` and `xcodebuild test` on the `iPhone 17` simulator.
+- 2026-05-28 Reopened Phase 1 after the user clarified the acceptance gate:
+  mocked/scripted handshakes, local Unix sockets, and Mac-loopback WebSockets
+  are not enough. Completion requires the iPhone path to connect to a real
+  Codex app-server on a real phone-reachable host.
 
 # Decision Log
 
@@ -156,3 +188,12 @@ reference the mockups only as downstream context.
   runners, or other local development dependencies, install the needed tooling
   instead of designing around the absence of the tool. Record material installs
   in the relevant phase plan/worklog.
+- 2026-05-28 Codex transport finding from `/Users/aelaguiz/workspace/codex`:
+  this machine's daemon is running with `remoteControlEnabled: true`, but the
+  daemon-managed app-server is still Unix-socket-only because
+  `codex-rs/app-server-daemon/src/backend/pid.rs` starts it with
+  `app-server --remote-control --listen unix://`. `config.toml` does not expose
+  a phone-reachable app-server listener. A phone-reachable proof must launch or
+  configure a real WebSocket listener such as `ws://0.0.0.0:<port>` or a
+  host/Tailscale IP and must use Codex websocket auth for non-loopback
+  listeners.

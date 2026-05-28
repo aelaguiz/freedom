@@ -2,6 +2,26 @@
 
 Date: 2026-05-28
 
+## 2026-05-28 Correction - Phase Reopened
+
+The implementation below proves the local protocol client, but it does not
+satisfy Phase 1 acceptance anymore.
+
+The missing acceptance proof is: the iPhone path must connect to a real Codex
+app-server on a real phone-reachable host, currently `Amir-M5` or `Home`.
+Mocks, scripted transports, local-only Unix sockets, and Mac-loopback WebSocket
+endpoints do not count.
+
+Transport investigation found that this machine's daemon is running, but its
+managed app-server is still Unix-socket-only:
+
+- `/Users/aelaguiz/.codex/app-server-daemon/settings.json` has
+  `remoteControlEnabled: true`.
+- `/Users/aelaguiz/workspace/codex/codex-rs/app-server-daemon/src/backend/pid.rs`
+  starts the managed app-server with `--listen unix://`.
+- A phone-reachable listener must use a real WebSocket endpoint on LAN or
+  Tailscale and must use Codex websocket auth for non-loopback listeners.
+
 ## Implementation
 
 - Added a SwiftPM package with a `CodexDock` library target and
@@ -28,6 +48,9 @@ Date: 2026-05-28
   `DEF1631B-7125-43C6-BFA3-4423BF103C91`.
 
 ## Verification
+
+The checks below are local implementation checks. They are no longer sufficient
+for Phase 1 completion until the real phone-reachable host proof is added.
 
 - `python3 /Users/aelaguiz/.agents/skills/arch-step/scripts/arch_stage_gate.py ready --doc docs/epic/CODEX_DOCK_MVP_2026-05-27/PHASE_01_JSON_RPC_HANDSHAKE_FOUNDATION_2026-05-27.md`
   returned `READY next=implement-loop`.

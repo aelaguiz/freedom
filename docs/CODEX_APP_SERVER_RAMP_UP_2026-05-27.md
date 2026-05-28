@@ -1,32 +1,84 @@
 # Codex App Server Ramp-Up
 
 Date captured: 2026-05-27
+Last updated: 2026-05-28
 
 ## Bottom Line
 
-Yes. If the Codex app-server daemon is running, a client can connect to it and
-do real work through it.
+Yes, a client can connect to Codex app-server and do real work through it.
+However, the daemon-managed app-server path is local-only. It uses a Unix
+socket, which an iPhone cannot dial over LAN or Tailscale.
 
 The app server is not a REST API. It is a bidirectional JSON-RPC API. For the
 local daemon, messages travel as WebSocket frames over a Unix socket.
 
-At the time this note was captured, this machine's daemon was not running:
+On 2026-05-28, this machine's daemon was running:
 
 ```sh
 codex app-server daemon version
 ```
 
-failed because it could not connect to:
+returned:
+
+```json
+{"status":"running","backend":"pid","managedCodexPath":"/Users/aelaguiz/.codex/packages/standalone/current/codex","managedCodexVersion":"0.132.0","socketPath":"/Users/aelaguiz/.codex/app-server-control/app-server-control.sock","cliVersion":"0.135.0-alpha.2","appServerVersion":"0.132.0"}
+```
+
+That still does not make it phone-reachable. The socket path is:
 
 ```text
 /Users/aelaguiz/.codex/app-server-control/app-server-control.sock
 ```
 
-The failure was:
+and a phone cannot connect to that Unix socket.
+
+## Why The Current Setup Is Unix-Socket-Only
+
+The reason is in `/Users/aelaguiz/workspace/codex`, not in this app repo.
+
+`/Users/aelaguiz/.codex/config.toml` does not define a phone-reachable
+app-server listener. The daemon settings file only says:
+
+```json
+{
+  "remoteControlEnabled": true
+}
+```
+
+That setting enables remote-control behavior, but it does not change the
+listener from a Unix socket to TCP.
+
+The daemon backend hardcodes the managed app-server command in:
 
 ```text
-No such file or directory (os error 2)
+/Users/aelaguiz/workspace/codex/codex-rs/app-server-daemon/src/backend/pid.rs
 ```
+
+When remote control is enabled, it starts:
+
+```sh
+app-server --remote-control --listen unix://
+```
+
+When remote control is disabled, it starts:
+
+```sh
+app-server --listen unix://
+```
+
+So the daemon path is WebSocket-over-Unix-socket. It is not
+WebSocket-over-TCP.
+
+For a phone-reachable proof, we need a real Codex app-server listener on a
+network address the phone can reach, for example:
+
+```sh
+codex app-server --listen ws://0.0.0.0:4500 --ws-auth capability-token --ws-token-file /path/to/token
+```
+
+or a listener bound to a LAN/Tailscale host IP. Codex refuses non-loopback
+WebSocket listeners without websocket auth, so `--ws-auth capability-token` or
+`--ws-auth signed-bearer-token` is required for that real-server path.
 
 ## Main Repo Surfaces
 
@@ -197,6 +249,9 @@ Use one of these approaches:
    codex app-server --listen ws://127.0.0.1:4500
    ```
 
+   This is Mac-local loopback only. It is useful for local development, but it
+   does not prove an iPhone can reach the host.
+
    This transport is marked experimental and unsupported. For non-loopback
    listeners, app-server refuses to start unless websocket auth is configured
    with either:
@@ -210,6 +265,9 @@ Use one of these approaches:
    ```sh
    --ws-auth signed-bearer-token
    ```
+
+   For the Codex Dock acceptance proof, the endpoint must be phone-reachable,
+   not `127.0.0.1`, `localhost`, `::1`, or a Unix socket.
 
 ## Connection Handshake
 
@@ -843,6 +901,8 @@ For TCP WebSocket usage:
 - Auth modes are `capability-token` or `signed-bearer-token`.
 - `wss://` or loopback `ws://` are the supported shapes for auth-token use in
   interactive TUI remote mode.
+- For Codex Dock Phase 1 completion, loopback is not enough. The endpoint must
+  be reachable from the iPhone path.
 
 The server also rejects HTTP requests that carry an `Origin` header on the
 WebSocket listener, including `/healthz` and `/readyz` probes.
@@ -1147,6 +1207,11 @@ codex app-server --listen ws://127.0.0.1:4500
 
 Loopback listeners can run without websocket auth. Non-loopback listeners refuse
 to start unless websocket auth is configured.
+
+For a phone-reachable Codex Dock proof, do not use the loopback example above
+as acceptance evidence. Use a real host-reachable address, for example
+`ws://0.0.0.0:4500` for binding plus the host's LAN/Tailscale IP from the phone,
+and configure websocket auth.
 
 Health probes for the TCP listener:
 
@@ -2146,6 +2211,9 @@ Start a loopback WebSocket server:
 ```sh
 codex app-server --listen ws://127.0.0.1:4500
 ```
+
+This is local-only. It is not Codex Dock completion evidence because a phone
+cannot use the Mac's loopback address.
 
 Connect TUI to default daemon socket:
 

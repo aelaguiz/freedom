@@ -316,6 +316,45 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(serverInfo, response)
         XCTAssertEqual(state, .connected)
     }
+
+    func testPhoneReachableRealHostInitializeHandshakeWhenEndpointIsProvided() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let endpoint = environment["CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS"], !endpoint.isEmpty else {
+            throw XCTSkip(
+                "Set CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS to run the phone-reachable real-host handshake test"
+            )
+        }
+        let url = try XCTUnwrap(URL(string: endpoint))
+        XCTAssertTrue(
+            ["ws", "wss"].contains(url.scheme?.lowercased()),
+            "Phone-reachable handshake endpoint must be a WebSocket URL"
+        )
+        XCTAssertFalse(
+            isLoopbackHost(url.host),
+            "Phone-reachable handshake endpoint cannot be localhost, 127.0.0.1, or ::1"
+        )
+        let client = AppServerClient(webSocketURL: url)
+
+        let response = try await client.connectAndInitialize(
+            params: .codexDock(version: "0.1.0"),
+            timeout: .seconds(5)
+        )
+
+        XCTAssertFalse(response.userAgent.isEmpty)
+        XCTAssertFalse(response.codexHome.isEmpty)
+        XCTAssertFalse(response.platformFamily.isEmpty)
+        XCTAssertFalse(response.platformOs.isEmpty)
+        let state = await client.state
+        XCTAssertEqual(state, .connected)
+        await client.disconnect()
+    }
+}
+
+private func isLoopbackHost(_ host: String?) -> Bool {
+    guard let host = host?.lowercased() else {
+        return false
+    }
+    return ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
 }
 
 private actor ScriptedAppServerTransport: AppServerTransport {

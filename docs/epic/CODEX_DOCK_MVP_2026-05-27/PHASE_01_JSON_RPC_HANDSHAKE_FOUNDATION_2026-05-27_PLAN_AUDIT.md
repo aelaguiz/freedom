@@ -1,5 +1,37 @@
 # Phase 1 Plan Audit Log
 
+## 2026-05-28 - Completion Correction
+
+Mode: `implementation-audit-correction`
+
+Verdict: `reopened`
+
+The previous `approve` verdict was too weak for the real requirement. It
+accepted local protocol evidence, including deterministic test transports and
+`iPhone 17` simulator tests. That evidence is still useful, but it does not
+prove that an iPhone can connect to a real Codex app-server on a real host.
+
+New blocking acceptance requirement:
+
+- The iPhone path must complete `initialize` then `initialized` against a real
+  Codex app-server on `Amir-M5` or `Home`.
+- The endpoint must be phone-reachable over LAN, Tailscale, or another real
+  network path.
+- Mocks, scripted transports, Unix sockets, `localhost`, `127.0.0.1`, and `::1`
+  do not count.
+- Codex non-loopback WebSocket listeners require websocket auth, so the client
+  must support that auth before this proof can pass.
+
+Transport evidence:
+
+- This machine's daemon is running with socket path
+  `/Users/aelaguiz/.codex/app-server-control/app-server-control.sock`.
+- `/Users/aelaguiz/.codex/app-server-daemon/settings.json` has
+  `remoteControlEnabled: true`.
+- `/Users/aelaguiz/workspace/codex/codex-rs/app-server-daemon/src/backend/pid.rs`
+  hardcodes daemon startup to `--listen unix://`, including the remote-control
+  case.
+
 ## 2026-05-28 - Implementation Audit
 
 Mode: `implementation-audit`
