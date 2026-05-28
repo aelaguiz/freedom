@@ -483,7 +483,7 @@ public final class ThreadDetailStore: ObservableObject {
             ThreadDetailSnapshot(
                 header: header,
                 liveState: liveState,
-                events: events
+                events: ThreadEventDisplayOrder.newestFirst(events)
             )
         )
     }

@@ -48,6 +48,47 @@ final class ThreadDetailStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testLoadPublishesPagedTurnsNewestFirstForDisplay() async throws {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            turnsListResult: .success(
+                ThreadTurnsListResponseDTO(data: [
+                    makeDetailTurn(id: "turn-old", startedAt: 1_700_000_000, text: "Old paged turn"),
+                    makeDetailTurn(id: "turn-new", startedAt: 1_700_000_100, text: "New paged turn"),
+                ])
+            ),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: [])))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session)
+        )
+
+        await store.load()
+
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+
+        XCTAssertEqual(snapshot.events.map(\.body), ["New paged turn", "Old paged turn"])
+        let readParams = await session.readParamsSnapshot()
+        let turnsListParams = await session.turnsListParamsSnapshot()
+        let resumeParams = await session.resumeParamsSnapshot()
+        XCTAssertEqual(readParams, [
+            ThreadReadParams(threadId: "thread-1", includeTurns: false),
+        ])
+        XCTAssertEqual(turnsListParams, [
+            ThreadTurnsListParams(threadId: "thread-1", limit: 10),
+        ])
+        XCTAssertEqual(resumeParams, [
+            ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
+        ])
+    }
+
+    @MainActor
     func testResumeFailureKeepsReadEventsAndMarksDetailStale() async {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
@@ -146,6 +187,58 @@ final class ThreadDetailStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testLiveDeltaAppearsBeforePagedHistoryAndMergesInPlace() async throws {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            turnsListResult: .success(
+                ThreadTurnsListResponseDTO(data: [
+                    makeDetailTurn(id: "turn-old", startedAt: 1_000, text: "Older stored"),
+                ])
+            ),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: [])))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session),
+            now: { Date(timeIntervalSince1970: 3_000) }
+        )
+
+        await store.load()
+        await session.emitNotification(
+            JSONRPCNotification(
+                method: "item/agentMessage/delta",
+                params: .object([
+                    "threadId": .string("thread-1"),
+                    "turnId": .string("turn-live"),
+                    "itemId": .string("agent-live"),
+                    "delta": .string("hello "),
+                ])
+            )
+        )
+        await session.emitNotification(
+            JSONRPCNotification(
+                method: "item/agentMessage/delta",
+                params: .object([
+                    "threadId": .string("thread-1"),
+                    "turnId": .string("turn-live"),
+                    "itemId": .string("agent-live"),
+                    "delta": .string("world"),
+                ])
+            )
+        )
+
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.events.map(\.body) == ["hello world", "Older stored"]
+        }
+    }
+
+    @MainActor
     func testServerRequestAppearsAsNeedsAttentionEvent() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
@@ -182,6 +275,64 @@ final class ThreadDetailStoreTests: XCTestCase {
         }
         XCTAssertEqual(store.requestCards.count, 1)
         XCTAssertEqual(store.requestCards[0].kind, .commandApproval)
+    }
+
+    @MainActor
+    func testServerRequestEventAppearsNewestWithoutBreakingRequestCardResponse() async throws {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            turnsListResult: .success(
+                ThreadTurnsListResponseDTO(data: [
+                    makeDetailTurn(id: "turn-old", startedAt: 1_000, text: "Older stored"),
+                ])
+            ),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: [])))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session),
+            now: { Date(timeIntervalSince1970: 3_000) }
+        )
+
+        await store.load()
+        await session.emitServerRequest(
+            JSONRPCRequest(
+                id: .string("approval-1"),
+                method: "item/commandExecution/requestApproval",
+                params: .object([
+                    "threadId": .string("thread-1"),
+                    "turnId": .string("turn-live"),
+                    "itemId": .string("cmd-live"),
+                    "command": .array([.string("make"), .string("test")]),
+                ])
+            )
+        )
+
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.events.map(\.body) == ["make test", "Older stored"]
+                && store.requestCards.count == 1
+        }
+
+        XCTAssertEqual(store.requestCards[0].kind, .commandApproval)
+        await store.respond(to: "request-approval-1", action: .accept)
+
+        let sentResponses = await session.sentResponsesSnapshot()
+        XCTAssertEqual(
+            sentResponses,
+            [
+                SentServerResponse(
+                    id: .string("approval-1"),
+                    result: .object(["decision": .string("accept")])
+                ),
+            ]
+        )
+        XCTAssertEqual(store.requestCards[0].status, .resolved)
     }
 
     @MainActor
@@ -675,18 +826,30 @@ private func makeDetailThread(_ id: String, text: String) -> ThreadDTO {
     ThreadDTO(
         id: id,
         turns: [
-            .object([
-                "id": .string("turn-1"),
-                "items": .array([
-                    .object([
-                        "id": .string("agent-1"),
-                        "type": .string("agentMessage"),
-                        "text": .string(text),
-                    ]),
-                ]),
-            ]),
+            makeDetailTurn(id: "turn-1", text: text),
         ]
     )
+}
+
+private func makeDetailTurn(
+    id: String,
+    startedAt: Int64? = nil,
+    text: String
+) -> JSONValue {
+    var fields: [String: JSONValue] = [
+        "id": .string(id),
+        "items": .array([
+            .object([
+                "id": .string("\(id)-agent"),
+                "type": .string("agentMessage"),
+                "text": .string(text),
+            ]),
+        ]),
+    ]
+    if let startedAt {
+        fields["startedAt"] = .integer(startedAt)
+    }
+    return .object(fields)
 }
 
 @MainActor

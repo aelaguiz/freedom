@@ -36,6 +36,12 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
     public var body: String
     public let date: Date?
     public let isLive: Bool
+    public let turnID: String?
+    public let itemID: String?
+    public let turnSequence: Int?
+    public let itemSequence: Int?
+    public let eventSequence: Int?
+    public let displayGroupDate: Date?
 
     public init(
         id: String,
@@ -43,7 +49,13 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
         title: String,
         body: String,
         date: Date? = nil,
-        isLive: Bool = false
+        isLive: Bool = false,
+        turnID: String? = nil,
+        itemID: String? = nil,
+        turnSequence: Int? = nil,
+        itemSequence: Int? = nil,
+        eventSequence: Int? = nil,
+        displayGroupDate: Date? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -51,13 +63,89 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
         self.body = body
         self.date = date
         self.isLive = isLive
+        self.turnID = turnID
+        self.itemID = itemID
+        self.turnSequence = turnSequence
+        self.itemSequence = itemSequence
+        self.eventSequence = eventSequence
+        self.displayGroupDate = displayGroupDate ?? date
+    }
+}
+
+public enum ThreadEventDisplayOrder {
+    public static func newestFirst(_ events: [ThreadEvent]) -> [ThreadEvent] {
+        let indexed = events.enumerated().map { offset, event in
+            IndexedEvent(offset: offset, event: event)
+        }
+        let groupInfo = Dictionary(grouping: indexed, by: \.groupKey).mapValues { group in
+            GroupInfo(
+                date: group
+                    .compactMap { $0.event.displayGroupDate ?? $0.event.date }
+                    .max() ?? .distantPast,
+                sequence: group.map(\.groupSequence).max() ?? 0
+            )
+        }
+
+        return indexed.sorted { left, right in
+            if left.groupKey != right.groupKey {
+                let leftInfo = groupInfo[left.groupKey] ?? GroupInfo(date: .distantPast, sequence: left.offset)
+                let rightInfo = groupInfo[right.groupKey] ?? GroupInfo(date: .distantPast, sequence: right.offset)
+                if leftInfo.date != rightInfo.date {
+                    return leftInfo.date > rightInfo.date
+                }
+                if leftInfo.sequence != rightInfo.sequence {
+                    return leftInfo.sequence > rightInfo.sequence
+                }
+                return left.groupKey < right.groupKey
+            }
+
+            let leftItem = left.event.itemSequence ?? left.offset
+            let rightItem = right.event.itemSequence ?? right.offset
+            if leftItem != rightItem {
+                return leftItem < rightItem
+            }
+
+            let leftEvent = left.event.eventSequence ?? left.offset
+            let rightEvent = right.event.eventSequence ?? right.offset
+            if leftEvent != rightEvent {
+                return leftEvent < rightEvent
+            }
+
+            return left.offset < right.offset
+        }.map(\.event)
+    }
+
+    private struct IndexedEvent {
+        let offset: Int
+        let event: ThreadEvent
+
+        var groupKey: String {
+            if let turnID = event.turnID {
+                return "turn:\(turnID)"
+            }
+            if let itemID = event.itemID {
+                return "item:\(itemID)"
+            }
+            return "event:\(event.id)"
+        }
+
+        var groupSequence: Int {
+            event.turnSequence ?? offset
+        }
+    }
+
+    private struct GroupInfo {
+        let date: Date
+        let sequence: Int
     }
 }
 
 public enum ThreadEventNormalizer {
     public static func events(from thread: ThreadDTO) -> [ThreadEvent] {
         let turns = thread.turns ?? []
-        return turns.flatMap(events(fromTurn:))
+        return turns.enumerated().flatMap { turnSequence, turn in
+            events(fromTurn: turn, turnSequence: turnSequence)
+        }
     }
 
     public static func event(from notification: JSONRPCNotification, now: Date = Date()) -> ThreadEvent? {
@@ -106,7 +194,8 @@ public enum ThreadEventNormalizer {
                 title: "Thread status",
                 body: status,
                 date: now,
-                isLive: true
+                isLive: true,
+                displayGroupDate: now
             )
         case "thread/closed":
             return ThreadEvent(
@@ -115,7 +204,8 @@ public enum ThreadEventNormalizer {
                 title: "Thread closed",
                 body: "The app-server closed this thread.",
                 date: now,
-                isLive: true
+                isLive: true,
+                displayGroupDate: now
             )
         default:
             return nil
@@ -137,7 +227,10 @@ public enum ThreadEventNormalizer {
             title: requestTitle(for: request.method),
             body: body,
             date: now,
-            isLive: true
+            isLive: true,
+            turnID: params["turnId"]?.stringValue,
+            itemID: params["itemId"]?.stringValue,
+            displayGroupDate: now
         )
     }
 
@@ -149,22 +242,31 @@ public enum ThreadEventNormalizer {
         request.params?.objectValue?["threadId"]?.stringValue
     }
 
-    private static func events(fromTurn turn: JSONValue) -> [ThreadEvent] {
+    private static func events(fromTurn turn: JSONValue, turnSequence: Int?) -> [ThreadEvent] {
         guard let object = turn.objectValue else {
             return [
                 ThreadEvent(
                     id: "unknown-turn-\(UUID().uuidString)",
                     kind: .unknown,
                     title: "Unsupported turn",
-                    body: "This turn shape is not supported yet."
+                    body: "This turn shape is not supported yet.",
+                    turnSequence: turnSequence,
+                    eventSequence: 0
                 )
             ]
         }
 
         let defaultDate = date(seconds: object["startedAt"]) ?? date(seconds: object["completedAt"])
         let items = object["items"]?.arrayValue ?? []
-        return items.flatMap { item in
-            events(fromItem: item, turn: object, defaultDate: defaultDate, isLive: false)
+        return items.enumerated().flatMap { itemSequence, item in
+            events(
+                fromItem: item,
+                turn: object,
+                defaultDate: defaultDate,
+                isLive: false,
+                turnSequence: turnSequence,
+                itemSequence: itemSequence
+            )
         }
     }
 
@@ -172,7 +274,9 @@ public enum ThreadEventNormalizer {
         fromItem item: JSONValue,
         turn: [String: JSONValue],
         defaultDate: Date?,
-        isLive: Bool
+        isLive: Bool,
+        turnSequence: Int? = nil,
+        itemSequence: Int? = nil
     ) -> [ThreadEvent] {
         guard let object = item.objectValue else {
             return [
@@ -182,118 +286,130 @@ public enum ThreadEventNormalizer {
                     title: "Unsupported item",
                     body: "This item shape is not supported yet.",
                     date: defaultDate,
-                    isLive: isLive
+                    isLive: isLive,
+                    turnID: turn["id"]?.stringValue ?? turn["turnId"]?.stringValue,
+                    turnSequence: turnSequence,
+                    itemSequence: itemSequence,
+                    eventSequence: 0,
+                    displayGroupDate: defaultDate
                 )
             ]
         }
 
-        let itemID = object["id"]?.stringValue ?? UUID().uuidString
-        let turnID = turn["id"]?.stringValue ?? turn["turnId"]?.stringValue ?? "turn"
+        let itemID = object["id"]?.stringValue
+        let eventItemID = itemID ?? UUID().uuidString
+        let turnID = turn["id"]?.stringValue ?? turn["turnId"]?.stringValue
+        let eventTurnID = turnID ?? "turn"
         let date = defaultDate ?? date(milliseconds: turn["startedAtMs"]) ?? date(milliseconds: turn["completedAtMs"])
         let type = object["type"]?.stringValue ?? "unknown"
+        func makeEvent(
+            suffix: String,
+            kind: ThreadEventKind,
+            title: String,
+            body: String,
+            eventSequence: Int = 0
+        ) -> ThreadEvent {
+            ThreadEvent(
+                id: "\(eventTurnID)-\(eventItemID)-\(suffix)",
+                kind: kind,
+                title: title,
+                body: body,
+                date: date,
+                isLive: isLive,
+                turnID: turnID,
+                itemID: itemID,
+                turnSequence: turnSequence,
+                itemSequence: itemSequence,
+                eventSequence: eventSequence,
+                displayGroupDate: date
+            )
+        }
 
         switch type {
         case "userMessage":
             return [
-                ThreadEvent(
-                    id: "\(turnID)-\(itemID)-user",
+                makeEvent(
+                    suffix: "user",
                     kind: .userMessage,
                     title: "User message",
-                    body: userInputText(object["content"]) ?? "User input",
-                    date: date,
-                    isLive: isLive
+                    body: userInputText(object["content"]) ?? "User input"
                 )
             ]
         case "agentMessage":
             return [
-                ThreadEvent(
-                    id: "\(turnID)-\(itemID)-agent",
+                makeEvent(
+                    suffix: "agent",
                     kind: .agentMessage,
                     title: "Agent message",
-                    body: firstNonEmpty(object["text"]?.stringValue, "Agent message") ?? "Agent message",
-                    date: date,
-                    isLive: isLive
+                    body: firstNonEmpty(object["text"]?.stringValue, "Agent message") ?? "Agent message"
                 )
             ]
         case "plan":
             return [
-                ThreadEvent(
-                    id: "\(turnID)-\(itemID)-plan",
+                makeEvent(
+                    suffix: "plan",
                     kind: .agentMessage,
                     title: "Plan",
-                    body: firstNonEmpty(object["text"]?.stringValue, "Plan update") ?? "Plan update",
-                    date: date,
-                    isLive: isLive
+                    body: firstNonEmpty(object["text"]?.stringValue, "Plan update") ?? "Plan update"
                 )
             ]
         case "reasoning":
             let body = textList(object["summary"]) ?? textList(object["content"]) ?? "Reasoning"
             return [
-                ThreadEvent(
-                    id: "\(turnID)-\(itemID)-reasoning",
+                makeEvent(
+                    suffix: "reasoning",
                     kind: .agentMessage,
                     title: "Reasoning",
-                    body: body,
-                    date: date,
-                    isLive: isLive
+                    body: body
                 )
             ]
         case "commandExecution":
             let command = commandText(object["command"])
             var events = [
-                ThreadEvent(
-                    id: "\(turnID)-\(itemID)-command",
+                makeEvent(
+                    suffix: "command",
                     kind: .command,
                     title: "Command",
-                    body: firstNonEmpty(command, "Command") ?? "Command",
-                    date: date,
-                    isLive: isLive
+                    body: firstNonEmpty(command, "Command") ?? "Command"
                 )
             ]
             if let output = firstNonEmpty(object["aggregatedOutput"]?.stringValue) {
                 events.append(
-                    ThreadEvent(
-                        id: "\(turnID)-\(itemID)-output",
+                    makeEvent(
+                        suffix: "output",
                         kind: .output,
                         title: "Command output",
                         body: output,
-                        date: date,
-                        isLive: isLive
+                        eventSequence: 1
                     )
                 )
             }
             return events
         case "fileChange":
             return [
-                ThreadEvent(
-                    id: "\(turnID)-\(itemID)-file-change",
+                makeEvent(
+                    suffix: "file-change",
                     kind: .request,
                     title: "File change",
-                    body: "File changes are available on desktop.",
-                    date: date,
-                    isLive: isLive
+                    body: "File changes are available on desktop."
                 )
             ]
         case "mcpToolCall", "dynamicToolCall":
             return [
-                ThreadEvent(
-                    id: "\(turnID)-\(itemID)-tool",
+                makeEvent(
+                    suffix: "tool",
                     kind: .command,
                     title: "Tool call",
-                    body: object["tool"]?.stringValue ?? object["namespace"]?.stringValue ?? "Tool call",
-                    date: date,
-                    isLive: isLive
+                    body: object["tool"]?.stringValue ?? object["namespace"]?.stringValue ?? "Tool call"
                 )
             ]
         default:
             return [
-                ThreadEvent(
-                    id: "\(turnID)-\(itemID)-unknown",
+                makeEvent(
+                    suffix: "unknown",
                     kind: .unknown,
                     title: "Unsupported event",
-                    body: "Unsupported event type: \(type)",
-                    date: date,
-                    isLive: isLive
+                    body: "Unsupported event type: \(type)"
                 )
             ]
         }
@@ -310,15 +426,18 @@ public enum ThreadEventNormalizer {
         guard let body = nonEmptyPreservingWhitespace(params[key]?.stringValue) else {
             return nil
         }
-        let turnID = params["turnId"]?.stringValue ?? "turn"
-        let itemID = params["itemId"]?.stringValue ?? "item"
+        let turnID = params["turnId"]?.stringValue
+        let itemID = params["itemId"]?.stringValue
         return ThreadEvent(
-            id: "\(turnID)-\(itemID)-\(method)",
+            id: "\(turnID ?? "turn")-\(itemID ?? "item")-\(method)",
             kind: kind,
             title: title,
             body: body,
             date: now,
-            isLive: true
+            isLive: true,
+            turnID: turnID,
+            itemID: itemID,
+            displayGroupDate: now
         )
     }
 
