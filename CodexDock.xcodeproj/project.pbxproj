@@ -388,6 +388,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					1B43F1F1D80974244330CF93 = {
+						DevelopmentTeam = R6B8KXF3QW;
+						ProvisioningStyle = Automatic;
+					};
 				};
 			};
 			buildConfigurationList = 0102447A9AEF5A0101FA6522 /* Build configuration list for PBXProject "CodexDock" */;
@@ -503,6 +507,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = R6B8KXF3QW;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = CodexDockApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -638,6 +644,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = R6B8KXF3QW;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = CodexDockApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;

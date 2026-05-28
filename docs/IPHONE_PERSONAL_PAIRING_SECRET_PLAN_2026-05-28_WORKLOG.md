@@ -8,7 +8,7 @@ Plan: `docs/IPHONE_PERSONAL_PAIRING_SECRET_PLAN_2026-05-28.md`
 - Implemented the Mac relay as the no-phone-secret boundary.
 - Implemented iPhone relay discovery/bootstrap with optional bearer host config.
 - Moved production voice transcription to relay-backed JSON-RPC.
-- Added the physical `rtk make device-install DEVICE=<device-udid> DEVELOPMENT_TEAM=<team-id>` path.
+- Added the physical `rtk make device-install` path with the repo defaulting to the paired iPhone 14 and automatic signing team `R6B8KXF3QW`.
 - Updated README and the stale iPhone UX spec so they no longer teach phone-side OpenAI keys or bearer-token simulator launch as the real route.
 
 ## Phase 1 - Relay Boundary
@@ -90,9 +90,12 @@ Result: passed, including relay transcription request-shape coverage.
 
 ## Phase 4 - Install Target, Docs, And Physical Proof
 
-Status: partially implemented; manual physical proof is blocked by local Xcode account/provisioning state.
+Status: implemented; physical install succeeds on the paired iPhone 14.
 
-- Added `rtk make device-install DEVICE=<device-udid> DEVELOPMENT_TEAM=<team-id>`.
+- Added `rtk make device-install`.
+- Added `rtk make devices` and `scripts/device.py` so the default physical device is resolved from CoreDevice instead of guessed.
+- Pinned the repo's physical-device signing default to automatic signing team `R6B8KXF3QW`, matching the PS Mobile signing setup that actually works for this machine.
+- Added `-allowProvisioningDeviceRegistration` to the physical build so a second paired iPhone can be registered into the development profile when needed.
 - The target starts Mac services, builds for `iphoneos`, and installs with `xcrun devicectl`.
 - The target does not launch the app and does not pass env vars or secrets to the phone.
 - Updated README with the simple route: `rtk make services`, install once, open from home screen.
@@ -117,21 +120,37 @@ rtk xcodebuild -quiet -project CodexDock.xcodeproj -scheme CodexDockApp -destina
 
 Result: both generated-project builds passed after the Relay tab and saved-relay fallback fixes.
 
-Physical install attempt:
+Physical install proof:
 
 ```sh
-rtk make device-install DEVICE=CB9FFF0E-89AD-57B5-9C00-6552D814875E DEVELOPMENT_TEAM=Q2V42N8S7R
+rtk make device-install
 ```
 
 Result:
 
 - Mac services started.
 - Relay health returned `{"ok":true,"service":"codex-dock-relay","auth":"none"}`.
-- Physical build/install did not complete because Xcode reported no account/provisioning profile for team `Q2V42N8S7R` and bundle id `com.aelaguiz.CodexDockApp`.
+- The iPhone 14 resolved to CoreDevice id `0A4EFF8B-54D8-58FB-B3FB-63263265B9CC`.
+- Xcode built `CodexDockApp` for that device with automatic signing team `R6B8KXF3QW`.
+- `xcrun devicectl device install app` installed `com.aelaguiz.CodexDockApp` on the iPhone 14.
+- Mobile MCP confirmed `Codex (com.aelaguiz.CodexDockApp)` is installed on the iPhone 14 hardware device `00008110-000E04940240A01E`.
 
-Pending manual proof after Xcode account/provisioning is fixed:
+Second physical phone install:
 
-- install on physical iPhone;
+```sh
+rtk make device-install DEVICE=CB9FFF0E-89AD-57B5-9C00-6552D814875E
+```
+
+Result:
+
+- The iPhone 17 Pro / `Amir's iPhone` initially failed because it was not registered in the `R6B8KXF3QW` development profile.
+- A direct build with `-allowProvisioningUpdates -allowProvisioningDeviceRegistration` registered the device and succeeded.
+- `device-install` now includes `-allowProvisioningDeviceRegistration`.
+- The Makefile path installed `com.aelaguiz.CodexDockApp` on CoreDevice id `CB9FFF0E-89AD-57B5-9C00-6552D814875E`.
+- `xcrun devicectl device info apps --device CB9FFF0E-89AD-57B5-9C00-6552D814875E --bundle-id com.aelaguiz.CodexDockApp` confirmed `Codex Dock` version `0.1.0`, bundle version `1`.
+
+Pending manual proof:
+
 - launch from home screen;
 - confirm Bonjour discovery;
 - confirm session load;
@@ -149,6 +168,6 @@ Result:
 - Expected code-level identifiers such as `base64Audio` and `OPENAI_API_KEY` remain where they define the relay contract or Mac-side `.env` loading.
 - `.env` and `.codex-dock/` are ignored by Git, including the generated app-server token and relay logs.
 
-## Current Blocker
+## Current Manual Checklist
 
-The only known incomplete acceptance item is physical home-screen proof. The app can compile for device, the service boundary is live, and `device-install` reaches signing, but Xcode needs a valid account/provisioning profile for `com.aelaguiz.CodexDockApp` before installation can finish.
+The physical install blocker is fixed. The remaining acceptance item is user-visible manual proof from the installed app: open Codex Dock from the iPhone 14 home screen, confirm relay discovery, confirm sessions load, force-quit/relaunch, reboot/relaunch if needed, and confirm voice transcription goes through the relay.

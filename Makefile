@@ -28,7 +28,8 @@ APP_BUNDLE_ID ?= com.aelaguiz.CodexDockApp
 APP_DERIVED_DATA ?= $(APP_SERVER_ABS_DIR)/DerivedData
 APP_PATH := $(APP_DERIVED_DATA)/Build/Products/Debug-iphonesimulator/$(APP_SCHEME).app
 DEVICE ?=
-DEVELOPMENT_TEAM ?=
+DEVICE_NAME ?= iPhone 14
+DEVELOPMENT_TEAM ?= R6B8KXF3QW
 DEVICE_APP_PATH := $(APP_DERIVED_DATA)/Build/Products/Debug-iphoneos/$(APP_SCHEME).app
 CODEX_DOCK_HOSTS ?= Amir-M5
 CODEX_DOCK_HOST_AMIR_M5_NAME ?= Amir-M5
@@ -39,13 +40,15 @@ CODEX_DOCK_OPENAI_TRANSCRIPTION_MODEL ?= gpt-4o-transcribe
 
 .DEFAULT_GOAL := help
 
-.PHONY: help app device-install services env-file node-deps app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart sims sim sim-list sim-boot run
+.PHONY: help app device-install devices services env-file node-deps app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart sims sim sim-list sim-boot run
 
 help:
 	@printf "%s\n" "Codex Dock commands:"
 	@printf "%s\n" "  rtk make app SIM='iPhone 17' Build/install/launch the app in a simulator"
 	@printf "%s\n" "  rtk make app SIM=<UDID>    Build/install/launch the app by simulator ID"
-	@printf "%s\n" "  rtk make device-install DEVICE=<UDID> DEVELOPMENT_TEAM=<team-id> Build/install on a physical iPhone"
+	@printf "%s\n" "  rtk make device-install    Build/install on the default physical iPhone"
+	@printf "%s\n" "  rtk make device-install DEVICE=<UDID> Build/install on a specific physical iPhone"
+	@printf "%s\n" "  rtk make devices           List physical iPhones known to CoreDevice"
 	@printf "%s\n" "  rtk make services          Start/reuse every local service the app needs"
 	@printf "%s\n" "  rtk make app-server        Start/reuse the raw persistent LAN app-server"
 	@printf "%s\n" "  rtk make dock-relay        Start/reuse the phone-reachable live-session relay"
@@ -108,7 +111,10 @@ app: services
 
 device-install: services
 	@rtk xcodegen generate --spec project.yml
-	@rtk sh -c 'set -eu; if [ -z "$(DEVICE)" ]; then echo "DEVICE=<device-udid> is required"; exit 2; fi; if [ -z "$(DEVELOPMENT_TEAM)" ]; then echo "DEVELOPMENT_TEAM=<team-id> is required"; exit 2; fi; echo "building $(APP_SCHEME) for physical iPhone"; xcodebuild -quiet -allowProvisioningUpdates -project CodexDock.xcodeproj -scheme "$(APP_SCHEME)" -destination "generic/platform=iOS" -derivedDataPath "$(APP_DERIVED_DATA)" DEVELOPMENT_TEAM="$(DEVELOPMENT_TEAM)" CODE_SIGN_STYLE=Automatic build; echo "installing $(DEVICE_APP_PATH) on $(DEVICE)"; xcrun devicectl device install app --device "$(DEVICE)" "$(DEVICE_APP_PATH)"; echo "installed $(APP_BUNDLE_ID) on $(DEVICE)"'
+	@rtk sh -c 'set -eu; device="$(DEVICE)"; if [ -z "$$device" ]; then device="$$(python3 scripts/device.py resolve "$(DEVICE_NAME)")"; fi; if [ -z "$(DEVELOPMENT_TEAM)" ]; then echo "DEVELOPMENT_TEAM=<team-id> is required"; exit 2; fi; echo "building $(APP_SCHEME) for $$device with team $(DEVELOPMENT_TEAM)"; xcodebuild -quiet -allowProvisioningUpdates -allowProvisioningDeviceRegistration -project CodexDock.xcodeproj -scheme "$(APP_SCHEME)" -destination "id=$$device" -derivedDataPath "$(APP_DERIVED_DATA)" DEVELOPMENT_TEAM="$(DEVELOPMENT_TEAM)" CODE_SIGN_STYLE=Automatic build; echo "installing $(DEVICE_APP_PATH) on $$device"; xcrun devicectl device install app --device "$$device" "$(DEVICE_APP_PATH)"; echo "installed $(APP_BUNDLE_ID) on $$device"'
+
+devices:
+	@rtk python3 scripts/device.py list
 
 run: app
 

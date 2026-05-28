@@ -21,11 +21,11 @@ No blocking implementation findings remain in the code-reviewed scope.
 
 Implementation note:
 
-- IMP-NOTE-001 - Physical home-screen proof remains pending on local Xcode signing/provisioning, not on a current code-review blocker.
+- IMP-NOTE-001 - Physical install is no longer blocked by signing/provisioning after switching the repo default to automatic signing team `R6B8KXF3QW` and allowing device registration; final home-screen/manual interaction proof is still a user-visible checklist item.
   - Lens: proof and phase exit
   - Scope: Phase 4 manual acceptance
   - Plan expects: physical install, home-screen launch, discovery, relaunch/reboot persistence, and relay voice transcription proof before the change is truly complete.
-  - Code reality: `device-install` reaches signing/install, Mac services start, and generated-project builds pass; local Xcode account/provisioning for team `Q2V42N8S7R` and bundle id `com.aelaguiz.CodexDockApp` still blocks installation.
+  - Code reality: `device-install` starts Mac services, builds with automatic signing team `R6B8KXF3QW`, resolves the paired iPhone 14 by default, and installs `com.aelaguiz.CodexDockApp`; the explicit `DEVICE=CB9FFF0E-89AD-57B5-9C00-6552D814875E` path also installs on Amir's iPhone / iPhone 17 Pro after Xcode registers that device.
   - Required implementation repair: none known in repo code; complete the manual proof after Xcode account/provisioning is fixed.
   - Status: open
 
@@ -135,14 +135,14 @@ Implementation note:
 ### Pass 4 - 2026-05-28
 
 - Mode: implementation-audit
-- Scope: whole plan implementation through Phase 4 code/docs/install target, excluding manual physical-device proof that is blocked by local Xcode signing/provisioning
+- Scope: whole plan implementation through Phase 4 code/docs/install target, excluding final manual home-screen interaction proof
 - Baseline reviewed: current dirty worktree after relay boundary, Swift bootstrap/discovery, relay transcription, Relay tab cleanup, Makefile install target, generated project, README, UX-spec supersession note, worklog, and changed tests
-- Test/CI context accepted, if supplied: `rtk npm test` passed with 14 relay tests; `rtk swift test` passed with 86 tests and 5 real-host smoke skips; generated simulator and generic iphoneos builds passed; physical install attempt reached signing/provisioning and failed because Xcode has no usable account/profile for team `Q2V42N8S7R` and bundle id `com.aelaguiz.CodexDockApp`
+- Test/CI context accepted, if supplied: `rtk npm test` passed with 14 relay tests; `rtk swift test` passed with 86 tests and 5 real-host smoke skips; generated simulator and generic iphoneos builds passed; `rtk make device-install` installed `com.aelaguiz.CodexDockApp` on the paired iPhone 14 with automatic signing team `R6B8KXF3QW`; `rtk make device-install DEVICE=CB9FFF0E-89AD-57B5-9C00-6552D814875E` installed it on the iPhone 17 Pro
 - Agents/lenses run: parent ran implementation-audit lenses for plan-code-fit, outcome-realization, requirement traceability, phase-frontier review, canonical owner/SSOT, existing-pattern fit, deletion/side-door closure, drift-proof coupling, caller/invariant/state, elegance/code-judo, tiny-team maintainability, test-code review, docs-contract-drift, security-boundary, and scope-creep; attempted to spawn new audit agents but the harness was at thread limit; reused existing native agent threads for Swift no-secret path and relay/build/docs boundary review, then repaired the returned findings
 - Code areas read: `scripts/dock-relay.mjs`; `scripts/dock-relay-transcription.mjs`; `scripts/dock-relay-bonjour.mjs`; `scripts/dock-relay.test.mjs`; `Makefile`; `README.md`; `project.yml`; `CodexDockApp/Info.plist`; `CodexDockApp/CodexDockApp.swift`; `CodexDock/Configuration/*`; `CodexDock/AppServer/*`; `CodexDock/Features/Dock/*`; `CodexDock/Features/Archive/ArchiveView.swift`; `CodexDock/Features/Hosts/HostsView.swift`; `CodexDock/State/HostSettingsStore.swift`; `CodexDock/State/ThreadDetailStore.swift`; `CodexDock/Voice/TranscriptionService.swift`; `CodexDockTests/DockStoreTests.swift`; `CodexDockTests/AppServerClientTests.swift`; `docs/CODEX_DOCK_IPHONE_UX_SPEC_2026-05-27.md`; `.gitignore`
 - Obligations checked: no-client-auth phone relay; Mac-side raw/history token; narrow relay method allowlist; relay `audio/transcribe`; no phone-supplied model; Mac-side `gpt-4o-transcribe` default; Bonjour advertisement; optional Swift bearer config; env-independent physical startup; saved/manual non-secret relay persistence; Relay UI with no token side door; shared registry propagation; relay-backed production voice default; install-only physical target with no env launch; stale docs updated/superseded; ignored secret runtime files
 - Findings added:
-  - IMP-NOTE-001 - physical home-screen proof remains pending on local Xcode signing/provisioning
+  - IMP-NOTE-001 - final home-screen/manual interaction proof remains pending after successful physical install
 - Findings resolved:
   - The strict maintainability review flagged `scripts/dock-relay.mjs` crossing 1,000 lines; transcription and Bonjour helpers were split into focused modules, leaving the main relay script at 961 lines.
   - Agent implementation audit flagged credential-bearing WebSocket URLs as a phone-secret side door; shared URL validation now rejects URL username/password credentials for env config, bootstrap manual entry, and Relay tab saves.
@@ -155,4 +155,4 @@ Implementation note:
 - Findings carried forward:
   - IMP-NOTE-001
 - Verdict: approve-with-notes
-- Next audit focus: complete manual physical-device proof after Xcode account/provisioning is fixed; then re-run a short implementation audit focused only on Phase 4 proof artifacts and logs
+- Next audit focus: complete manual home-screen, discovery, session-load, relaunch, and voice proof on the installed iPhone 14; then re-run a short implementation audit focused only on Phase 4 proof artifacts and logs

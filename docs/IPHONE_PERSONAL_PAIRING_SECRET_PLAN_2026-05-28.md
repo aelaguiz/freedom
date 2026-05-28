@@ -137,7 +137,7 @@ Codex Dock is done for this change when a physical iPhone build installed once w
   - Build/test commands run clean enough to support the changed paths.
 - Manual physical-device proof:
   - run `rtk make services` once on the Mac;
-  - install with `rtk make device-install DEVICE=<device-udid> DEVELOPMENT_TEAM=<team-id>`;
+  - install with `rtk make device-install`, which defaults to the paired iPhone 14 and automatic signing team `R6B8KXF3QW`;
   - launch from the iPhone home screen;
   - confirm relay discovery, session load, force-quit/relaunch, phone reboot/relaunch, and voice transcription all work;
   - confirm logs/docs/screenshots do not expose OpenAI key, raw Codex token, relay bearer token, audio payload, or transcript text.
@@ -603,10 +603,10 @@ No token field appears in the primary physical-phone flow.
 ## Phase 4 - Physical install/runbook and final proof
 
 * Goal: Make the user-facing workflow install once, open app, use relay.
-* Status: Partially implemented on 2026-05-28. Build/install target and services are implemented; physical install is blocked by missing/invalid Xcode account/provisioning for team `Q2V42N8S7R`, so manual home-screen proof remains pending.
+* Status: Implemented on 2026-05-28. Build/install target and services are implemented; the physical install path works on the paired iPhone 14 with automatic signing team `R6B8KXF3QW`.
 * Work: Align build targets, docs, and manual proof with the shipped path.
 * Checklist (must all be done):
-  - Add `rtk make device-install DEVICE=<device-udid> DEVELOPMENT_TEAM=<team-id>` or equivalent install-only physical target.
+  - Add `rtk make device-install` or equivalent install-only physical target; this repo defaults to the paired iPhone 14 and automatic signing team `R6B8KXF3QW`.
   - Ensure `device-install` builds for `iphoneos`, applies signing settings, installs the app, and does not launch it or pass env/secrets.
   - Keep `rtk make app SIM=...` as simulator/dev convenience only.
   - Update README with Mac services, physical install, home-screen launch, discovery, voice, and no-phone-secret posture.
@@ -685,7 +685,7 @@ This is personal local software. No staged multi-user rollout is needed.
   - `rtk make dock-relay-status`
   - `rtk make app-server-status`
 - Phone:
-  - `rtk make device-install DEVICE=<device-udid> DEVELOPMENT_TEAM=<team-id>`
+  - `rtk make device-install`
   - open Codex Dock from the iPhone home screen.
 - Dev simulator:
   - `rtk make app SIM='iPhone 17'`

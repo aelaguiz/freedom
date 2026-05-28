@@ -3,3 +3,5 @@
 .env
 .codex-dock/
 node_modules/
+xcuserdata/
+__pycache__/

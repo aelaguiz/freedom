@@ -232,8 +232,26 @@ rtk make services
 Install the app once on a physical iPhone:
 
 ```sh
-rtk make device-install DEVICE=<device-udid> DEVELOPMENT_TEAM=<team-id>
+rtk make device-install
 ```
+
+By default this resolves the paired iPhone 14 and signs with team
+`R6B8KXF3QW`, matching the working PS Mobile automatic-signing setup on this
+machine. Override only when you intentionally want a different phone or team:
+
+```sh
+rtk make devices
+rtk make device-install DEVICE=<device-udid>
+rtk make device-install DEVICE_NAME='iPhone 17 Pro'
+rtk make device-install DEVELOPMENT_TEAM=<team-id>
+```
+
+Do not use team `Q2V42N8S7R` for this app on this machine, and do not force a
+manual provisioning profile such as `iOS Team Provisioning Profile: *`. The
+working path is automatic signing with `R6B8KXF3QW`. The install target also
+passes `-allowProvisioningDeviceRegistration`, so a second paired iPhone can be
+registered into the development profile when Xcode is allowed to update
+provisioning.
 
 Then open Codex Dock from the iPhone home screen. The app discovers the Mac
 relay over Bonjour, connects with no phone-side bearer token, loads sessions,
