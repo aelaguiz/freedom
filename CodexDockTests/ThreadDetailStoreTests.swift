@@ -818,7 +818,8 @@ private func makeDetailRow(hostID: String, threadID: String) -> DockRowViewModel
         lastActivityDate: Date(timeIntervalSince1970: 2_000),
         summary: "Open a real thread",
         rail: .blue,
-        label: nil
+        label: nil,
+        origin: .humanInteractive(subtype: .cli)
     )
 }
 

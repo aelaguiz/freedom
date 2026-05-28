@@ -86,6 +86,9 @@ final class ThreadListMappingTests: XCTestCase {
         XCTAssertEqual(summary.branch, .known("main"))
         XCTAssertEqual(summary.lastActivity.timeIntervalSince1970, 1_790_000_010)
         XCTAssertEqual(summary.shortEventSummary, .known("Build the Dock"))
+        XCTAssertEqual(summary.origin.kind, .humanInteractive)
+        XCTAssertEqual(summary.origin.humanSubtype, .cli)
+        XCTAssertEqual(summary.origin.evidence.sourceKind, .cli)
     }
 
     func testSparsePayloadMapsUnknownOptionalMetadataWithoutDroppingThread() throws {
@@ -120,6 +123,8 @@ final class ThreadListMappingTests: XCTestCase {
         XCTAssertEqual(summary.branch, .unknown)
         XCTAssertEqual(summary.lastActivity.timeIntervalSince1970, 1_790_000_105)
         XCTAssertEqual(summary.shortEventSummary, .unknown)
+        XCTAssertEqual(summary.origin.kind, .unknown)
+        XCTAssertNil(summary.origin.evidence.sourceKind)
     }
 
     func testMalformedRowsProduceScopedMappingFailures() throws {
@@ -200,9 +205,178 @@ final class ThreadListMappingTests: XCTestCase {
         XCTAssertTrue(result.summaries[0].status.needsAttention)
         XCTAssertEqual(result.summaries[1].status, .unknown)
     }
+
+    func testMapsExecAsAutomationEvenWhenThreadSourceIsUser() {
+        let result = SessionSummaryMapper.map(
+            response: ThreadListResponseDTO(data: [
+                makeThread(
+                    id: "thread-exec",
+                    source: .string("exec"),
+                    threadSource: "user"
+                )
+            ]),
+            hostID: "Amir-M5"
+        )
+
+        XCTAssertEqual(result.failures, [])
+        XCTAssertEqual(result.summaries[0].origin.kind, .agentOrAutomation)
+        XCTAssertEqual(result.summaries[0].origin.automationSubtype, .exec)
+        XCTAssertEqual(result.summaries[0].origin.evidence.sourceKind, .exec)
+        XCTAssertEqual(result.summaries[0].origin.evidence.threadSource, "user")
+    }
+
+    func testMapsAppServerAndMCPAsAutomation() {
+        let result = SessionSummaryMapper.map(
+            response: ThreadListResponseDTO(data: [
+                makeThread(id: "thread-app-server", source: .string("app_server")),
+                makeThread(id: "thread-mcp", source: .object(["type": .string("mcp")]))
+            ]),
+            hostID: "Amir-M5"
+        )
+
+        XCTAssertEqual(result.failures, [])
+        XCTAssertEqual(result.summaries[0].origin.kind, .agentOrAutomation)
+        XCTAssertEqual(result.summaries[0].origin.automationSubtype, .appServer)
+        XCTAssertEqual(result.summaries[0].origin.evidence.sourceKind, .appServer)
+        XCTAssertEqual(result.summaries[1].origin.kind, .agentOrAutomation)
+        XCTAssertEqual(result.summaries[1].origin.automationSubtype, .appServer)
+        XCTAssertEqual(result.summaries[1].origin.evidence.sourceKind, .appServer)
+    }
+
+    func testMapsSubAgentObjectAndRoleEvidenceAsAutomation() {
+        let result = SessionSummaryMapper.map(
+            response: ThreadListResponseDTO(data: [
+                makeThread(
+                    id: "thread-review",
+                    source: .object(["subAgent": .string("review")])
+                ),
+                makeThread(
+                    id: "thread-role",
+                    source: nil,
+                    threadSource: "subagent",
+                    agentNickname: "reviewer",
+                    agentRole: "code_review"
+                ),
+                makeThread(
+                    id: "thread-spawn",
+                    source: .object([
+                        "subAgent": .object([
+                            "thread_spawn": .object([:])
+                        ])
+                    ])
+                )
+            ]),
+            hostID: "Amir-M5"
+        )
+
+        XCTAssertEqual(result.failures, [])
+        XCTAssertEqual(result.summaries[0].origin.kind, .agentOrAutomation)
+        XCTAssertEqual(result.summaries[0].origin.automationSubtype, .subAgentReview)
+        XCTAssertEqual(result.summaries[0].origin.evidence.sourceKind, .subAgentReview)
+        XCTAssertEqual(result.summaries[1].origin.kind, .agentOrAutomation)
+        XCTAssertEqual(result.summaries[1].origin.automationSubtype, .subAgentOther)
+        XCTAssertEqual(result.summaries[1].origin.evidence.agentNickname, "reviewer")
+        XCTAssertEqual(result.summaries[1].origin.evidence.agentRole, "code_review")
+        XCTAssertEqual(result.summaries[2].origin.kind, .agentOrAutomation)
+        XCTAssertEqual(result.summaries[2].origin.automationSubtype, .subAgentThreadSpawn)
+        XCTAssertEqual(result.summaries[2].origin.evidence.sourceKind, .subAgentThreadSpawn)
+        XCTAssertEqual(
+            result.summaries[2].origin.evidence.rawSource,
+            .object([
+                "subAgent": .object([
+                    "thread_spawn": .object([:])
+                ])
+            ])
+        )
+    }
+
+    func testMapsKnownInteractiveCustomSourcesAsHuman() {
+        let result = SessionSummaryMapper.map(
+            response: ThreadListResponseDTO(data: [
+                makeThread(id: "thread-atlas", source: .string("atlas")),
+                makeThread(id: "thread-chatgpt", source: .string("chatgpt"))
+            ]),
+            hostID: "Amir-M5"
+        )
+
+        XCTAssertEqual(result.failures, [])
+        XCTAssertEqual(result.summaries.map(\.origin.kind), [.humanInteractive, .humanInteractive])
+        XCTAssertEqual(result.summaries[0].origin.humanSubtype, .customInteractive("atlas"))
+        XCTAssertEqual(result.summaries[1].origin.humanSubtype, .customInteractive("chatgpt"))
+    }
+
+    func testMapsUnknownSourceAsUnknown() {
+        let result = SessionSummaryMapper.map(
+            response: ThreadListResponseDTO(data: [
+                makeThread(id: "thread-unknown", source: .string("unknown")),
+                makeThread(id: "thread-future", source: .string("futureSource"))
+            ]),
+            hostID: "Amir-M5"
+        )
+
+        XCTAssertEqual(result.failures, [])
+        XCTAssertEqual(result.summaries.map(\.origin.kind), [.unknown, .unknown])
+        XCTAssertEqual(result.summaries[0].origin.evidence.sourceKind, .unknown)
+        XCTAssertEqual(result.summaries[1].origin.evidence.sourceKind, .unknown)
+    }
+
+    func testContradictorySourceEvidenceMapsUnknown() {
+        let result = SessionSummaryMapper.map(
+            response: ThreadListResponseDTO(data: [
+                makeThread(
+                    id: "thread-conflicting-source",
+                    source: .object([
+                        "cli": .object([:]),
+                        "subAgent": .string("review")
+                    ])
+                ),
+                makeThread(
+                    id: "thread-conflicting-metadata",
+                    source: .string("cli"),
+                    agentNickname: "reviewer"
+                ),
+                makeThread(
+                    id: "thread-conflicting-subagent-variants",
+                    source: .object([
+                        "subAgent": .array([
+                            .string("review"),
+                            .string("compact")
+                        ])
+                    ])
+                )
+            ]),
+            hostID: "Amir-M5"
+        )
+
+        XCTAssertEqual(result.failures, [])
+        XCTAssertEqual(result.summaries.map(\.origin.kind), [.unknown, .unknown, .unknown])
+        XCTAssertEqual(result.summaries.map(\.origin.evidence.sourceKind), [.unknown, .unknown, .unknown])
+    }
 }
 
 private func decodeThreadListResponse(_ text: String) throws -> ThreadListResponseDTO {
     let data = try XCTUnwrap(text.data(using: .utf8))
     return try JSONDecoder().decode(ThreadListResponseDTO.self, from: data)
+}
+
+private func makeThread(
+    id: String,
+    source: JSONValue?,
+    threadSource: String? = nil,
+    agentNickname: String? = nil,
+    agentRole: String? = nil
+) -> ThreadDTO {
+    ThreadDTO(
+        id: id,
+        sessionId: "\(id)-session",
+        preview: "Thread \(id)",
+        createdAt: 1_790_000_000,
+        updatedAt: 1_790_000_010,
+        status: .idle,
+        source: source,
+        threadSource: threadSource,
+        agentNickname: agentNickname,
+        agentRole: agentRole,
+        turns: []
+    )
 }

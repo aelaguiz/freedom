@@ -396,6 +396,55 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(response.backwardsCursor, "before-1")
     }
 
+    func testThreadListEncodesSourceKinds() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let task = Task {
+            try await client.threadList(
+                params: ThreadListParams(
+                    sourceKinds: [
+                        .exec,
+                        .appServer,
+                        .subAgentReview,
+                        .unknown
+                    ],
+                    archived: false
+                ),
+                timeout: .seconds(1)
+            )
+        }
+        let request = try await transport.nextSentRequest()
+        XCTAssertEqual(request.method, AppServerMethods.threadList)
+
+        guard case .object(let params) = try XCTUnwrap(request.params) else {
+            return XCTFail("Expected object params")
+        }
+        XCTAssertEqual(
+            params["sourceKinds"],
+            .array([
+                .string("exec"),
+                .string("appServer"),
+                .string("subAgentReview"),
+                .string("unknown")
+            ])
+        )
+        XCTAssertEqual(params["archived"], .bool(false))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: request.id,
+                    result: try JSONValue.encoded(ThreadListResponseDTO(data: []))
+                )
+            )
+        )
+
+        let response = try await task.value
+        XCTAssertEqual(response.data, [])
+    }
+
     func testThreadListMethodFailureSurfacesServerError() async throws {
         let transport = ScriptedAppServerTransport()
         let client = AppServerClient(transport: transport)

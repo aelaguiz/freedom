@@ -38,7 +38,8 @@ struct SessionRowProjector {
             lastActivityDate: summary.lastActivity,
             summary: latestSummary(for: summary),
             rail: metadata?.rail ?? rail(for: summary),
-            label: metadata?.label
+            label: metadata?.label,
+            origin: summary.origin
         )
     }
 

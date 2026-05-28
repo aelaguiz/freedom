@@ -95,9 +95,190 @@ public enum SessionSummaryMapper {
             workingDirectory: text(from: thread.cwd),
             branch: text(from: thread.gitInfo?.branch),
             lastActivity: Date(timeIntervalSince1970: TimeInterval(timestamp)),
-            shortEventSummary: preview.map { .known(collapsed($0)) } ?? .unknown
+            shortEventSummary: preview.map { .known(collapsed($0)) } ?? .unknown,
+            origin: origin(from: thread)
         )
         return .success(summary)
+    }
+
+    private static func origin(from thread: ThreadDTO) -> SessionOrigin {
+        let source = classifySource(thread.source)
+        let threadSource = nonEmpty(thread.threadSource)
+        let agentNickname = nonEmpty(thread.agentNickname)
+        let agentRole = nonEmpty(thread.agentRole)
+        let evidence = SessionOriginEvidence(
+            sourceKind: source.sourceKind,
+            rawSource: source.rawSource,
+            threadSource: threadSource,
+            agentNickname: agentNickname,
+            agentRole: agentRole
+        )
+        let metadataSubtype = agentNickname != nil || agentRole != nil
+            ? SessionAgentOriginSubtype.subAgentOther
+            : subAgentSubtype(from: threadSource)
+
+        if let sourceOrigin = source.origin, sourceOrigin.kind == .agentOrAutomation {
+            return sourceOrigin.replacingEvidence(evidence)
+        }
+
+        if let sourceOrigin = source.origin,
+           sourceOrigin.kind == .humanInteractive,
+           metadataSubtype != nil {
+            return .unknown(
+                evidence: SessionOriginEvidence(
+                    sourceKind: .unknown,
+                    rawSource: evidence.rawSource,
+                    threadSource: evidence.threadSource,
+                    agentNickname: evidence.agentNickname,
+                    agentRole: evidence.agentRole
+                )
+            )
+        }
+
+        if let metadataSubtype {
+            return .agentOrAutomation(subtype: metadataSubtype, evidence: evidence)
+        }
+
+        if let sourceOrigin = source.origin {
+            return sourceOrigin.replacingEvidence(evidence)
+        }
+
+        return .unknown(evidence: evidence)
+    }
+
+    private struct SourceClassification {
+        let origin: SessionOrigin?
+        let sourceKind: ThreadSourceKind?
+        let rawSource: JSONValue?
+    }
+
+    fileprivate enum RecognizedSourceSignal: Hashable {
+        case human(SessionHumanOriginSubtype, sourceKind: ThreadSourceKind?)
+        case automation(SessionAgentOriginSubtype, sourceKind: ThreadSourceKind)
+        case unknown
+
+        var originKind: SessionOriginKind {
+            switch self {
+            case .human:
+                return .humanInteractive
+            case .automation:
+                return .agentOrAutomation
+            case .unknown:
+                return .unknown
+            }
+        }
+
+        var sourceKind: ThreadSourceKind? {
+            switch self {
+            case .human(_, let sourceKind):
+                return sourceKind
+            case .automation(_, let sourceKind):
+                return sourceKind
+            case .unknown:
+                return .unknown
+            }
+        }
+    }
+
+    private static func classifySource(_ source: JSONValue?) -> SourceClassification {
+        guard let source else {
+            return SourceClassification(origin: nil, sourceKind: nil, rawSource: nil)
+        }
+
+        let signals = source.recognizedSourceSignals
+        if signals.isEmpty {
+            return SourceClassification(
+                origin: .unknown(),
+                sourceKind: .unknown,
+                rawSource: source
+            )
+        }
+        if signals.contains(.unknown) {
+            return SourceClassification(
+                origin: .unknown(),
+                sourceKind: .unknown,
+                rawSource: source
+            )
+        }
+
+        let uniqueSignals = Set(signals)
+        guard uniqueSignals.count == 1, let signal = signals.first else {
+            return SourceClassification(
+                origin: .unknown(),
+                sourceKind: .unknown,
+                rawSource: source
+            )
+        }
+
+        switch signal {
+        case .human(let subtype, let sourceKind):
+            return SourceClassification(
+                origin: .humanInteractive(subtype: subtype),
+                sourceKind: sourceKind,
+                rawSource: source
+            )
+        case .automation(let subtype, let sourceKind):
+            return SourceClassification(
+                origin: .agentOrAutomation(subtype: subtype),
+                sourceKind: sourceKind,
+                rawSource: source
+            )
+        case .unknown:
+            return SourceClassification(
+                origin: .unknown(),
+                sourceKind: .unknown,
+                rawSource: source
+            )
+        }
+    }
+
+    fileprivate static func sourceSignal(fromName name: String) -> RecognizedSourceSignal? {
+        switch normalizedOriginToken(name) {
+        case "cli":
+            return .human(.cli, sourceKind: .cli)
+        case "vscode", "vs":
+            return .human(.vscode, sourceKind: .vscode)
+        case "atlas":
+            return .human(.customInteractive("atlas"), sourceKind: nil)
+        case "chatgpt":
+            return .human(.customInteractive("chatgpt"), sourceKind: nil)
+        case "exec":
+            return .automation(.exec, sourceKind: .exec)
+        case "appserver", "mcp":
+            return .automation(.appServer, sourceKind: .appServer)
+        case "subagent", "subagentother", "other":
+            return .automation(.subAgentOther, sourceKind: .subAgentOther)
+        case "subagentreview", "review":
+            return .automation(.subAgentReview, sourceKind: .subAgentReview)
+        case "subagentcompact", "compact":
+            return .automation(.subAgentCompact, sourceKind: .subAgentCompact)
+        case "subagentthreadspawn", "threadspawn", "threadspawning", "spawn":
+            return .automation(.subAgentThreadSpawn, sourceKind: .subAgentThreadSpawn)
+        case "unknown":
+            return .unknown
+        default:
+            return nil
+        }
+    }
+
+    private static func subAgentSubtype(from threadSource: String?) -> SessionAgentOriginSubtype? {
+        guard let threadSource else {
+            return nil
+        }
+        guard case .automation(let subtype, _)? = sourceSignal(fromName: threadSource) else {
+            return nil
+        }
+        return subtype
+    }
+
+    fileprivate static func normalizedOriginToken(_ value: String) -> String {
+        let trimmed = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let scalars = trimmed.unicodeScalars.filter { scalar in
+            CharacterSet.alphanumerics.contains(scalar)
+        }
+        return String(String.UnicodeScalarView(scalars))
     }
 
     private static func status(from status: ThreadStatusDTO?) -> SessionStatus {
@@ -207,5 +388,91 @@ public enum SessionSummaryMapper {
         }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private extension JSONValue {
+    var recognizedSourceSignals: [SessionSummaryMapper.RecognizedSourceSignal] {
+        switch self {
+        case .string(let value):
+            return SessionSummaryMapper.sourceSignal(fromName: value).map { [$0] } ?? []
+        case .object(let values):
+            var signals: [SessionSummaryMapper.RecognizedSourceSignal] = []
+            for key in values.keys where !key.isSubAgentSourceKey {
+                if let signal = SessionSummaryMapper.sourceSignal(fromName: key) {
+                    signals.append(signal)
+                }
+            }
+            for key in ["type", "kind", "sourceKind", "source_kind", "subtype"] {
+                if case .string(let value)? = values[key] {
+                    if let signal = SessionSummaryMapper.sourceSignal(fromName: value) {
+                        signals.append(signal)
+                    }
+                }
+            }
+            if case .string(let value)? = values["custom"] {
+                if let signal = SessionSummaryMapper.sourceSignal(fromName: value) {
+                    signals.append(signal)
+                }
+            }
+            if let nestedSource = values["source"] {
+                signals.append(contentsOf: nestedSource.recognizedSourceSignals)
+            }
+            if let subAgent = values["subAgent"] ?? values["subagent"] {
+                signals.append(contentsOf: subAgent.recognizedSubAgentSignals)
+            }
+            return signals.removingDuplicates()
+        case .array(let values):
+            return values.flatMap(\.recognizedSourceSignals).removingDuplicates()
+        case .null, .bool, .integer, .double:
+            return []
+        }
+    }
+
+    var recognizedSubAgentSignals: [SessionSummaryMapper.RecognizedSourceSignal] {
+        switch self {
+        case .string(let value):
+            return SessionSummaryMapper.sourceSignal(fromName: value).map { [$0] } ?? []
+        case .object(let values):
+            var signals: [SessionSummaryMapper.RecognizedSourceSignal] = []
+            for key in values.keys {
+                if let signal = SessionSummaryMapper.sourceSignal(fromName: key) {
+                    signals.append(signal)
+                }
+            }
+            for key in ["type", "kind", "variant", "subtype"] {
+                if case .string(let value)? = values[key] {
+                    if let signal = SessionSummaryMapper.sourceSignal(fromName: value) {
+                        signals.append(signal)
+                    }
+                }
+            }
+            return signals.removingDuplicates()
+        case .array(let values):
+            return values.flatMap(\.recognizedSubAgentSignals).removingDuplicates()
+        case .null, .bool, .integer, .double:
+            return []
+        }
+    }
+}
+
+private extension String {
+    var isSubAgentSourceKey: Bool {
+        switch SessionSummaryMapper.normalizedOriginToken(self) {
+        case "subagent":
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+private extension Sequence where Element: Equatable {
+    func removingDuplicates() -> [Element] {
+        var result: [Element] = []
+        for element in self where !result.contains(element) {
+            result.append(element)
+        }
+        return result
     }
 }

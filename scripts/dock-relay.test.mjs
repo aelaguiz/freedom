@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import test from "node:test";
 import WebSocket, { WebSocketServer } from "ws";
 
@@ -7,12 +8,14 @@ import {
   buildBonjourAdvertisementArgs,
   decodedAudioTranscribeParams,
   isPhoneRequestAuthorized,
+  mergeThreadListRows,
   mergeActiveFlags,
   preferThread,
   sanitizeRelayFields,
   shouldCollectLiveRowsForThreadList,
   startServer,
   statusPriority,
+  threadMatchesSourceKinds,
   transcribeAudio,
 } from "./dock-relay.mjs";
 
@@ -92,6 +95,151 @@ test("archived thread/list does not merge live loopback rows", () => {
   assert.equal(shouldCollectLiveRowsForThreadList({}), true);
 });
 
+test("default thread/list sourceKinds keeps only interactive live sources", () => {
+  const cases = [
+    ["cli", { source: "cli" }, true],
+    ["vscode", { source: "vscode" }, true],
+    ["atlas custom", { source: { custom: "atlas" } }, true],
+    ["chatgpt custom", { source: { custom: "chatgpt" } }, true],
+    ["atlas legacy string", { source: "atlas" }, true],
+    ["exec", { source: "exec" }, false],
+    ["appServer", { source: "appServer" }, false],
+    ["appServer object", { source: { appServer: {} } }, false],
+    ["mcp alias", { source: "mcp" }, false],
+    ["mcp object", { source: { mcp: {} } }, false],
+    ["subAgent", { source: { subAgent: "review" } }, false],
+    ["unknown", { source: "unknown" }, false],
+    ["missing source", {}, false],
+  ];
+
+  for (const [name, row, expected] of cases) {
+    assert.equal(threadMatchesSourceKinds(row), expected, name);
+    assert.equal(threadMatchesSourceKinds(row, []), expected, `${name} empty sourceKinds`);
+  }
+});
+
+test("explicit agent sourceKinds include live automation and unknown rows", () => {
+  const agentKinds = [
+    "exec",
+    "appServer",
+    "subAgentReview",
+    "subAgentCompact",
+    "subAgentThreadSpawn",
+    "subAgentOther",
+    "unknown",
+  ];
+
+  assert.equal(threadMatchesSourceKinds({ source: "exec" }, agentKinds), true);
+  assert.equal(threadMatchesSourceKinds({ source: { exec: {} } }, agentKinds), true);
+  assert.equal(threadMatchesSourceKinds({ source: "appServer" }, agentKinds), true);
+  assert.equal(threadMatchesSourceKinds({ source: { appServer: {} } }, agentKinds), true);
+  assert.equal(threadMatchesSourceKinds({ source: "mcp" }, agentKinds), true);
+  assert.equal(threadMatchesSourceKinds({ source: { mcp: {} } }, agentKinds), true);
+  assert.equal(threadMatchesSourceKinds({ source: { subAgent: "review" } }, agentKinds), true);
+  assert.equal(threadMatchesSourceKinds({ source: "subAgentReview" }, agentKinds), true);
+  assert.equal(threadMatchesSourceKinds({ source: { sourceKind: "subAgentCompact" } }, agentKinds), true);
+  assert.equal(threadMatchesSourceKinds({ source: { subAgent: "memory_consolidation" } }, agentKinds), false);
+  assert.equal(threadMatchesSourceKinds({ source: "unknown" }, agentKinds), true);
+  assert.equal(threadMatchesSourceKinds({}, agentKinds), true);
+  assert.equal(threadMatchesSourceKinds({ source: "cli" }, agentKinds), false);
+  assert.equal(threadMatchesSourceKinds({ source: { custom: "atlas" } }, agentKinds), false);
+});
+
+test("contradictory live source metadata maps to unknown", () => {
+  const familyConflict = {
+    source: {
+      cli: {},
+      subAgent: "review",
+    },
+  };
+  const variantConflict = {
+    source: {
+      subAgent: ["review", "compact"],
+    },
+  };
+
+  assert.equal(threadMatchesSourceKinds(familyConflict), false);
+  assert.equal(threadMatchesSourceKinds(familyConflict, ["subAgent"]), false);
+  assert.equal(threadMatchesSourceKinds(familyConflict, ["unknown"]), true);
+
+  assert.equal(threadMatchesSourceKinds(variantConflict), false);
+  assert.equal(threadMatchesSourceKinds(variantConflict, ["subAgentReview"]), false);
+  assert.equal(threadMatchesSourceKinds(variantConflict, ["subAgentCompact"]), false);
+  assert.equal(threadMatchesSourceKinds(variantConflict, ["unknown"]), true);
+});
+
+test("internal memory live source metadata stays out of filtered scopes", () => {
+  const row = { source: "unknown", threadSource: "memory_consolidation" };
+  const snakeCaseRow = { source: "unknown", thread_source: "memory_consolidation" };
+  const sourceStringRow = { source: "memory_consolidation" };
+  const subAgentRow = { source: { subAgent: "memory_consolidation" } };
+
+  assert.equal(threadMatchesSourceKinds(row), false);
+  assert.equal(threadMatchesSourceKinds(row, ["subAgent"]), false);
+  assert.equal(threadMatchesSourceKinds(row, ["unknown"]), false);
+  assert.equal(threadMatchesSourceKinds(snakeCaseRow, ["unknown"]), false);
+  assert.equal(threadMatchesSourceKinds(sourceStringRow, ["unknown"]), false);
+  assert.equal(threadMatchesSourceKinds(subAgentRow, ["subAgent"]), false);
+  assert.equal(threadMatchesSourceKinds(subAgentRow, ["unknown"]), false);
+});
+
+test("subAgent sourceKinds match broad and specific live variants", () => {
+  const review = { source: { subAgent: "review" } };
+  const compact = { source: { subAgent: "compact" } };
+  const threadSpawn = {
+    source: {
+      subAgent: {
+        thread_spawn: {
+          parent_thread_id: "parent-thread",
+          depth: 1,
+        },
+      },
+    },
+  };
+  const other = { source: { subAgent: { other: "custom-agent" } } };
+
+  assert.equal(threadMatchesSourceKinds(review, ["subAgent"]), true);
+  assert.equal(threadMatchesSourceKinds(threadSpawn, ["subAgent"]), true);
+
+  assert.equal(threadMatchesSourceKinds(review, ["subAgentReview"]), true);
+  assert.equal(threadMatchesSourceKinds(review, ["subAgentCompact"]), false);
+  assert.equal(threadMatchesSourceKinds(compact, ["subAgentCompact"]), true);
+  assert.equal(threadMatchesSourceKinds(threadSpawn, ["subAgentThreadSpawn"]), true);
+  assert.equal(threadMatchesSourceKinds(other, ["subAgentOther"]), true);
+});
+
+test("thread/list live merge applies source filtering before sanitizing results", () => {
+  const historyRows = [
+    { id: "history-human", source: "cli", updatedAt: 10 },
+  ];
+  const liveRows = [
+    {
+      id: "live-human",
+      source: { custom: "chatgpt" },
+      updatedAt: 30,
+      dockRelaySource: { url: "ws://127.0.0.1:4555" },
+    },
+    {
+      id: "live-exec",
+      source: "exec",
+      updatedAt: 40,
+      dockRelaySource: { url: "ws://127.0.0.1:4556" },
+    },
+    {
+      id: "live-subagent",
+      source: { subAgent: "review" },
+      updatedAt: 50,
+      dockRelaySource: { url: "ws://127.0.0.1:4557" },
+    },
+  ];
+
+  const filteredLiveRows = liveRows.filter((row) => threadMatchesSourceKinds(row));
+  const data = mergeThreadListRows(historyRows, filteredLiveRows);
+
+  assert.deepEqual(data.map((row) => row.id), ["live-human", "history-human"]);
+  assert.equal(Object.hasOwn(data[0], "dockRelaySource"), false);
+});
+
 test("relay source marker is never returned to clients", () => {
   assert.deepEqual(
     sanitizeRelayFields({
@@ -100,6 +248,110 @@ test("relay source marker is never returned to clients", () => {
     }),
     { id: "thread-1" },
   );
+});
+
+test("relay thread/list filters discovered live rows by sourceKinds", async () => {
+  const liveServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(liveServer);
+  const liveUrl = `ws://127.0.0.1:${liveServer.address().port}`;
+  const liveMarker = spawnLoopbackAppServerMarker(liveUrl);
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+
+  liveServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "live-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/loaded/list") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: { data: ["live-human", "live-exec"], nextCursor: null },
+        }));
+      } else if (message.method === "thread/read") {
+        const thread = message.params.threadId === "live-human"
+          ? {
+              id: "live-human",
+              sessionId: "session-live-human",
+              updatedAt: 30,
+              source: { custom: "chatgpt" },
+              status: { type: "idle" },
+            }
+          : {
+              id: "live-exec",
+              sessionId: "session-live-exec",
+              updatedAt: 40,
+              source: "exec",
+              status: { type: "idle" },
+            };
+        ws.send(JSON.stringify({ id: message.id, result: { thread } }));
+      }
+    });
+  });
+
+  historyServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "history-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/list") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: { data: [], nextCursor: null, backwardsCursor: null },
+        }));
+      }
+    });
+  });
+
+  await sleepMs(20);
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const defaultResponse = await jsonRpcRequest(ws, "thread/list");
+    const defaultIDs = defaultResponse.result.data.map((row) => row.id);
+    assert.equal(defaultIDs.includes("live-human"), true);
+    assert.equal(defaultIDs.includes("live-exec"), false);
+    assert.equal(
+      Object.hasOwn(defaultResponse.result.data.find((row) => row.id === "live-human"), "dockRelaySource"),
+      false,
+    );
+
+    const execResponse = await jsonRpcRequest(ws, "thread/list", { sourceKinds: ["exec"] });
+    const execIDs = execResponse.result.data.map((row) => row.id);
+    assert.equal(execIDs.includes("live-exec"), true);
+    assert.equal(execIDs.includes("live-human"), false);
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeProcess(liveMarker);
+    await closeWebSocketServer(liveServer);
+    await closeWebSocketServer(historyServer);
+  }
 });
 
 test("phone auth none permits local phone connections without a bearer token", () => {
@@ -426,5 +678,41 @@ function closeWebSocketServer(server) {
         resolve();
       }
     });
+  });
+}
+
+function spawnLoopbackAppServerMarker(url) {
+  return spawn(
+    process.execPath,
+    [
+      "-e",
+      "setInterval(() => {}, 1000)",
+      "codex",
+      "app-server",
+      "--listen",
+      url,
+    ],
+    { stdio: "ignore" },
+  );
+}
+
+function sleepMs(milliseconds) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+function closeProcess(child) {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, 500);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    child.kill();
   });
 }

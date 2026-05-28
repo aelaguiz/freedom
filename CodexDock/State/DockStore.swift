@@ -14,17 +14,31 @@ public struct DockLoadResult: Equatable, Sendable {
     }
 }
 
+public struct DockSessionQuery: Equatable, Sendable {
+    public let archived: Bool
+    public let sourceKinds: [ThreadSourceKind]?
+
+    public init(
+        archived: Bool = false,
+        sourceKinds: [ThreadSourceKind]? = nil
+    ) {
+        self.archived = archived
+        self.sourceKinds = sourceKinds
+    }
+
+    public static let activeHuman = DockSessionQuery(archived: false, sourceKinds: nil)
+    public static let archivedHuman = DockSessionQuery(archived: true, sourceKinds: nil)
+    public static let activeAgents = DockSessionQuery(
+        archived: false,
+        sourceKinds: ThreadSourceKind.dockAgentScopeKinds
+    )
+}
+
 public protocol DockSessionLoading: Sendable {
     func loadSessions(
         for host: DockHostConfiguration,
-        archived: Bool
+        query: DockSessionQuery
     ) async throws -> DockLoadResult
-}
-
-public extension DockSessionLoading {
-    func loadSessions(for host: DockHostConfiguration) async throws -> DockLoadResult {
-        try await loadSessions(for: host, archived: false)
-    }
 }
 
 public protocol DockSessionArchiving: Sendable {
@@ -51,7 +65,7 @@ public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
 
     public func loadSessions(
         for host: DockHostConfiguration,
-        archived: Bool = false
+        query: DockSessionQuery
     ) async throws -> DockLoadResult {
         try await withClient(for: host) { client in
             let response = try await client.threadList(
@@ -60,7 +74,8 @@ public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
                     sortKey: .updatedAt,
                     sortDirection: .desc,
                     modelProviders: [],
-                    archived: archived
+                    sourceKinds: query.sourceKinds,
+                    archived: query.archived
                 ),
                 timeout: .seconds(10)
             )
@@ -172,6 +187,68 @@ public enum DockRowRail: String, Codable, Equatable, Sendable, CaseIterable {
     case violet
 }
 
+public enum DockTabID: String, CaseIterable, Identifiable, Equatable, Sendable {
+    case all
+    case needsMe
+    case running
+    case limited
+    case agents
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .all:
+            return "All"
+        case .needsMe:
+            return "Needs me"
+        case .running:
+            return "Running"
+        case .limited:
+            return "Limited"
+        case .agents:
+            return "Agents"
+        }
+    }
+
+    public func includes(_ row: DockRowViewModel) -> Bool {
+        switch self {
+        case .all:
+            return row.origin.kind == .humanInteractive
+        case .needsMe:
+            return row.origin.kind == .humanInteractive && row.status == .needsMe
+        case .running:
+            return row.origin.kind == .humanInteractive
+                && (
+                    row.status == .needsMe
+                        || row.status == .running
+                        || row.status == .idle
+                        || row.status == .failed
+                )
+        case .limited:
+            return row.origin.kind == .humanInteractive && row.status == .limited
+        case .agents:
+            return row.origin.kind != .humanInteractive
+        }
+    }
+}
+
+public struct DockTabViewModel: Equatable, Identifiable, Sendable {
+    public let id: DockTabID
+    public let title: String
+    public let count: Int
+
+    public var label: String {
+        "\(title) \(count)"
+    }
+
+    public init(id: DockTabID, count: Int) {
+        self.id = id
+        self.title = id.title
+        self.count = count
+    }
+}
+
 public struct DockRowViewModel: Equatable, Identifiable, Sendable {
     public let id: HostScopedThreadID
     public let backendSessionID: String
@@ -184,6 +261,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
     public let summary: String
     public let rail: DockRowRail
     public let label: String?
+    public let origin: SessionOrigin
 
     public var metadataKey: LocalThreadMetadataKey {
         LocalThreadMetadataKey(
@@ -225,6 +303,9 @@ public struct DockSnapshot: Equatable, Sendable {
     public let hosts: [DockHostViewModel]
     public let hostStates: [DockHostStateViewModel]
     public let sections: [DockSectionViewModel]
+    public let tabs: [DockTabViewModel]
+    public let scopeLoadFailures: [DockScopeLoadFailureViewModel]
+    public let scopeConflicts: [DockScopeConflictViewModel]
     public let mappingFailures: [SessionSummaryMappingFailure]
 
     public var rowCount: Int {
@@ -232,10 +313,21 @@ public struct DockSnapshot: Equatable, Sendable {
             count + section.rows.count
         }
     }
+
+    public func sections(for tab: DockTabID) -> [DockSectionViewModel] {
+        sections.compactMap { section in
+            let rows = section.rows.filter(tab.includes)
+            guard !rows.isEmpty else {
+                return nil
+            }
+            return DockSectionViewModel(id: section.id, title: section.title, rows: rows)
+        }
+    }
 }
 
 public enum DockHostLoadStatus: Equatable, Sendable {
     case loaded(rowCount: Int)
+    case partial(rowCount: Int, message: String)
     case empty
     case offline(String)
     case error(String)
@@ -244,6 +336,8 @@ public enum DockHostLoadStatus: Equatable, Sendable {
         switch self {
         case .loaded(let rowCount):
             return "\(rowCount) sessions"
+        case .partial(let rowCount, let message):
+            return "\(rowCount) sessions, partial: \(message)"
         case .empty:
             return "Online, no sessions"
         case .offline:
@@ -266,12 +360,66 @@ public struct DockHostStateViewModel: Equatable, Identifiable, Sendable {
     }
 }
 
+public enum DockSessionScope: String, CaseIterable, Hashable, Sendable {
+    case human
+    case agents
+
+    public var label: String {
+        switch self {
+        case .human:
+            return "Dock"
+        case .agents:
+            return "Agents"
+        }
+    }
+
+    public var query: DockSessionQuery {
+        switch self {
+        case .human:
+            return .activeHuman
+        case .agents:
+            return .activeAgents
+        }
+    }
+}
+
+public struct DockScopeLoadFailureViewModel: Equatable, Identifiable, Sendable {
+    public let id: String
+    public let host: DockHostViewModel
+    public let scope: DockSessionScope
+    public let message: String
+
+    public init(host: DockHostViewModel, scope: DockSessionScope, message: String) {
+        self.id = "\(host.id)::\(scope.rawValue)"
+        self.host = host
+        self.scope = scope
+        self.message = message
+    }
+}
+
+public struct DockScopeConflictViewModel: Equatable, Identifiable, Sendable {
+    public let id: String
+    public let threadID: HostScopedThreadID
+    public let backendThreadID: String
+    public let winningScope: DockSessionScope
+
+    public init(
+        threadID: HostScopedThreadID,
+        backendThreadID: String,
+        winningScope: DockSessionScope
+    ) {
+        self.id = "\(threadID.hostID)::\(threadID.threadID)"
+        self.threadID = threadID
+        self.backendThreadID = backendThreadID
+        self.winningScope = winningScope
+    }
+}
+
 public enum DockStoreState: Equatable, Sendable {
     case configurationError(String)
     case idle(DockHostViewModel)
     case loading(DockHostViewModel)
     case loaded(DockSnapshot)
-    case empty(DockHostViewModel)
     case offline(DockHostViewModel, String)
     case error(DockHostViewModel, String)
 }
@@ -415,47 +563,68 @@ public final class DockStore: ObservableObject {
         let snapshot = makeSnapshot(results: results)
 
         if hosts.count == 1, let first = results.first {
-            switch first.result {
-            case .success(let result):
-                state = snapshot.rowCount == 0
-                    ? .empty(hostViewModel)
-                    : .loaded(snapshot)
-                if result.summaries.isEmpty, !result.mappingFailures.isEmpty {
-                    state = .loaded(snapshot)
-                }
-            case .failure(let failure):
+            if let failure = first.completeFailure {
                 switch failure {
                 case .offline(let message):
                     state = .offline(hostViewModel, message)
                 case .error(let message):
                     state = .error(hostViewModel, message)
                 }
+            } else {
+                state = .loaded(snapshot)
             }
         } else {
             state = .loaded(snapshot)
         }
     }
 
+    private struct ScopedHostLoadOutcome: Sendable {
+        let scope: DockSessionScope
+        let result: Result<DockLoadResult, DockLoadFailure>
+    }
+
+    private struct ScopedSessionSummary: Sendable {
+        let scope: DockSessionScope
+        let summary: SessionSummary
+    }
+
+    private struct DeduplicatedSummaries: Sendable {
+        let summaries: [SessionSummary]
+        let conflicts: [DockScopeConflictViewModel]
+    }
+
     private struct HostLoadOutcome: Sendable {
         let host: DockHostConfiguration
-        let result: Result<DockLoadResult, DockLoadFailure>
+        let scopedResults: [ScopedHostLoadOutcome]
+
+        var completeFailure: DockLoadFailure? {
+            let failures = scopedResults.compactMap { outcome -> DockLoadFailure? in
+                if case .failure(let failure) = outcome.result {
+                    return failure
+                }
+                return nil
+            }
+            guard !scopedResults.isEmpty, failures.count == scopedResults.count else {
+                return nil
+            }
+            if let error = failures.first(where: { failure in
+                if case .error = failure {
+                    return true
+                }
+                return false
+            }) {
+                return error
+            }
+            return failures[0]
+        }
     }
 
     private func loadAllHosts() async -> [HostLoadOutcome] {
         await withTaskGroup(of: HostLoadOutcome.self) { group in
             for host in hosts {
                 group.addTask { [loader] in
-                    do {
-                        return HostLoadOutcome(
-                            host: host,
-                            result: .success(try await loader.loadSessions(for: host, archived: false))
-                        )
-                    } catch {
-                        return HostLoadOutcome(
-                            host: host,
-                            result: .failure(Self.mapLoadFailure(error))
-                        )
-                    }
+                    let scopedResults = await Self.loadActiveScopes(loader: loader, host: host)
+                    return HostLoadOutcome(host: host, scopedResults: scopedResults)
                 }
             }
 
@@ -466,6 +635,46 @@ public final class DockStore: ObservableObject {
             return outcomes.sorted { lhs, rhs in
                 hostIndex(lhs.host.id) < hostIndex(rhs.host.id)
             }
+        }
+    }
+
+    private nonisolated static func loadActiveScopes(
+        loader: any DockSessionLoading,
+        host: DockHostConfiguration
+    ) async -> [ScopedHostLoadOutcome] {
+        await withTaskGroup(of: ScopedHostLoadOutcome.self) { group in
+            for scope in DockSessionScope.allCases {
+                group.addTask { [loader] in
+                    ScopedHostLoadOutcome(
+                        scope: scope,
+                        result: await Self.loadScope(
+                            loader: loader,
+                            host: host,
+                            query: scope.query
+                        )
+                    )
+                }
+            }
+
+            var outcomes: [ScopedHostLoadOutcome] = []
+            for await outcome in group {
+                outcomes.append(outcome)
+            }
+            return outcomes.sorted { lhs, rhs in
+                Self.scopeIndex(lhs.scope) < Self.scopeIndex(rhs.scope)
+            }
+        }
+    }
+
+    private nonisolated static func loadScope(
+        loader: any DockSessionLoading,
+        host: DockHostConfiguration,
+        query: DockSessionQuery
+    ) async -> Result<DockLoadResult, DockLoadFailure> {
+        do {
+            return .success(try await loader.loadSessions(for: host, query: query))
+        } catch {
+            return .failure(mapLoadFailure(error))
         }
     }
 
@@ -480,28 +689,57 @@ public final class DockStore: ObservableObject {
         var summaries: [SessionSummary] = []
         var mappingFailures: [SessionSummaryMappingFailure] = []
         var hostStates: [DockHostStateViewModel] = []
+        var scopeLoadFailures: [DockScopeLoadFailureViewModel] = []
+        var scopeConflicts: [DockScopeConflictViewModel] = []
 
         for outcome in results {
             let host = DockHostViewModel(host: outcome.host)
-            switch outcome.result {
-            case .success(let result):
-                summaries.append(contentsOf: result.summaries)
-                mappingFailures.append(contentsOf: result.mappingFailures)
-                hostStates.append(
-                    DockHostStateViewModel(
-                        host: host,
-                        status: result.summaries.isEmpty
-                            ? .empty
-                            : .loaded(rowCount: result.summaries.count)
+            let hostSummaries = successfulScopedSummaries(from: outcome)
+            let deduplicated = deduplicated(hostSummaries)
+            let hostDedupedSummaries = deduplicated.summaries
+            summaries.append(contentsOf: hostDedupedSummaries)
+            scopeConflicts.append(contentsOf: deduplicated.conflicts)
+            mappingFailures.append(contentsOf: successfulMappingFailures(from: outcome))
+
+            for scopedOutcome in outcome.scopedResults {
+                if case .failure(let failure) = scopedOutcome.result {
+                    scopeLoadFailures.append(
+                        DockScopeLoadFailureViewModel(
+                            host: host,
+                            scope: scopedOutcome.scope,
+                            message: failure.localizedDescription
+                        )
                     )
-                )
-            case .failure(let failure):
+                }
+            }
+
+            if let failure = outcome.completeFailure {
                 switch failure {
                 case .offline(let message):
                     hostStates.append(DockHostStateViewModel(host: host, status: .offline(message)))
                 case .error(let message):
                     hostStates.append(DockHostStateViewModel(host: host, status: .error(message)))
                 }
+            } else if scopeLoadFailures.contains(where: { $0.host.id == host.id }) {
+                let message = scopeLoadFailures
+                    .filter { $0.host.id == host.id }
+                    .map { "\($0.scope.label): \($0.message)" }
+                    .joined(separator: "; ")
+                hostStates.append(
+                    DockHostStateViewModel(
+                        host: host,
+                        status: .partial(rowCount: hostDedupedSummaries.count, message: message)
+                    )
+                )
+            } else {
+                hostStates.append(
+                    DockHostStateViewModel(
+                        host: host,
+                        status: hostDedupedSummaries.isEmpty
+                            ? .empty
+                            : .loaded(rowCount: hostDedupedSummaries.count)
+                    )
+                )
             }
         }
 
@@ -510,18 +748,119 @@ public final class DockStore: ObservableObject {
             localMetadata: localMetadata,
             now: now
         ).sections(from: summaries)
+        let allRows = sections.flatMap(\.rows)
 
         return DockSnapshot(
             host: DockHostViewModel(host: hosts[0]),
             hosts: hosts.map(DockHostViewModel.init),
             hostStates: hostStates,
             sections: sections,
+            tabs: DockTabID.allCases.map { tab in
+                DockTabViewModel(id: tab, count: allRows.filter(tab.includes).count)
+            },
+            scopeLoadFailures: scopeLoadFailures,
+            scopeConflicts: scopeConflicts,
             mappingFailures: mappingFailures
         )
     }
 
+    private func successfulScopedSummaries(from outcome: HostLoadOutcome) -> [ScopedSessionSummary] {
+        var summaries: [ScopedSessionSummary] = []
+        for scopedOutcome in outcome.scopedResults {
+            if case .success(let result) = scopedOutcome.result {
+                summaries.append(
+                    contentsOf: result.summaries.map { summary in
+                        ScopedSessionSummary(scope: scopedOutcome.scope, summary: summary)
+                    }
+                )
+            }
+        }
+        return summaries
+    }
+
+    private func successfulMappingFailures(from outcome: HostLoadOutcome) -> [SessionSummaryMappingFailure] {
+        var failures: [SessionSummaryMappingFailure] = []
+        for scopedOutcome in outcome.scopedResults {
+            if case .success(let result) = scopedOutcome.result {
+                failures.append(contentsOf: result.mappingFailures)
+            }
+        }
+        return failures
+    }
+
+    private func deduplicated(_ summaries: [ScopedSessionSummary]) -> DeduplicatedSummaries {
+        var orderedIDs: [HostScopedThreadID] = []
+        var summariesByID: [HostScopedThreadID: SessionSummary] = [:]
+        var scopesByID: [HostScopedThreadID: Set<DockSessionScope>] = [:]
+        var conflictIDs: Set<HostScopedThreadID> = []
+        var conflicts: [DockScopeConflictViewModel] = []
+
+        for scopedSummary in summaries {
+            let summary = scopedSummary.summary
+            if summariesByID[summary.id] == nil {
+                orderedIDs.append(summary.id)
+                summariesByID[summary.id] = summary
+                scopesByID[summary.id] = [scopedSummary.scope]
+                continue
+            }
+
+            guard let existing = summariesByID[summary.id] else {
+                continue
+            }
+            var scopes = scopesByID[summary.id] ?? []
+            if !scopes.contains(scopedSummary.scope), !conflictIDs.contains(summary.id) {
+                conflictIDs.insert(summary.id)
+                let winningScope = preferredScope(candidate: summary, existing: existing)
+                conflicts.append(
+                    DockScopeConflictViewModel(
+                        threadID: summary.id,
+                        backendThreadID: summary.backendThreadID,
+                        winningScope: winningScope
+                    )
+                )
+            }
+            scopes.insert(scopedSummary.scope)
+            scopesByID[summary.id] = scopes
+
+            if shouldPrefer(summary, over: existing) {
+                summariesByID[summary.id] = summary
+            }
+        }
+
+        return DeduplicatedSummaries(
+            summaries: orderedIDs.compactMap { summariesByID[$0] },
+            conflicts: conflicts
+        )
+    }
+
+    private func shouldPrefer(_ candidate: SessionSummary, over existing: SessionSummary) -> Bool {
+        if existing.origin.kind == .humanInteractive,
+           candidate.origin.kind != .humanInteractive {
+            return true
+        }
+        if existing.origin.kind == .unknown,
+           candidate.origin.kind == .agentOrAutomation {
+            return true
+        }
+        return false
+    }
+
+    private func preferredScope(candidate: SessionSummary, existing: SessionSummary) -> DockSessionScope {
+        shouldPrefer(candidate, over: existing)
+            ? scope(for: candidate.origin)
+            : scope(for: existing.origin)
+    }
+
+    private func scope(for origin: SessionOrigin) -> DockSessionScope {
+        origin.kind == .humanInteractive ? .human : .agents
+    }
+
     private func hostIndex(_ hostID: String) -> Int {
         hosts.firstIndex { $0.id == hostID } ?? Int.max
+    }
+
+    private nonisolated static func scopeIndex(_ scope: DockSessionScope) -> Int {
+        DockSessionScope.allCases.firstIndex(of: scope) ?? Int.max
     }
 
     private func save(metadata: LocalThreadMetadata, for key: LocalThreadMetadataKey) async {

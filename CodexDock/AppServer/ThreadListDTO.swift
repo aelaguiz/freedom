@@ -58,6 +58,16 @@ public enum ThreadSourceKind: String, Codable, Equatable, Sendable {
     case subAgentThreadSpawn
     case subAgentOther
     case unknown
+
+    public static let dockAgentScopeKinds: [ThreadSourceKind] = [
+        .exec,
+        .appServer,
+        .subAgentReview,
+        .subAgentCompact,
+        .subAgentThreadSpawn,
+        .subAgentOther,
+        .unknown
+    ]
 }
 
 public enum ThreadListCwdFilter: Codable, Equatable, Sendable {

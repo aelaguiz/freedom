@@ -6,31 +6,6 @@ import UIKit
 import AppKit
 #endif
 
-public enum DockFilter: String, CaseIterable, Identifiable {
-    case all = "All"
-    case needsMe = "Needs me"
-    case running = "Running"
-    case limited = "Limited"
-
-    public var id: String { rawValue }
-
-    func includes(_ row: DockRowViewModel) -> Bool {
-        switch self {
-        case .all:
-            return true
-        case .needsMe:
-            return row.status == .needsMe
-        case .running:
-            return row.status == .needsMe
-                || row.status == .running
-                || row.status == .idle
-                || row.status == .failed
-        case .limited:
-            return row.status == .limited
-        }
-    }
-}
-
 public struct CodexDockRootView: View {
     @StateObject private var dockStore: DockStore
     @StateObject private var archiveStore: ArchiveStore
@@ -131,7 +106,7 @@ public struct CodexDockRootView: View {
 public struct DockView: View {
     @ObservedObject private var store: DockStore
     private let onArchiveSucceeded: @MainActor () async -> Void
-    @State private var filter: DockFilter = .all
+    @State private var selectedTab: DockTabID = .all
     @State private var searchText = ""
 
     public init(
@@ -201,9 +176,9 @@ public struct DockView: View {
 
     private var controls: some View {
         VStack(spacing: 12) {
-            Picker("Filter", selection: $filter) {
-                ForEach(DockFilter.allCases) { filter in
-                    Text(filter.rawValue).tag(filter)
+            Picker("Filter", selection: $selectedTab) {
+                ForEach(currentTabs) { tab in
+                    Text(tab.label).tag(tab.id)
                 }
             }
             .pickerStyle(.segmented)
@@ -241,6 +216,13 @@ public struct DockView: View {
         #endif
     }
 
+    private var currentTabs: [DockTabViewModel] {
+        if case .loaded(let snapshot) = store.state {
+            return snapshot.tabs
+        }
+        return DockTabID.allCases.map { DockTabViewModel(id: $0, count: 0) }
+    }
+
     @ViewBuilder
     private var content: some View {
         switch store.state {
@@ -256,13 +238,6 @@ public struct DockView: View {
             HostSummaryView(host: host, subtitle: "Loading")
             ProgressView()
                 .frame(maxWidth: .infinity, minHeight: 120)
-        case let .empty(host):
-            HostSummaryView(host: host, subtitle: "Online")
-            DockMessageView(
-                icon: "tray",
-                title: "No sessions",
-                message: "This host returned no Codex sessions."
-            )
         case let .offline(host, message):
             HostSummaryView(host: host, subtitle: "Offline")
             DockMessageView(
@@ -283,7 +258,7 @@ public struct DockView: View {
     }
 
     private func loadedContent(_ snapshot: DockSnapshot) -> some View {
-        let sections = filteredSections(snapshot.sections)
+        let sections = filteredSections(snapshot.sections(for: selectedTab))
 
         return VStack(alignment: .leading, spacing: 16) {
             ForEach(snapshot.hostStates) { hostState in
@@ -296,6 +271,14 @@ public struct DockView: View {
 
             if !snapshot.mappingFailures.isEmpty {
                 MappingFailureBanner(count: snapshot.mappingFailures.count)
+            }
+
+            ForEach(snapshot.scopeConflicts) { conflict in
+                ScopeConflictBanner(conflict: conflict)
+            }
+
+            ForEach(snapshot.scopeLoadFailures) { failure in
+                ScopeLoadFailureBanner(failure: failure)
             }
 
             if sections.isEmpty {
@@ -394,7 +377,7 @@ public struct DockView: View {
     private func filteredSections(_ sections: [DockSectionViewModel]) -> [DockSectionViewModel] {
         sections.compactMap { section in
             let rows = section.rows.filter { row in
-                filter.includes(row) && matchesSearch(row)
+                matchesSearch(row)
             }
             guard !rows.isEmpty else {
                 return nil
@@ -416,15 +399,22 @@ public struct DockView: View {
     }
 
     private var emptyStateTitle: String {
-        switch filter {
-        case .all:
+        let hasSearch = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if hasSearch {
             return "No matches"
+        }
+
+        switch selectedTab {
+        case .all:
+            return "No sessions"
         case .needsMe:
             return "Nothing needs you"
         case .running:
             return "Nothing running"
         case .limited:
             return "No limited rows"
+        case .agents:
+            return "No agent sessions"
         }
     }
 
@@ -434,15 +424,17 @@ public struct DockView: View {
             return "No sessions match this filter and search."
         }
 
-        switch filter {
+        switch selectedTab {
         case .all:
-            return "No sessions match the current filter."
+            return "No human sessions are loaded on reachable hosts."
         case .needsMe:
             return "No sessions are waiting for approval or input."
         case .running:
             return "No live sessions are loaded on reachable hosts."
         case .limited:
             return "No limited history rows are visible."
+        case .agents:
+            return "No agent or automation sessions are loaded on reachable hosts."
         }
     }
 }
@@ -459,7 +451,7 @@ struct HostSummaryView: View {
     init(hostState: DockHostStateViewModel) {
         self.host = hostState.host
         switch hostState.status {
-        case .loaded, .empty:
+        case .loaded, .partial, .empty:
             self.subtitle = hostState.status.subtitle
         case .offline(let message), .error(let message):
             self.subtitle = "\(hostState.status.subtitle): \(message)"
@@ -529,6 +521,42 @@ struct ActionErrorBanner: View {
         }
         .padding(12)
         .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+struct ScopeLoadFailureBanner: View {
+    let failure: DockScopeLoadFailureViewModel
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                .foregroundStyle(.orange)
+            Text("\(failure.host.displayName) \(failure.scope.label) load failed: \(failure.message)")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+            Spacer()
+        }
+        .padding(12)
+        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+struct ScopeConflictBanner: View {
+    let conflict: DockScopeConflictViewModel
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.triangle.branch")
+                .foregroundStyle(.orange)
+            Text("Thread \(conflict.backendThreadID) appeared in multiple source scopes; showing it in \(conflict.winningScope.label).")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+            Spacer()
+        }
+        .padding(12)
+        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -704,10 +732,31 @@ extension View {
 private struct PreviewDockSessionLoader: DockSessionLoading {
     func loadSessions(
         for host: DockHostConfiguration,
-        archived: Bool
+        query: DockSessionQuery
     ) async throws -> DockLoadResult {
-        if archived {
+        if query.archived {
             return DockLoadResult(summaries: [])
+        }
+        if query == .activeAgents {
+            return DockLoadResult(
+                summaries: [
+                    SessionSummary(
+                        id: HostScopedThreadID(hostID: host.id, threadID: "preview-agent"),
+                        backendSessionID: "preview-session-agent",
+                        displayTitle: "Audit the Dock snapshot model",
+                        status: .idle,
+                        repository: .known("codex-client"),
+                        workingDirectory: .known("/Users/aelaguiz/workspace/codex-client"),
+                        branch: .known("feature/agents"),
+                        lastActivity: Date(timeIntervalSinceNow: -900),
+                        shortEventSummary: .known("Sub-agent returned a focused review."),
+                        origin: .agentOrAutomation(
+                            subtype: .subAgentReview,
+                            evidence: SessionOriginEvidence(sourceKind: .subAgentReview)
+                        )
+                    )
+                ]
+            )
         }
         return DockLoadResult(
             summaries: [
@@ -720,7 +769,8 @@ private struct PreviewDockSessionLoader: DockSessionLoading {
                     workingDirectory: .known("/Users/aelaguiz/workspace/codex-client"),
                     branch: .known("main"),
                     lastActivity: Date(timeIntervalSinceNow: -180),
-                    shortEventSummary: .known("Generated the app target and Dock store.")
+                    shortEventSummary: .known("Generated the app target and Dock store."),
+                    origin: .humanInteractive(subtype: .cli)
                 ),
                 SessionSummary(
                     id: HostScopedThreadID(hostID: host.id, threadID: "preview-needs-me"),
@@ -731,7 +781,8 @@ private struct PreviewDockSessionLoader: DockSessionLoading {
                     workingDirectory: .known("/Users/aelaguiz/workspace/codex"),
                     branch: .known("app-server"),
                     lastActivity: Date(timeIntervalSinceNow: -4_800),
-                    shortEventSummary: .known("The simulator is connected to a reachable app-server.")
+                    shortEventSummary: .known("The simulator is connected to a reachable app-server."),
+                    origin: .humanInteractive(subtype: .cli)
                 )
             ]
         )

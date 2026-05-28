@@ -139,7 +139,7 @@ public final class HostSettingsStore: ObservableObject {
         statuses[hostID] = .testing
 
         do {
-            let result = try await tester.loadSessions(for: host, archived: false)
+            let result = try await tester.loadSessions(for: host, query: .activeHuman)
             statuses[hostID] = .online(rowCount: result.summaries.count, checkedAt: now())
         } catch let failure as DockLoadFailure {
             switch failure {

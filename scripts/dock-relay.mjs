@@ -19,6 +19,7 @@ import {
   decodedAudioTranscribeParams,
   transcribeAudio,
 } from "./dock-relay-transcription.mjs";
+import { threadMatchesSourceKinds } from "./dock-relay-source-filter.mjs";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const RELAY_VERSION = "0.1.0";
@@ -538,6 +539,34 @@ function shouldCollectLiveRowsForThreadList(params = {}) {
   return params.archived !== true;
 }
 
+function mergeThreadListRows(historyRows = [], liveRows = [], params = {}) {
+  const liveIds = new Set(liveRows.map((row) => row.id));
+  const merged = [];
+  for (const row of liveRows) {
+    merged.push(sanitizeRelayFields(row));
+  }
+  for (const row of historyRows) {
+    if (!liveIds.has(row.id)) {
+      merged.push(row);
+    }
+  }
+
+  merged.sort((lhs, rhs) => {
+    const timestampDelta = rowTimestamp(rhs) - rowTimestamp(lhs);
+    if (timestampDelta !== 0) {
+      return timestampDelta;
+    }
+    const statusDelta = statusPriority(lhs) - statusPriority(rhs);
+    if (statusDelta !== 0) {
+      return statusDelta;
+    }
+    return String(lhs.id || "").localeCompare(String(rhs.id || ""));
+  });
+
+  const limit = parseLimit(params.limit, merged.length || 1);
+  return merged.slice(0, limit);
+}
+
 async function aggregateThreadList(config, params = {}) {
   if (!shouldCollectLiveRowsForThreadList(params)) {
     const history = await readHistoryThreadList(config, params);
@@ -575,33 +604,12 @@ async function aggregateThreadList(config, params = {}) {
     );
   }
 
-  const liveIds = new Set(live.rows.map((row) => row.id));
-  const merged = [];
-  for (const row of live.rows) {
-    merged.push(sanitizeRelayFields(row));
-  }
-  for (const row of history.data || []) {
-    if (!liveIds.has(row.id)) {
-      merged.push(row);
-    }
-  }
-
-  merged.sort((lhs, rhs) => {
-    const timestampDelta = rowTimestamp(rhs) - rowTimestamp(lhs);
-    if (timestampDelta !== 0) {
-      return timestampDelta;
-    }
-    const statusDelta = statusPriority(lhs) - statusPriority(rhs);
-    if (statusDelta !== 0) {
-      return statusDelta;
-    }
-    return String(lhs.id || "").localeCompare(String(rhs.id || ""));
-  });
-
-  const limit = parseLimit(params.limit, merged.length || 1);
-  const data = merged.slice(0, limit);
+  const filteredLiveRows = live.rows.filter((row) => (
+    threadMatchesSourceKinds(row, params.sourceKinds)
+  ));
+  const data = mergeThreadListRows(history.data || [], filteredLiveRows, params);
   console.error(
-    `dock-relay: thread/list history=${history.data?.length || 0} live=${live.rows.length} endpoints=${live.endpoints.length} failed=${live.failedEndpoints} returned=${data.length}`,
+    `dock-relay: thread/list history=${history.data?.length || 0} live=${filteredLiveRows.length} endpoints=${live.endpoints.length} failed=${live.failedEndpoints} returned=${data.length}`,
   );
   return {
     data,
@@ -951,11 +959,13 @@ export {
   decodedAudioTranscribeParams,
   isPhoneRequestAuthorized,
   loadDotEnvFile,
+  mergeThreadListRows,
   mergeActiveFlags,
   preferThread,
   sanitizeRelayFields,
   shouldCollectLiveRowsForThreadList,
   startServer,
   statusPriority,
+  threadMatchesSourceKinds,
   transcribeAudio,
 };

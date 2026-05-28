@@ -136,7 +136,7 @@ public final class ArchiveStore: ObservableObject {
                     do {
                         return HostLoadOutcome(
                             host: host,
-                            result: .success(try await loader.loadSessions(for: host, archived: true))
+                            result: .success(try await loader.loadSessions(for: host, query: .archivedHuman))
                         )
                     } catch {
                         return HostLoadOutcome(
