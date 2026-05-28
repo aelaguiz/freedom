@@ -45,6 +45,84 @@ final class DockStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testLoadKeepsMostRecentRowsAheadOfOlderRunningRows() async {
+        let host = makeHost()
+        let summaries = [
+            makeSummary(
+                hostID: host.id,
+                threadID: "old-history",
+                branch: "aaa-old-history",
+                status: .notLoaded,
+                lastActivity: Date(timeIntervalSince1970: 1_990),
+                prompt: "Stored history row"
+            ),
+            makeSummary(
+                hostID: host.id,
+                threadID: "live-running",
+                branch: "zzz-live-work",
+                status: .active(activeFlags: []),
+                lastActivity: Date(timeIntervalSince1970: 1_200),
+                prompt: "Live running row"
+            )
+        ]
+        let store = DockStore(
+            host: host,
+            loader: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: summaries))),
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+
+        await store.load()
+
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+
+        XCTAssertEqual(snapshot.sections.map(\.title), ["aaa-old-history", "zzz-live-work"])
+        XCTAssertEqual(snapshot.sections[0].rows[0].status, .limited)
+        XCTAssertEqual(snapshot.sections[1].rows[0].status, .running)
+    }
+
+    @MainActor
+    func testRefreshUpdatesLoadedRows() async {
+        let host = makeHost()
+        let loader = SequencedDockSessionLoader(results: [
+            .success(DockLoadResult(summaries: [
+                makeSummary(
+                    hostID: host.id,
+                    threadID: "thread-a",
+                    branch: "main",
+                    status: .idle,
+                    lastActivity: Date(timeIntervalSince1970: 1_000),
+                    prompt: "Initial row"
+                )
+            ])),
+            .success(DockLoadResult(summaries: [
+                makeSummary(
+                    hostID: host.id,
+                    threadID: "thread-b",
+                    branch: "feature/refresh",
+                    status: .active(activeFlags: []),
+                    lastActivity: Date(timeIntervalSince1970: 1_900),
+                    prompt: "Refreshed row"
+                )
+            ]))
+        ])
+        let store = DockStore(host: host, loader: loader)
+
+        await store.load()
+        await store.refresh()
+
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+
+        let loadCount = await loader.currentLoadCount()
+        XCTAssertEqual(loadCount, 2)
+        XCTAssertEqual(snapshot.sections.map(\.title), ["feature/refresh"])
+        XCTAssertEqual(snapshot.sections[0].rows[0].title, "Refreshed row")
+    }
+
+    @MainActor
     func testEmptyHostPublishesEmptyState() async {
         let host = makeHost()
         let store = DockStore(
@@ -148,6 +226,33 @@ private struct FakeDockSessionLoader: DockSessionLoading {
             return result
         case let .failure(error):
             throw error
+        }
+    }
+}
+
+private actor SequencedDockSessionLoader: DockSessionLoading {
+    private var results: [FakeMode]
+    private(set) var loadCount = 0
+
+    init(results: [FakeMode]) {
+        self.results = results
+    }
+
+    func currentLoadCount() -> Int {
+        loadCount
+    }
+
+    func loadSessions(for host: DockHostConfiguration) async throws -> DockLoadResult {
+        loadCount += 1
+        let result = results.isEmpty ? nil : results.removeFirst()
+
+        switch result {
+        case let .success(result):
+            return result
+        case let .failure(error):
+            throw error
+        case nil:
+            return DockLoadResult(summaries: [])
         }
     }
 }

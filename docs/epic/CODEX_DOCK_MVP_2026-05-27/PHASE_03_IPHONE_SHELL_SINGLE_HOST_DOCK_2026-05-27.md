@@ -33,7 +33,10 @@ Manual QA: complete
 - None.
 
 ## Reopened phases (false-complete fixes)
-- None. Phase 3 is complete.
+- 2026-05-28: Reopened the live-session source after real use showed the Dock
+  was connected to the phone-visible history app-server but not to the live
+  loopback app-servers that own loaded Codex sessions. Fixed with the
+  authenticated Dock relay and kept Phase 3 complete after proof.
 
 ## Missing items (code gaps; evidence-anchored; no tables)
 - None.
@@ -42,16 +45,43 @@ Manual QA: complete
 - Stage gate: `rtk python3 /Users/aelaguiz/.agents/skills/arch-step/scripts/arch_stage_gate.py ready --doc docs/epic/CODEX_DOCK_MVP_2026-05-27/PHASE_03_IPHONE_SHELL_SINGLE_HOST_DOCK_2026-05-27.md` returned `READY next=implement-loop`.
 - Tooling: installed XcodeGen 2.45.4 with `rtk brew install xcodegen`; this is allowed by the epic-level permission to install needed tools.
 - Project generation: `rtk xcodegen generate --spec project.yml` created `CodexDock.xcodeproj` from the checked-in `project.yml`.
-- App-server runbook: added `Makefile` target `rtk make app-server` as the canonical start path. It installs/uses a per-repo LaunchAgent for the authenticated LAN app-server and leaves it running with plist/PID/token/log files under `.codex-dock/`.
-- SwiftPM proof: `rtk swift test` passed 31 tests with 3 optional live endpoint tests skipped when no endpoint env was set.
-- iOS build proof: `rtk xcodebuild -project CodexDock.xcodeproj -scheme CodexDockApp -destination 'id=DEF1631B-7125-43C6-BFA3-4423BF103C91' -derivedDataPath /tmp/codex-dock-phase3-derived build` passed on the booted `iPhone 17` simulator.
-- iOS generated-project test proof: `rtk xcodebuild test -project CodexDock.xcodeproj -scheme CodexDockApp -destination 'id=DEF1631B-7125-43C6-BFA3-4423BF103C91' -derivedDataPath /tmp/codex-dock-phase3-derived` passed.
+- Service runbook: `rtk make services` is the canonical start path. It
+  starts/reuses the raw authenticated LAN app-server for history and the
+  authenticated Dock relay for live loaded sessions, leaving both running with
+  plist/PID/token/log files under `.codex-dock/`.
+- SwiftPM proof: `rtk swift test` passed 33 tests with 3 optional live endpoint
+  tests skipped when no endpoint env was set.
+- iOS build proof: `rtk make app SIM='iPhone 17'` passed on simulator
+  `BAD95C8E-3E57-4818-9B90-E4ED22593B4B` and launched
+  `com.aelaguiz.CodexDockApp` against the relay endpoint.
+- iOS generated-project test proof: `rtk xcodebuild test -project
+  CodexDock.xcodeproj -scheme CodexDockApp -destination
+  'id=BAD95C8E-3E57-4818-9B90-E4ED22593B4B' -derivedDataPath
+  .codex-dock/DerivedData` passed.
 - Real host proof: started a real Codex app-server on `Amir-M5` with `rtk codex app-server --listen ws://0.0.0.0:4500 --ws-auth capability-token --ws-token-file <temp-token-file>`.
 - Reachability proof: `rtk curl -i --max-time 5 http://192.168.50.117:4500/readyz` returned `HTTP/1.1 200 OK`.
 - Real data proof: `rtk env CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4500 CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE=<temp-token-file> CODEX_DOCK_REAL_HOST_ID=Amir-M5 swift test --filter AppServerClientTests/testPhoneReachableRealHost` passed the phone-reachable handshake and `thread/list` tests.
-- App live-host proof: installed and launched `com.aelaguiz.CodexDockApp` on the booted `iPhone 17` simulator with `SIMCTL_CHILD_CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4500`, bearer token, and host env. Screenshot `/tmp/codex-dock-phase3-live-host-no-arbitrary-loads.png` showed `Amir-M5`, `192.168.50.117`, and 50 real sessions rendered in the Dock after ATS was tightened to local networking only.
+- App live-host proof: installed and launched `com.aelaguiz.CodexDockApp` on
+  the booted `iPhone 17` simulator with
+  `SIMCTL_CHILD_CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4510`,
+  bearer token, and host env. Screenshot
+  `/tmp/codex-dock-phase3-relay-recency-refresh.png` showed `Amir-M5`,
+  `192.168.50.117`, and 118 real sessions from the relay-backed live loopback
+  app-server scan.
 - App offline proof: stopped the same real app-server, relaunched the installed app against the same endpoint, and screenshot `/tmp/codex-dock-phase3-offline.png` showed `Amir-M5 · Offline` plus the transport error instead of demo rows.
-- Scope check: implementation added app target/project generation, app host configuration, `DockStore`, Dock SwiftUI views, and store/config tests only. No thread detail, multi-host fan-out, Archive implementation, Hosts implementation, voice, AIMGR, relay, or production static rows were added.
+- Source correction proof: direct relay query against `ws://192.168.50.117:4510`
+  returned 50 newest-first rows with `active: 3`, `idle: 21`, and
+  `notLoaded: 26`; `thread/loaded/list` returned 29 real loaded IDs from
+  discovered loopback Codex app-servers. No mocked rows or invented statuses
+  were used.
+- Ordering and refresh proof: `DockStore` keeps rows and branch sections
+  newest-first with status only as a tie-breaker, and `DockView` auto-refreshes
+  every five seconds plus pull-to-refresh.
+- Scope check: implementation added app target/project generation, app host
+  configuration, `DockStore`, Dock SwiftUI views, store/config tests, and the
+  required host-side relay/runbook. No thread detail, multi-host fan-out,
+  Archive implementation, Hosts implementation, voice, AIMGR, or production
+  static rows were added.
 
 ## Non-blocking follow-ups (manual QA / screenshots / human verification)
 - None for Phase 3.
@@ -139,6 +169,7 @@ existing thread-list pipeline, and renders real session rows in the Dock.
 - SwiftUI app shell.
 - Root tab/navigation shape.
 - One configured host in app state.
+- Phone-reachable service path that returns real loaded sessions for that host.
 - Dock loading/empty/error states.
 - Dock normal-state UI anchored to v2 mockup.
 
@@ -152,7 +183,10 @@ existing thread-list pipeline, and renders real session rows in the Dock.
 
 - App target builds.
 - Dock launches and uses Phase 1/2 runtime modules.
-- Real rows appear when the host has sessions.
+- Real rows appear when the host has sessions, including loaded/running rows
+  from the app-server process that owns them.
+- More recent threads sort first; status is only a tie-breaker.
+- The Dock refreshes itself after launch and still supports manual refresh.
 - Offline/error state appears when the host is unavailable.
 
 ## 0.5 Key invariants (fix immediately if violated)
@@ -216,8 +250,11 @@ The first UI should consume real summaries, not invent a separate data path.
   - `../../mockups/codex-dock-2026-05-27-v2/01-dock-normal.png` — visual anchor
     for the single-host Dock surface.
 - Canonical path / owner to reuse:
-  - Phase 1 client and Phase 2 `SessionSummary`; new `DockStore` projects UI
-    state.
+- Phase 1 client and Phase 2 `SessionSummary`; new `DockStore` projects UI
+  state.
+- `scripts/dock-relay.mjs` is the host-side bridge required to expose live
+  loopback-loaded sessions to the phone path without inventing unsupported Codex
+  daemon behavior.
 - Adjacent surfaces tied to the same contract family:
   - Phase 6 reuses Dock state for multi-host.
   - Phase 4 navigation depends on stable host/thread row identity.
@@ -268,10 +305,15 @@ The first UI should consume real summaries, not invent a separate data path.
 - `CodexDock/State/DockStore.swift`.
 - `CodexDock/Features/Dock/DockView.swift`.
 - `CodexDockTests/DockStoreTests.swift`.
+- `scripts/dock-relay.mjs`.
+- `Makefile` service targets.
+- `package.json` / `package-lock.json` for the relay's `ws` dependency.
 ## Control paths (future)
 1. App launches.
-2. DockStore loads one host through Phase 1/2 modules.
-3. DockView renders connection state and real summaries.
+2. `rtk make services` keeps the raw history app-server and relay running.
+3. DockStore loads one host through Phase 1/2 modules pointed at the relay.
+4. DockView renders connection state and real summaries, then periodically
+   refreshes.
 ## Object model + abstractions (future)
 - `DockStore`, `DockSection`, `DockRowViewModel`.
 ## Invariants and boundaries
@@ -289,14 +331,21 @@ The first UI should consume real summaries, not invent a separate data path.
 | ---- | ---- | ------------------ | ---------------- | --------------- | --- | ------------------ | -------------- |
 | App | `CodexDockApp.swift` | app entry | Missing | Create app root | Runnable UI | app entry | Build |
 | State | `DockStore.swift` | `load()` | Missing | Load one host summaries | UI data owner | observable state | Unit |
-| UI | `DockView.swift` | Dock | Missing | Render host/filter/search/rows | First product screen | SwiftUI view | Manual/build |
+| State | `DockStore.swift` | `refresh()` | Missing | Refresh without fake rows or manual reload only | Auto-updating Dock | observable state | Unit/manual |
+| UI | `DockView.swift` | Dock | Missing | Render host/filter/search/rows and schedule refresh | First product screen | SwiftUI view | Manual/build |
+| Relay | `scripts/dock-relay.mjs` | relay endpoint | Missing | Merge real loaded loopback sessions over history | Phone path needs live state | JSON-RPC relay | Node check/live query |
+| Ops | `Makefile`, `README.md` | service start | Raw app-server only | Start/reuse raw app-server plus relay | Idempotent app launch | `rtk make services` | live status |
 | Tests | `DockStoreTests.swift` | store tests | Missing | Prove load/error states | Protect UI state | test transport | Unit |
 ## Migration notes
-* Canonical owner path / shared code path: `DockStore` over Phase 1/2 modules.
+* Canonical owner path / shared code path: `DockStore` over Phase 1/2 modules;
+  host-side live-state fan-in belongs to `scripts/dock-relay.mjs`.
 * Deprecated APIs (if any): none.
-* Delete list: production static rows if introduced.
+* Delete list: production static rows if introduced; app launch pointing at the
+  raw `:4500` history-only endpoint.
 * Adjacent surfaces tied to the same contract family: Phase 4 row navigation.
-* Compatibility posture / cutover plan: preserve Phase 1/2 APIs.
+* Compatibility posture / cutover plan: preserve Phase 1/2 APIs; cleanly cut
+  the app endpoint over to the relay because the raw app-server cannot observe
+  other processes' loaded thread state.
 * Capability-replacing harnesses to delete or justify: no visual-golden tests.
 * Live docs/comments/instructions to update or delete: document build command if needed.
 * Behavior-preservation signals for refactors: protocol/data tests stay green.
@@ -346,10 +395,12 @@ Checklist (must all be done):
 - Store loads summaries from the configured host.
 - Store exposes loading, empty, offline, and error states.
 - Store tests use a fake client/test transport rather than static production rows.
+- Refresh updates the loaded snapshot without relying on user pull-to-refresh.
 
 Exit criteria (all required):
 - A real or fake host can drive rows through the store.
 - Protocol calls remain outside SwiftUI views.
+- Newest rows and newest branch sections appear first.
 
 ## Implementation slice 3: Dock UI aligned to v2 normal mockup
 
@@ -382,6 +433,10 @@ Exit criteria (all required):
 ## Verification strategy
 - Build and launch the iPhone app target.
 - Run `DockStore` tests for loading, empty, offline, and error states.
+- Run `DockStore` tests for newest-first ordering and refresh.
+- Run `node --check scripts/dock-relay.mjs`.
+- Query `ws://192.168.50.117:4510` and confirm real loaded rows come from
+  discovered loopback app-servers.
 - Manual/screenshot check against [Dock normal](../../mockups/codex-dock-2026-05-27-v2/01-dock-normal.png).
 - Verify production Dock rows come from `SessionSummary`, not static demo data.
 
@@ -421,15 +476,18 @@ Phase 3 simulator target: `iPhone 17`
 Tooling note: Phase 3 uses XcodeGen. If missing, install it with
 `rtk brew install xcodegen`; this was done during implementation.
 
-Canonical app-server start:
+Canonical service start:
 
-- `rtk make app-server`: start or reuse the authenticated LAN app-server and
-  leave it running under launchd.
-- `rtk make app-server-status`: check PID and `/readyz` without restarting.
+- `rtk make services`: start or reuse the authenticated raw LAN app-server and
+  authenticated Dock relay, leaving both running under launchd.
+- `rtk make app-server-status`: check raw app-server PID and `/readyz` without
+  restarting.
+- `rtk make dock-relay-status`: check relay PID and `/readyz` without
+  restarting.
 - `rtk make app-server-env`: print environment variables for Swift tests and
   app launch.
-- `rtk make app-server-stop`: stop it only when intentionally done with the
-  server.
+- `rtk make app-server-stop` and `rtk make dock-relay-stop`: stop services only
+  when intentionally done with them.
 
 # 10) Decision Log (append-only)
 
@@ -462,3 +520,34 @@ Consequences
 : The app can be built, installed, and launched on `iPhone 17`; production rows
   come from the real app-server pipeline, while preview rows remain isolated to
   SwiftUI previews.
+
+## 2026-05-28 - Phone-visible history server was not enough for live Dock state
+
+Context
+: Real use showed the standalone phone-visible app-server returned stored
+  `notLoaded` history while active Codex sessions lived in private loopback
+  app-server processes.
+
+Decision
+: Add an authenticated host-side Dock relay, keep the raw app-server as the
+  history source, and make `rtk make services` / `rtk make app SIM=...` point
+  the app at the relay.
+
+Consequences
+: The iPhone path now sees real loaded/running rows from `Amir-M5` without
+  unsupported Codex daemon configuration, fake rows, or mocked statuses.
+
+## 2026-05-28 - Dock ordering and refresh policy
+
+Context
+: The Dock must stay useful while sessions change, and the user explicitly
+  required newer threads first.
+
+Decision
+: Sort rows and sections by last activity descending first, using status only as
+  a tie-breaker, and auto-refresh the Dock every five seconds while the view is
+  active.
+
+Consequences
+: `All` stays newest-first, filters still work from the same loaded snapshot,
+  and the user does not need to manually pull to refresh live state.

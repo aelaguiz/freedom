@@ -2,3 +2,4 @@
 .build/
 .env
 .codex-dock/
+node_modules/

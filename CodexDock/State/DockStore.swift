@@ -31,6 +31,8 @@ public enum DockLoadFailure: Error, Equatable, LocalizedError, Sendable {
 }
 
 public struct AppServerDockClient: DockSessionLoading {
+    private let sessionPageLimit = 200
+
     public init() {}
 
     public func loadSessions(for host: DockHostConfiguration) async throws -> DockLoadResult {
@@ -47,7 +49,7 @@ public struct AppServerDockClient: DockSessionLoading {
 
             let response = try await client.threadList(
                 params: ThreadListParams(
-                    limit: 50,
+                    limit: sessionPageLimit,
                     sortKey: .updatedAt,
                     sortDirection: .desc,
                     modelProviders: []
@@ -179,11 +181,14 @@ public enum DockStoreState: Equatable, Sendable {
 
 @MainActor
 public final class DockStore: ObservableObject {
+    public static let defaultAutoRefreshInterval: Duration = .seconds(5)
+
     @Published public private(set) var state: DockStoreState
 
     private let host: DockHostConfiguration?
     private let loader: any DockSessionLoading
     private let now: @Sendable () -> Date
+    private var isLoading = false
 
     public init(
         host: DockHostConfiguration,
@@ -208,12 +213,28 @@ public final class DockStore: ObservableObject {
     }
 
     public func load() async {
+        await reload(showLoading: true)
+    }
+
+    public func refresh() async {
+        await reload(showLoading: false)
+    }
+
+    private func reload(showLoading: Bool) async {
         guard let host else {
             return
         }
+        guard !isLoading else {
+            return
+        }
+
+        isLoading = true
+        defer { isLoading = false }
 
         let hostViewModel = DockHostViewModel(host: host)
-        state = .loading(hostViewModel)
+        if showLoading {
+            state = .loading(hostViewModel)
+        }
 
         do {
             let result = try await loader.loadSessions(for: host)
@@ -247,16 +268,63 @@ public final class DockStore: ObservableObject {
                 DockSectionViewModel(
                     id: branch,
                     title: branch,
-                    rows: rows.sorted { lhs, rhs in lhs.lastActivityDate > rhs.lastActivityDate }
+                    rows: rows.sorted(by: rowPrecedes)
                 )
             }
-            .sorted { lhs, rhs in lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending }
+            .sorted(by: sectionPrecedes)
 
         return DockSnapshot(
             host: host,
             sections: sections,
             mappingFailures: mappingFailures
         )
+    }
+
+    private func sectionPrecedes(_ lhs: DockSectionViewModel, _ rhs: DockSectionViewModel) -> Bool {
+        let lhsDate = lhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
+        let rhsDate = rhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
+        if lhsDate != rhsDate {
+            return lhsDate > rhsDate
+        }
+
+        let lhsPriority = lhs.rows.map { statusPriority($0.status) }.min() ?? Int.max
+        let rhsPriority = rhs.rows.map { statusPriority($0.status) }.min() ?? Int.max
+        if lhsPriority != rhsPriority {
+            return lhsPriority < rhsPriority
+        }
+
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+
+    private func rowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
+        if lhs.lastActivityDate != rhs.lastActivityDate {
+            return lhs.lastActivityDate > rhs.lastActivityDate
+        }
+
+        let lhsPriority = statusPriority(lhs.status)
+        let rhsPriority = statusPriority(rhs.status)
+        if lhsPriority != rhsPriority {
+            return lhsPriority < rhsPriority
+        }
+
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+
+    private func statusPriority(_ status: DockRowStatusKind) -> Int {
+        switch status {
+        case .needsMe:
+            return 0
+        case .running:
+            return 1
+        case .failed:
+            return 2
+        case .idle:
+            return 3
+        case .unknown:
+            return 4
+        case .limited:
+            return 5
+        }
     }
 
     private func makeRow(summary: SessionSummary) -> DockRowViewModel {

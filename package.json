@@ -1,0 +1,11 @@
+{
+  "name": "codex-dock-client",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dock-relay": "node scripts/dock-relay.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

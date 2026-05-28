@@ -80,11 +80,25 @@ public struct DockView: View {
             .background(dockBackgroundColor)
             .dockNavigationChrome()
             .task {
-                await store.load()
+                await runRefreshLoop()
             }
             .refreshable {
-                await store.load()
+                await store.refresh()
             }
+        }
+    }
+
+    private func runRefreshLoop() async {
+        await store.load()
+
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: DockStore.defaultAutoRefreshInterval)
+            } catch {
+                return
+            }
+
+            await store.refresh()
         }
     }
 

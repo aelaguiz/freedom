@@ -83,9 +83,12 @@ or any endpoint a physical phone could not reach.
    - DOC_PATH: docs/epic/CODEX_DOCK_MVP_2026-05-27/PHASE_03_IPHONE_SHELL_SINGLE_HOST_DOCK_2026-05-27.md
    - Gate to next: The app builds, launches, connects to one configured host,
      and shows real session rows in a Dock surface aligned to the v2 Dock mockup.
-   - Status: planning
+   - Status: complete
    - Auto-plan status: ready (`READY next=implement-loop`)
-   - Epic-critic verdict: —
+   - Epic-critic verdict: passed — Phase 3 now builds and launches the iPhone
+     Dock shell on `iPhone 17`, uses the authenticated relay endpoint on
+     `Amir-M5`, renders real live sessions from host loopback app-servers plus
+     stored history, keeps rows newest-first, and auto-refreshes.
 
 4. **Thread detail read/live view**: Open a real Dock row into a session detail
    view that reads/resumes the thread and keeps receiving live updates.
@@ -193,6 +196,13 @@ reference the mockups only as downstream context.
   mapper tests. Verified live `thread/list` plus `SessionSummary` mapping from
   macOS SwiftPM and the `iPhone 17` simulator against
   `ws://192.168.50.117:4500`.
+- 2026-05-28 Completed Phase 3, then repaired a false-complete live-session
+  source bug. The standalone phone-visible app-server on `:4500` only had
+  stored `notLoaded` history; active Codex sessions were attached to private
+  loopback app-servers. Added the authenticated Dock relay on
+  `ws://192.168.50.117:4510`, made `rtk make services` the canonical start
+  path, launched the app on `iPhone 17`, and verified real Running rows without
+  mocks.
 
 # Decision Log
 
@@ -216,3 +226,9 @@ reference the mockups only as downstream context.
   configure a real WebSocket listener such as `ws://0.0.0.0:<port>` or a
   host/Tailscale IP and must use Codex websocket auth for non-loopback
   listeners.
+- 2026-05-28 Phase 3 live-state correction: a phone-reachable standalone
+  app-server is still real but not sufficient for the Dock if it is not the
+  process that owns loaded thread state. The supported path for this MVP is an
+  authenticated host-side relay that uses supported Codex JSON-RPC calls against
+  the real loopback app-servers and exposes one phone-reachable endpoint to the
+  app. Relay data must stay real: no mocked rows and no invented statuses.

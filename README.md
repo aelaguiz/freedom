@@ -84,36 +84,57 @@ complete Phase 1. Phase 1 completed on 2026-05-28 after the `iPhone 17`
 simulator path connected to a real Codex app-server on `Amir-M5` at
 `ws://192.168.50.117:4500` with websocket auth.
 
-## Canonical App-Server Start
+## Canonical Service Start
 
 Use this target for local Dock development instead of manually starting and
-stopping the app-server:
+stopping host services:
 
 ```sh
-rtk make app-server
+rtk make services
 ```
 
-It starts an authenticated LAN listener in the background, leaves it running,
-and installs a per-repo LaunchAgent with runtime files under `.codex-dock/`:
+It starts/reuses two real services and leaves them running:
+
+- Raw Codex app-server on `ws://192.168.50.117:4500`
+- Dock relay on `ws://192.168.50.117:4510`
+
+The raw app-server provides stored history. The relay is the app endpoint. It
+discovers the real loopback Codex app-server processes on `Amir-M5`, calls
+supported Codex methods on them, and merges live loaded rows over stored
+history. This is required because the active Codex sessions are usually attached
+to private `ws://127.0.0.1:<port>` app-servers, and an iPhone cannot reach the
+Mac's loopback addresses directly.
+
+The Dock sorts rows by newest activity first. Status only breaks ties. The Dock
+also refreshes itself every five seconds while the view is open, with
+pull-to-refresh still available for manual checks.
+
+The service targets install per-repo LaunchAgents with runtime files under
+`.codex-dock/`:
 
 ```text
 .codex-dock/com.aelaguiz.codex-dock.app-server.plist
+.codex-dock/com.aelaguiz.codex-dock.relay.plist
 .codex-dock/app-server.pid
 .codex-dock/app-server.token
 .codex-dock/app-server.log
 .codex-dock/app-server.err.log
+.codex-dock/dock-relay.pid
+.codex-dock/dock-relay.log
+.codex-dock/dock-relay.err.log
 ```
 
-The default endpoint is:
+The default app endpoint is:
 
 ```text
-ws://192.168.50.117:4500
+ws://192.168.50.117:4510
 ```
 
-Check it without restarting:
+Check services without restarting:
 
 ```sh
 rtk make app-server-status
+rtk make dock-relay-status
 ```
 
 Print the environment needed by Swift tests or app launch commands:
@@ -122,14 +143,16 @@ Print the environment needed by Swift tests or app launch commands:
 rtk make app-server-env
 ```
 
-Only stop it intentionally:
+Only stop services intentionally:
 
 ```sh
 rtk make app-server-stop
+rtk make dock-relay-stop
 ```
 
-Normal verification should use `rtk make app-server` or
-`rtk make app-server-status`; it should not stop the server.
+Normal verification should use `rtk make services`, `rtk make
+app-server-status`, or `rtk make dock-relay-status`; it should not stop the
+services.
 
 ## Simulator Commands
 
@@ -145,9 +168,9 @@ Or use a simulator ID:
 rtk make app SIM=DEF1631B-7125-43C6-BFA3-4423BF103C91
 ```
 
-That command starts/reuses the persistent app-server, boots the simulator,
+That command starts/reuses the persistent services, boots the simulator,
 builds the app, installs it, and launches it with the real `Amir-M5`
-app-server environment.
+relay environment.
 
 Start all local services the app currently needs:
 
@@ -155,14 +178,14 @@ Start all local services the app currently needs:
 rtk make services
 ```
 
-Today that means the authenticated LAN app-server. If a proxy or other local
-service becomes required later, it should be added behind this target so
-`rtk make app SIM=...` keeps doing the whole setup idempotently.
+Today that means the authenticated raw LAN app-server plus the authenticated
+Dock relay. If another local service becomes required later, add it behind this
+target so `rtk make app SIM=...` keeps doing the whole setup idempotently.
 
 The service targets also rewrite `.env` with the current connection settings:
 
 ```text
-CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4500
+CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4510
 CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE=/Users/aelaguiz/workspace/codex-client/.codex-dock/app-server.token
 CODEX_DOCK_REAL_HOST_ID=Amir-M5
 CODEX_DOCK_REAL_HOST_NAME=Amir-M5
@@ -220,14 +243,16 @@ Run generated-project tests on the `iPhone 17` simulator:
 rtk xcodebuild test -project CodexDock.xcodeproj -scheme CodexDockApp -destination 'platform=iOS Simulator,name=iPhone 17'
 ```
 
-Launch the installed app against a phone-reachable host by passing simulator
+Prefer `rtk make app SIM='iPhone 17'` for launch. If you need to launch an
+already-installed build manually, point it at the relay by passing simulator
 environment variables with the `SIMCTL_CHILD_` prefix:
 
 ```sh
 rtk xcrun simctl install <iphone-17-device-id> /path/to/CodexDockApp.app
-rtk env SIMCTL_CHILD_CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4500 SIMCTL_CHILD_CODEX_DOCK_APP_SERVER_BEARER_TOKEN=<token> SIMCTL_CHILD_CODEX_DOCK_REAL_HOST_ID=Amir-M5 SIMCTL_CHILD_CODEX_DOCK_REAL_HOST_NAME=Amir-M5 xcrun simctl launch --terminate-running-process <iphone-17-device-id> com.aelaguiz.CodexDockApp
+rtk env SIMCTL_CHILD_CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4510 SIMCTL_CHILD_CODEX_DOCK_APP_SERVER_BEARER_TOKEN=<token> SIMCTL_CHILD_CODEX_DOCK_REAL_HOST_ID=Amir-M5 SIMCTL_CHILD_CODEX_DOCK_REAL_HOST_NAME=Amir-M5 xcrun simctl launch --terminate-running-process <iphone-17-device-id> com.aelaguiz.CodexDockApp
 ```
 
 Do not use preview rows as production evidence. A Phase 3 pass means the
-installed app connects to a real app-server, renders real `SessionSummary`
-rows, and shows offline/error UI when that same host is unavailable.
+installed app connects to the real relay-backed host path, renders real
+`SessionSummary` rows, and shows offline/error UI when that same host path is
+unavailable.

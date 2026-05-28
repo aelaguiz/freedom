@@ -60,4 +60,37 @@ Date: 2026-05-28
 - Preview/demo rows exist only in SwiftUI preview code.
 - No production fallback rows were added.
 - No thread detail, multi-host, Archive implementation, Hosts implementation,
-  voice, AIMGR, or relay was added in Phase 3.
+  voice, or AIMGR was added in Phase 3.
+
+## False-Complete Repair: Live Session Source
+
+- Root cause: the phone-visible raw app-server on `ws://192.168.50.117:4500`
+  was real, but it only exposed stored history from its own process. The active
+  Codex sessions were attached to private loopback app-servers, so the Dock saw
+  old `Limited` rows and no `Running` rows.
+- Added `scripts/dock-relay.mjs`, an authenticated host-side relay on
+  `ws://192.168.50.117:4510`. It discovers real loopback Codex app-server
+  processes, calls supported JSON-RPC methods, and merges live loaded rows over
+  stored history.
+- Changed `rtk make services`, `.env`, and `rtk make app SIM=...` so the app
+  uses the relay endpoint while the raw app-server remains the relay's history
+  source.
+- Updated Dock ordering so rows and branch sections are newest-first; status is
+  only a tie-breaker.
+- Added Dock auto-refresh every five seconds while the Dock view is active, plus
+  the existing pull-to-refresh path.
+- Verification added for newest-first ordering and refresh in
+  `DockStoreTests`.
+- Current proof after the repair:
+  - `rtk swift test` passed 33 tests with 3 optional live endpoint tests skipped.
+  - Relay direct query against `ws://192.168.50.117:4510` returned 50
+    newest-first rows with `active: 3`, `idle: 21`, and `notLoaded: 26`;
+    `thread/loaded/list` returned 29 real loaded IDs.
+  - Relay-backed live Swift tests passed with
+    `CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4510`.
+  - `rtk make app SIM='iPhone 17'` built, installed, and launched the app.
+  - `rtk xcodebuild test -project CodexDock.xcodeproj -scheme CodexDockApp
+    -destination 'id=BAD95C8E-3E57-4818-9B90-E4ED22593B4B' -derivedDataPath
+    .codex-dock/DerivedData` passed.
+  - Screenshot `/tmp/codex-dock-phase3-relay-recency-refresh.png` showed
+    `Amir-M5 · 118 sessions` on the `iPhone 17` simulator.
