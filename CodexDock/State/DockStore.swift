@@ -190,6 +190,10 @@ public final class DockStore: ObservableObject {
     private let now: @Sendable () -> Date
     private var isLoading = false
 
+    public var hostConfiguration: DockHostConfiguration? {
+        host
+    }
+
     public init(
         host: DockHostConfiguration,
         loader: any DockSessionLoading = AppServerDockClient(),

@@ -49,7 +49,9 @@ function jsonRpcResult(id, result) {
 }
 
 function sendJson(ws, value) {
-  ws.send(JSON.stringify(value));
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(value));
+  }
 }
 
 function platformOs() {
@@ -143,10 +145,20 @@ function discoverLoopbackEndpoints() {
 }
 
 class JsonRpcWebSocketClient {
-  constructor(url, { bearerToken = null, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  constructor(
+    url,
+    {
+      bearerToken = null,
+      timeoutMs = DEFAULT_TIMEOUT_MS,
+      onNotification = null,
+      onRequest = null,
+    } = {},
+  ) {
     this.url = url;
     this.bearerToken = bearerToken;
     this.timeoutMs = timeoutMs;
+    this.onNotification = onNotification;
+    this.onRequest = onRequest;
     this.nextId = 1;
     this.pending = new Map();
     this.ws = null;
@@ -193,16 +205,25 @@ class JsonRpcWebSocketClient {
     } catch {
       return;
     }
-    if (message.id === undefined || !this.pending.has(String(message.id))) {
+    if (message.id !== undefined && this.pending.has(String(message.id))) {
+      const pending = this.pending.get(String(message.id));
+      this.pending.delete(String(message.id));
+      clearTimeout(pending.timer);
+      if (message.error) {
+        pending.reject(new Error(`${pending.method}: ${JSON.stringify(message.error)}`));
+      } else {
+        pending.resolve(message.result);
+      }
       return;
     }
-    const pending = this.pending.get(String(message.id));
-    this.pending.delete(String(message.id));
-    clearTimeout(pending.timer);
-    if (message.error) {
-      pending.reject(new Error(`${pending.method}: ${JSON.stringify(message.error)}`));
-    } else {
-      pending.resolve(message.result);
+
+    if (message.method && message.id !== undefined) {
+      this.onRequest?.(message);
+      return;
+    }
+
+    if (message.method) {
+      this.onNotification?.(message);
     }
   }
 
@@ -237,6 +258,14 @@ class JsonRpcWebSocketClient {
     this.ws.send(JSON.stringify(payload));
   }
 
+  sendRaw(message) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    this.ws.send(typeof message === "string" ? message : JSON.stringify(message));
+    return true;
+  }
+
   close() {
     if (this.ws) {
       this.ws.close();
@@ -255,24 +284,28 @@ class JsonRpcWebSocketClient {
 
 async function withClient(url, options, operation) {
   const client = new JsonRpcWebSocketClient(url, options);
-  await client.connect();
+  await initializeClient(client);
   try {
-    await client.request("initialize", {
-      clientInfo: {
-        name: "codex_dock_relay",
-        title: "Codex Dock Relay",
-        version: RELAY_VERSION,
-      },
-      capabilities: {
-        experimentalApi: true,
-        requestAttestation: false,
-      },
-    });
-    client.notify("initialized");
     return await operation(client);
   } finally {
     client.close();
   }
+}
+
+async function initializeClient(client) {
+  await client.connect();
+  await client.request("initialize", {
+    clientInfo: {
+      name: "codex_dock_relay",
+      title: "Codex Dock Relay",
+      version: RELAY_VERSION,
+    },
+    capabilities: {
+      experimentalApi: true,
+      requestAttestation: false,
+    },
+  });
+  client.notify("initialized");
 }
 
 async function readLoadedRows(endpoint) {
@@ -342,6 +375,14 @@ async function readHistoryThread(config, params) {
   );
 }
 
+async function readThreadFromEndpoint(endpoint, params) {
+  return withClient(
+    endpoint.url,
+    { bearerToken: endpoint.bearerToken || null },
+    async (client) => client.request("thread/read", params),
+  );
+}
+
 function sanitizeRelayFields(thread) {
   if (!thread || typeof thread !== "object") {
     return thread;
@@ -407,12 +448,49 @@ async function aggregateThreadRead(config, params = {}) {
   const live = await collectLiveRows();
   const liveRow = live.rows.find((row) => row.id === params.threadId);
   if (liveRow) {
+    if (params.includeTurns) {
+      return readThreadFromEndpoint(liveRow.dockRelaySource, params);
+    }
     return { thread: sanitizeRelayFields(liveRow) };
   }
   return readHistoryThread(config, params);
 }
 
-async function handleRequest(config, method, params) {
+async function resumeThread(config, params = {}, session, downstreamWs) {
+  if (!params.threadId) {
+    throw new Error("thread/resume requires threadId");
+  }
+
+  session.upstream?.close();
+  session.upstream = null;
+
+  const live = await collectLiveRows();
+  const liveRow = live.rows.find((row) => row.id === params.threadId);
+  const endpoint = liveRow?.dockRelaySource || {
+    url: config.historyUrl,
+    bearerToken: config.historyBearerToken,
+  };
+  const client = new JsonRpcWebSocketClient(endpoint.url, {
+    bearerToken: endpoint.bearerToken || null,
+    onNotification: (message) => sendJson(downstreamWs, message),
+    onRequest: (message) => sendJson(downstreamWs, message),
+  });
+
+  try {
+    await initializeClient(client);
+    const result = await client.request("thread/resume", params);
+    session.upstream = client;
+    console.error(
+      `dock-relay: thread/resume thread=${params.threadId} upstream=${endpoint.url}`,
+    );
+    return result;
+  } catch (error) {
+    client.close();
+    throw error;
+  }
+}
+
+async function handleRequest(config, method, params, session, downstreamWs) {
   switch (method) {
     case "initialize":
       return {
@@ -427,6 +505,8 @@ async function handleRequest(config, method, params) {
       return aggregateLoadedList(params || {});
     case "thread/read":
       return aggregateThreadRead(config, params || {});
+    case "thread/resume":
+      return resumeThread(config, params || {}, session, downstreamWs);
     default:
       throw Object.assign(new Error(`unsupported method: ${method}`), {
         code: -32601,
@@ -463,6 +543,13 @@ function startServer(config) {
   });
 
   wss.on("connection", (ws) => {
+    const session = { upstream: null };
+
+    ws.on("close", () => {
+      session.upstream?.close();
+      session.upstream = null;
+    });
+
     ws.on("message", async (data) => {
       let message;
       try {
@@ -472,12 +559,19 @@ function startServer(config) {
         return;
       }
 
+      if (!message.method && message.id !== undefined) {
+        if (!session.upstream?.sendRaw(message)) {
+          sendJson(ws, jsonRpcError(message.id, -32000, "no active upstream session"));
+        }
+        return;
+      }
+
       if (message.id === undefined) {
         return;
       }
 
       try {
-        const result = await handleRequest(config, message.method, message.params);
+        const result = await handleRequest(config, message.method, message.params, session, ws);
         sendJson(ws, jsonRpcResult(message.id, result));
       } catch (error) {
         sendJson(

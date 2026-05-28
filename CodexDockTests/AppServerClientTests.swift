@@ -430,6 +430,99 @@ final class AppServerClientTests: XCTestCase {
         }
     }
 
+    func testThreadReadAndResumeSendTypedRequests() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let readTask = Task {
+            try await client.threadRead(
+                params: ThreadReadParams(threadId: "thread-1", includeTurns: true),
+                timeout: .seconds(1)
+            )
+        }
+        let readRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(readRequest.method, AppServerMethods.threadRead)
+        guard case .object(let readParams) = try XCTUnwrap(readRequest.params) else {
+            return XCTFail("Expected object params")
+        }
+        XCTAssertEqual(readParams["threadId"], .string("thread-1"))
+        XCTAssertEqual(readParams["includeTurns"], .bool(true))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: readRequest.id,
+                    result: try JSONValue.encoded(
+                        ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))
+                    )
+                )
+            )
+        )
+
+        let readResponse = try await readTask.value
+        XCTAssertEqual(readResponse.thread.id, "thread-1")
+
+        let resumeTask = Task {
+            try await client.threadResume(
+                params: ThreadResumeParams(threadId: "thread-1"),
+                timeout: .seconds(1)
+            )
+        }
+        let resumeRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(resumeRequest.method, AppServerMethods.threadResume)
+        guard case .object(let resumeParams) = try XCTUnwrap(resumeRequest.params) else {
+            return XCTFail("Expected object params")
+        }
+        XCTAssertEqual(resumeParams["threadId"], .string("thread-1"))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: resumeRequest.id,
+                    result: try JSONValue.encoded(
+                        ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))
+                    )
+                )
+            )
+        )
+
+        let resumeResponse = try await resumeTask.value
+        XCTAssertEqual(resumeResponse.thread.id, "thread-1")
+    }
+
+    func testServerRequestStreamReceivesRequestsWithoutFailingConnection() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let requestTask = Task {
+            var iterator = client.serverRequests.makeAsyncIterator()
+            return await iterator.next()
+        }
+
+        await transport.enqueue(
+            .request(
+                JSONRPCRequest(
+                    id: .string("approval-1"),
+                    method: "item/commandExecution/requestApproval",
+                    params: .object([
+                        "threadId": .string("thread-1"),
+                        "command": .array([.string("make"), .string("test")]),
+                    ])
+                )
+            )
+        )
+
+        let request = try await valueWithinOneSecond {
+            await requestTask.value
+        }
+        XCTAssertEqual(request?.id, .string("approval-1"))
+        XCTAssertEqual(request?.method, "item/commandExecution/requestApproval")
+        let state = await client.state
+        XCTAssertEqual(state, .connected)
+    }
+
     func testLoopbackRealHostInitializeHandshakeWhenEndpointIsProvided() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let endpoint = environment["CODEX_DOCK_LOOPBACK_APP_SERVER_WS"], !endpoint.isEmpty else {
@@ -527,6 +620,58 @@ final class AppServerClientTests: XCTestCase {
         }
         await client.disconnect()
     }
+
+    func testPhoneReachableRealHostThreadReadAndResumeWhenEndpointIsProvided() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let endpoint = environment["CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS"], !endpoint.isEmpty else {
+            throw XCTSkip(
+                "Set CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS to run the phone-reachable real-host thread detail test"
+            )
+        }
+        let url = try XCTUnwrap(URL(string: endpoint))
+        XCTAssertTrue(
+            ["ws", "wss"].contains(url.scheme?.lowercased()),
+            "Phone-reachable thread detail endpoint must be a WebSocket URL"
+        )
+        XCTAssertFalse(
+            isLoopbackHost(url.host),
+            "Phone-reachable thread detail endpoint cannot be localhost, 127.0.0.1, or ::1"
+        )
+        let bearerToken = try XCTUnwrap(
+            try appServerBearerToken(from: environment),
+            "Set CODEX_DOCK_APP_SERVER_BEARER_TOKEN or CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE for the phone-reachable authenticated app-server"
+        )
+
+        let client = AppServerClient(webSocketURL: url, bearerToken: bearerToken)
+        _ = try await client.connectAndInitialize(
+            params: .codexDock(version: "0.1.0"),
+            timeout: .seconds(5)
+        )
+        let list = try await client.threadList(
+            params: ThreadListParams(limit: 50, sortKey: .updatedAt, sortDirection: .desc),
+            timeout: .seconds(10)
+        )
+        let thread = try XCTUnwrap(
+            list.data.first(where: canOpenThreadDetail),
+            "Real-host detail smoke test requires at least one loaded thread"
+        )
+        let threadID = try XCTUnwrap(thread.id)
+
+        let read = try await client.threadRead(
+            params: ThreadReadParams(threadId: threadID, includeTurns: true),
+            timeout: .seconds(10)
+        )
+        let resumed = try await client.threadResume(
+            params: ThreadResumeParams(threadId: threadID),
+            timeout: .seconds(10)
+        )
+
+        XCTAssertEqual(read.thread.id, threadID)
+        XCTAssertEqual(resumed.thread.id, threadID)
+        XCTAssertNotNil(read.thread.turns)
+        XCTAssertNotNil(resumed.thread.turns)
+        await client.disconnect()
+    }
 }
 
 private func assertRealHostHandshakeSucceeds(
@@ -569,6 +714,15 @@ private func isLoopbackHost(_ host: String?) -> Bool {
         return false
     }
     return ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
+}
+
+private func canOpenThreadDetail(_ thread: ThreadDTO) -> Bool {
+    switch thread.status {
+    case .notLoaded, nil:
+        return false
+    case .idle, .systemError, .active, .unknown:
+        return thread.id?.isEmpty == false
+    }
 }
 
 private actor ScriptedAppServerTransport: AppServerTransport {

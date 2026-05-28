@@ -96,9 +96,13 @@ or any endpoint a physical phone could not reach.
    - Gate to next: From a real Dock row, the app opens the correct thread,
      renders normalized events, and keeps reading notifications while the view
      is open.
-   - Status: planning
+   - Status: complete
    - Auto-plan status: ready (`READY next=implement-loop`)
-   - Epic-critic verdict: —
+   - Epic-critic verdict: passed — Phase 4 now opens a real Dock row into a
+     Thread detail screen on `iPhone 17`, reads and resumes the real upstream
+     Codex thread through the phone-reachable relay on
+     `ws://192.168.50.117:4510`, renders normalized events without raw JSON,
+     and keeps notification/server-request intake alive while the view is open.
 
 5. **Text control and minimal request cards**: Add typed steering and minimal
    supported request/approval cards on top of the open thread path.
@@ -203,6 +207,13 @@ reference the mockups only as downstream context.
   `ws://192.168.50.117:4510`, made `rtk make services` the canonical start
   path, launched the app on `iPhone 17`, and verified real Running rows without
   mocks.
+- 2026-05-28 Completed Phase 4 against the real relay path. Added
+  `thread/read` and `thread/resume`, a `ThreadDetailStore`, normalized thread
+  events, row-to-detail navigation, and relay forwarding for full reads, live
+  resume, notifications, and server requests. Verified a real loaded thread
+  through `ws://192.168.50.117:4510`, ran the optional real-host read/resume
+  XCTest, launched on `iPhone 17`, and tapped a real Dock row into Thread
+  detail.
 
 # Decision Log
 
@@ -232,3 +243,8 @@ reference the mockups only as downstream context.
   authenticated host-side relay that uses supported Codex JSON-RPC calls against
   the real loopback app-servers and exposes one phone-reachable endpoint to the
   app. Relay data must stay real: no mocked rows and no invented statuses.
+- 2026-05-28 Phase 4 relay extension: thread detail cannot be satisfied from
+  relay list-row data. The relay must forward `thread/read includeTurns:true`,
+  `thread/resume`, notifications, and server requests to a real owning
+  app-server process, then expose that real stream through the same
+  phone-reachable endpoint used by the app.

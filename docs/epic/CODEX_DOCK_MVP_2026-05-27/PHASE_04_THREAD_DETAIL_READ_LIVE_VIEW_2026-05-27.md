@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - Thread Detail Read Live View - Architecture Plan"
 date: 2026-05-27
-status: active
+status: complete
 fallback_policy: forbidden
 owners: [aelaguiz]
 reviewers: [Codex]
@@ -117,10 +117,10 @@ events, and updates the event stream while notifications arrive.
 
 ## 0.4 Definition of done (acceptance evidence)
 
-- Real Dock row opens correct detail.
-- Detail shows message/command/output/request-ish event summaries.
-- Live/stale state is visible.
-- Phase 3 Dock still works.
+- [x] Real Dock row opens correct detail.
+- [x] Detail shows message/command/output/request-ish event summaries.
+- [x] Live/stale state is visible.
+- [x] Phase 3 Dock still works.
 
 ## 0.5 Key invariants (fix immediately if violated)
 
@@ -141,6 +141,10 @@ events, and updates the event stream while notifications arrive.
 
 - Stored thread browsing and continuation use different methods.
 - Notifications are connection-scoped.
+- The iPhone app uses the phone-reachable relay endpoint, not Mac loopback.
+  Therefore `thread/read includeTurns:true`, `thread/resume`, notifications,
+  and server requests must pass through the relay to a real upstream Codex
+  app-server. Returning list-row data for detail is not enough.
 
 ## 1.3 Architectural principles (rules we will enforce)
 
@@ -380,7 +384,49 @@ No analytics.
 
 Open a real Dock row and observe a live or stored session.
 
-# 10) Decision Log (append-only)
+# 10) Implementation Evidence
+
+Date: 2026-05-28
+
+Implemented:
+- Added typed `thread/read` and `thread/resume` DTOs and client wrappers.
+- Added `ThreadEvent` normalization for stored turns, message deltas, command
+  output deltas, request-like server requests, status updates, and unsupported
+  event shapes.
+- Added `ThreadDetailStore` as the single open-thread owner over read, resume,
+  live notification merge, stale/error state, and identity validation.
+- Added `SessionDetailView` and wired Dock row navigation using the existing
+  host-scoped thread id.
+- Extended `scripts/dock-relay.mjs` so the phone-reachable endpoint forwards
+  `thread/read includeTurns:true`, `thread/resume`, upstream notifications, and
+  server requests to real Codex app-server processes.
+- Added tests for typed read/resume requests, server request streaming, event
+  normalization, detail store success/stale/live/identity behavior, and the
+  optional real-host thread read/resume smoke path.
+
+Verification:
+- `rtk swift test` passed 45 tests, with 4 optional live-host tests skipped
+  unless endpoint env is supplied.
+- `rtk node --check scripts/dock-relay.mjs` passed.
+- `rtk make dock-relay-restart` restarted the relay and left the raw
+  app-server running.
+- Direct relay probe against `ws://192.168.50.117:4510` selected real loaded
+  thread `019e6c34-d435-7a51-ba98-7d9bb3ced865`; `thread/read
+  includeTurns:true` returned `readTurns: 1`; `thread/resume` returned
+  `resumeTurns: 1`; notifications/server messages continued to arrive.
+- Live XCTest passed:
+  `rtk env CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4510 CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE=/Users/aelaguiz/workspace/codex-client/.codex-dock/app-server.token CODEX_DOCK_REAL_HOST_ID=Amir-M5 CODEX_DOCK_REAL_HOST_NAME=Amir-M5 swift test --filter AppServerClientTests/testPhoneReachableRealHostThreadReadAndResumeWhenEndpointIsProvided`.
+- `rtk xcodebuild test -project CodexDock.xcodeproj -scheme CodexDockApp
+  -destination 'id=BAD95C8E-3E57-4818-9B90-E4ED22593B4B' -derivedDataPath
+  .codex-dock/DerivedData` passed.
+- `rtk make app SIM='iPhone 17'` built, installed, and launched the app using
+  the relay endpoint.
+- Mobile simulator proof: on `iPhone 17`
+  (`BAD95C8E-3E57-4818-9B90-E4ED22593B4B`), tapping a real Dock row opened the
+  matching Thread screen with `Amir-M5`, `Live`, and normalized transcript
+  events. Screenshot: `/tmp/codex-dock-phase4-detail.png`.
+
+# 11) Decision Log (append-only)
 
 ## 2026-05-27 - Split read/live from send
 
@@ -395,3 +441,23 @@ Decision
 
 Consequences
 : Text control becomes the next smaller sub-plan.
+
+## 2026-05-28 - Relay must own live detail forwarding
+
+Context
+: The iPhone app talks to the phone-reachable relay on `Amir-M5`, while loaded
+thread state and notifications live in real Codex loopback app-server
+processes.
+
+Options
+: Return stale list-row data from the relay for detail; require the iPhone to
+reach Mac loopback; or extend the relay using supported Codex JSON-RPC methods.
+
+Decision
+: Extend the relay to support `thread/read includeTurns:true`, `thread/resume`,
+upstream notifications, and upstream server requests. It still uses only real
+Codex app-server connections and supported JSON-RPC calls.
+
+Consequences
+: Phase 4 detail is real through the same phone-reachable endpoint as the Dock.
+Phase 5 can add request responses and text control on the same connection path.

@@ -69,17 +69,22 @@ public actor AppServerClient {
     public private(set) var state: AppServerConnectionState = .idle
     public private(set) var serverInfo: InitializeResponse?
     public nonisolated let notifications: AsyncStream<JSONRPCNotification>
+    public nonisolated let serverRequests: AsyncStream<JSONRPCRequest>
 
     private let notificationContinuation: AsyncStream<JSONRPCNotification>.Continuation
+    private let serverRequestContinuation: AsyncStream<JSONRPCRequest>.Continuation
     private let transport: any AppServerTransport
     private var nextRequestNumber: Int64 = 1
     private var pendingRequests: [JSONRPCRequestID: PendingRequest] = [:]
     private var receiveTask: Task<Void, Never>?
 
     public init(transport: any AppServerTransport) {
-        let stream = AsyncStream.makeStream(of: JSONRPCNotification.self)
-        self.notifications = stream.stream
-        self.notificationContinuation = stream.continuation
+        let notifications = AsyncStream.makeStream(of: JSONRPCNotification.self)
+        let serverRequests = AsyncStream.makeStream(of: JSONRPCRequest.self)
+        self.notifications = notifications.stream
+        self.notificationContinuation = notifications.continuation
+        self.serverRequests = serverRequests.stream
+        self.serverRequestContinuation = serverRequests.continuation
         self.transport = transport
     }
 
@@ -100,6 +105,7 @@ public actor AppServerClient {
     deinit {
         receiveTask?.cancel()
         notificationContinuation.finish()
+        serverRequestContinuation.finish()
     }
 
     public func connectAndInitialize(
@@ -161,6 +167,30 @@ public actor AppServerClient {
         )
     }
 
+    public func threadRead(
+        params: ThreadReadParams,
+        timeout: Duration = .seconds(10)
+    ) async throws -> ThreadReadResponseDTO {
+        try await sendRequest(
+            method: AppServerMethods.threadRead,
+            params: try JSONValue.encoded(params),
+            timeout: timeout,
+            as: ThreadReadResponseDTO.self
+        )
+    }
+
+    public func threadResume(
+        params: ThreadResumeParams,
+        timeout: Duration = .seconds(10)
+    ) async throws -> ThreadResumeResponseDTO {
+        try await sendRequest(
+            method: AppServerMethods.threadResume,
+            params: try JSONValue.encoded(params),
+            timeout: timeout,
+            as: ThreadResumeResponseDTO.self
+        )
+    }
+
     private func sendNotification(
         method: String,
         params: JSONValue? = nil,
@@ -180,6 +210,7 @@ public actor AppServerClient {
         await transport.disconnect()
         state = .offline(reason: "client disconnected")
         notificationContinuation.finish()
+        serverRequestContinuation.finish()
     }
 
     private func openTransport() async throws {
@@ -323,7 +354,7 @@ public actor AppServerClient {
         case .notification(let notification):
             notificationContinuation.yield(notification)
         case .request(let request):
-            await failConnection(.unexpectedServerRequest(method: request.method))
+            serverRequestContinuation.yield(request)
         }
     }
 

@@ -235,7 +235,18 @@ public struct DockView: View {
 
                         VStack(spacing: 10) {
                             ForEach(section.rows) { row in
-                                DockRowView(row: row)
+                                if let host = store.hostConfiguration {
+                                    NavigationLink {
+                                        SessionDetailView(
+                                            store: ThreadDetailStore(host: host, row: row)
+                                        )
+                                    } label: {
+                                        DockRowView(row: row)
+                                    }
+                                    .buttonStyle(.plain)
+                                } else {
+                                    DockRowView(row: row)
+                                }
                             }
                         }
                     }

@@ -7,18 +7,24 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		030B4800DCC13C10C117D54D /* ThreadDetailStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9C3D49CF36AB4945916A749 /* ThreadDetailStoreTests.swift */; };
 		08C32D79593965966136996A /* DockStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A42B2061F9E45C1B6935F08 /* DockStore.swift */; };
 		1BFBBBFFA3E7C5115F4B9897 /* AppServerMethods.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACA75584AA40FC172ED36E9D /* AppServerMethods.swift */; };
 		1E86F12DB4ADEA5C3AE94D88 /* ThreadListMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4487067DBDCABE61793B26B5 /* ThreadListMappingTests.swift */; };
+		24830113F0217C6DEC1EA844 /* ThreadEventNormalizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DC48CE0A2682B2B0F223F12 /* ThreadEventNormalizerTests.swift */; };
+		3AB27D218C22102A68404C7D /* ThreadEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37232256608F5A94E813243A /* ThreadEvent.swift */; };
 		45667271A740635F7DA6A495 /* CodexDock.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		486650859FCE02D4B036B60B /* DockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A92948E4571E0CEE65CAE35 /* DockView.swift */; };
 		48D9A54C1E505B0CC65E4654 /* CodexDockApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FACDCA51DD66D50C6A6F145 /* CodexDockApp.swift */; };
+		4D9CD10593ABDDD5F6E74BD9 /* ThreadDetailDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECA148D7F9C96BD5EDF6D709 /* ThreadDetailDTO.swift */; };
 		525C4D2542BCD14F9EFDE571 /* JSONRPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9C4FD936A8FB869F14F7F61 /* JSONRPC.swift */; };
+		5F045E715AFE5F40D383E82D /* SessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AC280DBF1FD9245AD8CD686 /* SessionDetailView.swift */; };
 		68A4924EA66B7E73782296C8 /* SessionSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23406F25CA882A60E01CB56E /* SessionSummary.swift */; };
 		6B62194AAF786F06DEAB123A /* DockStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E8613594609B20254A5CA44 /* DockStoreTests.swift */; };
 		7620B7A25D86E81210477475 /* AppServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABDB5847612728C391956985 /* AppServerClient.swift */; };
 		8A21B73F18333A33FEA9DA97 /* CodexDock.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; };
 		948497183F2A3F44DEBFB7C0 /* CodexDock.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; };
+		99B452E9A8D07C40003708BF /* ThreadDetailStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D0EBB21C932928CC08AEA0D /* ThreadDetailStore.swift */; };
 		D1510D6CA7B7B44EDBB04A96 /* ThreadListDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5070CB2076B611D53150818 /* ThreadListDTO.swift */; };
 		D265D19D042CE35098EF5521 /* AppServerClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FABBE94F4FF90D41C42F5683 /* AppServerClientTests.swift */; };
 		E8B4F584399DE2B51D9E3B1A /* DockHostConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C72CBCF6924E26CAC9D3AE /* DockHostConfiguration.swift */; };
@@ -71,6 +77,9 @@
 /* Begin PBXFileReference section */
 		23406F25CA882A60E01CB56E /* SessionSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSummary.swift; sourceTree = "<group>"; };
 		2E8613594609B20254A5CA44 /* DockStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockStoreTests.swift; sourceTree = "<group>"; };
+		37232256608F5A94E813243A /* ThreadEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadEvent.swift; sourceTree = "<group>"; };
+		3AC280DBF1FD9245AD8CD686 /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
+		3DC48CE0A2682B2B0F223F12 /* ThreadEventNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadEventNormalizerTests.swift; sourceTree = "<group>"; };
 		4487067DBDCABE61793B26B5 /* ThreadListMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadListMappingTests.swift; sourceTree = "<group>"; };
 		4A92948E4571E0CEE65CAE35 /* DockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockView.swift; sourceTree = "<group>"; };
 		52C72CBCF6924E26CAC9D3AE /* DockHostConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockHostConfiguration.swift; sourceTree = "<group>"; };
@@ -79,11 +88,14 @@
 		8B717287F11303537B392BB6 /* CodexDockApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CodexDockApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		95146D412CB7EB8AAFF12FCC /* SessionSummaryMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSummaryMapper.swift; sourceTree = "<group>"; };
 		95A38808257E490A715D32C2 /* CodexDock.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = CodexDock.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		9D0EBB21C932928CC08AEA0D /* ThreadDetailStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailStore.swift; sourceTree = "<group>"; };
 		9FACDCA51DD66D50C6A6F145 /* CodexDockApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexDockApp.swift; sourceTree = "<group>"; };
 		ABDB5847612728C391956985 /* AppServerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerClient.swift; sourceTree = "<group>"; };
 		ACA75584AA40FC172ED36E9D /* AppServerMethods.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerMethods.swift; sourceTree = "<group>"; };
 		D5070CB2076B611D53150818 /* ThreadListDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadListDTO.swift; sourceTree = "<group>"; };
+		ECA148D7F9C96BD5EDF6D709 /* ThreadDetailDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailDTO.swift; sourceTree = "<group>"; };
 		F50231B3D09A5BFB802F5AC2 /* CodexDockTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CodexDockTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F9C3D49CF36AB4945916A749 /* ThreadDetailStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailStoreTests.swift; sourceTree = "<group>"; };
 		F9C4FD936A8FB869F14F7F61 /* JSONRPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPC.swift; sourceTree = "<group>"; };
 		FABBE94F4FF90D41C42F5683 /* AppServerClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerClientTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -122,8 +134,17 @@
 			children = (
 				23406F25CA882A60E01CB56E /* SessionSummary.swift */,
 				95146D412CB7EB8AAFF12FCC /* SessionSummaryMapper.swift */,
+				37232256608F5A94E813243A /* ThreadEvent.swift */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		4491443AE184FB131E00EC87 /* Session */ = {
+			isa = PBXGroup;
+			children = (
+				3AC280DBF1FD9245AD8CD686 /* SessionDetailView.swift */,
+			);
+			path = Session;
 			sourceTree = "<group>";
 		};
 		5377637F2463649CB9B4832A /* CodexDock */ = {
@@ -154,6 +175,7 @@
 				ABDB5847612728C391956985 /* AppServerClient.swift */,
 				ACA75584AA40FC172ED36E9D /* AppServerMethods.swift */,
 				F9C4FD936A8FB869F14F7F61 /* JSONRPC.swift */,
+				ECA148D7F9C96BD5EDF6D709 /* ThreadDetailDTO.swift */,
 				D5070CB2076B611D53150818 /* ThreadListDTO.swift */,
 			);
 			path = AppServer;
@@ -171,6 +193,7 @@
 			isa = PBXGroup;
 			children = (
 				7A42B2061F9E45C1B6935F08 /* DockStore.swift */,
+				9D0EBB21C932928CC08AEA0D /* ThreadDetailStore.swift */,
 			);
 			path = State;
 			sourceTree = "<group>";
@@ -179,6 +202,7 @@
 			isa = PBXGroup;
 			children = (
 				DE4F4B27B349CC95F0F8B851 /* Dock */,
+				4491443AE184FB131E00EC87 /* Session */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -206,6 +230,8 @@
 			children = (
 				FABBE94F4FF90D41C42F5683 /* AppServerClientTests.swift */,
 				2E8613594609B20254A5CA44 /* DockStoreTests.swift */,
+				F9C3D49CF36AB4945916A749 /* ThreadDetailStoreTests.swift */,
+				3DC48CE0A2682B2B0F223F12 /* ThreadEventNormalizerTests.swift */,
 				4487067DBDCABE61793B26B5 /* ThreadListMappingTests.swift */,
 			);
 			path = CodexDockTests;
@@ -310,6 +336,8 @@
 			files = (
 				D265D19D042CE35098EF5521 /* AppServerClientTests.swift in Sources */,
 				6B62194AAF786F06DEAB123A /* DockStoreTests.swift in Sources */,
+				030B4800DCC13C10C117D54D /* ThreadDetailStoreTests.swift in Sources */,
+				24830113F0217C6DEC1EA844 /* ThreadEventNormalizerTests.swift in Sources */,
 				1E86F12DB4ADEA5C3AE94D88 /* ThreadListMappingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -324,8 +352,12 @@
 				08C32D79593965966136996A /* DockStore.swift in Sources */,
 				486650859FCE02D4B036B60B /* DockView.swift in Sources */,
 				525C4D2542BCD14F9EFDE571 /* JSONRPC.swift in Sources */,
+				5F045E715AFE5F40D383E82D /* SessionDetailView.swift in Sources */,
 				68A4924EA66B7E73782296C8 /* SessionSummary.swift in Sources */,
 				FEA3427B9E20A65467D79334 /* SessionSummaryMapper.swift in Sources */,
+				4D9CD10593ABDDD5F6E74BD9 /* ThreadDetailDTO.swift in Sources */,
+				99B452E9A8D07C40003708BF /* ThreadDetailStore.swift in Sources */,
+				3AB27D218C22102A68404C7D /* ThreadEvent.swift in Sources */,
 				D1510D6CA7B7B44EDBB04A96 /* ThreadListDTO.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
