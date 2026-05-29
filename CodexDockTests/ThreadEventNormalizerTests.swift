@@ -46,7 +46,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         XCTAssertFalse(events.contains { $0.body.contains("{") || $0.body.contains("}") })
     }
 
-    func testNaturalFlowDisplayOrderPreservesSameTurnEventOrder() {
+    func testNewestFirstDisplayOrderShowsNewestTurnFirstAndPreservesSameTurnEventOrder() {
         let thread = ThreadDTO(
             id: "thread-1",
             turns: [
@@ -91,10 +91,10 @@ final class ThreadEventNormalizerTests: XCTestCase {
         )
 
         let events = ThreadEventNormalizer.events(from: thread)
-        let displayEvents = ThreadEventDisplayOrder.naturalFlow(events)
+        let displayEvents = ThreadEventDisplayOrder.newestFirst(events)
 
         XCTAssertEqual(events.map(\.body), ["Old request", "New request", "New answer", "swift test", "passed"])
-        XCTAssertEqual(displayEvents.map(\.body), ["Old request", "New request", "New answer", "swift test", "passed"])
+        XCTAssertEqual(displayEvents.map(\.body), ["New request", "New answer", "swift test", "passed", "Old request"])
     }
 
     func testStoredTurnEventsCarryDatesForDisplayOrdering() {
@@ -211,7 +211,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         XCTAssertEqual(events[0].body, "Unsupported event type: newServerThing")
     }
 
-    func testVisibilityModesFilterStoredEventCategories() {
+    func testMessageTypeFilterFiltersStoredEventKindsNewestFirst() {
         let thread = ThreadDTO(
             id: "thread-1",
             turns: [
@@ -287,20 +287,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             .unknown,
         ])
         XCTAssertEqual(
-            ThreadEventVisibilityMode.messages.visibleEvents(from: events).map(\.body),
-            ["Run the tests", "I am checking the suite."]
-        )
-        XCTAssertEqual(
-            ThreadEventVisibilityMode.messagesAndThinking.visibleEvents(from: events).map(\.body),
-            [
-                "Run the tests",
-                "I am checking the suite.",
-                "Run the model tests first.",
-                "The normalizer owns visibility.",
-            ]
-        )
-        XCTAssertEqual(
-            ThreadEventVisibilityMode.everything.visibleEvents(from: events).map(\.body),
+            ThreadDetailMessageFilter(kind: nil).visibleEvents(from: events).map(\.body),
             [
                 "Run the tests",
                 "I am checking the suite.",
@@ -313,6 +300,18 @@ final class ThreadEventNormalizerTests: XCTestCase {
                 "shell",
                 "Unsupported event type: newServerThing",
             ]
+        )
+        XCTAssertEqual(
+            ThreadDetailMessageFilter(kind: .agentMessage).visibleEvents(from: events).map(\.body),
+            [
+                "I am checking the suite.",
+                "Run the model tests first.",
+                "The normalizer owns visibility.",
+            ]
+        )
+        XCTAssertEqual(
+            ThreadDetailMessageFilter(kind: .request).visibleEvents(from: events).map(\.body),
+            ["File changes are available on desktop."]
         )
     }
 
@@ -361,12 +360,12 @@ final class ThreadEventNormalizerTests: XCTestCase {
 
         XCTAssertEqual(events.map(\.visibilityCategory), [.message, .thinking, .tooling, .system])
         XCTAssertEqual(
-            ThreadEventVisibilityMode.messages.visibleEvents(from: events).map(\.body),
-            ["message delta"]
+            ThreadDetailMessageFilter(kind: .agentMessage).visibleEvents(from: events).map(\.body),
+            ["message delta", "reasoning delta"]
         )
         XCTAssertEqual(
-            ThreadEventVisibilityMode.messagesAndThinking.visibleEvents(from: events).map(\.body),
-            ["message delta", "reasoning delta"]
+            ThreadDetailMessageFilter(kind: .output).visibleEvents(from: events).map(\.body),
+            ["output delta"]
         )
     }
 
@@ -415,7 +414,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         XCTAssertEqual(commandEvent?.body, "swift test")
     }
 
-    func testMessagesProjectionIgnoresHiddenEventDatesWhenOrdering() {
+    func testMessageTypeProjectionIgnoresOtherTypeDatesWhenOrderingNewestFirst() {
         let oldMessage = ThreadEvent(
             id: "old-message",
             kind: .userMessage,
@@ -428,9 +427,9 @@ final class ThreadEventNormalizerTests: XCTestCase {
         )
         let newerMessage = ThreadEvent(
             id: "new-message",
-            kind: .agentMessage,
+            kind: .userMessage,
             visibilityCategory: .message,
-            title: "Agent message",
+            title: "User message",
             body: "Newer visible message",
             date: Date(timeIntervalSince1970: 2_000),
             turnID: "turn-new",
@@ -447,18 +446,18 @@ final class ThreadEventNormalizerTests: XCTestCase {
             displayGroupDate: Date(timeIntervalSince1970: 3_000)
         )
 
-        let fullTranscript = ThreadEventDisplayOrder.naturalFlow([
+        let fullTranscript = ThreadEventDisplayOrder.newestFirst([
             oldMessage,
             newerMessage,
             hiddenRequestOnOldTurn,
         ])
-        let messages = ThreadEventVisibilityMode.messages.visibleEvents(from: fullTranscript)
+        let messages = ThreadDetailMessageFilter(kind: .userMessage).visibleEvents(from: fullTranscript)
 
-        XCTAssertEqual(fullTranscript.map(\.turnID), ["turn-old", "turn-old", "turn-new"])
-        XCTAssertEqual(messages.map(\.body), ["Older visible message", "Newer visible message"])
+        XCTAssertEqual(fullTranscript.map(\.turnID), ["turn-old", "turn-new", "turn-old"])
+        XCTAssertEqual(messages.map(\.body), ["Newer visible message", "Older visible message"])
     }
 
-    func testVisibilityProjectionIsStableWhenInputWasAlreadyDisplayOrdered() {
+    func testMessageTypeProjectionIsStableWhenInputWasAlreadyDisplayOrdered() {
         let timestamp = Date(timeIntervalSince1970: 2_000)
         let first = ThreadEvent(
             id: "first-message",
@@ -481,8 +480,8 @@ final class ThreadEventNormalizerTests: XCTestCase {
             displayGroupDate: timestamp
         )
 
-        let once = ThreadEventDisplayOrder.naturalFlow([first, second])
-        let twice = ThreadEventVisibilityMode.messages.visibleEvents(from: once)
+        let once = ThreadEventDisplayOrder.newestFirst([first, second])
+        let twice = ThreadDetailMessageFilter(kind: .agentMessage).visibleEvents(from: once)
 
         XCTAssertEqual(twice.map(\.id), once.map(\.id))
     }

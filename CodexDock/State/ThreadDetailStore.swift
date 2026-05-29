@@ -97,10 +97,12 @@ public enum ThreadDetailStoreState: Equatable, Sendable {
 
 @MainActor
 public final class ThreadDetailStore: ObservableObject {
-    private struct CompactThreadRead {
+    private struct FullThreadRead {
         let thread: ThreadDTO
         let turns: [JSONValue]
     }
+
+    private static let turnPageLimit = 100
 
     @Published public private(set) var state: ThreadDetailStoreState
     @Published public internal(set) var composer = ComposerState()
@@ -212,14 +214,14 @@ public final class ThreadDetailStore: ObservableObject {
             latestConnectionState = .connected
             startObservation(session: session)
 
-            let compactRead = try await readCompactThread(session: session)
-            DockLog.threadDetail.info("thread detail compact read finished host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) turns=\(compactRead.turns.count, privacy: .public)")
-            try replaceEvents(from: compactRead.thread, liveState: .connecting)
+            let fullRead = try await readFullThread(session: session)
+            DockLog.threadDetail.info("thread detail full read finished host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) turns=\(fullRead.turns.count, privacy: .public)")
+            try replaceEvents(from: fullRead.thread, liveState: .connecting)
 
             do {
                 let liveThread = try await resumeCompactThread(
                     session: session,
-                    turns: compactRead.turns
+                    turns: fullRead.turns
                 )
                 try replaceEvents(from: liveThread, liveState: .live)
                 DockLog.threadDetail.notice("thread detail load finished live host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) events=\(self.events.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
@@ -509,25 +511,51 @@ public final class ThreadDetailStore: ObservableObject {
         }
     }
 
-    private func readCompactThread(session: any ThreadDetailSession) async throws -> CompactThreadRead {
+    private func readFullThread(session: any ThreadDetailSession) async throws -> FullThreadRead {
         let startedAt = Date()
-        let signpostState = DockSignpost.threadDetail.beginInterval("thread.readCompact")
+        let signpostState = DockSignpost.threadDetail.beginInterval("thread.readFull")
         defer {
-            DockSignpost.threadDetail.endInterval("thread.readCompact", signpostState)
+            DockSignpost.threadDetail.endInterval("thread.readFull", signpostState)
         }
         let readResponse = try await session.threadRead(
             params: ThreadReadParams(threadId: row.id.threadID, includeTurns: false),
             timeout: .seconds(10)
         )
-        let turnsResponse = try await session.threadTurnsList(
-            params: ThreadTurnsListParams(threadId: row.id.threadID, limit: 10),
-            timeout: .seconds(10)
+        let turns = try await readAllTurns(session: session)
+        DockLog.threadDetail.info("thread full read finished thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) turns=\(turns.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+        return FullThreadRead(
+            thread: readResponse.thread.replacingTurns(turns),
+            turns: turns
         )
-        DockLog.threadDetail.info("thread compact read finished thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) turns=\(turnsResponse.data.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
-        return CompactThreadRead(
-            thread: readResponse.thread.replacingTurns(turnsResponse.data),
-            turns: turnsResponse.data
-        )
+    }
+
+    private func readAllTurns(session: any ThreadDetailSession) async throws -> [JSONValue] {
+        var cursor: String?
+        var seenCursors = Set<String>()
+        var turns: [JSONValue] = []
+
+        repeat {
+            let response = try await session.threadTurnsList(
+                params: ThreadTurnsListParams(
+                    threadId: row.id.threadID,
+                    cursor: cursor,
+                    limit: Self.turnPageLimit
+                ),
+                timeout: .seconds(10)
+            )
+            turns.append(contentsOf: response.data)
+
+            guard let nextCursor = response.nextCursor, !nextCursor.isEmpty else {
+                cursor = nil
+                break
+            }
+            guard seenCursors.insert(nextCursor).inserted else {
+                throw ThreadDetailStoreError.repeatedTurnsCursor(nextCursor)
+            }
+            cursor = nextCursor
+        } while cursor != nil
+
+        return turns
     }
 
     private func resumeCompactThread(
@@ -575,8 +603,8 @@ public final class ThreadDetailStore: ObservableObject {
         publishLoaded()
 
         do {
-            let compactRead = try await readCompactThread(session: session)
-            let liveThread = try await resumeCompactThread(session: session, turns: compactRead.turns)
+            let fullRead = try await readFullThread(session: session)
+            let liveThread = try await resumeCompactThread(session: session, turns: fullRead.turns)
             try mergeEvents(from: liveThread, liveState: .live)
             DockLog.threadDetail.notice("thread detail rehydrate finished thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) events=\(self.events.count, privacy: .public)")
         } catch {
@@ -697,7 +725,7 @@ public final class ThreadDetailStore: ObservableObject {
             ThreadDetailSnapshot(
                 header: header,
                 liveState: liveState,
-                events: ThreadEventDisplayOrder.naturalFlow(events)
+                events: ThreadEventDisplayOrder.newestFirst(events)
             )
         )
         connectivityReporter?.reportThreadDetail(host: host, liveState: liveState)
@@ -860,11 +888,14 @@ private extension ServerRequestCardAction {
 
 public enum ThreadDetailStoreError: Error, Equatable, LocalizedError, Sendable {
     case threadMismatch(expected: String, actual: String)
+    case repeatedTurnsCursor(String)
 
     public var errorDescription: String? {
         switch self {
         case let .threadMismatch(expected, actual):
             return "App-server returned thread \(actual), expected \(expected)."
+        case let .repeatedTurnsCursor(cursor):
+            return "App-server returned repeated thread turns cursor \(cursor)."
         }
     }
 }

@@ -51,7 +51,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
                 return false
             }
             return message == "Backgrounded"
-                && snapshot.events.map(\.body) == ["Stored turn", "make test"]
+                && snapshot.events.map(\.body) == ["make test", "Stored turn"]
         }
         XCTAssertEqual(store.composer.draft, "Keep this draft")
         XCTAssertEqual(store.requestCards.count, 1)
@@ -124,8 +124,8 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 10),
-            ThreadTurnsListParams(threadId: "thread-1", limit: 10),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 100),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 100),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
@@ -250,8 +250,8 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 10),
-            ThreadTurnsListParams(threadId: "thread-1", limit: 10),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 100),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 100),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),

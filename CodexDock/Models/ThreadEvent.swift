@@ -38,42 +38,6 @@ public enum ThreadEventVisibilityCategory: String, Equatable, Sendable, CaseIter
     case unknown
 }
 
-public enum ThreadEventVisibilityMode: String, Equatable, Sendable, CaseIterable, Identifiable {
-    case messages
-    case messagesAndThinking
-    case everything
-
-    public var id: String {
-        rawValue
-    }
-
-    public var next: ThreadEventVisibilityMode {
-        switch self {
-        case .messages:
-            return .messagesAndThinking
-        case .messagesAndThinking:
-            return .everything
-        case .everything:
-            return .messages
-        }
-    }
-
-    public func includes(_ event: ThreadEvent) -> Bool {
-        switch self {
-        case .messages:
-            return event.visibilityCategory == .message
-        case .messagesAndThinking:
-            return event.visibilityCategory == .message || event.visibilityCategory == .thinking
-        case .everything:
-            return true
-        }
-    }
-
-    public func visibleEvents(from events: [ThreadEvent]) -> [ThreadEvent] {
-        ThreadEventDisplayOrder.naturalFlow(events.filter { includes($0) })
-    }
-}
-
 public struct ThreadEvent: Equatable, Identifiable, Sendable {
     public let id: String
     public let kind: ThreadEventKind
@@ -120,46 +84,75 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
     }
 }
 
+public enum ThreadDetailMessageFilter: Equatable, Sendable, Identifiable, CaseIterable {
+    case all
+    case kind(ThreadEventKind)
+
+    public static var allCases: [ThreadDetailMessageFilter] {
+        [.all] + ThreadEventKind.allCases.map(ThreadDetailMessageFilter.kind)
+    }
+
+    public init(kind: ThreadEventKind?) {
+        if let kind {
+            self = .kind(kind)
+        } else {
+            self = .all
+        }
+    }
+
+    public var id: String {
+        switch self {
+        case .all:
+            return "all"
+        case .kind(let kind):
+            return kind.rawValue
+        }
+    }
+
+    public var selectedKind: ThreadEventKind? {
+        switch self {
+        case .all:
+            return nil
+        case .kind(let kind):
+            return kind
+        }
+    }
+
+    public func includes(_ event: ThreadEvent) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .kind(let kind):
+            return event.kind == kind
+        }
+    }
+
+    public func visibleEvents(from events: [ThreadEvent]) -> [ThreadEvent] {
+        ThreadEventDisplayOrder.newestFirst(events.filter { includes($0) })
+    }
+}
+
 public enum ThreadEventDisplayOrder {
-    public static func naturalFlow(_ events: [ThreadEvent]) -> [ThreadEvent] {
+    public static func newestFirst(_ events: [ThreadEvent]) -> [ThreadEvent] {
         let indexed = events.enumerated().map { offset, event in
             IndexedEvent(offset: offset, event: event)
         }
-        let groupInfo = Dictionary(grouping: indexed, by: \.groupKey).mapValues { group in
-            GroupInfo(
-                date: group
-                    .compactMap { $0.event.displayGroupDate ?? $0.event.date }
-                    .min(),
-                sequence: group.compactMap(\.groupSequence).min(),
-                firstOffset: group.map(\.offset).min() ?? 0
-            )
-        }
 
         return indexed.sorted { left, right in
-            if left.groupKey != right.groupKey {
-                let leftInfo = groupInfo[left.groupKey] ?? GroupInfo(date: nil, sequence: nil, firstOffset: left.offset)
-                let rightInfo = groupInfo[right.groupKey] ?? GroupInfo(date: nil, sequence: nil, firstOffset: right.offset)
-                let leftSequence = leftInfo.sequence ?? Int.max
-                let rightSequence = rightInfo.sequence ?? Int.max
-                if leftSequence != rightSequence {
-                    return leftSequence < rightSequence
-                }
-                if let dateOrder = orderedByDate(leftInfo.date, rightInfo.date) {
-                    return dateOrder
-                }
-                if leftInfo.firstOffset != rightInfo.firstOffset {
-                    return leftInfo.firstOffset < rightInfo.firstOffset
-                }
-                return left.groupKey < right.groupKey
+            if let dateOrder = orderedByDateDescending(left.eventDate, right.eventDate) {
+                return dateOrder
+            }
+
+            let leftTurn = left.event.turnSequence ?? Int.min
+            let rightTurn = right.event.turnSequence ?? Int.min
+            if leftTurn != rightTurn {
+                return leftTurn > rightTurn
             }
 
             let leftItem = left.event.itemSequence ?? Int.max
             let rightItem = right.event.itemSequence ?? Int.max
             if leftItem != rightItem {
                 return leftItem < rightItem
-            }
-            if let dateOrder = orderedByDate(left.eventDate, right.eventDate) {
-                return dateOrder
             }
             if left.itemKey != right.itemKey {
                 return left.itemKey < right.itemKey
@@ -178,10 +171,10 @@ public enum ThreadEventDisplayOrder {
         }.map(\.event)
     }
 
-    private static func orderedByDate(_ left: Date?, _ right: Date?) -> Bool? {
+    private static func orderedByDateDescending(_ left: Date?, _ right: Date?) -> Bool? {
         switch (left, right) {
         case let (left?, right?) where left != right:
-            return left < right
+            return left > right
         case (_?, nil):
             return true
         case (nil, _?):
@@ -195,20 +188,6 @@ public enum ThreadEventDisplayOrder {
         let offset: Int
         let event: ThreadEvent
 
-        var groupKey: String {
-            if let turnID = event.turnID {
-                return "turn:\(turnID)"
-            }
-            if let itemID = event.itemID {
-                return "item:\(itemID)"
-            }
-            return "event:\(event.id)"
-        }
-
-        var groupSequence: Int? {
-            event.turnSequence
-        }
-
         var itemKey: String {
             if let itemID = event.itemID {
                 return "item:\(itemID)"
@@ -217,14 +196,8 @@ public enum ThreadEventDisplayOrder {
         }
 
         var eventDate: Date? {
-            event.date ?? event.displayGroupDate
+            event.displayGroupDate ?? event.date
         }
-    }
-
-    private struct GroupInfo {
-        let date: Date?
-        let sequence: Int?
-        let firstOffset: Int
     }
 }
 

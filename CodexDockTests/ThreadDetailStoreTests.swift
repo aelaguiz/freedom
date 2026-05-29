@@ -40,7 +40,7 @@ final class ThreadDetailStoreTests: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 10),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 100),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
@@ -48,18 +48,27 @@ final class ThreadDetailStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testLoadPublishesPagedTurnsInNaturalFlowForDisplay() async throws {
+    func testLoadPagesAllTurnsAndPublishesNewestFirstForDisplay() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
             readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResult: .success(
-                ThreadTurnsListResponseDTO(data: [
-                    makeDetailTurn(id: "turn-old", startedAt: 1_700_000_000, text: "Old paged turn"),
-                    makeDetailTurn(id: "turn-new", startedAt: 1_700_000_100, text: "New paged turn"),
-                ])
-            ),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: [])))
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            turnsListResults: [
+                .success(
+                    ThreadTurnsListResponseDTO(
+                        data: [
+                            makeDetailTurn(id: "turn-old", startedAt: 1_700_000_000, text: "Old paged turn"),
+                        ],
+                        nextCursor: "page-2"
+                    )
+                ),
+                .success(
+                    ThreadTurnsListResponseDTO(data: [
+                        makeDetailTurn(id: "turn-new", startedAt: 1_700_000_100, text: "New paged turn"),
+                    ])
+                ),
+            ]
         )
         let store = ThreadDetailStore(
             host: host,
@@ -73,7 +82,7 @@ final class ThreadDetailStoreTests: XCTestCase {
             return XCTFail("Expected loaded state, got \(store.state)")
         }
 
-        XCTAssertEqual(snapshot.events.map(\.body), ["Old paged turn", "New paged turn"])
+        XCTAssertEqual(snapshot.events.map(\.body), ["New paged turn", "Old paged turn"])
         let readParams = await session.readParamsSnapshot()
         let turnsListParams = await session.turnsListParamsSnapshot()
         let resumeParams = await session.resumeParamsSnapshot()
@@ -81,11 +90,61 @@ final class ThreadDetailStoreTests: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 10),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 100),
+            ThreadTurnsListParams(threadId: "thread-1", cursor: "page-2", limit: 100),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
         ])
+    }
+
+    @MainActor
+    func testLoadFailsLoudlyWhenTurnsCursorRepeats() async throws {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            turnsListResults: [
+                .success(
+                    ThreadTurnsListResponseDTO(
+                        data: [
+                            makeDetailTurn(id: "turn-old", startedAt: 1_700_000_000, text: "Old paged turn"),
+                        ],
+                        nextCursor: "same-page"
+                    )
+                ),
+                .success(
+                    ThreadTurnsListResponseDTO(
+                        data: [
+                            makeDetailTurn(id: "turn-new", startedAt: 1_700_000_100, text: "New paged turn"),
+                        ],
+                        nextCursor: "same-page"
+                    )
+                ),
+            ]
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session)
+        )
+
+        await store.load()
+
+        guard case let .error(header, message) = store.state else {
+            return XCTFail("Expected error state, got \(store.state)")
+        }
+
+        XCTAssertEqual(header.threadID, "thread-1")
+        XCTAssertTrue(message.contains("repeated thread turns cursor same-page"))
+        let turnsListParams = await session.turnsListParamsSnapshot()
+        let resumeParams = await session.resumeParamsSnapshot()
+        XCTAssertEqual(turnsListParams, [
+            ThreadTurnsListParams(threadId: "thread-1", limit: 100),
+            ThreadTurnsListParams(threadId: "thread-1", cursor: "same-page", limit: 100),
+        ])
+        XCTAssertEqual(resumeParams, [ThreadResumeParams]())
     }
 
     @MainActor
@@ -298,7 +357,7 @@ final class ThreadDetailStoreTests: XCTestCase {
                 return false
             }
             return message == "transport closed"
-                && snapshot.events.map(\.body) == ["Stored turn", "make test"]
+                && snapshot.events.map(\.body) == ["make test", "Stored turn"]
         }
         XCTAssertEqual(store.composer.draft, "Keep this draft")
         XCTAssertEqual(store.requestCards.count, 1)
@@ -419,7 +478,7 @@ final class ThreadDetailStoreTests: XCTestCase {
             guard case let .loaded(snapshot) = store.state else {
                 return false
             }
-            return snapshot.events.map(\.body) == ["Older stored", "hello world"]
+            return snapshot.events.map(\.body) == ["hello world", "Older stored"]
         }
     }
 
@@ -464,7 +523,7 @@ final class ThreadDetailStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testServerRequestEventAppearsInNaturalFlowWithoutBreakingRequestCardResponse() async throws {
+    func testServerRequestEventAppearsNewestFirstWithoutBreakingRequestCardResponse() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
@@ -501,7 +560,7 @@ final class ThreadDetailStoreTests: XCTestCase {
             guard case let .loaded(snapshot) = store.state else {
                 return false
             }
-            return snapshot.events.map(\.body) == ["Older stored", "make test"]
+            return snapshot.events.map(\.body) == ["make test", "Older stored"]
                 && store.requestCards.count == 1
         }
 

@@ -1120,7 +1120,7 @@ final class AppServerClientTests: XCTestCase {
 
         let turnsListTask = Task {
             try await client.threadTurnsList(
-                params: ThreadTurnsListParams(threadId: "thread-1", limit: 10),
+                params: ThreadTurnsListParams(threadId: "thread-1", cursor: "page-2", limit: 100),
                 timeout: .seconds(1)
             )
         }
@@ -1130,7 +1130,8 @@ final class AppServerClientTests: XCTestCase {
             return XCTFail("Expected object params")
         }
         XCTAssertEqual(turnsListParams["threadId"], .string("thread-1"))
-        XCTAssertEqual(turnsListParams["limit"], .integer(10))
+        XCTAssertEqual(turnsListParams["cursor"], .string("page-2"))
+        XCTAssertEqual(turnsListParams["limit"], .integer(100))
 
         await transport.enqueue(
             .response(
@@ -1968,7 +1969,7 @@ final class AppServerClientTests: XCTestCase {
             timeout: .seconds(10)
         )
         let turns = try await client.threadTurnsList(
-            params: ThreadTurnsListParams(threadId: threadID, limit: 10),
+            params: ThreadTurnsListParams(threadId: threadID, limit: 100),
             timeout: .seconds(10)
         )
         let resumed = try await client.threadResume(
@@ -1980,7 +1981,7 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(resumed.thread.id, threadID)
         XCTAssertNotNil(read.thread.turns)
         XCTAssertNotNil(resumed.thread.turns)
-        XCTAssertLessThanOrEqual(turns.data.count, 10)
+        XCTAssertLessThanOrEqual(turns.data.count, 100)
         await client.disconnect()
     }
 

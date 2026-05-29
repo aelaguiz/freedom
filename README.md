@@ -144,18 +144,20 @@ normal for the personal physical-phone relay path; it is not shown as missing
 credentials.
 
 Live Session detail connections reconnect automatically when recovery is safe.
-After reconnect, the app re-runs the compact detail path:
-`thread/read includeTurns:false`, `thread/turns/list limit:10`, and
-`thread/resume excludeTurns:true`. Failed user sends are not silently replayed.
-If the relay loses its upstream session, it either re-resumes upstream or closes
-the phone WebSocket so Swift can mark the detail stale or reconnect.
+After reconnect, the app re-runs the full detail rehydrate path:
+`thread/read includeTurns:false`, paged `thread/turns/list` until `nextCursor`
+is exhausted, and `thread/resume excludeTurns:true`. The turn-list page size is
+a transport guard, not a total message cap. Failed user sends are not silently
+replayed. If the relay loses its upstream session, it either re-resumes upstream
+or closes the phone WebSocket so Swift can mark the detail stale or reconnect.
 
 When iOS backgrounds the app, root refresh and reconnect attempts pause instead
-of spending retry budget. Open details keep visible events, request cards, and
-draft text but are no longer labeled fresh. Active voice capture is cancelled
-without auto-submitting. On foreground resume, Dock and Archive refresh from
-root, open details rehydrate through the same compact path, and the indicator
-moves through `Backgrounded` / `Resuming` / `Reconnecting` as appropriate.
+of spending retry budget. Open details keep visible events, request action
+state, and draft text but are no longer labeled fresh. Active voice capture is
+cancelled without auto-submitting. On foreground resume, Dock and Archive
+refresh from root, open details rehydrate through the same full detail path, and
+the indicator moves through `Backgrounded` / `Resuming` / `Reconnecting` as
+appropriate.
 
 The service targets install per-repo launchd files on macOS and systemd user
 files on Linux, with runtime files under `.codex-dock/`:

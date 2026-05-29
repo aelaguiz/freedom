@@ -1,13 +1,20 @@
 ---
 title: "Codex Dock - Thread Event Visibility Modes - Architecture Plan"
 date: 2026-05-28
-status: active
+status: superseded
 fallback_policy: forbidden
 owners: [Amir, Codex]
 reviewers: [Plan Audit]
 doc_type: architectural_change
 related: []
 ---
+
+> Superseded on 2026-05-29 by
+> `docs/CODEX_DOCK_THREAD_DETAIL_MESSAGE_FLOW_GOALS_2026-05-29.md`. Thread
+> detail now targets one full-thread, newest-first message list with one
+> message-type filter and one shared request-capable message card. The
+> Messages/Thinking/Everything mode cycle and separate visible request-card
+> stack described below are no longer current target behavior.
 
 # TL;DR
 
