@@ -36,6 +36,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         let events = ThreadEventNormalizer.events(from: thread)
 
         XCTAssertEqual(events.map(\.kind), [.userMessage, .agentMessage, .command, .output])
+        XCTAssertEqual(events.map(\.visibilityCategory), [.message, .message, .tooling, .tooling])
         XCTAssertEqual(events[0].body, "Run the tests")
         XCTAssertEqual(events[2].body, "swift test")
         XCTAssertEqual(events[3].body, "33 tests passed")
@@ -154,6 +155,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         XCTAssertEqual(ThreadEventNormalizer.threadId(from: notification), "thread-1")
         XCTAssertEqual(event?.id, "turn-1-agent-1-item/agentMessage/delta")
         XCTAssertEqual(event?.kind, .agentMessage)
+        XCTAssertEqual(event?.visibilityCategory, .message)
         XCTAssertEqual(event?.body, "hello")
         XCTAssertEqual(event?.isLive, true)
         XCTAssertEqual(event?.turnID, "turn-1")
@@ -179,6 +181,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         XCTAssertEqual(ThreadEventNormalizer.threadId(from: request), "thread-1")
         XCTAssertEqual(event.id, "request-approval-1")
         XCTAssertEqual(event.kind, .request)
+        XCTAssertEqual(event.visibilityCategory, .request)
         XCTAssertEqual(event.title, "Command approval")
         XCTAssertEqual(event.body, "make app")
         XCTAssertEqual(event.isLive, true)
@@ -204,6 +207,283 @@ final class ThreadEventNormalizerTests: XCTestCase {
 
         XCTAssertEqual(events.count, 1)
         XCTAssertEqual(events[0].kind, .unknown)
+        XCTAssertEqual(events[0].visibilityCategory, .unknown)
         XCTAssertEqual(events[0].body, "Unsupported event type: newServerThing")
+    }
+
+    func testVisibilityModesFilterStoredEventCategories() {
+        let thread = ThreadDTO(
+            id: "thread-1",
+            turns: [
+                .object([
+                    "id": .string("turn-1"),
+                    "startedAt": .integer(1_700_000_000),
+                    "items": .array([
+                        .object([
+                            "id": .string("user-1"),
+                            "type": .string("userMessage"),
+                            "content": .array([
+                                .object(["text": .string("Run the tests")]),
+                            ]),
+                        ]),
+                        .object([
+                            "id": .string("agent-1"),
+                            "type": .string("agentMessage"),
+                            "text": .string("I am checking the suite."),
+                        ]),
+                        .object([
+                            "id": .string("plan-1"),
+                            "type": .string("plan"),
+                            "text": .string("Run the model tests first."),
+                        ]),
+                        .object([
+                            "id": .string("reasoning-1"),
+                            "type": .string("reasoning"),
+                            "summary": .array([
+                                .object(["text": .string("The normalizer owns visibility.")]),
+                            ]),
+                        ]),
+                        .object([
+                            "id": .string("cmd-1"),
+                            "type": .string("commandExecution"),
+                            "command": .array([.string("swift"), .string("test")]),
+                            "aggregatedOutput": .string("passed"),
+                        ]),
+                        .object([
+                            "id": .string("file-1"),
+                            "type": .string("fileChange"),
+                        ]),
+                        .object([
+                            "id": .string("mcp-1"),
+                            "type": .string("mcpToolCall"),
+                            "tool": .string("workspace.read"),
+                        ]),
+                        .object([
+                            "id": .string("dynamic-1"),
+                            "type": .string("dynamicToolCall"),
+                            "namespace": .string("shell"),
+                        ]),
+                        .object([
+                            "id": .string("unknown-1"),
+                            "type": .string("newServerThing"),
+                        ]),
+                    ]),
+                ]),
+            ]
+        )
+
+        let events = ThreadEventNormalizer.events(from: thread)
+
+        XCTAssertEqual(events.map(\.visibilityCategory), [
+            .message,
+            .message,
+            .thinking,
+            .thinking,
+            .tooling,
+            .tooling,
+            .request,
+            .tooling,
+            .tooling,
+            .unknown,
+        ])
+        XCTAssertEqual(
+            ThreadEventVisibilityMode.messages.visibleEvents(from: events).map(\.body),
+            ["Run the tests", "I am checking the suite."]
+        )
+        XCTAssertEqual(
+            ThreadEventVisibilityMode.messagesAndThinking.visibleEvents(from: events).map(\.body),
+            [
+                "Run the tests",
+                "I am checking the suite.",
+                "Run the model tests first.",
+                "The normalizer owns visibility.",
+            ]
+        )
+        XCTAssertEqual(
+            ThreadEventVisibilityMode.everything.visibleEvents(from: events).map(\.body),
+            [
+                "Run the tests",
+                "I am checking the suite.",
+                "Run the model tests first.",
+                "The normalizer owns visibility.",
+                "swift test",
+                "passed",
+                "File changes are available on desktop.",
+                "workspace.read",
+                "shell",
+                "Unsupported event type: newServerThing",
+            ]
+        )
+    }
+
+    func testLiveEventsUseVisibilityCategories() {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let notifications = [
+            JSONRPCNotification(
+                method: "item/agentMessage/delta",
+                params: .object([
+                    "threadId": .string("thread-1"),
+                    "turnId": .string("turn-1"),
+                    "itemId": .string("agent-1"),
+                    "delta": .string("message delta"),
+                ])
+            ),
+            JSONRPCNotification(
+                method: "item/reasoning/textDelta",
+                params: .object([
+                    "threadId": .string("thread-1"),
+                    "turnId": .string("turn-1"),
+                    "itemId": .string("reasoning-1"),
+                    "delta": .string("reasoning delta"),
+                ])
+            ),
+            JSONRPCNotification(
+                method: "item/commandExecution/outputDelta",
+                params: .object([
+                    "threadId": .string("thread-1"),
+                    "turnId": .string("turn-1"),
+                    "itemId": .string("command-1"),
+                    "delta": .string("output delta"),
+                ])
+            ),
+            JSONRPCNotification(
+                method: "thread/status/changed",
+                params: .object([
+                    "threadId": .string("thread-1"),
+                    "status": .object(["type": .string("inProgress")]),
+                ])
+            ),
+        ]
+
+        let events = notifications.compactMap {
+            ThreadEventNormalizer.event(from: $0, now: now)
+        }
+
+        XCTAssertEqual(events.map(\.visibilityCategory), [.message, .thinking, .tooling, .system])
+        XCTAssertEqual(
+            ThreadEventVisibilityMode.messages.visibleEvents(from: events).map(\.body),
+            ["message delta"]
+        )
+        XCTAssertEqual(
+            ThreadEventVisibilityMode.messagesAndThinking.visibleEvents(from: events).map(\.body),
+            ["message delta", "reasoning delta"]
+        )
+    }
+
+    func testFullItemNotificationsUseStoredItemVisibilityCategories() {
+        let reasoningStarted = JSONRPCNotification(
+            method: "item/started",
+            params: .object([
+                "threadId": .string("thread-1"),
+                "turnId": .string("turn-live"),
+                "item": .object([
+                    "id": .string("reasoning-live"),
+                    "type": .string("reasoning"),
+                    "summary": .array([
+                        .object(["text": .string("Reason through the failure.")]),
+                    ]),
+                ]),
+            ])
+        )
+        let commandCompleted = JSONRPCNotification(
+            method: "item/completed",
+            params: .object([
+                "threadId": .string("thread-1"),
+                "turnId": .string("turn-live"),
+                "item": .object([
+                    "id": .string("command-live"),
+                    "type": .string("commandExecution"),
+                    "command": .array([.string("swift"), .string("test")]),
+                ]),
+            ])
+        )
+
+        let reasoningEvent = ThreadEventNormalizer.event(
+            from: reasoningStarted,
+            now: Date(timeIntervalSince1970: 2_000)
+        )
+        let commandEvent = ThreadEventNormalizer.event(
+            from: commandCompleted,
+            now: Date(timeIntervalSince1970: 2_001)
+        )
+
+        XCTAssertEqual(reasoningEvent?.kind, .agentMessage)
+        XCTAssertEqual(reasoningEvent?.visibilityCategory, .thinking)
+        XCTAssertEqual(reasoningEvent?.body, "Reason through the failure.")
+        XCTAssertEqual(commandEvent?.kind, .command)
+        XCTAssertEqual(commandEvent?.visibilityCategory, .tooling)
+        XCTAssertEqual(commandEvent?.body, "swift test")
+    }
+
+    func testMessagesProjectionIgnoresHiddenEventDatesWhenOrdering() {
+        let oldMessage = ThreadEvent(
+            id: "old-message",
+            kind: .userMessage,
+            visibilityCategory: .message,
+            title: "User message",
+            body: "Older visible message",
+            date: Date(timeIntervalSince1970: 1_000),
+            turnID: "turn-old",
+            displayGroupDate: Date(timeIntervalSince1970: 1_000)
+        )
+        let newerMessage = ThreadEvent(
+            id: "new-message",
+            kind: .agentMessage,
+            visibilityCategory: .message,
+            title: "Agent message",
+            body: "Newer visible message",
+            date: Date(timeIntervalSince1970: 2_000),
+            turnID: "turn-new",
+            displayGroupDate: Date(timeIntervalSince1970: 2_000)
+        )
+        let hiddenRequestOnOldTurn = ThreadEvent(
+            id: "old-hidden-request",
+            kind: .request,
+            visibilityCategory: .request,
+            title: "Command approval",
+            body: "Hidden request",
+            date: Date(timeIntervalSince1970: 3_000),
+            turnID: "turn-old",
+            displayGroupDate: Date(timeIntervalSince1970: 3_000)
+        )
+
+        let fullTranscript = ThreadEventDisplayOrder.newestFirst([
+            oldMessage,
+            newerMessage,
+            hiddenRequestOnOldTurn,
+        ])
+        let messages = ThreadEventVisibilityMode.messages.visibleEvents(from: fullTranscript)
+
+        XCTAssertEqual(fullTranscript.map(\.turnID), ["turn-old", "turn-old", "turn-new"])
+        XCTAssertEqual(messages.map(\.body), ["Newer visible message", "Older visible message"])
+    }
+
+    func testVisibilityProjectionIsStableWhenInputWasAlreadyDisplayOrdered() {
+        let timestamp = Date(timeIntervalSince1970: 2_000)
+        let first = ThreadEvent(
+            id: "first-message",
+            kind: .agentMessage,
+            visibilityCategory: .message,
+            title: "Agent message",
+            body: "First equal-date message",
+            date: timestamp,
+            turnID: "turn-a",
+            displayGroupDate: timestamp
+        )
+        let second = ThreadEvent(
+            id: "second-message",
+            kind: .agentMessage,
+            visibilityCategory: .message,
+            title: "Agent message",
+            body: "Second equal-date message",
+            date: timestamp,
+            turnID: "turn-b",
+            displayGroupDate: timestamp
+        )
+
+        let once = ThreadEventDisplayOrder.newestFirst([first, second])
+        let twice = ThreadEventVisibilityMode.messages.visibleEvents(from: once)
+
+        XCTAssertEqual(twice.map(\.id), once.map(\.id))
     }
 }

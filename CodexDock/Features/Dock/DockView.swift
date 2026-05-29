@@ -7,9 +7,13 @@ import AppKit
 #endif
 
 public struct CodexDockRootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var dockStore: DockStore
     @StateObject private var archiveStore: ArchiveStore
     @StateObject private var hostsStore: HostSettingsStore
+    @StateObject private var connectivityStore: AppConnectivityStore
+    @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
+    @State private var foregroundResumeTask: Task<Void, Never>?
 
     public init(store: DockStore) {
         _dockStore = StateObject(wrappedValue: store)
@@ -17,19 +21,25 @@ public struct CodexDockRootView: View {
            let registry = try? HostRegistry(hosts: [host]) {
             _archiveStore = StateObject(wrappedValue: ArchiveStore(registry: registry))
             _hostsStore = StateObject(wrappedValue: HostSettingsStore(registry: registry))
+            _connectivityStore = StateObject(wrappedValue: AppConnectivityStore(registry: registry))
         } else {
             let error = DockHostConfigurationError.missingEndpoint
             _archiveStore = StateObject(wrappedValue: ArchiveStore(configurationError: error))
             _hostsStore = StateObject(wrappedValue: HostSettingsStore(configurationError: error))
+            _connectivityStore = StateObject(wrappedValue: AppConnectivityStore(configurationError: error))
         }
+        _lifecycleCoordinator = StateObject(wrappedValue: AppLifecycleCoordinator())
     }
 
     public init(
         registry: HostRegistry,
         client: AppServerDockClient = AppServerDockClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
+        lifecycleCoordinator: AppLifecycleCoordinator = AppLifecycleCoordinator(),
+        connectivityStore: AppConnectivityStore? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
+        let connectivityStore = connectivityStore ?? AppConnectivityStore(registry: registry, now: now)
         _dockStore = StateObject(
             wrappedValue: DockStore(
                 registry: registry,
@@ -55,18 +65,25 @@ public struct CodexDockRootView: View {
                 now: now
             )
         )
+        _connectivityStore = StateObject(wrappedValue: connectivityStore)
+        _lifecycleCoordinator = StateObject(wrappedValue: lifecycleCoordinator)
     }
 
     public init(configurationError error: Error) {
         _dockStore = StateObject(wrappedValue: DockStore(configurationError: error))
         _archiveStore = StateObject(wrappedValue: ArchiveStore(configurationError: error))
         _hostsStore = StateObject(wrappedValue: HostSettingsStore(configurationError: error))
+        _connectivityStore = StateObject(wrappedValue: AppConnectivityStore(configurationError: error))
+        _lifecycleCoordinator = StateObject(wrappedValue: AppLifecycleCoordinator())
     }
 
     public var body: some View {
         TabView {
             DockView(
                 store: dockStore,
+                lifecycleCoordinator: lifecycleCoordinator,
+                connectivityReporter: connectivityStore,
+                connectivityStore: connectivityStore,
                 onArchiveSucceeded: {
                     await archiveStore.refresh()
                 }
@@ -91,29 +108,117 @@ public struct CodexDockRootView: View {
                 }
         }
         .tint(.blue)
+        .task {
+            bindConnectivity()
+            await runDockRefreshLoop()
+        }
+        .onChange(of: scenePhase) { _, scenePhase in
+            handleScenePhase(scenePhase)
+        }
         .onChange(of: hostsStore.registry) { _, registry in
             guard let registry else {
                 return
             }
             Task {
+                connectivityStore.configure(registry)
                 await dockStore.updateRegistry(registry)
                 await archiveStore.updateRegistry(registry)
             }
+        }
+    }
+
+    private func bindConnectivity() {
+        dockStore.setConnectivityReporter(connectivityStore)
+        archiveStore.setConnectivityReporter(connectivityStore)
+        hostsStore.setConnectivityReporter(connectivityStore)
+    }
+
+    private func runDockRefreshLoop() async {
+        while !Task.isCancelled, !lifecycleCoordinator.allowsForegroundWork {
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+            } catch {
+                return
+            }
+        }
+
+        await dockStore.load()
+
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: DockStore.defaultAutoRefreshInterval)
+            } catch {
+                return
+            }
+
+            guard lifecycleCoordinator.allowsForegroundWork else {
+                continue
+            }
+            await dockStore.refresh()
+        }
+    }
+
+    private func handleScenePhase(_ scenePhase: ScenePhase) {
+        lifecycleCoordinator.handle(appScenePhase(from: scenePhase))
+        connectivityStore.reportLifecycle(lifecycleCoordinator.snapshot)
+
+        guard lifecycleCoordinator.snapshot.phase == .foregroundResuming else {
+            return
+        }
+
+        foregroundResumeTask?.cancel()
+        foregroundResumeTask = Task {
+            await resumeForegroundWork()
+        }
+    }
+
+    private func resumeForegroundWork() async {
+        guard lifecycleCoordinator.snapshot.phase == .foregroundResuming else {
+            return
+        }
+
+        await dockStore.refresh()
+        await archiveStore.refresh()
+        lifecycleCoordinator.finishForegroundResume()
+        connectivityStore.reportLifecycle(lifecycleCoordinator.snapshot)
+    }
+
+    private func appScenePhase(from scenePhase: ScenePhase) -> AppScenePhase {
+        switch scenePhase {
+        case .active:
+            return .active
+        case .inactive:
+            return .inactive
+        case .background:
+            return .background
+        @unknown default:
+            return .inactive
         }
     }
 }
 
 public struct DockView: View {
     @ObservedObject private var store: DockStore
+    private let lifecycleCoordinator: AppLifecycleCoordinator?
+    private let connectivityReporter: (any AppConnectivityReporting)?
+    private let connectivityStore: AppConnectivityStore?
     private let onArchiveSucceeded: @MainActor () async -> Void
     @State private var selectedTab: DockTabID = .all
     @State private var searchText = ""
+    @State private var sortMode: DockSessionSortMode = .branch
+    @State private var showsIdle = false
 
     public init(
         store: DockStore,
+        lifecycleCoordinator: AppLifecycleCoordinator? = nil,
+        connectivityReporter: (any AppConnectivityReporting)? = nil,
+        connectivityStore: AppConnectivityStore? = nil,
         onArchiveSucceeded: @escaping @MainActor () async -> Void = {}
     ) {
         self.store = store
+        self.lifecycleCoordinator = lifecycleCoordinator
+        self.connectivityReporter = connectivityReporter
+        self.connectivityStore = connectivityStore
         self.onArchiveSucceeded = onArchiveSucceeded
     }
 
@@ -131,26 +236,9 @@ public struct DockView: View {
             }
             .background(dockBackgroundColor)
             .dockNavigationChrome()
-            .task {
-                await runRefreshLoop()
-            }
             .refreshable {
                 await store.refresh()
             }
-        }
-    }
-
-    private func runRefreshLoop() async {
-        await store.load()
-
-        while !Task.isCancelled {
-            do {
-                try await Task.sleep(for: DockStore.defaultAutoRefreshInterval)
-            } catch {
-                return
-            }
-
-            await store.refresh()
         }
     }
 
@@ -161,6 +249,11 @@ public struct DockView: View {
                 .foregroundStyle(.primary)
 
             Spacer(minLength: 12)
+
+            if let connectivityStore {
+                GlobalConnectivityIndicatorView(store: connectivityStore)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
 
             Button {
             } label: {
@@ -183,16 +276,72 @@ public struct DockView: View {
             }
             .pickerStyle(.segmented)
 
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                searchField
+            ViewThatFits(in: .horizontal) {
+                sessionControlsRow
+                VStack(alignment: .leading, spacing: 8) {
+                    searchControl
+                    HStack(spacing: 8) {
+                        sortControl
+                        idleToggle
+                    }
+                }
             }
-            .font(.subheadline)
-            .padding(.horizontal, 12)
+        }
+    }
+
+    private var sessionControlsRow: some View {
+        HStack(spacing: 6) {
+            searchControl
+                .frame(width: 154)
+            sortControl
+                .frame(width: 116)
+            idleToggle
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    private var searchControl: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            searchField
+        }
+        .font(.subheadline)
+        .padding(.horizontal, 10)
+        .frame(height: 40)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var sortControl: some View {
+        Picker("Sort", selection: $sortMode) {
+            ForEach(DockSessionSortMode.allCases) { mode in
+                Text(mode.label).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityLabel("Sort sessions")
+    }
+
+    private var idleToggle: some View {
+        Button {
+            showsIdle.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: showsIdle ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 17, weight: .semibold))
+                Text("Idle")
+            }
+            .font(.subheadline.weight(.medium))
             .frame(height: 40)
+            .padding(.horizontal, 8)
             .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Show idle threads")
+        .accessibilityValue(showsIdle ? "On" : "Off")
+        .accessibilityHint("Shows idle threads when enabled.")
+        .accessibilityAddTraits(showsIdle ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -218,7 +367,7 @@ public struct DockView: View {
 
     private var currentTabs: [DockTabViewModel] {
         if case .loaded(let snapshot) = store.state {
-            return snapshot.tabs
+            return snapshot.project(options: projectionOptions).tabs
         }
         return DockTabID.allCases.map { DockTabViewModel(id: $0, count: 0) }
     }
@@ -258,7 +407,8 @@ public struct DockView: View {
     }
 
     private func loadedContent(_ snapshot: DockSnapshot) -> some View {
-        let sections = filteredSections(snapshot.sections(for: selectedTab))
+        let projection = snapshot.project(options: projectionOptions)
+        let sections = projection.sections
 
         return VStack(alignment: .leading, spacing: 16) {
             ForEach(snapshot.hostStates) { hostState in
@@ -284,8 +434,8 @@ public struct DockView: View {
             if sections.isEmpty {
                 DockMessageView(
                     icon: "line.3.horizontal.decrease.circle",
-                    title: emptyStateTitle,
-                    message: emptyStateMessage
+                    title: emptyStateTitle(hasHiddenIdleMatches: projection.hiddenIdleMatchCount > 0),
+                    message: emptyStateMessage(hasHiddenIdleMatches: projection.hiddenIdleMatchCount > 0)
                 )
             } else {
                 ForEach(sections) { section in
@@ -300,7 +450,12 @@ public struct DockView: View {
                                 if let host = store.hostConfiguration(for: row.id.hostID) {
                                     NavigationLink {
                                         SessionDetailView(
-                                            store: ThreadDetailStore(host: host, row: row)
+                                            store: ThreadDetailStore(
+                                                host: host,
+                                                row: row,
+                                                lifecycleCoordinator: lifecycleCoordinator,
+                                                connectivityReporter: connectivityReporter
+                                            )
                                         )
                                     } label: {
                                         DockRowView(row: row)
@@ -321,6 +476,15 @@ public struct DockView: View {
                 }
             }
         }
+    }
+
+    private var projectionOptions: DockSessionProjectionOptions {
+        DockSessionProjectionOptions(
+            selectedTab: selectedTab,
+            searchText: searchText,
+            sortMode: sortMode,
+            showsIdle: showsIdle
+        )
     }
 
     @ViewBuilder
@@ -374,31 +538,11 @@ public struct DockView: View {
         }
     }
 
-    private func filteredSections(_ sections: [DockSectionViewModel]) -> [DockSectionViewModel] {
-        sections.compactMap { section in
-            let rows = section.rows.filter { row in
-                matchesSearch(row)
-            }
-            guard !rows.isEmpty else {
-                return nil
-            }
-            return DockSectionViewModel(id: section.id, title: section.title, rows: rows)
-        }
-    }
-
-    private func matchesSearch(_ row: DockRowViewModel) -> Bool {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else {
-            return true
+    private func emptyStateTitle(hasHiddenIdleMatches: Bool) -> String {
+        if hasHiddenIdleMatches {
+            return "Idle hidden"
         }
 
-        return [row.title, row.repository, row.branch, row.summary, row.status.label]
-            .contains { value in
-                value.localizedCaseInsensitiveContains(query)
-            }
-    }
-
-    private var emptyStateTitle: String {
         let hasSearch = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if hasSearch {
             return "No matches"
@@ -418,7 +562,11 @@ public struct DockView: View {
         }
     }
 
-    private var emptyStateMessage: String {
+    private func emptyStateMessage(hasHiddenIdleMatches: Bool) -> String {
+        if hasHiddenIdleMatches {
+            return "Enable Idle to show matching idle threads."
+        }
+
         let hasSearch = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if hasSearch {
             return "No sessions match this filter and search."
@@ -718,12 +866,7 @@ extension View {
 }
 
 #Preview {
-    let host = DockHostConfiguration(
-        id: "preview",
-        displayName: "Preview",
-        webSocketURL: URL(string: "ws://preview.invalid:4500")!,
-        bearerToken: "preview"
-    )
+    let host = try! DockHostConfiguration(host: "preview.invalid", port: 4500)
     return CodexDockRootView(
         store: DockStore(host: host, loader: PreviewDockSessionLoader())
     )

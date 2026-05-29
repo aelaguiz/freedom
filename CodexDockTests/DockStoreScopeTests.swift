@@ -118,6 +118,27 @@ final class DockStoreScopeTests: XCTestCase {
             .agents: 2
         ])
 
+        XCTAssertEqual(
+            tabCounts(snapshot.project(options: .init(selectedTab: .all, showsIdle: false))),
+            [
+                .all: 2,
+                .needsMe: 1,
+                .running: 1,
+                .limited: 1,
+                .agents: 1
+            ]
+        )
+        XCTAssertEqual(
+            tabCounts(snapshot.project(options: .init(selectedTab: .all, showsIdle: true))),
+            [
+                .all: 2,
+                .needsMe: 1,
+                .running: 1,
+                .limited: 1,
+                .agents: 2
+            ]
+        )
+
         XCTAssertTrue(rows(in: snapshot.sections(for: .all)).allSatisfy {
             $0.origin.kind == .humanInteractive
         })
@@ -353,13 +374,13 @@ private actor QueryRoutedDockSessionLoader: DockSessionLoading {
 private func makeHost(
     id: String = "Amir-M5",
     displayName: String = "Amir-M5",
-    url: String = "ws://192.168.50.117:4500"
+    url: String? = nil
 ) -> DockHostConfiguration {
-    DockHostConfiguration(
-        id: id,
-        displayName: displayName,
-        webSocketURL: URL(string: url)!,
-        bearerToken: "test-token"
+    let defaultURL = id == "Amir-M5" ? "ws://192.168.50.117:4500" : "ws://\(id):4500"
+    let parsedURL = URL(string: url ?? defaultURL)!
+    return try! DockHostConfiguration(
+        host: parsedURL.host!,
+        port: parsedURL.port!
     )
 }
 
@@ -407,6 +428,10 @@ private func querySortKey(_ query: DockSessionQuery) -> String {
 
 private func tabCounts(_ snapshot: DockSnapshot) -> [DockTabID: Int] {
     Dictionary(uniqueKeysWithValues: snapshot.tabs.map { ($0.id, $0.count) })
+}
+
+private func tabCounts(_ projection: DockSessionProjection) -> [DockTabID: Int] {
+    Dictionary(uniqueKeysWithValues: projection.tabs.map { ($0.id, $0.count) })
 }
 
 private func rows(in sections: [DockSectionViewModel]) -> [DockRowViewModel] {

@@ -93,6 +93,19 @@ public struct HostsView: View {
                         editingHostID = row.id
                         draft = HostDraft(host: row.host)
                         validationMessage = nil
+                    },
+                    onRemove: {
+                        Task {
+                            do {
+                                try await store.removeHost(row.id)
+                                if editingHostID == row.id {
+                                    editingHostID = nil
+                                    draft = HostDraft()
+                                }
+                            } catch {
+                                validationMessage = error.localizedDescription
+                            }
+                        }
                     }
                 )
             }
@@ -119,9 +132,8 @@ public struct HostsView: View {
             }
 
             VStack(spacing: 10) {
-                HostTextField(title: "Relay ID", text: $draft.id)
-                HostTextField(title: "Name", text: $draft.displayName)
-                HostTextField(title: "WebSocket", text: $draft.webSocketURL)
+                HostTextField(title: "Host", text: $draft.host)
+                HostTextField(title: "Port", text: $draft.port)
             }
 
             if let validationMessage {
@@ -147,9 +159,8 @@ public struct HostsView: View {
             do {
                 try await store.saveHost(
                     replacing: editingHostID,
-                    id: draft.id,
-                    displayName: draft.displayName,
-                    webSocketURL: draft.webSocketURL
+                    host: draft.host,
+                    port: draft.port
                 )
                 editingHostID = nil
                 draft = HostDraft()
@@ -165,6 +176,7 @@ private struct HostSettingsRow: View {
     let row: HostSettingsRowViewModel
     let onTest: () -> Void
     let onEdit: () -> Void
+    let onRemove: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -209,6 +221,12 @@ private struct HostSettingsRow: View {
 
                 Button(action: onEdit) {
                     Label("Edit", systemImage: "pencil")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+
+                Button(role: .destructive, action: onRemove) {
+                    Label("Remove", systemImage: "trash")
                         .font(.subheadline.weight(.semibold))
                 }
                 .buttonStyle(.bordered)
@@ -274,15 +292,13 @@ private struct HostTextField: View {
 }
 
 private struct HostDraft: Equatable {
-    var id = ""
-    var displayName = ""
-    var webSocketURL = ""
+    var host = ""
+    var port = "4510"
 
     init() {}
 
     init(host: DockHostConfiguration) {
-        self.id = host.id
-        self.displayName = host.displayName
-        self.webSocketURL = host.webSocketURL.absoluteString
+        self.host = host.endpoint.host
+        self.port = String(host.endpoint.port)
     }
 }

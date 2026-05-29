@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import test from "node:test";
-import WebSocket, { WebSocketServer } from "ws";
+import { WebSocketServer } from "ws";
 
 import {
   attentionFlagsForServerRequest,
   buildBonjourAdvertisementArgs,
-  decodedAudioTranscribeParams,
   isPhoneRequestAuthorized,
   mergeThreadListRows,
   mergeActiveFlags,
@@ -16,8 +14,56 @@ import {
   startServer,
   statusPriority,
   threadMatchesSourceKinds,
-  transcribeAudio,
 } from "./dock-relay.mjs";
+import { createRelayLogger } from "./dock-relay-logger.mjs";
+
+import {
+  closeWebSocketServer,
+  jsonRpcRequest,
+  onceListening,
+  openWebSocket,
+} from "./dock-relay-test-helpers.mjs";
+
+test("relay logger redacts credentials and payload fields", () => {
+  const lines = [];
+  const logger = createRelayLogger({
+    stream: {
+      write(line) {
+        lines.push(line);
+      },
+    },
+    clock: () => new Date("2026-05-28T00:00:00.000Z"),
+  });
+
+  logger.info("relay.redaction_test", {
+    authorization: "Bearer sk-test-secret-token",
+    openAIAPIKey: "sk-test-secret-token",
+    base64Audio: Buffer.from("raw audio bytes").toString("base64"),
+    transcript: "private transcript",
+    endpointUrl: "ws://user:pass@127.0.0.1:4510/path?token=secret#frag",
+    params: {
+      prompt: "private prompt",
+    },
+  });
+
+  assert.equal(lines.length, 1);
+  const parsed = JSON.parse(lines[0]);
+  assert.equal(parsed.timestamp, "2026-05-28T00:00:00.000Z");
+  assert.equal(parsed.level, "info");
+  assert.equal(parsed.fields.authorization, "<redacted>");
+  assert.equal(parsed.fields.openAIAPIKey, "<redacted>");
+  assert.equal(parsed.fields.base64Audio, "<redacted>");
+  assert.equal(parsed.fields.transcript, "<redacted>");
+  assert.equal(parsed.fields.params, "<redacted-payload>");
+  assert.equal(parsed.fields.endpointUrl, "ws://127.0.0.1:4510/path");
+
+  const text = lines.join("\n");
+  assert.equal(text.includes("sk-test-secret-token"), false);
+  assert.equal(text.includes("raw audio bytes"), false);
+  assert.equal(text.includes("private transcript"), false);
+  assert.equal(text.includes("private prompt"), false);
+  assert.equal(text.includes("user:pass"), false);
+});
 
 test("attention flags are derived from real app-server request methods", () => {
   assert.deepEqual(
@@ -240,6 +286,121 @@ test("thread/list live merge applies source filtering before sanitizing results"
   assert.equal(Object.hasOwn(data[0], "dockRelaySource"), false);
 });
 
+test("thread/list live merge borrows fresher history timestamp for same thread id", () => {
+  const historyRows = [
+    {
+      id: "active-stale-read",
+      updatedAt: 300,
+      status: { type: "notLoaded" },
+    },
+    {
+      id: "other-live",
+      updatedAt: 200,
+      status: { type: "notLoaded" },
+    },
+  ];
+  const liveRows = [
+    {
+      id: "active-stale-read",
+      updatedAt: 10,
+      source: "cli",
+      status: { type: "active", activeFlags: ["waitingOnUserInput"] },
+      dockRelaySource: { url: "ws://127.0.0.1:4555" },
+    },
+    {
+      id: "other-live",
+      updatedAt: 250,
+      source: "cli",
+      status: { type: "active", activeFlags: [] },
+      dockRelaySource: { url: "ws://127.0.0.1:4556" },
+    },
+  ];
+
+  const data = mergeThreadListRows(historyRows, liveRows);
+
+  assert.deepEqual(data.map((row) => row.id), ["active-stale-read", "other-live"]);
+  assert.equal(data[0].updatedAt, 300);
+  assert.deepEqual(data[0].status, {
+    type: "active",
+    activeFlags: ["waitingOnUserInput"],
+  });
+  assert.equal(data[0].source, "cli");
+  assert.equal(Object.hasOwn(data[0], "dockRelaySource"), false);
+});
+
+test("thread/list live merge does not downgrade fresher live timestamp", () => {
+  const historyRows = [
+    {
+      id: "active-fresh-live",
+      updatedAt: 10,
+      status: { type: "notLoaded" },
+    },
+  ];
+  const liveRows = [
+    {
+      id: "active-fresh-live",
+      updatedAt: 300,
+      status: { type: "active", activeFlags: [] },
+      dockRelaySource: { url: "ws://127.0.0.1:4555" },
+    },
+  ];
+
+  const data = mergeThreadListRows(historyRows, liveRows);
+
+  assert.equal(data.length, 1);
+  assert.equal(data[0].updatedAt, 300);
+  assert.equal(data[0].status.type, "active");
+});
+
+test("thread/list duplicate live history row consumes one relay slot under limit", () => {
+  const historyRows = [
+    {
+      id: "duplicate-thread",
+      updatedAt: 300,
+      status: { type: "notLoaded" },
+    },
+    {
+      id: "history-fill",
+      updatedAt: 200,
+      status: { type: "idle" },
+    },
+  ];
+  const liveRows = [
+    {
+      id: "duplicate-thread",
+      updatedAt: 10,
+      status: { type: "active", activeFlags: [] },
+      dockRelaySource: { url: "ws://127.0.0.1:4555" },
+    },
+  ];
+
+  const data = mergeThreadListRows(historyRows, liveRows, { limit: 2 });
+
+  assert.deepEqual(data.map((row) => row.id), ["duplicate-thread", "history-fill"]);
+  assert.equal(data[0].updatedAt, 300);
+  assert.equal(data[0].status.type, "active");
+});
+
+test("thread/list keeps live rows inside relay limit before filling with history", () => {
+  const historyRows = [
+    { id: "history-newest", updatedAt: 100, status: { type: "idle" } },
+    { id: "history-next", updatedAt: 90, status: { type: "idle" } },
+  ];
+  const liveRows = [
+    {
+      id: "live-older",
+      updatedAt: 10,
+      status: { type: "active", activeFlags: [] },
+      dockRelaySource: { url: "ws://127.0.0.1:4555" },
+    },
+  ];
+
+  const data = mergeThreadListRows(historyRows, liveRows, { limit: 2 });
+
+  assert.deepEqual(data.map((row) => row.id), ["live-older", "history-newest"]);
+  assert.equal(Object.hasOwn(data[0], "dockRelaySource"), false);
+});
+
 test("relay source marker is never returned to clients", () => {
   assert.deepEqual(
     sanitizeRelayFields({
@@ -248,110 +409,6 @@ test("relay source marker is never returned to clients", () => {
     }),
     { id: "thread-1" },
   );
-});
-
-test("relay thread/list filters discovered live rows by sourceKinds", async () => {
-  const liveServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  await onceListening(liveServer);
-  const liveUrl = `ws://127.0.0.1:${liveServer.address().port}`;
-  const liveMarker = spawnLoopbackAppServerMarker(liveUrl);
-  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  await onceListening(historyServer);
-
-  liveServer.on("connection", (ws) => {
-    ws.on("message", (data) => {
-      const message = JSON.parse(data.toString());
-      if (message.method === "initialize") {
-        ws.send(JSON.stringify({
-          id: message.id,
-          result: {
-            userAgent: "live-test",
-            codexHome: "/tmp/codex",
-            platformFamily: "unix",
-            platformOs: "macos",
-          },
-        }));
-      } else if (message.method === "thread/loaded/list") {
-        ws.send(JSON.stringify({
-          id: message.id,
-          result: { data: ["live-human", "live-exec"], nextCursor: null },
-        }));
-      } else if (message.method === "thread/read") {
-        const thread = message.params.threadId === "live-human"
-          ? {
-              id: "live-human",
-              sessionId: "session-live-human",
-              updatedAt: 30,
-              source: { custom: "chatgpt" },
-              status: { type: "idle" },
-            }
-          : {
-              id: "live-exec",
-              sessionId: "session-live-exec",
-              updatedAt: 40,
-              source: "exec",
-              status: { type: "idle" },
-            };
-        ws.send(JSON.stringify({ id: message.id, result: { thread } }));
-      }
-    });
-  });
-
-  historyServer.on("connection", (ws) => {
-    ws.on("message", (data) => {
-      const message = JSON.parse(data.toString());
-      if (message.method === "initialize") {
-        ws.send(JSON.stringify({
-          id: message.id,
-          result: {
-            userAgent: "history-test",
-            codexHome: "/tmp/codex",
-            platformFamily: "unix",
-            platformOs: "macos",
-          },
-        }));
-      } else if (message.method === "thread/list") {
-        ws.send(JSON.stringify({
-          id: message.id,
-          result: { data: [], nextCursor: null, backwardsCursor: null },
-        }));
-      }
-    });
-  });
-
-  await sleepMs(20);
-  const relay = startServer({
-    listenHost: "127.0.0.1",
-    port: 0,
-    phoneAuth: "none",
-    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
-    historyBearerToken: "history-token",
-    advertiseBonjour: false,
-  });
-  await relay.listening;
-  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
-
-  try {
-    const defaultResponse = await jsonRpcRequest(ws, "thread/list");
-    const defaultIDs = defaultResponse.result.data.map((row) => row.id);
-    assert.equal(defaultIDs.includes("live-human"), true);
-    assert.equal(defaultIDs.includes("live-exec"), false);
-    assert.equal(
-      Object.hasOwn(defaultResponse.result.data.find((row) => row.id === "live-human"), "dockRelaySource"),
-      false,
-    );
-
-    const execResponse = await jsonRpcRequest(ws, "thread/list", { sourceKinds: ["exec"] });
-    const execIDs = execResponse.result.data.map((row) => row.id);
-    assert.equal(execIDs.includes("live-exec"), true);
-    assert.equal(execIDs.includes("live-human"), false);
-  } finally {
-    ws.close();
-    await relay.close();
-    await closeProcess(liveMarker);
-    await closeWebSocketServer(liveServer);
-    await closeWebSocketServer(historyServer);
-  }
 });
 
 test("phone auth none permits local phone connections without a bearer token", () => {
@@ -391,172 +448,12 @@ test("Bonjour advertisement contains only non-secret relay metadata", () => {
     "4510",
   ]);
   assert.ok(args.includes("version=0.1.0"));
-  assert.ok(args.includes("auth=none"));
-  assert.ok(args.includes("scheme=ws"));
+  assert.equal(args.includes("auth=none"), false);
+  assert.equal(args.includes("scheme=ws"), false);
   assert.equal(args.some((value) => /token|secret|key/i.test(value)), false);
 });
 
-test("audio/transcribe validates phone payload and rejects phone-supplied model", () => {
-  const audio = Buffer.from("fake m4a bytes").toString("base64");
-  const decoded = decodedAudioTranscribeParams({
-    mimeType: "audio/mp4",
-    base64Audio: audio,
-  });
-  assert.equal(decoded.mimeType, "audio/mp4");
-  assert.equal(decoded.bytes.toString(), "fake m4a bytes");
-
-  assert.throws(
-    () => decodedAudioTranscribeParams({
-      mimeType: "audio/mp4",
-      base64Audio: audio,
-      model: "whisper-1",
-    }),
-    /model is configured on the relay/,
-  );
-  assert.throws(
-    () => decodedAudioTranscribeParams({
-      mimeType: "text/plain",
-      base64Audio: audio,
-    }),
-    /supported audio mimeType/,
-  );
-  assert.throws(
-    () => decodedAudioTranscribeParams({
-      mimeType: "audio/mp4",
-      base64Audio: audio,
-    }, 3),
-    /too large/,
-  );
-});
-
-test("audio/transcribe uses the relay OpenAI key and configured latest model", async () => {
-  const audio = Buffer.from("fake m4a bytes").toString("base64");
-  const captured = {};
-  const result = await transcribeAudio({
-    openAIAPIKey: "relay-openai-key",
-    openAITranscriptionModel: "gpt-4o-transcribe",
-    openAITranscriptionEndpoint: "https://example.test/transcribe",
-    fetch: async (url, init) => {
-      captured.url = url;
-      captured.authorization = init.headers.Authorization;
-      captured.model = init.body.get("model");
-      captured.responseFormat = init.body.get("response_format");
-      captured.file = init.body.get("file");
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ text: "  Check the relay  " }),
-      };
-    },
-  }, {
-    mimeType: "audio/mp4",
-    base64Audio: audio,
-  });
-
-  assert.deepEqual(result, { text: "Check the relay" });
-  assert.equal(captured.url, "https://example.test/transcribe");
-  assert.equal(captured.authorization, "Bearer relay-openai-key");
-  assert.equal(captured.model, "gpt-4o-transcribe");
-  assert.equal(captured.responseFormat, "json");
-  assert.equal(captured.file.size, Buffer.from("fake m4a bytes").length);
-});
-
-test("audio/transcribe fails safely for missing key and upstream failures", async () => {
-  const audio = Buffer.from("fake m4a bytes").toString("base64");
-  await assert.rejects(
-    () => transcribeAudio({}, {
-      mimeType: "audio/mp4",
-      base64Audio: audio,
-    }),
-    /key is not configured on the relay/,
-  );
-
-  await assert.rejects(
-    () => transcribeAudio({
-      openAIAPIKey: "relay-openai-key",
-      fetch: async () => ({
-        ok: false,
-        status: 503,
-        json: async () => ({ error: "do not leak this body" }),
-      }),
-    }, {
-      mimeType: "audio/mp4",
-      base64Audio: audio,
-    }),
-    /failed with status 503/,
-  );
-
-  await assert.rejects(
-    () => transcribeAudio({
-      openAIAPIKey: "relay-openai-key",
-      fetch: async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({ text: "" }),
-      }),
-    }, {
-      mimeType: "audio/mp4",
-      base64Audio: audio,
-    }),
-    /returned no text/,
-  );
-});
-
-test("audio/transcribe timeout returns a safe relay error", async () => {
-  const audio = Buffer.from("fake m4a bytes").toString("base64");
-  await assert.rejects(
-    () => transcribeAudio({
-      openAIAPIKey: "relay-openai-key",
-      transcriptionTimeoutMs: 1,
-      fetch: async (_url, init) => new Promise((_resolve, reject) => {
-        if (init.signal.aborted) {
-          const error = new Error("request aborted");
-          error.name = "AbortError";
-          reject(error);
-          return;
-        }
-        init.signal.addEventListener("abort", () => {
-          const error = new Error("request aborted");
-          error.name = "AbortError";
-          reject(error);
-        });
-      }),
-    }, {
-      mimeType: "audio/mp4",
-      base64Audio: audio,
-    }),
-    /timed out/,
-  );
-});
-
-test("audio/transcribe does not log keys, audio, or transcript text", async () => {
-  const logs = [];
-  const originalError = console.error;
-  console.error = (...values) => {
-    logs.push(values.join(" "));
-  };
-  try {
-    await transcribeAudio({
-      openAIAPIKey: "relay-openai-key",
-      fetch: async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({ text: "private transcript" }),
-      }),
-    }, {
-      mimeType: "audio/mp4",
-      base64Audio: Buffer.from("raw audio bytes").toString("base64"),
-    });
-  } finally {
-    console.error = originalError;
-  }
-
-  assert.equal(logs.join("\n").includes("relay-openai-key"), false);
-  assert.equal(logs.join("\n").includes("raw audio bytes"), false);
-  assert.equal(logs.join("\n").includes("private transcript"), false);
-});
-
-test("relay server accepts no-auth phone mode and rejects unsupported methods", async () => {
+test("relay rejects legacy raw audio/transcribe after realtime cutover", async () => {
   const relay = startServer({
     listenHost: "127.0.0.1",
     port: 0,
@@ -566,13 +463,17 @@ test("relay server accepts no-auth phone mode and rejects unsupported methods", 
     advertiseBonjour: false,
   });
   await relay.listening;
-  const port = relay.server.address().port;
-  const ws = await openWebSocket(`ws://127.0.0.1:${port}`);
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
 
   try {
-    const response = await jsonRpcRequest(ws, "missing/method");
+    const response = await jsonRpcRequest(ws, "audio/transcribe", {
+      mimeType: "audio/mp4",
+      base64Audio: Buffer.from("legacy audio").toString("base64"),
+    });
+
+    assert.equal(response.result, undefined);
     assert.equal(response.error.code, -32601);
-    assert.match(response.error.message, /unsupported method/);
+    assert.match(response.error.message, /unsupported method: audio\/transcribe/);
   } finally {
     ws.close();
     await relay.close();
@@ -631,88 +532,3 @@ test("relay keeps the raw history app-server token on the Mac side", async () =>
     await closeWebSocketServer(historyServer);
   }
 });
-
-function onceListening(server) {
-  if (server.address()) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    server.once("listening", resolve);
-  });
-}
-
-function openWebSocket(url, options = undefined) {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url, options);
-    ws.once("open", () => resolve(ws));
-    ws.once("error", reject);
-  });
-}
-
-function jsonRpcRequest(ws, method, params = undefined) {
-  const id = `${method}-test`;
-  const payload = { id, method };
-  if (params !== undefined) {
-    payload.params = params;
-  }
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timed out waiting for ${method}`)), 1_000);
-    ws.on("message", function onMessage(data) {
-      const message = JSON.parse(data.toString());
-      if (message.id === id) {
-        clearTimeout(timer);
-        ws.off("message", onMessage);
-        resolve(message);
-      }
-    });
-    ws.send(JSON.stringify(payload));
-  });
-}
-
-function closeWebSocketServer(server) {
-  return new Promise((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    });
-  });
-}
-
-function spawnLoopbackAppServerMarker(url) {
-  return spawn(
-    process.execPath,
-    [
-      "-e",
-      "setInterval(() => {}, 1000)",
-      "codex",
-      "app-server",
-      "--listen",
-      url,
-    ],
-    { stdio: "ignore" },
-  );
-}
-
-function sleepMs(milliseconds) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, milliseconds);
-  });
-}
-
-function closeProcess(child) {
-  return new Promise((resolve) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(resolve, 500);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    child.kill();
-  });
-}

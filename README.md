@@ -72,18 +72,29 @@ rtk make services
 The phone-facing endpoint is:
 
 ```text
-ws://<amir-m5-lan-or-tailscale-ip>:4510
+<amir-m5-lan-or-tailscale-host>:4510
 ```
 
 For the personal LAN/Tailscale path, the relay accepts the iPhone without a
 client bearer token. The relay advertises `_codexdock._tcp` with non-secret
 Bonjour metadata so the app can find it after a normal home-screen launch.
 
-## Phase 1 Rule
+## Physical Phone Rule
 
 Mocks, scripted transports, Unix sockets, and loopback-only WebSockets do not
-complete the physical phone path. The current phone path is the relay at
-`ws://192.168.50.117:4510`, with no iPhone-side bearer token.
+complete the physical phone path. The current phone path is the Dock relay on
+`:4510`, with no iPhone-side bearer token. The iPhone 17 Pro uses
+`ws://amir-m5.fairy-salmon.ts.net:4510` and
+`ws://home.fairy-salmon.ts.net:4510`; the iPhone 14 uses
+`ws://Amir-M5.local:4510` and `ws://192.168.50.74:4510`.
+
+As of 2026-05-28, physical-device testing is deferred manual QA for Amir. Do
+not block agent-side implementation on physical install/launch, Mobile MCP,
+screenshots, accessibility readback, audio, or other physical-only proof unless
+Amir explicitly asks in that turn. Use simulator, local, real-relay,
+service-status, and generated-artifact proof as far as they can go, then record
+physical-only checks in
+`docs/CODEX_DOCK_CROSS_PLAN_IMPLEMENTATION_DOCK_2026-05-28.md`.
 
 ## Canonical Service Start
 
@@ -96,8 +107,8 @@ rtk make services
 
 It starts/reuses two real services and leaves them running:
 
-- Raw Codex app-server on `ws://192.168.50.117:4500`
-- Dock relay on `ws://192.168.50.117:4510`
+- Raw Codex app-server on loopback `ws://127.0.0.1:4500`
+- Dock relay on `ws://<APP_SERVER_HOST>:4510`
 
 The raw app-server provides stored history. The relay is the app endpoint. It
 discovers the real loopback Codex app-server processes on `Amir-M5`, calls
@@ -106,34 +117,62 @@ history. This is required because the active Codex sessions are usually attached
 to private `ws://127.0.0.1:<port>` app-servers, and an iPhone cannot reach the
 Mac's loopback addresses directly.
 
-The relay also owns OpenAI transcription. Keep `OPENAI_API_KEY` in the Mac
-environment or repo `.env`; the app never receives it. The default transcription
-model is `gpt-4o-transcribe`, with an optional Mac-side
-`CODEX_DOCK_OPENAI_TRANSCRIPTION_MODEL` override.
+The relay also owns OpenAI Realtime transcription. Keep `OPENAI_API_KEY` in the
+Mac environment or repo `.env`; the app never receives it. The default Realtime
+transcription model is `gpt-realtime-whisper`, with optional Mac-side
+`CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL` and
+`CODEX_DOCK_REALTIME_TRANSCRIPTION_DELAY` overrides.
 
-The Dock sorts rows by newest activity first. Status only breaks ties. The Dock
-also refreshes itself every five seconds while the view is open, with
-pull-to-refresh still available for manual checks.
+The Dock filters loaded sessions locally. Its controls row includes Search,
+Sort, and `Idle`: Search matches session title, label, repository or working
+directory, branch, summary, status, host, and thread id; Sort switches between
+grouped `Branch` and flat `Newest`; `Idle` is off by default so idle rows stay
+hidden until enabled. `Branch` keeps branch/host grouping but orders visible
+groups and rows by newest activity first. `Newest` shows one flat newest-first
+list.
 
-The service targets install per-repo LaunchAgents with runtime files under
-`.codex-dock/`:
+The app has one root connectivity indicator. It appears above Dock, Archive,
+Hosts, and pushed Session detail screens. The labels are `Unconfigured`,
+`Checking`, `Online`, `Partial`, `Reconnecting`, `Backgrounded`, `Resuming`,
+`Stale`, `Offline`, `Error`, and `Config error`. A nil host bearer token is
+normal for the personal physical-phone relay path; it is not shown as missing
+credentials.
+
+Live Session detail connections reconnect automatically when recovery is safe.
+After reconnect, the app re-runs the compact detail path:
+`thread/read includeTurns:false`, `thread/turns/list limit:10`, and
+`thread/resume excludeTurns:true`. Failed user sends are not silently replayed.
+If the relay loses its upstream session, it either re-resumes upstream or closes
+the phone WebSocket so Swift can mark the detail stale or reconnect.
+
+When iOS backgrounds the app, root refresh and reconnect attempts pause instead
+of spending retry budget. Open details keep visible events, request cards, and
+draft text but are no longer labeled fresh. Active voice capture is cancelled
+without auto-submitting. On foreground resume, Dock and Archive refresh from
+root, open details rehydrate through the same compact path, and the indicator
+moves through `Backgrounded` / `Resuming` / `Reconnecting` as appropriate.
+
+The service targets install per-repo launchd files on macOS and systemd user
+files on Linux, with runtime files under `.codex-dock/`:
 
 ```text
-.codex-dock/com.aelaguiz.codex-dock.app-server.plist
-.codex-dock/com.aelaguiz.codex-dock.relay.plist
-.codex-dock/app-server.pid
+.codex-dock/services/com.aelaguiz.codex-dock.app-server.plist
+.codex-dock/services/com.aelaguiz.codex-dock.relay.plist
+.codex-dock/services/codex-dock-app-server.service
+.codex-dock/services/codex-dock-relay.service
 .codex-dock/app-server.token
-.codex-dock/app-server.log
-.codex-dock/app-server.err.log
-.codex-dock/dock-relay.pid
-.codex-dock/dock-relay.log
-.codex-dock/dock-relay.err.log
+.codex-dock/service.env
+.codex-dock/host.env
+.codex-dock/logs/app-server.log
+.codex-dock/logs/app-server.err.log
+.codex-dock/logs/dock-relay.log
+.codex-dock/logs/dock-relay.err.log
 ```
 
 The default app endpoint is:
 
 ```text
-ws://192.168.50.117:4510
+ws://amir-m5.fairy-salmon.ts.net:4510
 ```
 
 Check services without restarting:
@@ -143,7 +182,7 @@ rtk make app-server-status
 rtk make dock-relay-status
 ```
 
-Print the environment for raw dev smoke tests:
+Print the app-safe host config plus raw dev smoke helpers:
 
 ```sh
 rtk make app-server-env
@@ -160,6 +199,76 @@ Normal verification should use `rtk make services`, `rtk make
 app-server-status`, or `rtk make dock-relay-status`; it should not stop the
 services.
 
+## Cross-Platform Host Services
+
+The same host-service wrapper is used on macOS and Linux. `rtk make services`
+installs, starts, and waits for the raw app-server plus Dock relay bundle. The
+relay is always the app-facing endpoint; the raw app-server stays host-side and
+loopback by default.
+
+Mac local service:
+
+```sh
+rtk make services
+rtk make app-server-status
+rtk make dock-relay-status
+rtk make host-service-doctor
+```
+
+Linux `home` service over Tailscale:
+
+```sh
+rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make services HOST_SERVICE_PLATFORM=linux CODEX_BIN=/home/aelaguiz/.local/bin/codex NODE_BIN=/usr/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510 APP_SERVER_LISTEN=ws://127.0.0.1:4500 DOCK_RELAY_HISTORY_WS=ws://127.0.0.1:4500'
+```
+
+Check `home` after start with the same overrides:
+
+```sh
+rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-status HOST_SERVICE_PLATFORM=linux CODEX_BIN=/home/aelaguiz/.local/bin/codex NODE_BIN=/usr/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510 APP_SERVER_LISTEN=ws://127.0.0.1:4500 DOCK_RELAY_HISTORY_WS=ws://127.0.0.1:4500'
+rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-doctor HOST_SERVICE_PLATFORM=linux CODEX_BIN=/home/aelaguiz/.local/bin/codex NODE_BIN=/usr/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510 APP_SERVER_LISTEN=ws://127.0.0.1:4500 DOCK_RELAY_HISTORY_WS=ws://127.0.0.1:4500'
+```
+
+From the Mac, the app-facing `home` relay should answer:
+
+```sh
+curl -fsS --max-time 5 http://100.66.11.7:4510/readyz
+curl -fsS --max-time 5 http://100.66.11.7:4510/statusz
+```
+
+`home` Realtime transcription is not claimed unless `OPENAI_API_KEY` is
+configured on `home`. The current safe state is that the `home` relay reports
+transcription `enabled: false` and `keyPresent: false`.
+
+## Logging Commands
+
+The iOS app writes Apple unified logs under subsystem
+`com.aelaguiz.CodexDock`. The Dock relay writes structured JSON lines to
+stderr, which the service target stores at
+`.codex-dock/logs/dock-relay.err.log`.
+
+Stream simulator logs:
+
+```sh
+rtk make sim-logs SIM='iPhone 17'
+```
+
+Collect physical device logs:
+
+```sh
+rtk make device-logs DEVICE=<device-udid>
+```
+
+On some Xcode installs, physical log collection requires root. If this prints
+`log: Must be root to collect logs from attached device`, rerun the raw
+`xcrun log collect` command with root privileges or treat that as the log
+collection blocker.
+
+Tail Dock relay logs:
+
+```sh
+rtk make dock-relay-logs
+```
+
 ## Simulator Commands
 
 Build, install, and launch the app in a specific simulator:
@@ -175,9 +284,18 @@ rtk make app SIM=DEF1631B-7125-43C6-BFA3-4423BF103C91
 ```
 
 That command starts/reuses the persistent services, boots the simulator,
-builds the app, installs it, and launches it with the real `Amir-M5`
-relay URL. It does not pass an OpenAI key or app-server bearer token into the
-app.
+builds the app, installs it, and launches it with generated app config from
+`.codex-dock/host.env`. It does not pass an OpenAI key or app-server bearer
+token into the app.
+
+Run the generated-project app tests through the same Makefile-owned path:
+
+```sh
+rtk make app-test SIM='iPhone 17'
+```
+
+Both targets stamp debug builds with `APP_BUILD_NUMBER` so stale simulator
+artifacts fail verification instead of silently launching.
 
 Start all local services the app currently needs:
 
@@ -185,18 +303,32 @@ Start all local services the app currently needs:
 rtk make services
 ```
 
-Today that means the authenticated raw LAN app-server plus the no-client-auth
-Dock relay. If another local service becomes required later, add it behind this
-target so `rtk make app SIM=...` keeps doing the whole setup idempotently.
+Today that means the authenticated raw loopback app-server plus the
+no-client-auth Dock relay. If another local service becomes required later, add
+it behind this target so `rtk make app SIM=...` keeps doing the whole setup
+idempotently.
 
-The service targets also rewrite `.env` with the current connection settings:
+The service targets write host-side settings to `.codex-dock/service.env`,
+write app-safe settings to `.codex-dock/host.env`, and leave the user-owned
+`.env` untouched. They may read `OPENAI_API_KEY` from the shell or `.env`, but
+they must not rewrite `.env`.
+
+`.codex-dock/service.env` may contain host-side secrets and relay provider
+settings:
 
 ```text
-CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4510
+CODEX_DOCK_HOSTS=amir-m5.fairy-salmon.ts.net:4510
 CODEX_DOCK_REAL_HOST_ID=Amir-M5
 CODEX_DOCK_REAL_HOST_NAME=Amir-M5
-CODEX_DOCK_OPENAI_TRANSCRIPTION_MODEL=gpt-4o-transcribe
+CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL=gpt-realtime-whisper
+CODEX_DOCK_REALTIME_TRANSCRIPTION_DELAY=low
 OPENAI_API_KEY=<kept on Mac when configured>
+```
+
+`.codex-dock/host.env` is the generated app config. It must stay non-secret:
+
+```text
+CODEX_DOCK_HOSTS=amir-m5.fairy-salmon.ts.net:4510
 ```
 
 List available simulators:
@@ -219,9 +351,12 @@ rtk make sim SIM=DEF1631B-7125-43C6-BFA3-4423BF103C91
 
 ## iOS App Runbook
 
-Phase 3 adds a real iOS app target generated by XcodeGen.
+The iOS app target is generated by XcodeGen from `project.yml`.
 
 ### Physical iPhone
+
+This section is for Amir-owned manual QA while physical testing is deferred.
+Do not run these commands as an agent-side gate unless Amir explicitly asks.
 
 Start or refresh the Mac services:
 
@@ -235,15 +370,32 @@ Install the app once on a physical iPhone:
 rtk make device-install
 ```
 
-By default this resolves the paired iPhone 14 and signs with team
-`R6B8KXF3QW`, matching the working PS Mobile automatic-signing setup on this
-machine. Override only when you intentionally want a different phone or team:
+By default this resolves the paired iPhone 14, signs with team `R6B8KXF3QW`,
+fresh-builds the app, installs it, writes the device's saved relay endpoints,
+verifies the installed build number, and launches Codex Dock. Override only
+when you intentionally want a different phone or team:
 
 ```sh
 rtk make devices
 rtk make device-install DEVICE=<device-udid>
 rtk make device-install DEVICE_NAME='iPhone 17 Pro'
 rtk make device-install DEVELOPMENT_TEAM=<team-id>
+```
+
+Install/configure both current physical phones:
+
+```sh
+rtk make device-install-all
+```
+
+The iPhone 17 Pro (`CB9FFF0E-89AD-57B5-9C00-6552D814875E`) is configured with
+`amir-m5.fairy-salmon.ts.net:4510` and `home.fairy-salmon.ts.net:4510`. The
+iPhone 14 (`0A4EFF8B-54D8-58FB-B3FB-63263265B9CC`) is configured with
+`Amir-M5.local:4510` and `192.168.50.74:4510`. Verify saved endpoints without
+reinstalling:
+
+```sh
+rtk make device-config-verify DEVICE=<device-udid>
 ```
 
 Do not use team `Q2V42N8S7R` for this app on this machine, and do not force a
@@ -253,12 +405,30 @@ passes `-allowProvisioningDeviceRegistration`, so a second paired iPhone can be
 registered into the development profile when Xcode is allowed to update
 provisioning.
 
-Then open Codex Dock from the iPhone home screen. The app discovers the Mac
-relay over Bonjour, connects with no phone-side bearer token, loads sessions,
-and sends dictation audio to the relay for transcription.
+The install target launches Codex Dock after writing the saved endpoints. If the
+app is closed later, open it from the iPhone home screen; it connects with no
+phone-side bearer token, loads sessions, and sends dictation audio to the relay
+for transcription.
 
-The physical install target builds for `iphoneos` and installs the app. It does
-not launch the app, pass simulator env, or pass any OpenAI/Codex token to the
+When physical testing resumes, manual physical iPhone 14 testing should cover
+the actual composer path:
+
+- hold `Hold to dictate`, speak, and confirm text appears before release;
+- release, edit the final draft, and verify `Send` is still manual;
+- tap `Start dictation`, speak, tap `Stop dictation`, and verify the final
+  draft remains editable;
+- type a prefix before dictation and confirm it survives final transcription;
+- interrupt dictation by navigating away, backgrounding, or using another real
+  interruption path and confirm no turn submits and the draft is recoverable;
+- check VoiceOver labels/hints, tappable controls, and large Dynamic Type
+  layout.
+
+Record new evidence in the relevant plan log or in the deferred physical QA
+checklist in `docs/CODEX_DOCK_CROSS_PLAN_IMPLEMENTATION_DOCK_2026-05-28.md`.
+
+The physical install target builds for `iphoneos`, installs the app, writes the
+saved relay endpoints, verifies the installed build number, and launches the
+app. It does not pass simulator env, OpenAI keys, or raw Codex tokens to the
 phone.
 
 If XcodeGen is missing, install it:
@@ -273,10 +443,10 @@ Generate the project:
 rtk xcodegen generate --spec project.yml
 ```
 
-Build the app for the `iPhone 17` simulator:
+Build, install, and launch the app for the `iPhone 17` simulator:
 
 ```sh
-rtk xcodebuild -project CodexDock.xcodeproj -scheme CodexDockApp -destination 'platform=iOS Simulator,name=iPhone 17' build
+rtk make app SIM='iPhone 17'
 ```
 
 Run unit tests through SwiftPM:
@@ -288,20 +458,17 @@ rtk swift test
 Run generated-project tests on the `iPhone 17` simulator:
 
 ```sh
-rtk xcodebuild test -project CodexDock.xcodeproj -scheme CodexDockApp -destination 'platform=iOS Simulator,name=iPhone 17'
+rtk make app-test SIM='iPhone 17'
 ```
 
-Prefer `rtk make app SIM='iPhone 17'` for simulator launch. If you need to
-launch an already-installed simulator build manually, point it at the relay by
-passing non-secret simulator environment variables with the `SIMCTL_CHILD_`
-prefix:
+Builds and installs are Makefile-owned. Do not use raw Xcode, CoreDevice,
+simulator install, or Flutter build/install commands as the normal workflow;
+add or fix a make target instead. Raw platform commands are for diagnosing a
+failed make target.
 
-```sh
-rtk xcrun simctl install <iphone-17-device-id> /path/to/CodexDockApp.app
-rtk env SIMCTL_CHILD_CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4510 SIMCTL_CHILD_CODEX_DOCK_REAL_HOST_ID=Amir-M5 SIMCTL_CHILD_CODEX_DOCK_REAL_HOST_NAME=Amir-M5 xcrun simctl launch --terminate-running-process <iphone-17-device-id> com.aelaguiz.CodexDockApp
-```
-
-Do not use preview rows as production evidence. A Phase 3 pass means the
-installed app connects to the real relay-backed host path, renders real
-`SessionSummary` rows, and shows offline/error UI when that same host path is
-unavailable.
+Do not use fixture or SwiftUI preview rows as production evidence. A physical
+phone pass means the installed app connects to the real relay-backed host path,
+renders real `SessionSummary` rows, and shows offline/error UI when that same
+host path is unavailable. While physical testing is deferred, the agent-side
+stand-in is simulator plus local/real-relay/service-status proof, with the
+physical checks recorded for Amir.

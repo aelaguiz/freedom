@@ -275,6 +275,474 @@ final class AppServerClientTests: XCTestCase {
         }
     }
 
+    func testConnectionStatesEmitConnectingConnectedAndOfflineOnMidstreamClose() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        let stateTask = Task {
+            var iterator = client.connectionStates.makeAsyncIterator()
+            var states: [AppServerConnectionState] = []
+            while states.count < 4, let state = await iterator.next() {
+                states.append(state)
+            }
+            return states
+        }
+
+        try await completeHandshake(client: client, transport: transport)
+        await transport.closeInbound()
+
+        let states = try await valueWithinOneSecond {
+            await stateTask.value
+        }
+        XCTAssertEqual(states, [
+            .idle,
+            .connecting,
+            .connected,
+            .offline(reason: "transport closed"),
+        ])
+    }
+
+    func testExplicitDisconnectFinishesConnectionNotificationAndRequestStreams() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let connectionTask = Task {
+            var iterator = client.connectionStates.makeAsyncIterator()
+            var states: [AppServerConnectionState] = []
+            while let state = await iterator.next() {
+                states.append(state)
+            }
+            return states
+        }
+
+        await client.disconnect()
+
+        let states = try await valueWithinOneSecond {
+            await connectionTask.value
+        }
+        XCTAssertEqual(states.last, .closed(reason: "client disconnected"))
+
+        let notification = try await valueWithinOneSecond {
+            var iterator = client.notifications.makeAsyncIterator()
+            return await iterator.next()
+        }
+        XCTAssertNil(notification)
+
+        let serverRequest = try await valueWithinOneSecond {
+            var iterator = client.serverRequests.makeAsyncIterator()
+            return await iterator.next()
+        }
+        XCTAssertNil(serverRequest)
+    }
+
+    func testLateTimedOutResponseIsIgnoredAndConnectionStaysUsable() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let timedOutTask = Task {
+            try await client.sendRequest(method: "never-responds", timeout: .milliseconds(50))
+        }
+        let timedOutRequest = try await transport.nextSentRequest()
+
+        do {
+            _ = try await timedOutTask.value
+            XCTFail("Expected timeout")
+        } catch AppServerClientError.requestTimedOut {
+            // Expected.
+        } catch {
+            XCTFail("Expected request timeout, got \(error)")
+        }
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: timedOutRequest.id,
+                    result: .string("late")
+                )
+            )
+        )
+
+        let followUpTask = Task {
+            try await client.sendRequest(method: "after-timeout", timeout: .seconds(1))
+        }
+        let followUpRequest = try await valueWithinOneSecond {
+            try await transport.nextSentRequest()
+        }
+        XCTAssertEqual(followUpRequest.method, "after-timeout")
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: followUpRequest.id,
+                    result: .string("ok")
+                )
+            )
+        )
+
+        let followUp = try await followUpTask.value
+        XCTAssertEqual(followUp, .string("ok"))
+        let state = await client.state
+        XCTAssertEqual(state, .connected)
+    }
+
+    func testLateCancelledResponseIsIgnoredAndConnectionStaysUsable() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let cancelledTask = Task {
+            try await client.sendRequest(method: "cancel-me", timeout: .seconds(1))
+        }
+        let cancelledRequest = try await transport.nextSentRequest()
+        cancelledTask.cancel()
+
+        do {
+            _ = try await cancelledTask.value
+            XCTFail("Expected cancellation")
+        } catch AppServerClientError.requestCancelled {
+            // Expected.
+        } catch {
+            XCTFail("Expected request cancellation, got \(error)")
+        }
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: cancelledRequest.id,
+                    result: .string("late")
+                )
+            )
+        )
+
+        let followUpTask = Task {
+            try await client.sendRequest(method: "after-cancel", timeout: .seconds(1))
+        }
+        let followUpRequest = try await valueWithinOneSecond {
+            try await transport.nextSentRequest()
+        }
+        XCTAssertEqual(followUpRequest.method, "after-cancel")
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: followUpRequest.id,
+                    result: .string("ok")
+                )
+            )
+        )
+
+        let followUp = try await followUpTask.value
+        XCTAssertEqual(followUp, .string("ok"))
+        let state = await client.state
+        XCTAssertEqual(state, .connected)
+    }
+
+    func testNeverIssuedResponseStillFailsConnection() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: .integer(999),
+                    result: .string("unexpected")
+                )
+            )
+        )
+
+        try await waitUntil {
+            if case .error(let message) = await client.state {
+                return message.contains("unknown request id `999`")
+            }
+            return false
+        }
+    }
+
+    func testReconnectEnabledClientTransitionsConnectedReconnectingConnectedAfterTransportClose() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(
+            transport: transport,
+            connectionPolicy: AppServerConnectionPolicy(
+                reconnect: AppServerReconnectPolicy(
+                    maxAttempts: 1,
+                    initialDelayMilliseconds: 0,
+                    maxDelayMilliseconds: 0
+                )
+            )
+        )
+        let stateTask = Task {
+            var iterator = client.connectionStates.makeAsyncIterator()
+            var states: [AppServerConnectionState] = []
+            while states.count < 5, let state = await iterator.next() {
+                states.append(state)
+            }
+            return states
+        }
+
+        try await completeHandshake(client: client, transport: transport)
+        await transport.closeInbound()
+
+        let reconnectInitialize = try await valueWithinOneSecond {
+            try await transport.nextSentRequest()
+        }
+        XCTAssertEqual(reconnectInitialize.id, .string("initialize"))
+        XCTAssertEqual(reconnectInitialize.method, AppServerMethods.initialize)
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: reconnectInitialize.id,
+                    result: initializeResult()
+                )
+            )
+        )
+        let initializedNotification = try await valueWithinOneSecond {
+            try await transport.nextSentNotification()
+        }
+        XCTAssertEqual(initializedNotification.method, AppServerMethods.initialized)
+
+        let states = try await valueWithinOneSecond {
+            await stateTask.value
+        }
+        XCTAssertEqual(states, [
+            .idle,
+            .connecting,
+            .connected,
+            .reconnecting(attempt: 1, reason: "transport closed"),
+            .connected,
+        ])
+    }
+
+    func testReconnectExhaustionStopsAndFinishesDataStreams() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(
+            transport: transport,
+            connectionPolicy: AppServerConnectionPolicy(
+                reconnect: AppServerReconnectPolicy(
+                    maxAttempts: 2,
+                    initialDelayMilliseconds: 0,
+                    maxDelayMilliseconds: 0
+                )
+            )
+        )
+        try await completeHandshake(client: client, transport: transport)
+        await transport.enqueueConnectFailure(TestTransportError.offline)
+        await transport.enqueueConnectFailure(TestTransportError.offline)
+
+        let notificationTask = Task {
+            var iterator = client.notifications.makeAsyncIterator()
+            return await iterator.next()
+        }
+        let requestTask = Task {
+            var iterator = client.serverRequests.makeAsyncIterator()
+            return await iterator.next()
+        }
+
+        await transport.closeInbound()
+
+        try await waitUntil {
+            if case .offline(let reason) = await client.state {
+                return reason.contains("Reconnect failed after 2 attempts")
+            }
+            return false
+        }
+        let notification = try await valueWithinOneSecond {
+            await notificationTask.value
+        }
+        let serverRequest = try await valueWithinOneSecond {
+            await requestTask.value
+        }
+        XCTAssertNil(notification)
+        XCTAssertNil(serverRequest)
+    }
+
+    func testExplicitDisconnectCancelsScheduledReconnect() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(
+            transport: transport,
+            connectionPolicy: AppServerConnectionPolicy(
+                reconnect: AppServerReconnectPolicy(
+                    maxAttempts: 1,
+                    initialDelayMilliseconds: 250,
+                    maxDelayMilliseconds: 250
+                )
+            )
+        )
+        try await completeHandshake(client: client, transport: transport)
+
+        await transport.closeInbound()
+        try await waitUntil {
+            if case .reconnecting = await client.state {
+                return true
+            }
+            return false
+        }
+
+        await client.disconnect()
+        try await Task.sleep(for: .milliseconds(300))
+
+        let connectCount = await transport.connectCountSnapshot()
+        let state = await client.state
+        XCTAssertEqual(connectCount, 1)
+        XCTAssertEqual(state, .closed(reason: "client disconnected"))
+    }
+
+    func testReconnectWaitsForForegroundBeforeConsumingAttempt() async throws {
+        let lifecycle = await MainActor.run {
+            AppLifecycleCoordinator()
+        }
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(
+            transport: transport,
+            connectionPolicy: AppServerConnectionPolicy(
+                reconnect: AppServerReconnectPolicy(
+                    maxAttempts: 1,
+                    initialDelayMilliseconds: 0,
+                    maxDelayMilliseconds: 0
+                )
+            ),
+            foregroundWorkGate: lifecycle
+        )
+        try await completeHandshake(client: client, transport: transport)
+
+        await MainActor.run {
+            lifecycle.handle(.background)
+        }
+        await transport.closeInbound()
+        try await Task.sleep(for: .milliseconds(100))
+
+        let backgroundConnectCount = await transport.connectCountSnapshot()
+        XCTAssertEqual(backgroundConnectCount, 1)
+
+        await MainActor.run {
+            lifecycle.handle(.active)
+        }
+        let reconnectInitialize = try await valueWithinOneSecond {
+            try await transport.nextSentRequest()
+        }
+        XCTAssertEqual(reconnectInitialize.method, AppServerMethods.initialize)
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: reconnectInitialize.id,
+                    result: initializeResult()
+                )
+            )
+        )
+        _ = try await transport.nextSentNotification()
+
+        try await waitUntil {
+            await client.state == .connected
+        }
+        let resumedConnectCount = await transport.connectCountSnapshot()
+        XCTAssertEqual(resumedConnectCount, 2)
+    }
+
+    func testReconnectDoesNotOpenIfAppBackgroundsDuringBackoffSleep() async throws {
+        let lifecycle = await MainActor.run {
+            AppLifecycleCoordinator()
+        }
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(
+            transport: transport,
+            connectionPolicy: AppServerConnectionPolicy(
+                reconnect: AppServerReconnectPolicy(
+                    maxAttempts: 1,
+                    initialDelayMilliseconds: 200,
+                    maxDelayMilliseconds: 200
+                )
+            ),
+            foregroundWorkGate: lifecycle
+        )
+        try await completeHandshake(client: client, transport: transport)
+
+        await transport.closeInbound()
+        try await waitUntil {
+            if case .reconnecting = await client.state {
+                return true
+            }
+            return false
+        }
+        await MainActor.run {
+            lifecycle.handle(.background)
+        }
+        try await Task.sleep(for: .milliseconds(250))
+
+        let backgroundConnectCount = await transport.connectCountSnapshot()
+        XCTAssertEqual(backgroundConnectCount, 1)
+
+        await MainActor.run {
+            lifecycle.handle(.active)
+        }
+        let reconnectInitialize = try await valueWithinOneSecond {
+            try await transport.nextSentRequest()
+        }
+        XCTAssertEqual(reconnectInitialize.method, AppServerMethods.initialize)
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: reconnectInitialize.id,
+                    result: initializeResult()
+                )
+            )
+        )
+        _ = try await transport.nextSentNotification()
+        try await waitUntil {
+            await client.state == .connected
+        }
+    }
+
+    func testTransportFailureFailsInFlightRequestAndDoesNotReplayAfterReconnect() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(
+            transport: transport,
+            connectionPolicy: AppServerConnectionPolicy(
+                reconnect: AppServerReconnectPolicy(
+                    maxAttempts: 1,
+                    initialDelayMilliseconds: 0,
+                    maxDelayMilliseconds: 0
+                )
+            )
+        )
+        try await completeHandshake(client: client, transport: transport)
+
+        let task = Task {
+            try await client.sendRequest(method: "turn/start", timeout: .seconds(1))
+        }
+        let request = try await transport.nextSentRequest()
+        XCTAssertEqual(request.method, "turn/start")
+
+        await transport.closeInbound()
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected in-flight request to fail on transport loss")
+        } catch AppServerClientError.disconnected(let reason) {
+            XCTAssertEqual(reason, "transport closed")
+        } catch {
+            XCTFail("Expected disconnected error, got \(error)")
+        }
+
+        let reconnectInitialize = try await valueWithinOneSecond {
+            try await transport.nextSentRequest()
+        }
+        XCTAssertEqual(reconnectInitialize.method, AppServerMethods.initialize)
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: reconnectInitialize.id,
+                    result: initializeResult()
+                )
+            )
+        )
+        _ = try await transport.nextSentNotification()
+
+        try await waitUntil {
+            await client.state == .connected
+        }
+        let sentMethods = await transport.sentMethodsSnapshot()
+        XCTAssertEqual(sentMethods.filter { $0 == "turn/start" }.count, 1)
+    }
+
     func testInitializeHandshakeSendsInitializedAfterInitializeResponse() async throws {
         let transport = ScriptedAppServerTransport()
         let client = AppServerClient(transport: transport)
@@ -728,101 +1196,426 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(steerResponse.turnId, "turn-1")
     }
 
-    func testAudioTranscribeSendsTypedRelayRequestWithoutModel() async throws {
+    func testRealtimeTranscriptionMethodsSendTypedRequestsWithoutProviderConfig() async throws {
         let transport = ScriptedAppServerTransport()
         let client = AppServerClient(transport: transport)
         try await completeHandshake(client: client, transport: transport)
 
-        let task = Task {
-            try await client.audioTranscribe(
-                params: AudioTranscribeParams(
-                    mimeType: "audio/mp4",
-                    base64Audio: "ZmFrZSBhdWRpbw=="
+        let startTask = Task {
+            try await client.audioTranscriptionStart(
+                params: AudioTranscriptionStartParams(language: "en", delay: "low"),
+                timeout: .seconds(1)
+            )
+        }
+        let startRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(startRequest.method, AppServerMethods.audioTranscriptionStart)
+        guard case .object(let startParams) = try XCTUnwrap(startRequest.params) else {
+            return XCTFail("Expected audio/transcription/start params")
+        }
+        XCTAssertEqual(startParams["language"], .string("en"))
+        XCTAssertEqual(startParams["delay"], .string("low"))
+        XCTAssertNil(startParams["model"])
+        XCTAssertNil(startParams["endpoint"])
+        XCTAssertNil(startParams["headers"])
+        XCTAssertNil(startParams["apiKey"])
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: startRequest.id,
+                    result: try JSONValue.encoded(
+                        AudioTranscriptionStartResponseDTO(
+                            sessionId: "transcription-1",
+                            format: "audio/pcm",
+                            sampleRate: 24_000,
+                            model: "gpt-realtime-whisper",
+                            language: "en",
+                            delay: "low"
+                        )
+                    )
+                )
+            )
+        )
+        let startResponse = try await startTask.value
+        XCTAssertEqual(startResponse.sessionId, "transcription-1")
+
+        let appendTask = Task {
+            try await client.audioTranscriptionAppend(
+                params: AudioTranscriptionAppendParams(
+                    sessionId: "transcription-1",
+                    sequence: 1,
+                    base64Audio: "AQID"
                 ),
                 timeout: .seconds(1)
             )
         }
-        let request = try await transport.nextSentRequest()
-        XCTAssertEqual(request.method, AppServerMethods.audioTranscribe)
-        guard case .object(let params) = try XCTUnwrap(request.params) else {
-            return XCTFail("Expected audio/transcribe params")
+        let appendRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(appendRequest.method, AppServerMethods.audioTranscriptionAppend)
+        guard case .object(let appendParams) = try XCTUnwrap(appendRequest.params) else {
+            return XCTFail("Expected audio/transcription/append params")
         }
-        XCTAssertEqual(params["mimeType"], .string("audio/mp4"))
-        XCTAssertEqual(params["base64Audio"], .string("ZmFrZSBhdWRpbw=="))
-        XCTAssertNil(params["model"])
-
+        XCTAssertEqual(appendParams["sessionId"], .string("transcription-1"))
+        XCTAssertEqual(appendParams["sequence"], .integer(1))
+        XCTAssertEqual(appendParams["base64Audio"], .string("AQID"))
+        XCTAssertNil(appendParams["model"])
+        XCTAssertNil(appendParams["endpoint"])
+        XCTAssertNil(appendParams["headers"])
+        XCTAssertNil(appendParams["apiKey"])
         await transport.enqueue(
             .response(
                 JSONRPCResponse(
-                    id: request.id,
-                    result: try JSONValue.encoded(AudioTranscribeResponseDTO(text: "Check relay status"))
+                    id: appendRequest.id,
+                    result: try JSONValue.encoded(
+                        AudioTranscriptionAppendResponseDTO(
+                            sessionId: "transcription-1",
+                            acceptedSequence: 1
+                        )
+                    )
                 )
             )
         )
+        _ = try await appendTask.value
 
-        let response = try await task.value
-        XCTAssertEqual(response.text, "Check relay status")
+        let commitTask = Task {
+            try await client.audioTranscriptionCommit(
+                params: AudioTranscriptionCommitParams(sessionId: "transcription-1"),
+                timeout: .seconds(1)
+            )
+        }
+        let commitRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(commitRequest.method, AppServerMethods.audioTranscriptionCommit)
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: commitRequest.id,
+                    result: try JSONValue.encoded(
+                        AudioTranscriptionCommitResponseDTO(
+                            sessionId: "transcription-1",
+                            committed: true
+                        )
+                    )
+                )
+            )
+        )
+        _ = try await commitTask.value
+
+        let cancelTask = Task {
+            try await client.audioTranscriptionCancel(
+                params: AudioTranscriptionCancelParams(sessionId: "transcription-1"),
+                timeout: .seconds(1)
+            )
+        }
+        let cancelRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(cancelRequest.method, AppServerMethods.audioTranscriptionCancel)
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: cancelRequest.id,
+                    result: try JSONValue.encoded(
+                        AudioTranscriptionCancelResponseDTO(
+                            sessionId: "transcription-1",
+                            canceled: true
+                        )
+                    )
+                )
+            )
+        )
+        _ = try await cancelTask.value
     }
 
-    func testRelayTranscriptionClientSendsAudioThroughRelayWithoutOpenAIKeyOrModel() async throws {
+    @MainActor
+    func testRelayRealtimeTranscriptionClientMapsRelayNotificationsAndClosesConnection() async throws {
         let transport = ScriptedAppServerTransport()
         let appServerClient = AppServerClient(transport: transport)
-        let host = DockHostConfiguration(
-            id: "Amir-M5",
-            displayName: "Amir-M5",
-            webSocketURL: URL(string: "ws://192.168.50.117:4510")!,
-            bearerToken: nil
-        )
-        let service = RelayTranscriptionClient(host: host) { _ in
+        let host = makeRealtimeRelayHost()
+        let service = RelayRealtimeTranscriptionClient(host: host) { _ in
             appServerClient
         }
-        let audioFile = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-        try Data("relay audio".utf8).write(to: audioFile)
-        defer { try? FileManager.default.removeItem(at: audioFile) }
 
-        let task = Task {
-            try await service.transcribe(audioFile: audioFile)
+        let startTask = Task {
+            try await service.startSession()
         }
-
-        let initializeRequest = try await transport.nextSentRequest()
-        XCTAssertEqual(initializeRequest.method, AppServerMethods.initialize)
+        try await respondToInitialize(transport: transport)
+        let startRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(startRequest.method, AppServerMethods.audioTranscriptionStart)
         await transport.enqueue(
             .response(
                 JSONRPCResponse(
-                    id: initializeRequest.id,
-                    result: .object([
-                        "userAgent": .string("codex-test"),
-                        "codexHome": .string("/tmp/codex"),
-                        "platformFamily": .string("unix"),
-                        "platformOs": .string("macos"),
-                    ])
+                    id: startRequest.id,
+                    result: try JSONValue.encoded(
+                        AudioTranscriptionStartResponseDTO(
+                            sessionId: "transcription-1",
+                            format: "audio/pcm",
+                            sampleRate: 24_000,
+                            model: "gpt-realtime-whisper"
+                        )
+                    )
                 )
             )
         )
-        let initializedNotification = try await transport.nextSentNotification()
-        XCTAssertEqual(initializedNotification.method, AppServerMethods.initialized)
+        let session = try await startTask.value
+        let events = RealtimeEventProbe(session.events)
+        let startedEvent = await events.next()
+        XCTAssertEqual(startedEvent, .some(.started(sessionID: "transcription-1")))
 
-        let request = try await transport.nextSentRequest()
-        XCTAssertEqual(request.method, AppServerMethods.audioTranscribe)
-        guard case .object(let params) = try XCTUnwrap(request.params) else {
-            return XCTFail("Expected audio/transcribe params")
+        let appendTask = Task {
+            try await session.appendAudio(Data([1, 2, 3]), sequence: 1)
         }
-        XCTAssertEqual(params["mimeType"], .string("audio/mp4"))
-        XCTAssertEqual(params["base64Audio"], .string(Data("relay audio".utf8).base64EncodedString()))
-        XCTAssertNil(params["model"])
-
+        let appendRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(appendRequest.method, AppServerMethods.audioTranscriptionAppend)
+        guard case .object(let appendParams) = try XCTUnwrap(appendRequest.params) else {
+            return XCTFail("Expected audio/transcription/append params")
+        }
+        XCTAssertEqual(appendParams["sessionId"], .string("transcription-1"))
+        XCTAssertEqual(appendParams["sequence"], .integer(1))
+        XCTAssertEqual(appendParams["base64Audio"], .string(Data([1, 2, 3]).base64EncodedString()))
         await transport.enqueue(
             .response(
                 JSONRPCResponse(
-                    id: request.id,
-                    result: try JSONValue.encoded(AudioTranscribeResponseDTO(text: "  relay transcript  "))
+                    id: appendRequest.id,
+                    result: try JSONValue.encoded(
+                        AudioTranscriptionAppendResponseDTO(
+                            sessionId: "transcription-1",
+                            acceptedSequence: 1
+                        )
+                    )
                 )
             )
         )
+        try await appendTask.value
 
-        let transcript = try await task.value
-        XCTAssertEqual(transcript, "relay transcript")
+        await transport.enqueue(
+            .notification(
+                JSONRPCNotification(
+                    method: AppServerMethods.audioTranscriptionDelta,
+                    params: try JSONValue.encoded(
+                        AudioTranscriptionDeltaNotificationDTO(
+                            sessionId: "other-session",
+                            itemId: "item-1",
+                            contentIndex: 0,
+                            deltaText: "wrong",
+                            partialText: "wrong"
+                        )
+                    )
+                )
+            )
+        )
+        try await Task.sleep(for: .milliseconds(20))
+        let ignoredEventCount = await events.bufferedCount()
+        XCTAssertEqual(ignoredEventCount, 0)
+
+        await transport.enqueue(
+            .notification(
+                JSONRPCNotification(
+                    method: AppServerMethods.audioTranscriptionDelta,
+                    params: try JSONValue.encoded(
+                        AudioTranscriptionDeltaNotificationDTO(
+                            sessionId: "transcription-1",
+                            itemId: "item-1",
+                            contentIndex: 0,
+                            deltaText: "Check",
+                            partialText: "Check"
+                        )
+                    )
+                )
+            )
+        )
+        let deltaEvent = try await valueWithinOneSecond {
+            await events.next()
+        }
+        XCTAssertEqual(
+            deltaEvent,
+            .some(.delta(
+                sessionID: "transcription-1",
+                itemID: "item-1",
+                sequence: 0,
+                deltaText: "Check",
+                partialText: "Check"
+            ))
+        )
+
+        let commitTask = Task {
+            try await session.commit()
+        }
+        let commitRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(commitRequest.method, AppServerMethods.audioTranscriptionCommit)
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: commitRequest.id,
+                    result: try JSONValue.encoded(
+                        AudioTranscriptionCommitResponseDTO(
+                            sessionId: "transcription-1",
+                            committed: true
+                        )
+                    )
+                )
+            )
+        )
+        try await commitTask.value
+
+        await transport.enqueue(
+            .notification(
+                JSONRPCNotification(
+                    method: AppServerMethods.audioTranscriptionCompleted,
+                    params: try JSONValue.encoded(
+                        AudioTranscriptionCompletedNotificationDTO(
+                            sessionId: "transcription-1",
+                            itemId: "item-1",
+                            contentIndex: 0,
+                            transcript: "Check relay"
+                        )
+                    )
+                )
+            )
+        )
+        let completedEvent = try await valueWithinOneSecond {
+            await events.next()
+        }
+        XCTAssertEqual(
+            completedEvent,
+            .some(.completed(sessionID: "transcription-1", itemID: "item-1", text: "Check relay"))
+        )
+        try await waitUntil {
+            await transport.disconnectCountSnapshot() >= 1
+        }
+    }
+
+    @MainActor
+    func testRelayRealtimeTranscriptionClientRejectsInvalidChunksBeforeSending() async throws {
+        let transport = ScriptedAppServerTransport()
+        let appServerClient = AppServerClient(transport: transport)
+        let host = makeRealtimeRelayHost()
+        let service = RelayRealtimeTranscriptionClient(
+            host: host,
+            maxChunkBytes: 3
+        ) { _ in
+            appServerClient
+        }
+
+        let session = try await startRealtimeSession(service: service, transport: transport)
+
+        do {
+            try await session.appendAudio(Data(), sequence: 1)
+            XCTFail("Expected empty chunk rejection")
+        } catch RelayRealtimeTranscriptionClientError.emptyAudioChunk {
+            // Expected.
+        } catch {
+            XCTFail("Expected empty chunk rejection, got \(error)")
+        }
+
+        do {
+            try await session.appendAudio(Data([1, 2, 3, 4]), sequence: 1)
+            XCTFail("Expected oversized chunk rejection")
+        } catch RelayRealtimeTranscriptionClientError.audioChunkTooLarge(maxBytes: 3) {
+            // Expected.
+        } catch {
+            XCTFail("Expected oversized chunk rejection, got \(error)")
+        }
+
+        let sentMethods = await transport.sentMethodsSnapshot()
+        XCTAssertEqual(
+            sentMethods.filter { $0 == AppServerMethods.audioTranscriptionAppend }.count,
+            0
+        )
+    }
+
+    @MainActor
+    func testRelayRealtimeTranscriptionClientCommitTimeoutFailsAndCloses() async throws {
+        let transport = ScriptedAppServerTransport()
+        let appServerClient = AppServerClient(transport: transport)
+        let host = makeRealtimeRelayHost()
+        let service = RelayRealtimeTranscriptionClient(
+            host: host,
+            completionTimeout: .milliseconds(50)
+        ) { _ in
+            appServerClient
+        }
+
+        let session = try await startRealtimeSession(service: service, transport: transport)
+        let events = RealtimeEventProbe(session.events)
+        let startedEvent = await events.next()
+        XCTAssertEqual(startedEvent, .some(.started(sessionID: "transcription-1")))
+
+        let commitTask = Task {
+            try await session.commit()
+        }
+        let commitRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(commitRequest.method, AppServerMethods.audioTranscriptionCommit)
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: commitRequest.id,
+                    result: try JSONValue.encoded(
+                        AudioTranscriptionCommitResponseDTO(
+                            sessionId: "transcription-1",
+                            committed: true
+                        )
+                    )
+                )
+            )
+        )
+        try await commitTask.value
+
+        let failedEvent = try await valueWithinOneSecond {
+            await events.next()
+        }
+        XCTAssertEqual(
+            failedEvent,
+            .some(.failed(
+                sessionID: "transcription-1",
+                code: "commit_timeout",
+                message: "Realtime transcription timed out."
+            ))
+        )
+        try await waitUntil {
+            await transport.disconnectCountSnapshot() >= 1
+        }
+    }
+
+    @MainActor
+    func testRelayRealtimeTranscriptionClientCancelSendsTypedRequestAndCloses() async throws {
+        let transport = ScriptedAppServerTransport()
+        let appServerClient = AppServerClient(transport: transport)
+        let host = makeRealtimeRelayHost()
+        let service = RelayRealtimeTranscriptionClient(host: host) { _ in
+            appServerClient
+        }
+
+        let session = try await startRealtimeSession(service: service, transport: transport)
+        let events = RealtimeEventProbe(session.events)
+        let startedEvent = await events.next()
+        XCTAssertEqual(startedEvent, .some(.started(sessionID: "transcription-1")))
+
+        let cancelTask = Task {
+            await session.cancel()
+        }
+        let cancelRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(cancelRequest.method, AppServerMethods.audioTranscriptionCancel)
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: cancelRequest.id,
+                    result: try JSONValue.encoded(
+                        AudioTranscriptionCancelResponseDTO(
+                            sessionId: "transcription-1",
+                            canceled: true
+                        )
+                    )
+                )
+            )
+        )
+        await cancelTask.value
+
+        let canceledEvent = try await valueWithinOneSecond {
+            await events.next()
+        }
+        XCTAssertEqual(
+            canceledEvent,
+            .some(.canceled(sessionID: "transcription-1"))
+        )
+        try await waitUntil {
+            await transport.disconnectCountSnapshot() >= 1
+        }
     }
 
     func testSendResponseSendsJsonRPCResponseForServerRequestID() async throws {
@@ -866,20 +1659,7 @@ final class AppServerClientTests: XCTestCase {
 
     func testPhoneReachableRealHostInitializeHandshakeWhenEndpointIsProvided() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard let endpoint = environment["CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS"], !endpoint.isEmpty else {
-            throw XCTSkip(
-                "Set CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS to run the phone-reachable real-host handshake test"
-            )
-        }
-        let url = try XCTUnwrap(URL(string: endpoint))
-        XCTAssertTrue(
-            ["ws", "wss"].contains(url.scheme?.lowercased()),
-            "Phone-reachable handshake endpoint must be a WebSocket URL"
-        )
-        XCTAssertFalse(
-            isLoopbackHost(url.host),
-            "Phone-reachable handshake endpoint cannot be localhost, 127.0.0.1, or ::1"
-        )
+        let url = try configuredRelayURL(from: environment, label: "phone-reachable handshake")
         try await assertRealHostHandshakeSucceeds(
             url: url,
             bearerToken: nil,
@@ -889,20 +1669,7 @@ final class AppServerClientTests: XCTestCase {
 
     func testPhoneReachableRealHostThreadListWhenEndpointIsProvided() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard let endpoint = environment["CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS"], !endpoint.isEmpty else {
-            throw XCTSkip(
-                "Set CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS to run the phone-reachable real-host thread/list test"
-            )
-        }
-        let url = try XCTUnwrap(URL(string: endpoint))
-        XCTAssertTrue(
-            ["ws", "wss"].contains(url.scheme?.lowercased()),
-            "Phone-reachable thread/list endpoint must be a WebSocket URL"
-        )
-        XCTAssertFalse(
-            isLoopbackHost(url.host),
-            "Phone-reachable thread/list endpoint cannot be localhost, 127.0.0.1, or ::1"
-        )
+        let url = try configuredRelayURL(from: environment, label: "phone-reachable thread/list")
         let client = AppServerClient(webSocketURL: url, bearerToken: nil)
         _ = try await client.connectAndInitialize(
             params: .codexDock(version: "0.1.0"),
@@ -930,20 +1697,7 @@ final class AppServerClientTests: XCTestCase {
 
     func testPhoneReachableRealHostThreadReadAndResumeWhenEndpointIsProvided() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard let endpoint = environment["CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS"], !endpoint.isEmpty else {
-            throw XCTSkip(
-                "Set CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS to run the phone-reachable real-host thread detail test"
-            )
-        }
-        let url = try XCTUnwrap(URL(string: endpoint))
-        XCTAssertTrue(
-            ["ws", "wss"].contains(url.scheme?.lowercased()),
-            "Phone-reachable thread detail endpoint must be a WebSocket URL"
-        )
-        XCTAssertFalse(
-            isLoopbackHost(url.host),
-            "Phone-reachable thread detail endpoint cannot be localhost, 127.0.0.1, or ::1"
-        )
+        let url = try configuredRelayURL(from: environment, label: "phone-reachable thread detail")
         let client = AppServerClient(webSocketURL: url, bearerToken: nil)
         _ = try await client.connectAndInitialize(
             params: .codexDock(version: "0.1.0"),
@@ -987,16 +1741,7 @@ final class AppServerClientTests: XCTestCase {
                 "Set CODEX_DOCK_RUN_ARCHIVE_ROUND_TRIP=1 to run the reversible real-host archive smoke test"
             )
         }
-        let endpoint = try XCTUnwrap(environment["CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS"])
-        let url = try XCTUnwrap(URL(string: endpoint))
-        XCTAssertTrue(
-            ["ws", "wss"].contains(url.scheme?.lowercased()),
-            "Phone-reachable archive endpoint must be a WebSocket URL"
-        )
-        XCTAssertFalse(
-            isLoopbackHost(url.host),
-            "Phone-reachable archive endpoint cannot be localhost, 127.0.0.1, or ::1"
-        )
+        let url = try configuredRelayURL(from: environment, label: "phone-reachable archive")
         let client = AppServerClient(webSocketURL: url, bearerToken: nil)
         _ = try await client.connectAndInitialize(
             params: .codexDock(version: "0.1.0"),
@@ -1102,14 +1847,39 @@ private func appServerBearerToken(from environment: [String: String]) throws -> 
     if let token = environment["CODEX_DOCK_APP_SERVER_BEARER_TOKEN"], !token.isEmpty {
         return token
     }
+    if let token = environment["CODEX_DOCK_TEST_APP_SERVER_BEARER_TOKEN"], !token.isEmpty {
+        return token
+    }
 
-    guard let tokenFile = environment["CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE"], !tokenFile.isEmpty else {
+    let tokenFile = environment["CODEX_DOCK_TEST_APP_SERVER_BEARER_TOKEN_FILE"]
+        ?? environment["CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE"]
+    guard let tokenFile, !tokenFile.isEmpty else {
         return nil
     }
 
     let token = try String(contentsOfFile: tokenFile, encoding: .utf8)
         .trimmingCharacters(in: .whitespacesAndNewlines)
     return token.isEmpty ? nil : token
+}
+
+private func makeRealtimeRelayHost() -> DockHostConfiguration {
+    try! DockHostConfiguration(host: "192.168.50.117", port: 4510)
+}
+
+private func configuredRelayURL(from environment: [String: String], label: String) throws -> URL {
+    guard let endpoints = environment["CODEX_DOCK_HOSTS"],
+          let endpointText = endpoints.split(separator: ",").first?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !endpointText.isEmpty
+    else {
+        throw XCTSkip("Set CODEX_DOCK_HOSTS=<host>:<port> to run the \(label) real-host test")
+    }
+    let endpoint = try DockRelayEndpoint.parse(endpointText)
+    let url = endpoint.webSocketURL
+    XCTAssertFalse(
+        isLoopbackHost(url.host),
+        "\(label) endpoint cannot be localhost, 127.0.0.1, or ::1"
+    )
+    return url
 }
 
 private func isLoopbackHost(_ host: String?) -> Bool {
@@ -1128,25 +1898,33 @@ private func canOpenThreadDetail(_ thread: ThreadDTO) -> Bool {
     }
 }
 
-private actor ScriptedAppServerTransport: AppServerTransport {
+actor ScriptedAppServerTransport: AppServerTransport {
     private enum SentWaiter {
         case message(CheckedContinuation<JSONRPCMessage, Error>)
     }
 
-    private let connectError: Error?
+    private var connectResults: [Result<Void, Error>]
     private var inbound: [Result<String?, Error>] = []
     private var inboundWaiters: [CheckedContinuation<String?, Error>] = []
     private var sentMessages: [JSONRPCMessage] = []
+    private var allSentMessages: [JSONRPCMessage] = []
     private var sentWaiters: [SentWaiter] = []
     private var connected = false
+    private var connectCount = 0
+    private var disconnectCount = 0
 
     init(connectError: Error? = nil) {
-        self.connectError = connectError
+        if let connectError {
+            self.connectResults = [.failure(connectError)]
+        } else {
+            self.connectResults = []
+        }
     }
 
     func connect() async throws {
-        if let connectError {
-            throw connectError
+        connectCount += 1
+        if !connectResults.isEmpty {
+            try connectResults.removeFirst().get()
         }
         connected = true
     }
@@ -1157,6 +1935,7 @@ private actor ScriptedAppServerTransport: AppServerTransport {
         }
 
         let message = try JSONRPCMessage.decode(from: text)
+        allSentMessages.append(message)
         if sentWaiters.isEmpty {
             sentMessages.append(message)
         } else {
@@ -1179,6 +1958,7 @@ private actor ScriptedAppServerTransport: AppServerTransport {
     }
 
     func disconnect() async {
+        disconnectCount += 1
         connected = false
         let waiters = inboundWaiters
         inboundWaiters.removeAll()
@@ -1193,6 +1973,43 @@ private actor ScriptedAppServerTransport: AppServerTransport {
 
     func enqueueRaw(_ text: String) async {
         enqueueResult(.success(text))
+    }
+
+    func closeInbound() {
+        enqueueResult(.success(nil))
+    }
+
+    func failInbound(_ error: Error) {
+        enqueueResult(.failure(error))
+    }
+
+    func enqueueConnectFailure(_ error: Error) {
+        connectResults.append(.failure(error))
+    }
+
+    func enqueueConnectSuccess() {
+        connectResults.append(.success(()))
+    }
+
+    func connectCountSnapshot() -> Int {
+        connectCount
+    }
+
+    func disconnectCountSnapshot() -> Int {
+        disconnectCount
+    }
+
+    func sentMethodsSnapshot() -> [String] {
+        allSentMessages.compactMap { message in
+            switch message {
+            case .request(let request):
+                return request.method
+            case .notification(let notification):
+                return notification.method
+            case .response, .error:
+                return nil
+            }
+        }
     }
 
     func nextSentRequest() async throws -> JSONRPCRequest {
@@ -1269,17 +2086,113 @@ private func completeHandshake(
         .response(
             JSONRPCResponse(
                 id: initializeRequest.id,
-                result: .object([
-                    "userAgent": .string("codex/1.2.3"),
-                    "codexHome": .string("/Users/aelaguiz/.codex"),
-                    "platformFamily": .string("unix"),
-                    "platformOs": .string("macos"),
-                ])
+                result: initializeResult()
             )
         )
     )
     _ = try await transport.nextSentNotification()
     _ = try await handshakeTask.value
+}
+
+private func respondToInitialize(transport: ScriptedAppServerTransport) async throws {
+    let initializeRequest = try await transport.nextSentRequest()
+    XCTAssertEqual(initializeRequest.method, AppServerMethods.initialize)
+    await transport.enqueue(
+        .response(
+            JSONRPCResponse(
+                id: initializeRequest.id,
+                result: initializeResult()
+            )
+        )
+    )
+    let initializedNotification = try await transport.nextSentNotification()
+    XCTAssertEqual(initializedNotification.method, AppServerMethods.initialized)
+}
+
+@MainActor
+private func startRealtimeSession(
+    service: RelayRealtimeTranscriptionClient,
+    transport: ScriptedAppServerTransport
+) async throws -> any RealtimeTranscriptionSession {
+    let startTask = Task {
+        try await service.startSession()
+    }
+    try await respondToInitialize(transport: transport)
+    let startRequest = try await transport.nextSentRequest()
+    XCTAssertEqual(startRequest.method, AppServerMethods.audioTranscriptionStart)
+    await transport.enqueue(
+        .response(
+            JSONRPCResponse(
+                id: startRequest.id,
+                result: try JSONValue.encoded(
+                    AudioTranscriptionStartResponseDTO(
+                        sessionId: "transcription-1",
+                        format: "audio/pcm",
+                        sampleRate: 24_000,
+                        model: "gpt-realtime-whisper"
+                    )
+                )
+            )
+        )
+    )
+    return try await startTask.value
+}
+
+private func initializeResult() -> JSONValue {
+    .object([
+        "userAgent": .string("codex/1.2.3"),
+        "codexHome": .string("/Users/aelaguiz/.codex"),
+        "platformFamily": .string("unix"),
+        "platformOs": .string("macos"),
+    ])
+}
+
+private actor RealtimeEventProbe {
+    private var buffered: [RealtimeTranscriptionEvent] = []
+    private var waiters: [CheckedContinuation<RealtimeTranscriptionEvent?, Never>] = []
+    private var isFinished = false
+
+    init(_ events: AsyncStream<RealtimeTranscriptionEvent>) {
+        Task { [events] in
+            for await event in events {
+                await self.enqueue(event)
+            }
+            await self.finish()
+        }
+    }
+
+    func next() async -> RealtimeTranscriptionEvent? {
+        if !buffered.isEmpty {
+            return buffered.removeFirst()
+        }
+        if isFinished {
+            return nil
+        }
+        return await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func bufferedCount() -> Int {
+        buffered.count
+    }
+
+    private func enqueue(_ event: RealtimeTranscriptionEvent) {
+        if waiters.isEmpty {
+            buffered.append(event)
+        } else {
+            waiters.removeFirst().resume(returning: event)
+        }
+    }
+
+    private func finish() {
+        isFinished = true
+        let waiters = waiters
+        self.waiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: nil)
+        }
+    }
 }
 
 private func jsonObject(from message: JSONRPCMessage) throws -> [String: Any] {

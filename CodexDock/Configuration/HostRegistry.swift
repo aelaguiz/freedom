@@ -5,9 +5,18 @@ public struct HostRegistry: Equatable, Sendable {
 
     public init(hosts: [DockHostConfiguration]) throws {
         guard !hosts.isEmpty else {
+            DockLog.hostConfiguration.error("host registry creation failed reason=no_hosts")
             throw DockHostConfigurationError.missingEndpoint
         }
+        var seenHostIDs: Set<String> = []
+        for host in hosts {
+            guard seenHostIDs.insert(host.id).inserted else {
+                DockLog.hostConfiguration.error("host registry creation failed reason=duplicate_endpoint endpoint=\(host.id, privacy: .public)")
+                throw DockHostConfigurationError.duplicateHostID(host.id)
+            }
+        }
         self.hosts = hosts
+        DockLog.hostConfiguration.notice("host registry created hosts=\(hosts.count, privacy: .public)")
     }
 }
 
@@ -15,68 +24,9 @@ public extension HostRegistry {
     static func fromEnvironment(
         _ environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> HostRegistry {
-        let hostIDs = hostIDs(from: environment["CODEX_DOCK_HOSTS"])
-        guard !hostIDs.isEmpty else {
-            return try HostRegistry(hosts: [DockHostConfiguration.fromEnvironment(environment)])
-        }
-
-        let hosts = try hostIDs.map { hostID in
-            try hostConfiguration(hostID: hostID, environment: environment)
-        }
-        return try HostRegistry(hosts: hosts)
-    }
-
-    private static func hostIDs(from value: String?) -> [String] {
-        value?
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty } ?? []
-    }
-
-    private static func hostConfiguration(
-        hostID: String,
-        environment: [String: String]
-    ) throws -> DockHostConfiguration {
-        let key = envKeyComponent(hostID)
-        var scopedEnvironment = environment
-
-        scopedEnvironment["CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS"] = firstNonEmpty(
-            environment["CODEX_DOCK_HOST_\(key)_WS"],
-            environment["CODEX_DOCK_HOST_\(key)_APP_SERVER_WS"]
-        )
-        scopedEnvironment["CODEX_DOCK_APP_SERVER_BEARER_TOKEN"] = firstNonEmpty(
-            environment["CODEX_DOCK_HOST_\(key)_BEARER_TOKEN"],
-            environment["CODEX_DOCK_HOST_\(key)_TOKEN"]
-        )
-        scopedEnvironment["CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE"] = firstNonEmpty(
-            environment["CODEX_DOCK_HOST_\(key)_BEARER_TOKEN_FILE"],
-            environment["CODEX_DOCK_HOST_\(key)_TOKEN_FILE"]
-        )
-        scopedEnvironment["CODEX_DOCK_REAL_HOST_ID"] = hostID
-        scopedEnvironment["CODEX_DOCK_REAL_HOST_NAME"] = firstNonEmpty(
-            environment["CODEX_DOCK_HOST_\(key)_NAME"],
-            hostID
-        )
-
-        return try DockHostConfiguration.fromEnvironment(scopedEnvironment)
-    }
-
-    private static func envKeyComponent(_ value: String) -> String {
-        let scalars = value.unicodeScalars.map { scalar in
-            CharacterSet.alphanumerics.contains(scalar)
-                ? String(scalar).uppercased()
-                : "_"
-        }
-        return scalars.joined()
-    }
-
-    private static func firstNonEmpty(_ values: String?...) -> String? {
-        for value in values {
-            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let trimmed, !trimmed.isEmpty {
-                return trimmed
-            }
-        }
-        return nil
+        let endpoints = try DockRelayEndpoint.parseList(environment["CODEX_DOCK_HOSTS"])
+        let registry = try HostRegistry(hosts: endpoints.map(DockHostConfiguration.init(endpoint:)))
+        DockLog.hostConfiguration.notice("host registry loaded from environment hosts=\(registry.hosts.count, privacy: .public)")
+        return registry
     }
 }

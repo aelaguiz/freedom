@@ -1,5 +1,67 @@
 import SwiftUI
 
+struct ComposerVoiceControlsPresentation: Equatable {
+    let holdIcon: String
+    let tapIcon: String
+    let holdDisabled: Bool
+    let tapDisabled: Bool
+    let holdAccessibilityLabel: String
+    let holdAccessibilityHint: String
+    let tapAccessibilityLabel: String
+    let tapAccessibilityHint: String
+    let accessibilityValue: String
+    let statusText: String?
+    let statusSystemImage: String?
+
+    init(composer: ComposerState) {
+        self.holdIcon = Self.holdIcon(for: composer.voice.phase)
+        self.tapIcon = composer.voice.interactionMode == .tap && composer.voice.phase.isBusy
+            ? "stop.circle.fill"
+            : "mic.circle"
+        self.holdDisabled = composer.isSending
+            || composer.voice.phase == .finalizing
+            || (composer.voice.phase.isBusy && composer.voice.interactionMode != .hold)
+        self.tapDisabled = composer.isSending
+            || (composer.voice.phase.isBusy && composer.voice.interactionMode != .tap)
+            || composer.voice.phase == .finalizing
+        self.holdAccessibilityLabel = "Hold to dictate"
+        self.holdAccessibilityHint = "Press and hold to stream dictation. Release to finalize."
+        let isTapDictationActive = composer.voice.interactionMode == .tap
+            && composer.voice.phase.isBusy
+        self.tapAccessibilityLabel = isTapDictationActive ? "Stop dictation" : "Start dictation"
+        self.tapAccessibilityHint = "Tap once to start dictation and tap again to finalize."
+        self.accessibilityValue = composer.voice.phase.label
+
+        switch composer.voice.phase {
+        case .idle:
+            self.statusText = composer.voice.lastError
+            self.statusSystemImage = composer.voice.lastError == nil ? nil : "mic.slash"
+        case .starting:
+            self.statusText = "Starting dictation"
+            self.statusSystemImage = "mic"
+        case .streaming:
+            self.statusText = composer.voice.interactionMode == .tap
+                ? "Listening. Tap stop to finalize."
+                : "Listening. Release to finalize."
+            self.statusSystemImage = "mic.fill"
+        case .finalizing:
+            self.statusText = "Finalizing"
+            self.statusSystemImage = "waveform"
+        }
+    }
+
+    private static func holdIcon(for phase: ComposerVoicePhase) -> String {
+        switch phase {
+        case .idle:
+            return "mic"
+        case .starting, .streaming:
+            return "mic.fill"
+        case .finalizing:
+            return "waveform"
+        }
+    }
+}
+
 public struct ComposerView: View {
     @ObservedObject private var store: ThreadDetailStore
     @State private var isPressingMic = false
@@ -21,12 +83,14 @@ public struct ComposerView: View {
                 )
                 .lineLimit(1...4)
                 .autocorrectionDisabled(false)
+                .disabled(!store.composer.canEditDraft)
                 .accessibilityLabel("Message")
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-                micButton
+                holdMicButton
+                tapMicButton
 
                 Button {
                     Task {
@@ -59,15 +123,15 @@ public struct ComposerView: View {
         }
     }
 
-    private var micButton: some View {
+    private var holdMicButton: some View {
         Button {} label: {
-            Image(systemName: micSystemImage)
+            Image(systemName: voicePresentation.holdIcon)
                 .frame(width: 22, height: 22)
         }
         .frame(minWidth: 44, minHeight: 44)
         .buttonStyle(.bordered)
-        .tint(store.composer.voice.phase == .recording ? .red : .blue)
-        .disabled(store.composer.isSending || store.composer.voice.phase == .transcribing)
+        .tint(.blue)
+        .disabled(voicePresentation.holdDisabled)
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in
@@ -86,8 +150,27 @@ public struct ComposerView: View {
                     }
                 }
         )
-        .accessibilityLabel("Hold to dictate")
-        .accessibilityValue(store.composer.voice.phase.label)
+        .accessibilityLabel(voicePresentation.holdAccessibilityLabel)
+        .accessibilityHint(voicePresentation.holdAccessibilityHint)
+        .accessibilityValue(voicePresentation.accessibilityValue)
+    }
+
+    private var tapMicButton: some View {
+        Button {
+            Task {
+                await store.toggleTapVoiceCapture()
+            }
+        } label: {
+            Image(systemName: voicePresentation.tapIcon)
+                .frame(width: 22, height: 22)
+        }
+        .frame(minWidth: 44, minHeight: 44)
+        .buttonStyle(.bordered)
+        .tint(.blue)
+        .disabled(voicePresentation.tapDisabled)
+        .accessibilityLabel(voicePresentation.tapAccessibilityLabel)
+        .accessibilityHint(voicePresentation.tapAccessibilityHint)
+        .accessibilityValue(voicePresentation.accessibilityValue)
     }
 
     @ViewBuilder
@@ -100,25 +183,22 @@ public struct ComposerView: View {
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
-        case .recording:
-            Label("Recording. Release to transcribe.", systemImage: "mic.fill")
+        case .starting:
+            Label(voicePresentation.statusText ?? "", systemImage: voicePresentation.statusSystemImage ?? "mic")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.red)
-        case .transcribing:
-            Label("Transcribing", systemImage: "waveform")
+                .foregroundStyle(.blue)
+        case .streaming:
+            Label(voicePresentation.statusText ?? "", systemImage: voicePresentation.statusSystemImage ?? "mic.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.blue)
+        case .finalizing:
+            Label(voicePresentation.statusText ?? "", systemImage: voicePresentation.statusSystemImage ?? "waveform")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.blue)
         }
     }
 
-    private var micSystemImage: String {
-        switch store.composer.voice.phase {
-        case .idle:
-            return "mic"
-        case .recording:
-            return "mic.fill"
-        case .transcribing:
-            return "waveform"
-        }
+    private var voicePresentation: ComposerVoiceControlsPresentation {
+        ComposerVoiceControlsPresentation(composer: store.composer)
     }
 }

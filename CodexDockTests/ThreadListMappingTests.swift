@@ -91,6 +91,70 @@ final class ThreadListMappingTests: XCTestCase {
         XCTAssertEqual(summary.origin.evidence.sourceKind, .cli)
     }
 
+    func testMapsLatestMeaningfulTurnTextToShortEventSummary() {
+        let response = ThreadListResponseDTO(
+            data: [
+                ThreadDTO(
+                    id: "thread-latest",
+                    sessionId: "session-latest",
+                    preview: "Original opening prompt",
+                    createdAt: 1_790_000_000,
+                    updatedAt: 1_790_000_030,
+                    status: .idle,
+                    cwd: "/Users/aelaguiz/workspace/codex-client",
+                    source: .string("cli"),
+                    name: "Stable thread title",
+                    turns: [
+                        .object([
+                            "id": .string("turn-old"),
+                            "startedAt": .integer(1_790_000_010),
+                            "items": .array([
+                                .object([
+                                    "id": .string("old-user"),
+                                    "type": .string("userMessage"),
+                                    "content": .array([
+                                        .object(["text": .string("Original opening prompt")]),
+                                    ]),
+                                ]),
+                            ]),
+                        ]),
+                        .object([
+                            "id": .string("turn-new"),
+                            "startedAt": .integer(1_790_000_020),
+                            "items": .array([
+                                .object([
+                                    "id": .string("new-agent"),
+                                    "type": .string("agentMessage"),
+                                    "text": .string("Latest agent update"),
+                                ]),
+                                .object([
+                                    "id": .string("new-command"),
+                                    "type": .string("commandExecution"),
+                                    "command": .array([.string("rtk"), .string("swift"), .string("test")]),
+                                    "aggregatedOutput": .string("Passed"),
+                                ]),
+                                .object([
+                                    "id": .string("new-reasoning"),
+                                    "type": .string("reasoning"),
+                                    "summary": .array([
+                                        .object(["text": .string("Internal reasoning should stay out of row summaries")]),
+                                    ]),
+                                ]),
+                            ]),
+                        ]),
+                    ]
+                ),
+            ]
+        )
+
+        let result = SessionSummaryMapper.map(response: response, hostID: "Amir-M5")
+
+        XCTAssertEqual(result.failures, [])
+        let summary = result.summaries[0]
+        XCTAssertEqual(summary.displayTitle, "Stable thread title")
+        XCTAssertEqual(summary.shortEventSummary, .known("Latest agent update"))
+    }
+
     func testSparsePayloadMapsUnknownOptionalMetadataWithoutDroppingThread() throws {
         let response = try decodeThreadListResponse(
             """

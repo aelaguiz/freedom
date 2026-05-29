@@ -59,22 +59,16 @@ public struct HostSettingsRowViewModel: Equatable, Identifiable, Sendable {
 }
 
 public enum HostSettingsError: Error, Equatable, LocalizedError, Sendable {
-    case emptyID
-    case emptyName
     case invalidEndpoint(String)
     case duplicateID(String)
     case missingRegistry
 
     public var errorDescription: String? {
         switch self {
-        case .emptyID:
-            return "Host ID is required."
-        case .emptyName:
-            return "Host name is required."
         case let .invalidEndpoint(value):
-            return "Host WebSocket URL must be ws:// or wss://: \(value)"
+            return "Relay endpoint must be a host and port: \(value)"
         case let .duplicateID(id):
-            return "Host ID already exists: \(id)"
+            return "Relay endpoint already exists: \(id)"
         case .missingRegistry:
             return "Host registry is not available."
         }
@@ -90,6 +84,7 @@ public final class HostSettingsStore: ObservableObject {
     private let tester: any DockSessionLoading
     private let configurationStore: any LocalDockConfigurationStoring
     private let now: @Sendable () -> Date
+    private weak var connectivityReporter: (any AppConnectivityReporting)?
 
     public var rows: [HostSettingsRowViewModel] {
         registry?.hosts.map { host in
@@ -131,91 +126,133 @@ public final class HostSettingsStore: ObservableObject {
         }
     }
 
+    public func setConnectivityReporter(_ reporter: (any AppConnectivityReporting)?) {
+        connectivityReporter = reporter
+        for row in rows {
+            reporter?.reportHostTest(host: row.host, status: row.status)
+        }
+    }
+
     public func test(_ hostID: String) async {
         guard let host = registry?.hosts.first(where: { $0.id == hostID }) else {
+            DockLog.hostConfiguration.warning("host test skipped missing host_id=\(hostID, privacy: .public)")
             return
         }
 
+        let startedAt = Date()
+        let signpostState = DockSignpost.hostConfiguration.beginInterval("host.test")
+        DockLog.hostConfiguration.notice("host test started host_id=\(host.id, privacy: .public) endpoint=\(DockLog.endpoint(host.webSocketURL), privacy: .public)")
         statuses[hostID] = .testing
+        connectivityReporter?.reportHostTest(host: host, status: .testing)
+        defer {
+            DockSignpost.hostConfiguration.endInterval("host.test", signpostState)
+        }
 
         do {
             let result = try await tester.loadSessions(for: host, query: .activeHuman)
-            statuses[hostID] = .online(rowCount: result.summaries.count, checkedAt: now())
+            let status = HostConnectionTestStatus.online(rowCount: result.summaries.count, checkedAt: now())
+            statuses[hostID] = status
+            connectivityReporter?.reportHostTest(host: host, status: status)
+            DockLog.hostConfiguration.notice("host test finished host_id=\(host.id, privacy: .public) rows=\(result.summaries.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
         } catch let failure as DockLoadFailure {
+            let status: HostConnectionTestStatus
             switch failure {
             case .offline(let message):
-                statuses[hostID] = .offline(message, checkedAt: now())
+                status = .offline(message, checkedAt: now())
             case .error(let message):
-                statuses[hostID] = .error(message, checkedAt: now())
+                status = .error(message, checkedAt: now())
             }
+            statuses[hostID] = status
+            connectivityReporter?.reportHostTest(host: host, status: status)
+            DockLog.hostConfiguration.warning("host test failed host_id=\(host.id, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(failure), privacy: .public)")
         } catch {
-            statuses[hostID] = .error(error.localizedDescription, checkedAt: now())
+            let status = HostConnectionTestStatus.error(error.localizedDescription, checkedAt: now())
+            statuses[hostID] = status
+            connectivityReporter?.reportHostTest(host: host, status: status)
+            DockLog.hostConfiguration.error("host test failed host_id=\(host.id, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
         }
     }
 
     public func saveHost(
         replacing originalID: String?,
-        id rawID: String,
-        displayName rawDisplayName: String,
-        webSocketURL rawWebSocketURL: String
+        host rawHost: String,
+        port rawPort: String
     ) async throws {
-        guard var registry else {
+        if registry == nil, originalID != nil {
+            DockLog.hostConfiguration.error("host save failed reason=missing_registry")
             throw HostSettingsError.missingRegistry
         }
 
-        let id = normalized(rawID)
-        let displayName = normalized(rawDisplayName)
-        let rawWebSocketURL = normalized(rawWebSocketURL)
-
-        guard !id.isEmpty else {
-            throw HostSettingsError.emptyID
-        }
-        guard !displayName.isEmpty else {
-            throw HostSettingsError.emptyName
-        }
-        let webSocketURL: URL
+        let rawHost = normalized(rawHost)
+        let rawPort = normalized(rawPort)
+        let endpoint: DockRelayEndpoint
         do {
-            webSocketURL = try DockHostConfiguration.validatedWebSocketURL(rawWebSocketURL)
+            guard let port = Int(rawPort) else {
+                throw DockHostConfigurationError.invalidPort(rawPort)
+            }
+            endpoint = try DockRelayEndpoint(host: rawHost, port: port)
         } catch {
-            throw HostSettingsError.invalidEndpoint(rawWebSocketURL)
+            DockLog.hostConfiguration.warning("host save validation failed reason=invalid_endpoint")
+            throw HostSettingsError.invalidEndpoint("\(rawHost):\(rawPort)")
         }
 
-        let existingIDs = Set(registry.hosts.map(\.id))
-        if id != originalID, existingIDs.contains(id) {
-            throw HostSettingsError.duplicateID(id)
+        let currentHosts = registry?.hosts ?? []
+        let existingIDs = Set(currentHosts.map(\.id))
+        if endpoint.id != originalID, existingIDs.contains(endpoint.id) {
+            DockLog.hostConfiguration.warning("host save validation failed endpoint=\(endpoint.id, privacy: .public) reason=duplicate")
+            throw HostSettingsError.duplicateID(endpoint.id)
         }
 
-        let host = DockHostConfiguration(
-            id: id,
-            displayName: displayName,
-            webSocketURL: webSocketURL,
-            bearerToken: nil
-        )
+        let host = DockHostConfiguration(endpoint: endpoint)
 
-        try await configurationStore.save(
-            LocalRelayConfiguration(
-                displayName: displayName,
-                webSocketURL: webSocketURL
-            )
-        )
+        DockLog.hostConfiguration.notice("host save started endpoint=\(endpoint.id, privacy: .public) replacing=\(DockLog.publicID(originalID), privacy: .public)")
 
+        let newRegistry: HostRegistry
         if let originalID,
-           let index = registry.hosts.firstIndex(where: { $0.id == originalID }) {
-            registry = try HostRegistry(
-                hosts: registry.hosts.enumerated().map { offset, existing in
+           let index = currentHosts.firstIndex(where: { $0.id == originalID }) {
+            newRegistry = try HostRegistry(
+                hosts: currentHosts.enumerated().map { offset, existing in
                     offset == index ? host : existing
                 }
             )
-            if originalID != id {
+            if originalID != endpoint.id {
                 statuses.removeValue(forKey: originalID)
             }
-            statuses[id] = .notChecked
+            statuses[endpoint.id] = .notChecked
         } else {
-            registry = try HostRegistry(hosts: registry.hosts + [host])
-            statuses[id] = .notChecked
+            newRegistry = try HostRegistry(hosts: currentHosts + [host])
+            statuses[endpoint.id] = .notChecked
         }
-        self.registry = registry
+        try await persist(newRegistry)
+        self.registry = newRegistry
         configurationError = nil
+        DockLog.hostConfiguration.notice("host save finished endpoint=\(endpoint.id, privacy: .public) hosts=\(newRegistry.hosts.count, privacy: .public)")
+    }
+
+    public func removeHost(_ hostID: String) async throws {
+        guard let registry else {
+            DockLog.hostConfiguration.error("host remove failed reason=missing_registry")
+            throw HostSettingsError.missingRegistry
+        }
+        let hosts = registry.hosts.filter { $0.id != hostID }
+        if hosts.isEmpty {
+            try await configurationStore.save(LocalRelayEndpointList(endpoints: []))
+            statuses.removeValue(forKey: hostID)
+            self.registry = nil
+            configurationError = nil
+            DockLog.hostConfiguration.notice("host remove finished endpoint=\(hostID, privacy: .public) hosts=0")
+            return
+        }
+        let newRegistry = try HostRegistry(hosts: hosts)
+        try await persist(newRegistry)
+        statuses.removeValue(forKey: hostID)
+        self.registry = newRegistry
+        configurationError = nil
+        DockLog.hostConfiguration.notice("host remove finished endpoint=\(hostID, privacy: .public) hosts=\(newRegistry.hosts.count, privacy: .public)")
+    }
+
+    private func persist(_ registry: HostRegistry) async throws {
+        try await configurationStore.save(LocalRelayEndpointList(endpoints: registry.hosts.map(\.endpoint)))
     }
 
     private func normalized(_ value: String) -> String {

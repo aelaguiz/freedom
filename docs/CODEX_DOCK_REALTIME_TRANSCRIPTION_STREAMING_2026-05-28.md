@@ -21,11 +21,22 @@ related:
 
 # TL;DR
 
+## Supersession Note - 2026-05-28
+
+`docs/CODEX_DOCK_HOST_PORT_CONFIG_TAILSCALE_OPS_SEPARATION_2026-05-28.md`
+supersedes this plan anywhere it refers to selected host config as stored
+`host.webSocketURL` or `host.bearerToken`. Realtime still connects through the
+selected Dock relay, but the app host model is endpoint-only and computes
+`ws://<host>:<port>` only when creating the transport client. Provider config,
+OpenAI keys, and raw app-server tokens remain relay-side.
+
 - Outcome: Codex Dock voice dictation streams speech-to-text into the existing composer while the user is still talking; releasing the mic finalizes the transcript in the same draft and still requires manual Send.
-- Problem: Voice capture currently records an m4a file, waits for release, uploads the whole file to `POST /v1/audio/transcriptions`, then inserts one final transcript. That cannot produce the live "I see words appear as I speak" UX the user asked for.
+- Original problem: Voice capture recorded an m4a file, waited for release, uploaded the whole file to `POST /v1/audio/transcriptions`, then inserted one final transcript. That could not produce the live "I see words appear as I speak" UX the user asked for.
 - Approach: Replace the file-upload dictation path with one canonical realtime transcription session path. The iPhone streams microphone PCM frames through a Mac-owned relay to OpenAI Realtime transcription, receives transcript deltas, and patches only the active dictation segment in `ThreadDetailStore.composer.draft`.
 - Plan: After Connectivity exits, first prove the relay can own Realtime session creation and event streaming without exposing OpenAI secrets; then prove store-owned draft reconciliation with fake streaming events; then connect Swift to the relay with synthetic audio; then replace iOS file recording with live PCM capture and accessible composer controls; then retire stale production file-upload/docs/config paths. In the top-level dock, this plan runs after connectivity resilience so voice interruption, app background/resume, and relay failures use the shared lifecycle/status owner instead of a second voice-only recovery path.
 - Non-negotiables: no phone-side OpenAI key, no generic OpenAI proxy, no parallel voice composer, no voice auto-submit, no transcript/audio logging, no fallback that silently returns to slow file upload, and no Send while a dictation stream is active.
+- Implementation status on 2026-05-28: Phase 0 prerequisite readback passed. Phase 1 relay contract is code-complete in the current working tree with `scripts/dock-relay-realtime-transcription.mjs`, `scripts/dock-relay-realtime-transcription.test.mjs`, `scripts/dock-relay.mjs`, and `package.json`; mock/fake-upstream relay tests are preflight coverage only and do not count as acceptance proof. Phase 2 store-owned streaming draft reconciliation is code-complete in Swift with fake streaming-session preflight coverage only. Phase 3 typed Swift relay client integration is code-complete with scripted relay-notification preflight coverage only, and default store voice construction now uses the typed relay-backed streaming client instead of one-shot `audio/transcribe`. Phase 4 live PCM capture, store audio forwarding, hold dictation, tap-to-start/tap-to-stop dictation, and route/interruption cleanup are code-complete: `AVAudioEngine` emits 24 kHz mono PCM16 chunks, `ThreadDetailStore` forwards them to `RealtimeTranscriptionSession.appendAudio(...)` before commit, and `ComposerView` exposes both `Hold to dictate` and `Start dictation`. Standalone real relay-to-OpenAI proof passes with redacted evidence, and the user confirmed the physical iPhone 14 Realtime audio path worked after the relay empty-transcript fix. Phase 5 cutover cleanup removes direct Swift OpenAI/file-upload transcription, removes typed one-shot app DTO/client surfaces, deletes the relay one-shot helper, removes old one-shot service config, and adds a raw `audio/transcribe` rejection test. The latest physical iPhone 14 build changes listening-state UI from red to blue; red remains reserved for actual errors. Follow-up implementation audit and thermonuclear review passed after splitting voice state into `ThreadDetailStore+Voice.swift` and relay thread-data helpers into `scripts/dock-relay-thread-data.mjs`. The detailed typed-prefix, explicit-Send, cancel/interruption, and accessibility checklist is marked passed by user manual physical iPhone 14 check for the current installed build. Future physical checks are deferred manual QA for Amir and do not block implementation while simulator/local/real-relay proof passes; do not require, retry, or wait on physical-device checks unless Amir explicitly asks.
+- Current physical-device rule: `docs/CODEX_DOCK_CROSS_PLAN_IMPLEMENTATION_DOCK_2026-05-28.md` supersedes older physical-proof wording in this plan. Do not require, retry, or wait on physical-device checks for Realtime unless Amir explicitly asks; use simulator/local/real-relay proof and record physical-only checks in the parent deferred physical-device test list.
 
 <!-- arch_skill:block:planning_passes:start -->
 <!--
@@ -101,7 +112,7 @@ note: This block tracks stage order only. It never overrides readiness blockers 
 
 ## 0.1 The claim (falsifiable)
 
-This change is done when a physical iPhone build can hold the mic in an existing thread composer, stream live microphone audio to OpenAI Realtime transcription through the Mac relay, display transcript deltas in the text field before release, reconcile the final transcript on release without duplicating or erasing user text, and submit only when the user taps Send.
+This change is done when a physical iPhone build can dictate from the existing thread composer using either hold-to-talk or accessible tap-to-start/tap-to-stop, stream live microphone audio to OpenAI Realtime transcription through the Mac relay, display transcript deltas in the text field while speech is still in progress, reconcile the final transcript without duplicating or erasing user text, and submit only when the user taps Send.
 
 ## 0.2 In scope
 
@@ -156,6 +167,7 @@ This change is done when a physical iPhone build can hold the mic in an existing
 - Manual proof:
   - On a physical iPhone with relay services running, hold the mic and speak a sentence; text appears in the composer before release.
   - Release the mic; the final transcript remains editable and Send still requires a tap.
+  - On a physical iPhone with relay services running, tap to start dictation, speak a sentence, observe live text, tap to stop, and confirm final text remains editable with Send still manual.
   - Start dictation after existing typed text; typed text survives.
   - Cancel/interruption does not submit, does not corrupt the draft, and leaves a clear recoverable state.
 
@@ -230,12 +242,12 @@ Outputs consumed by later phases:
 
 # 2) Problem Statement (existing architecture + why change)
 
-## 2.1 What exists today
+## 2.1 Original Baseline Before Realtime Work
 
 - `VoiceCaptureController` records an m4a file with `AVAudioRecorder` after mic press.
 - `ThreadDetailStore.beginVoiceCapture()` marks `.recording` and starts recording.
 - `ThreadDetailStore.finishVoiceCapture()` stops recording, switches to `.transcribing`, calls `TranscriptionServicing.transcribe(audioFile:)`, then inserts one final transcript into `composer.draft`.
-- The default store path is currently one-shot relay upload through `RelayTranscriptionClient` and `audio/transcribe`; the direct `OpenAITranscriptionClient` still exists as a compiled side door that posts multipart m4a audio directly to `https://api.openai.com/v1/audio/transcriptions` with `gpt-4o-transcribe`.
+- The original default store path was one-shot relay upload through `RelayTranscriptionClient` and `audio/transcribe`; Realtime Phases 2-3 removed that automatic store fallback and wired the default store voice path to the typed relay-backed streaming client. Phase 5 removes the direct Swift OpenAI/file-upload side door and the one-shot app/relay DTO/client/helper surfaces.
 - `ComposerView` disables the mic during `.transcribing`, shows status text, and only updates the text field after the one-shot transcription returns.
 
 ## 2.2 What's broken / missing (concrete)
@@ -243,8 +255,8 @@ Outputs consumed by later phases:
 - Users must wait for recording to finish, upload, and decode before seeing any text.
 - There is no representation of partial transcript state in the store or UI.
 - The current protocol shape cannot stream transcript deltas.
-- The current physical-phone direction says OpenAI keys belong on the Mac relay. The app default now uses one-shot relay upload, but the direct phone-side OpenAI client and one-shot `audio/transcribe` relay route still remain as side doors that must not survive the Realtime cutover.
-- The relay does not yet expose a realtime transcription stream contract.
+- The current physical-phone direction says OpenAI keys belong on the Mac relay. The app default now uses relay-owned Realtime transcription, and the old `audio/transcribe` relay route is rejected after cutover.
+- The relay exposes a realtime transcription stream contract, the basic physical iPhone 14 microphone path has user-confirmed success after the empty-transcript relay fix, and the detailed manual checklist is marked passed by user manual check for the current installed build.
 
 ## 2.3 Constraints implied by the problem
 
@@ -270,17 +282,15 @@ Outputs consumed by later phases:
 ## 3.2 Internal ground truth (code as spec)
 
 - Authoritative behavior anchors:
-  - `CodexDock/Voice/VoiceCaptureController.swift` - current iOS voice capture uses `AVAudioRecorder`, creates a temporary m4a file, and only returns a URL on stop. It does not expose live audio frames.
-  - `CodexDock/Voice/TranscriptionService.swift` - current `TranscriptionServicing` is one-shot: `transcribe(audioFile:) async throws -> String`. `OpenAITranscriptionClient` posts multipart audio to `/v1/audio/transcriptions`, defaults to `gpt-4o-transcribe`, and reads `OPENAI_API_KEY`.
-  - `CodexDock/Voice/TranscriptionService.swift` - current `RelayTranscriptionClient` is also one-shot: it reads the completed audio file, base64-encodes it, and calls relay method `audio/transcribe`.
-  - `CodexDock/AppServer/AppServerMethods.swift` - currently defines `audioTranscribe = "audio/transcribe"`.
-  - `CodexDock/AppServer/AppServerClient.swift` - currently exposes `audioTranscribe(params:timeout:)` as a one-shot JSON-RPC request.
-  - `CodexDock/AppServer/AudioTranscriptionDTO.swift` - currently defines one-shot `AudioTranscribeParams` and `AudioTranscribeResponseDTO`.
-  - `CodexDock/State/ThreadDetailStore.swift` - current composer/voice owner. `ComposerState` owns `draft`, `isSending`, and `voice`; `ComposerVoicePhase` is only `.idle`, `.recording`, `.transcribing`; `beginVoiceCapture()` starts file recording; `finishVoiceCapture()` waits for one final transcript and calls `insertTranscript`.
-  - `CodexDock/Features/Session/ComposerView.swift` - UI binds `TextField` directly to `store.composer.draft`, drives hold/release mic gestures, and disables Send through `composer.canSend` while voice is busy.
-  - `CodexDockTests/ThreadDetailStoreTests.swift` - current proof covers transcript insertion without auto-submit, append-to-existing-draft, recoverable transcription failure, and fake `TranscriptionServicing`.
-  - `scripts/dock-relay.mjs` - current Mac relay owns app-facing JSON-RPC, upstream app-server forwarding, allowlisted methods, and LaunchAgent service behavior. It has a one-shot `audio/transcribe` handler plus file-upload transcription constants, env/CLI config, helper functions, and exports, but does not yet own OpenAI Realtime or audio streaming.
-  - `scripts/dock-relay.test.mjs` - current Node tests cover helper behavior and one-shot `audio/transcribe`; there is no Realtime transcription relay contract coverage yet.
+  - `CodexDock/Voice/VoiceCaptureController.swift` - current iOS voice capture uses `AVAudioEngine`, emits bounded PCM16 mono 24 kHz chunks, and does not create m4a upload files for production dictation.
+  - `CodexDock/Voice/TranscriptionService.swift` - current production voice abstractions are `RealtimeTranscriptionServicing`, `RealtimeTranscriptionSession`, `RealtimeTranscriptionEvent`, and `LiveVoiceCaptureControlling`; one-shot `TranscriptionServicing`, `OpenAITranscriptionClient`, and `RelayTranscriptionClient` have been removed.
+  - `CodexDock/Voice/RelayRealtimeTranscriptionClient.swift` - current typed client sends `audio/transcription/start`, `audio/transcription/append`, `audio/transcription/commit`, and `audio/transcription/cancel`, and maps relay delta/completed/failed/canceled/closed notifications.
+  - `CodexDock/AppServer/AppServerMethods.swift` and `CodexDock/AppServer/AppServerClient.swift` - current typed app surface contains Realtime transcription methods only; one-shot `audioTranscribe(params:timeout:)` and `AudioTranscriptionDTO.swift` have been removed.
+  - `CodexDock/State/ThreadDetailStore.swift` - current composer/voice owner streams live capture chunks into the active Realtime session, reconciles partial/final transcript text into the existing draft, and keeps Send explicit.
+  - `CodexDock/Features/Session/ComposerView.swift` - UI binds `TextField` directly to `store.composer.draft`, supports hold and tap dictation controls, and disables Send through `composer.canSend` while voice is busy.
+  - `CodexDockTests/ThreadDetailStoreTests.swift` - current proof covers live chunk forwarding, transcript insertion without auto-submit, append-to-existing-draft, recoverable transcription failure, and fake Realtime streaming sessions.
+  - `scripts/dock-relay.mjs` - current Mac relay owns app-facing JSON-RPC, upstream app-server forwarding, allowlisted methods, LaunchAgent service behavior, and relay-owned Realtime transcription routing. Raw `audio/transcribe` falls through to unsupported method `-32601`.
+  - `scripts/dock-relay.test.mjs` and `scripts/dock-relay-realtime-transcription.test.mjs` - current Node tests cover Realtime transcription contract behavior and raw legacy `audio/transcribe` rejection.
   - `CodexDock/Configuration/DockHostConfiguration.swift`, `CodexDock/Configuration/RelayBootstrapStore.swift`, and `CodexDock/Configuration/RelayDiscovery.swift` - current physical phone path discovers a no-client-auth relay and builds host config with `bearerToken: nil`. Realtime voice must use that same host contract rather than reintroducing a phone bearer or provider secret.
   - `docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28.md` - preceding top-level phase owns app scene lifecycle, root connectivity status, and thread detail reconnect/rehydrate. Realtime voice must attach to those lifecycle hooks for app background/interruption handling.
   - `docs/IPHONE_PERSONAL_PAIRING_SECRET_PLAN_2026-05-28.md` - current physical-device plan says voice transcription should move through the relay and the phone should not contain OpenAI keys. That plan targeted `audio/transcribe` file upload; this plan supersedes that voice sub-slice with Realtime streaming.
@@ -361,7 +371,7 @@ Outputs consumed by later phases:
 
 ## 4.2 Control paths (runtime)
 
-Current hold/release voice path:
+Original hold/release voice path before Realtime Phase 2:
 
 1. User presses mic in `ComposerView`.
 2. `ComposerView` calls `ThreadDetailStore.beginVoiceCapture()`.
@@ -371,8 +381,9 @@ Current hold/release voice path:
 6. `ComposerView` calls `ThreadDetailStore.finishVoiceCapture()`.
 7. Store sets `composer.voice.phase = .transcribing`.
 8. `VoiceCaptureController.stopRecording()` returns the m4a URL.
-9. Current default production path: `RelayTranscriptionClient.transcribe(audioFile:)` reads the completed m4a file, calls `AppServerClient.audioTranscribe`, and the relay handles `audio/transcribe` as a file-upload-style request.
-9a. Current side door: `OpenAITranscriptionClient.transcribe(audioFile:)` can still upload directly to `https://api.openai.com/v1/audio/transcriptions` if manually constructed. It is not the default store path and must be removed from production construction during the Realtime cutover.
+9. Original default production path: `RelayTranscriptionClient.transcribe(audioFile:)` reads the completed m4a file, calls `AppServerClient.audioTranscribe`, and the relay handles `audio/transcribe` as a file-upload-style request.
+9a. Current Phase 4/5 state: `ThreadDetailStore` no longer constructs that automatic one-shot fallback. The default voice path uses the typed relay-backed streaming client, starts `LiveVoiceCaptureController`, forwards 24 kHz mono PCM16 chunks through `RealtimeTranscriptionSession.appendAudio(...)`, stops capture before commit, and owns both hold and tap dictation modes. Real relay/OpenAI proof, the basic physical iPhone 14 Realtime audio path, and the detailed manual closeout checklist have passed for the current installed build.
+9b. Current side-door state after Phase 5: `OpenAITranscriptionClient`, `RelayTranscriptionClient`, `AppServerClient.audioTranscribe(...)`, `AppServerMethods.audioTranscribe`, the one-shot DTO, and the relay `audio/transcribe` handler have been removed or rejected. Raw `audio/transcribe` requests now fail rather than falling back to file upload.
 10. Store trims the returned text and appends it to `composer.draft`.
 11. Store clears voice state; user may edit or tap Send.
 
@@ -672,6 +683,8 @@ Realtime transcription stopped. Try again.
 
 * Goal:
   - Confirm Realtime starts after the Connectivity owner exists, so voice recovery does not create a second lifecycle/status path.
+* Status:
+  - Complete in the current working tree. `docs/CODEX_DOCK_REALTIME_TRANSCRIPTION_STREAMING_2026-05-28_IMPLEMENTATION_LOG.md` records the readback: `AppConnectivityStore`, `AppLifecycleCoordinator`, root-owned Dock refresh, scene-phase forwarding, and `ThreadDetailStore` lifecycle input are present. Phase 1 did not add a second lifecycle, `scenePhase`, reconnect, or connectivity authority.
 * Checklist (must all be done before Phase 1 starts):
   - Do not start Realtime until `docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28.md` has landed.
   - Required baseline symbols/behaviors: `AppConnectivityStore` exists, the root lifecycle owner exists, `DockView.runRefreshLoop()` is gone or no longer authoritative, background/foreground resume is modeled, and `ThreadDetailStore` receives lifecycle/reconnect inputs from that owner.
@@ -684,6 +697,11 @@ Realtime transcription stopped. Try again.
 
 * Goal:
   - Prove the highest-risk privilege and protocol seam first: the Mac relay can own an OpenAI Realtime transcription session, accept bounded app audio chunks, and stream sanitized transcript events back without exposing OpenAI secrets to the phone.
+* Status:
+  - Code-complete in the current working tree, not accepted from mocks. The relay now exposes `audio/transcription/start`, `audio/transcription/append`, `audio/transcription/commit`, and `audio/transcription/cancel`; owns OpenAI Realtime WebSocket setup; validates sequence/chunk/session bounds; accumulates transcript deltas; emits sanitized delta/completed/failed/canceled/closed notifications; and cleans up on cancel, upstream close, downstream close, timeout, or completion.
+  - Preflight proof passed on 2026-05-28: `node --check scripts/dock-relay-realtime-transcription.mjs`, `node --check scripts/dock-relay-realtime-transcription.test.mjs`, `node --check scripts/dock-relay.mjs`, `node --test scripts/dock-relay-realtime-transcription.test.mjs` with 8 tests and 0 failures, `rtk npm run test:relay` with 41 tests and 0 failures, and focused `rtk git diff --check`. These tests use fake/mock upstreams and do not count as acceptance proof.
+  - Acceptance proof status: later proof ran the relay against real OpenAI Realtime with the Mac-side `OPENAI_API_KEY`, streamed representative PCM through the relay contract, received real OpenAI transcription events, and recorded physical iPhone 14 user manual proof for the current installed app path.
+  - The legacy one-shot `audio/transcribe` path still exists at this phase. That is intentional until Phase 5, where the production fallback surface must be deleted/rejected after Swift has moved to the Realtime path.
 * Work:
   - Add the narrow relay-side session manager and fake-upstream test harness before touching Swift UI. This phase proves the server-side WebSocket shape, session lifecycle, privacy boundaries, and event ordering that later Swift work will depend on.
 * Checklist (must all be done):
@@ -706,6 +724,7 @@ Realtime transcription stopped. Try again.
   - Add `scripts/dock-relay.test.mjs` coverage with an injected or fake OpenAI Realtime WebSocket that proves start, append, commit, delta accumulation into `partialText`, completed, cancel, upstream error, downstream disconnect, bounds rejection, ordering, downstream JSON-RPC error sanitization, failed-notification sanitization, and log redaction behavior.
 * Verification (required proof):
   - `rtk npm run test:relay`
+  - Real relay-to-OpenAI Realtime smoke proof with redacted evidence. Mock/fake-upstream tests are preflight checks and do not count as acceptance proof.
 * Docs/comments (propagation; only if needed):
   - Add a short relay-boundary comment at the transcription session manager explaining that the method family is purpose-specific and must not become a generic OpenAI proxy.
 * Exit criteria (all required):
@@ -721,9 +740,10 @@ Realtime transcription stopped. Try again.
 ## Phase 2 - Store-Owned Streaming Draft Reconciliation
 
 * Goal:
-  - Prove the user-visible composer semantics with fake streaming events before depending on live audio or network timing.
+  - Preflight-check the user-visible composer state machine with fake streaming events before depending on live audio or network timing.
 * Work:
   - Replace the one-shot store mental model with a streaming voice state machine owned by `ThreadDetailStore`. This phase keeps the transport fake, so tests can focus on partial/final/cancel/error behavior in the single existing composer.
+  - Current implementation note: code-complete in the working tree as preflight only. Fake Swift streaming sessions check store behavior, but they do not count as acceptance proof.
 * Checklist (must all be done):
   - Define Swift transcript event/session types under `CodexDock/Voice/` for started, delta, completed, failed, canceled, and closed.
   - Replace production `TranscriptionServicing.transcribe(audioFile:)` with a fakeable streaming transcription service contract that supports start, append/audio input coordination, commit, cancel, and async transcript events.
@@ -795,6 +815,10 @@ Realtime transcription stopped. Try again.
 
 * Goal:
   - Replace file recording with live microphone chunks and expose the final in-place live dictation UX in `ComposerView`.
+* Current implementation note:
+  - Code-complete in the current working tree. `LiveVoiceCaptureController` uses `AVAudioEngine` to emit 24 kHz mono PCM16 chunks, `ThreadDetailStore` forwards those chunks into `RealtimeTranscriptionSession.appendAudio(...)`, release stops capture before commit, the hold-release path stays enabled while startup/finalizing state changes, tap-to-start/tap-to-stop dictation uses the same relay-backed session path, and route/interruption cleanup finishes active capture.
+  - Real relay-to-OpenAI proof has passed, and the user confirmed the physical iPhone 14 Realtime audio path worked after the empty-transcript relay fix. Preflight tests still remain useful but are not the acceptance proof by themselves.
+  - Closeout status: detailed manual checklist evidence for held-mic mode, tap mode, typed-prefix preservation, explicit Send/no auto-submit, cancel/interruption recoverability, and accessibility behavior is marked passed by user manual physical iPhone 14 check for the current installed build.
 * Work:
   - Add the real `AVAudioEngine` capture path, convert microphone input to relay-ready PCM, and wire the existing composer controls to streaming/finalizing states. This phase turns the proven contract into the actual user experience.
 * Checklist (must all be done):
@@ -859,6 +883,18 @@ Realtime transcription stopped. Try again.
   - Manual proof on physical iPhone: speak while holding mic, observe text before release, release, edit the final draft, tap Send manually, verify no auto-submit occurred.
   - Manual proof on physical iPhone: type a prefix, dictate, verify typed text survives final reconciliation, then cancel/interruption path verifies no submit and no draft corruption.
   - Manual accessibility proof on physical iPhone: tap-to-start/tap-to-stop works, VoiceOver labels/hints are meaningful, hit targets are usable, and large Dynamic Type keeps status/control text readable without overlap.
+  - Physical-device operating note: this checklist is marked passed by user manual physical iPhone 14 check for the current installed build. Future physical checks are deferred manual QA for Amir and must not block implementation when simulator/local/real-relay proof passes.
+  - Required physical iPhone 14 closeout checklist:
+
+    | Item | Required passing evidence |
+    | --- | --- |
+    | Held dictation live partial | Press and hold `Hold to dictate`, speak, and confirm transcript text appears in the existing composer before release. |
+    | Held dictation final/edit/send | Release after live text appears, confirm final text remains editable, and confirm no Codex turn submits until `Send` is tapped. |
+    | Tap dictation live partial | Tap `Start dictation`, speak, tap `Stop dictation`, and confirm final text remains in the same editable composer draft. |
+    | Typed-prefix preservation | Type text before dictation, dictate, finalize, and confirm typed text outside the active dictation segment was not overwritten. |
+    | Cancel/interruption recovery | Start dictation, interrupt through a real path such as navigating back, backgrounding the app, or an audio interruption, and confirm no submit, no draft corruption, and a recoverable composer state. |
+    | Accessibility labels/hints | Confirm `Message`, `Hold to dictate`, `Start dictation` / `Stop dictation`, and `Send` expose meaningful labels and hints. |
+    | Hit targets and Dynamic Type | Confirm voice controls and `Send` remain tappable and status/control text stays readable without overlap at large Dynamic Type. |
 * Docs/comments (propagation; only if needed):
   - Live docs listed in the checklist are part of this phase's required work; delete stale voice-path prose rather than preserving contradictory instructions.
 * Exit criteria (all required):

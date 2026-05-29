@@ -83,9 +83,11 @@ kept explicit so they are not lost during implementation.
 - The user can push to talk.
 - Push-to-talk is not a separate screen in MVP.
 - Push-to-talk happens in place from the session/thread screen composer.
-- The user presses and holds the mic while speaking.
-- When the user releases the mic, the app transcribes the audio into the same
-  composer text box.
+- The user can press and hold the mic while speaking, then release to finalize
+  dictation.
+- The user can also tap once to start dictation and tap again to stop/finalize.
+- Dictation streams text into the same composer text box while speech is still
+  in progress.
 - The app must not submit the transcript automatically. The user can edit the
   transcribed text, then taps Send when ready.
 - Push-to-talk should use OpenAI speech transcription through the Mac relay.
@@ -369,7 +371,9 @@ The app has three primary user-facing areas and one action surface.
 
 1. Dock
    - Primary home feed.
-   - Flat list grouped by host and branch.
+   - Session list with a Sort control: `Branch` keeps host/branch grouping and
+     orders visible groups and rows by newest activity first; `Newest` shows a
+     flat newest-first list.
    - Shows active, recent, and needs-attention sessions.
 
 2. Session
@@ -481,7 +485,8 @@ Session screen:
 - Pull down: refresh.
 - Swipe from left edge: back to Dock.
 - Tap and hold mic: push to talk in place on the session screen.
-- Release mic: transcribe speech into the composer text box.
+- Release mic: finalize streamed speech text in the composer text box.
+- Tap dictation: start hands-free dictation; tap stop to finalize.
 - Tap send: send typed/transcribed text only after the user explicitly submits.
 
 Archive row:
@@ -503,7 +508,7 @@ do not treat AI Manager rotation as a V1 implementation requirement.
 +------------------------------------------------+
 | Dock                                  + Host    |
 | All  Needs me  Running  Limited                |
-| Search sessions, repo, branch                  |
+| Search sessions        Branch Newest   [ ]Idle |
 +------------------------------------------------+
 | home                         Codex  AIM ready  |
 | main
@@ -514,7 +519,7 @@ do not treat AI Manager rotation as a V1 implementation requirement.
 | |      | aimgr  codex-rotation               |
 | |      | approval requested 8m ago            |
 | feature/animation-engine                         |
-| | gold | Dart animation SSOT          Idle     |
+| | gold | Scene graph cleanup         Running  |
 | |      | lessons_studio  feature/...          |
 | |      | last agent msg 19m ago               |
 +------------------------------------------------+
@@ -599,7 +604,7 @@ Notes:
 | rtk flutter test apps/flutter/test/...         |
 | [Deny]                         [Approve]       |
 +------------------------------------------------+
-| Type message...              Hold mic   Send   |
+| Type message...          Hold mic Tap mic Send |
 +------------------------------------------------+
 ```
 
@@ -611,7 +616,9 @@ Notes:
 - The composer stays simple.
 - Push-to-talk does not open a blue modal or separate recording screen.
 - While the mic is held, the composer can show an inline recording state.
-- On release, transcription fills the composer text field.
+- Tap-to-start/tap-to-stop is the accessible alternate dictation path.
+- During dictation, transcription streams into the composer text field.
+- On release or tap stop, transcription finalizes in the composer text field.
 - Voice becomes editable text before sending.
 - The transcript must not auto-send in MVP.
 - MVP uses OpenAI speech transcription through the Mac relay. The UI calls it
@@ -728,7 +735,8 @@ FR-LIST-001: The Dock must show sessions from multiple hosts in one flat feed.
 FR-LIST-002: The feed must group sessions by host.
 
 FR-LIST-003: Within a host, the feed should group or visually separate sessions
-by git branch when branch data is available.
+by git branch when branch data is available and Sort is set to `Branch`.
+`Branch` ordering is newest-visible-activity-first inside the grouped view.
 
 FR-LIST-004: Sessions with missing branch data must remain visible under an
 "Unknown branch" or repo-only grouping.
@@ -739,10 +747,17 @@ status, last activity, and at least one short event summary.
 FR-LIST-006: The feed must include filters for all sessions, needs-me sessions,
 running sessions, and limited/rate-limit-warning sessions.
 
+FR-LIST-006A: The feed must include a local `Idle` visibility toggle. It is off
+by default and hides Idle rows across Dock filters until enabled.
+
 FR-LIST-007: The feed must support pull-to-refresh.
 
 FR-LIST-008: The feed must support search by title, app-local label, repo/cwd,
 branch, host, and thread id.
+
+FR-LIST-009: The feed must support local Sort choices `Branch` and `Newest`.
+`Newest` is a flat newest-first list. `Branch` keeps host/branch grouping but
+orders visible groups and rows by newest activity first.
 
 ### 9.3 Thread Labels And Colors
 
@@ -795,8 +810,9 @@ FR-VOICE-001: The session composer must include push-to-talk.
 FR-VOICE-002: Push-to-talk must be an in-place hold gesture on the session
 composer, not a separate screen.
 
-FR-VOICE-003: The user must be able to record speech by holding the mic and
-receive a text transcript when releasing the mic.
+FR-VOICE-003: The user must be able to dictate speech by holding the mic or by
+tapping once to start and again to stop. Text must stream into the composer
+while dictation is active and finalize when the user releases or taps stop.
 
 FR-VOICE-004: The transcript must be inserted into the composer text field and
 remain editable before sending in MVP.
@@ -1303,7 +1319,7 @@ Sessions from other hosts are still visible.
 ```text
 No sessions need you right now.
 
-Running and idle sessions are still in All.
+Running sessions are still in All. Enable Idle to include idle sessions.
 ```
 
 ### 13.4 AIMGR Unavailable, Post-V1 Only
@@ -1383,14 +1399,16 @@ that does all of this:
 1. Add at least two host configurations.
 2. Connect to each host's Codex app-server.
 3. Show sessions from both hosts in one Dock feed.
-4. Group the feed by host and branch.
-5. Identify running, idle, needs-me, limited, offline, and archived sessions.
+4. Support `Branch` grouping by host/branch and flat `Newest` sorting.
+5. Identify running, idle, needs-me, limited, offline, and archived sessions;
+   hide idle Dock rows by default until `Idle` is enabled.
 6. Add/edit a local thread label.
 7. Add/edit a local thread color.
 8. Tap a session and view the conversation/event stream.
 9. Send typed text to a session.
-10. Hold the mic on the session screen, release to transcribe into the composer,
-    edit the transcript, and manually tap Send.
+10. Hold the mic on the session screen or use tap-to-start/tap-to-stop, watch
+    text stream into the composer, finalize dictation, edit the transcript, and
+    manually tap Send.
 11. Show minimal command/file/permission approval cards and let the user answer
     supported ones when the API produces them.
 12. Swipe to archive a session.
@@ -1429,7 +1447,8 @@ Build in this order when implementation starts:
 
 6. Voice
    - in-place push-to-talk from the session composer
-   - release-to-transcribe into the text box
+   - tap-to-start/tap-to-stop alternate dictation
+   - live partial text in the text box before finalization
    - transcript edit
    - manual send as text
 
@@ -1508,7 +1527,7 @@ Implementation-time decisions:
 | Quickly identify a thread | Sections 7, 8.1, 11.4 |
 | Click/tap into thread | Sections 8.3, 9.4 |
 | Type | Sections 8.3, 9.4 |
-| Push-to-talk with Whisper/OpenAI transcription | Sections 8.3, 9.5 |
+| Tap or hold dictation with relay-owned Realtime transcription | Sections 8.3, 9.5 |
 | Swipe to archive | Sections 8.4, 9.6 |
 | Unarchive | Sections 8.4, 9.6 |
 | View by server | Sections 8.1, 9.2 |

@@ -17,13 +17,23 @@ related:
 
 # TL;DR
 
+## Supersession Note - 2026-05-28
+
+`docs/CODEX_DOCK_HOST_PORT_CONFIG_TAILSCALE_OPS_SEPARATION_2026-05-28.md`
+supersedes this plan anywhere it presents `CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS`
+or bearer-token env as app launch config. Current app-facing relay config is
+endpoint-only: `CODEX_DOCK_HOSTS=<host>:<port>[,<host>:<port>]`. URL env is
+allowed only for clearly test-only transport smokes, not for app config.
+
 Outcome: make Codex Dock resilient enough that short-lived network drops, relay restarts, upstream app-server restarts, app background/resume cycles, and stale live-detail sessions become visible, automatically recoverable states instead of silent dead air. The app must show one compact connectivity indicator across Dock, Archive, Hosts, and Session detail, and the thread detail path must restore live updates after reconnect by resuming the same thread. The default user experience is transparent recovery: the client keeps trying while retry is safe, and the indicator tells the user what is happening.
 
 Problem: connectivity truth is currently split across one-shot list loading, manual host tests, a raw socket actor state, and one thread-detail live-state pill. The raw client can notice some failures, but the UI usually cannot observe them, and no layer owns reconnect/backoff/rehydration or iOS background/foreground transitions as a first-class lifecycle.
 
 Approach: make the app-server connection lifecycle observable, add a single app-level connectivity store for host status and refresh state, add root-owned scene lifecycle coordination for background/resume, teach thread detail to react to connection-state and app-lifecycle changes, and make the relay either preserve upstream live sessions or fail loudly so Swift can reconnect cleanly. Keep UI surfaces as consumers, not separate connectivity authorities.
 
-Plan: first prove transport drops become visible to thread detail, then add reconnect and compact thread rehydration, then build `AppConnectivityStore` plus the root indicator, then add app background/resume suspend-and-recover behavior, then align relay and archive/host surfaces, then verify on unit, integration, and real simulator paths. In the top-level dock, this plan runs after Agents tab/live counts so it can consume the final `DockSessionQuery`/`DockSnapshot` tab-count shape, and before Realtime transcription so voice recovery can use the same lifecycle/status owner.
+Plan: first prove transport drops become visible to thread detail, then add reconnect and compact thread rehydration, then build `AppConnectivityStore` plus the root indicator, then add app background/resume suspend-and-recover behavior, then align relay and archive/host surfaces, then verify on unit, integration, simulator, and real-relay proof. Physical `iPhone 14` visual navigation remains a deferred manual QA follow-up for Amir and must not block agent implementation while the top-level physical-device operating rule is active. In the top-level dock, this plan runs after Agents tab/live counts so it can consume the final `DockSessionQuery`/`DockSnapshot` tab-count shape, and before Realtime transcription so voice recovery can use the same lifecycle/status owner.
+
+Current physical-device rule: `docs/CODEX_DOCK_CROSS_PLAN_IMPLEMENTATION_DOCK_2026-05-28.md` supersedes older physical-proof wording in this plan. Do not require, retry, or wait on physical-device checks for Connectivity unless Amir explicitly asks; record physical-only checks in the parent deferred physical-device test list instead.
 
 Non-negotiables: no silent stale state, no hidden fallback path, no second source of connectivity truth, no disconnected streams that leave UI loops idle forever, no late JSON-RPC responses killing healthy connections, no app-wide indicator owned by a tab-local view, and no background/resume path that either spins reconnect loops in the background or returns foreground claiming online without revalidation.
 
@@ -130,8 +140,8 @@ The claim is false if any of these happen:
 - Dock/Archive/Hosts integration: keep existing content stores but feed their host outcomes into the shared connectivity model; fix Archive's all-offline empty-state ambiguity.
 - Relay bootstrap integration: `CodexDockBootstrapView`, `RelayBootstrapStore`, Bonjour discovery, saved non-secret relay config, and manual relay fallback participate in lifecycle and connectivity state. Discovery/resume must not become a second root status path.
 - Agents-plan integration: consume the final `DockSessionQuery(archived:sourceKinds:)`, scoped load failures, counted `DockSnapshot.tabs`, and tab-scoped sections. Do not build connectivity around the pre-Agents `loadSessions(for:archived:)` and `DockFilter` shape.
-- Relay behavior: align `scripts/dock-relay.mjs` with the reconnect story because it is the phone endpoint in normal development and simulator runs.
-- Verification: focused Swift unit tests, relay tests, existing `swift test`, existing `npm test`, and a real simulator/manual check using the current service targets.
+- Relay behavior: align `scripts/dock-relay.mjs` with the reconnect story because it is the normal phone endpoint and the simulator development endpoint.
+- Verification: focused Swift unit tests, relay tests, existing `swift test`, existing `npm test`, and a physical `iPhone 14` manual check using the current service targets. If physical UI automation is blocked, a non-Pro simulator visual fallback may be recorded to avoid blocking implementation progress.
 
 ## 0.3 Out of scope
 
@@ -152,7 +162,7 @@ The claim is false if any of these happen:
 - Dock, Archive, and Hosts update the shared connectivity status from real load/test outcomes without becoming competing sources of truth.
 - Relay tests prove upstream close either reconnects/re-resumes or closes the downstream WebSocket in a way Swift handles, attention probing uses compact resume, and live loaded rows survive relay list limits.
 - README or the relevant live runbook names the new status/recovery behavior and keeps `rtk make services`, `rtk make app-server-status`, and `rtk make dock-relay-status` current.
-- `rtk swift test` and `rtk npm test` pass, and the `iPhone 17` simulator can show the global indicator against `ws://192.168.50.117:4510`, background the app, resume it, and return to online/live automatically when services remain reachable.
+- `rtk swift test` and `rtk npm test` pass, and the physical `iPhone 14` can install/launch against `ws://192.168.50.117:4510`. Visual proof should prefer the physical `iPhone 14`; when device UI automation is blocked, the accepted fallback is a non-Pro simulator screenshot showing the global indicator, relay-backed host, and real rows, with physical visual navigation deferred until WebDriverAgent is available.
 
 ## 0.5 Key invariants (fix immediately if violated)
 
@@ -227,24 +237,26 @@ Outputs consumed by later phases:
 - The first implementation slice adds lifecycle observability before full UI polish because the hidden failure mode is worse than the missing label.
 - The relay may either reconnect upstream or close downstream fail-loudly. The preferred design is upstream re-resume when safe, but a fail-loud downstream close is acceptable if reconnecting upstream would duplicate or corrupt thread state.
 - The plan does not try to keep WebSockets alive in the iOS background. It chooses deterministic quiesce-on-background and revalidate-on-foreground because that matches iOS process suspension and keeps retry semantics honest.
-- Manual simulator verification remains part of final proof because the feature is partly user-visible, but unit and integration tests carry the core behavior.
+- Manual physical-device verification was part of the original final proof because the feature is partly user-visible, but the parent plan now supersedes that as a temporary operating rule: physical behavior checks are Amir-owned deferred manual QA while simulator/local/real-relay proof is available.
 
-# 2) Problem Statement (existing architecture + why change)
+# 2) Problem Statement (plan-start architecture + why change)
 
-## 2.1 What exists today
+## 2.1 What existed at plan start
 
-The app can already connect to the Codex app-server, perform JSON-RPC requests, list sessions, open a thread detail view, receive live notifications and server requests, send text, answer supported request cards, archive/unarchive, test hosts manually, and refresh Dock rows every five seconds while the Dock view is active.
+At plan start, the app could already connect to the Codex app-server, perform JSON-RPC requests, list sessions, open a thread detail view, receive live notifications and server requests, send text, answer supported request cards, archive/unarchive, test hosts manually, and refresh Dock rows every five seconds while the Dock view was active.
 
-The SwiftUI app entry point and root view do not currently observe `scenePhase`. Backgrounding/resuming is therefore implicit iOS behavior rather than an owned app lifecycle.
+The SwiftUI app entry point and root view did not observe `scenePhase`. Backgrounding/resuming was therefore implicit iOS behavior rather than an owned app lifecycle.
 
-Connectivity state exists, but it is local and fragmented:
+Connectivity state existed, but it was local and fragmented:
 
 - `AppServerClient.state` tracks raw socket state inside an actor.
 - `DockStoreState` and `DockHostLoadStatus` infer online/offline from `thread/list`.
 - `ThreadDetailLiveState` tracks one open detail view.
 - `HostConnectionTestStatus` tracks manual host test results in the Hosts tab.
 
-## 2.2 What's broken / missing (concrete)
+## 2.2 What was broken at plan start and current resolution
+
+The bullets below describe the plan-start problem statement, not current open work. Connectivity Phases 1-6 now implement the observable connection state, reconnect/rehydrate path, app-wide connectivity store, background/resume lifecycle, relay fail-loud/recovery behavior, README updates, and accepted simulator visual proof. Physical `iPhone 14` behavior checks remain deferred manual QA under the parent rule.
 
 - There is no reconnect/backoff policy in Swift.
 - `ThreadDetailStore` can stop receiving live updates without the UI learning that the stream is dead.
@@ -342,7 +354,7 @@ Connectivity state exists, but it is local and fragmented:
   - Not applicable.
 
 - Existing grounding / tool / file exposure:
-  - `rtk swift test`, `rtk npm test`, `rtk node --check scripts/dock-relay.mjs`, `rtk make services`, `rtk make app-server-status`, `rtk make dock-relay-status`, and `rtk make app SIM='iPhone 17'`.
+  - `rtk swift test`, `rtk npm test`, `rtk node --check scripts/dock-relay.mjs`, `rtk make services`, `rtk make app-server-status`, `rtk make dock-relay-status`, and `rtk make device-install DEVICE=00008110-000E04940240A01E DEVELOPMENT_TEAM=R6B8KXF3QW`.
 
 - Duplicate or drifting paths relevant to this change:
   - `AppServerClient.state`, `DockHostLoadStatus`, `HostConnectionTestStatus`, and `ThreadDetailLiveState` all describe connectivity-like truth from different angles. The plan must converge their app-wide rollup through `AppConnectivityStore` while preserving domain-specific local states.
@@ -362,7 +374,7 @@ Connectivity state exists, but it is local and fragmented:
   - `CodexDockTests/DockStoreTests.swift` already covers load, refresh, offline, multi-host partial failure, filters, metadata, archive/restore, and host settings.
   - `CodexDockTests/ThreadDetailStoreTests.swift` already covers compact read/turns/resume, newest-first display, resume failure stale state, notification merging, server-request cards, composer sends, voice draft behavior, and thread mismatch.
   - `scripts/dock-relay.test.mjs` already covers helper-level attention flags, merge priority, archived-list behavior, and hidden relay source markers.
-  - Simulator proof can use the existing app launch target plus iOS home/resume behavior to verify foreground revalidation without adding a background daemon.
+  - Physical `iPhone 14` proof uses the existing device-install target plus iOS home/resume behavior to verify foreground revalidation without adding a background daemon.
 
 ## 3.3 Decision gaps that must be resolved before implementation
 
@@ -687,7 +699,7 @@ The root pill may live in a `.safeAreaInset(edge: .top)` or root overlay. The im
 | Thread detail | `CodexDock/State/ThreadDetailStore.swift` | `load()`, `didLoad`, `startObservation` | One-shot load; streams can end silently; no reconnect. | Split initial load from rehydrate; observe state; on drop mark reconnecting and automatically rerun compact read/turns/resume; mark stale only after automatic recovery stops. | This is the highest-risk live update path. | `rehydrateLiveSession()` / state-driven recovery path. | `ThreadDetailStoreTests` |
 | Thread detail | `CodexDock/State/ThreadDetailStore.swift` | `sendDraft`, `respond(to:)` | Fails request locally if session send fails. | Preserve draft/request card state through reconnect; do not auto-replay non-idempotent sends unless explicitly submitted again. | Avoid duplicate turn starts or approvals. | Failed sends remain user-visible and recoverable. | `ThreadDetailStoreTests` |
 | App connectivity | new | `CodexDock/State/AppConnectivityStore.swift` | No app-wide status owner. | Add root-owned observable store with per-host and overall status, including automatic retry progress where useful. | Single source for global indicator and cross-tab status. | `AppConnectivityStore`, `HostConnectivityStatus`, `AppConnectivityOverallStatus`. | New `AppConnectivityStoreTests` |
-| App lifecycle | `CodexDockApp/CodexDockApp.swift`, `CodexDock/Features/Dock/CodexDockBootstrapView.swift`, `CodexDock/Features/Dock/DockView.swift` | `WindowGroup`, `.task`, `CodexDockRootView` | No `scenePhase` owner; background/resume is implicit. | Add root/bootstrap scene-phase forwarding into one lifecycle coordinator/store. | Background/resume must be a first-class recovery state, not hidden SwiftUI behavior. | `AppLifecycleCoordinator` or equivalent root-owned lifecycle state. | New lifecycle/store tests, simulator check |
+| App lifecycle | `CodexDockApp/CodexDockApp.swift`, `CodexDock/Features/Dock/CodexDockBootstrapView.swift`, `CodexDock/Features/Dock/DockView.swift` | `WindowGroup`, `.task`, `CodexDockRootView` | No `scenePhase` owner; background/resume is implicit. | Add root/bootstrap scene-phase forwarding into one lifecycle coordinator/store. | Background/resume must be a first-class recovery state, not hidden SwiftUI behavior. | `AppLifecycleCoordinator` or equivalent root-owned lifecycle state. | New lifecycle/store tests, physical `iPhone 14` check |
 | Host auth baseline | `CodexDock/Configuration/DockHostConfiguration.swift`, `CodexDock/Configuration/RelayBootstrapStore.swift`, `CodexDock/AppServer/AppServerClient.swift` | `bearerToken: String?`, discovered relay hosts | Nil bearer is the implemented physical relay path. | Keep nil bearer as a valid online/checking/reconnecting host state; do not surface it as missing credentials. | Connectivity status must match the actual no-phone-secret product path. | Optional bearer is normal; auth failures are endpoint-specific. | App connectivity and host tests |
 | Dock query baseline | `CodexDock/State/DockStore.swift`, `docs/CODEX_DOCK_AGENTS_TAB_LIVE_COUNTS_2026-05-28.md` | `DockSessionLoading.loadSessions` before Agents | Current code has old loader API, while Phase 1 top-level changes it. | Implement connectivity after Agents and report scoped query outcomes from the new `DockSessionQuery`/`DockSnapshot` shape. | Avoid building app-wide status on a loader API that will be removed. | Scoped load reporting into `AppConnectivityStore`. | Dock/connectivity tests |
 | App lifecycle | new | `CodexDock/State/AppLifecycleCoordinator.swift` or local root lifecycle type | Missing. | Track active/inactive/backgrounded/resuming state, background timestamp, resume generation, and lifecycle event stream/reporting. | Avoid duplicating lifecycle decisions across root, detail, relay discovery, and connectivity. | `AppLifecycleState`; `handleScenePhase(_:)`; resume generation. | `AppLifecycleCoordinatorTests` or focused store tests |
@@ -695,7 +707,7 @@ The root pill may live in a `.safeAreaInset(edge: .top)` or root overlay. The im
 | Root UI | `CodexDock/Features/Dock/DockView.swift` | `CodexDockRootView` | Owns three stores and plain `TabView`. | Add `@StateObject AppConnectivityStore` and lifecycle coordinator; pass reporters; mount global indicator; observe foreground resume. | Indicator and lifecycle recovery must appear across every screen. | Root-level status/lifecycle injection and overlay/inset. | UI/manual, store tests |
 | Dock refresh | `CodexDock/Features/Dock/DockView.swift` | `runRefreshLoop()` | View-bound five-second loop. | Move Dock auto-refresh ownership to `CodexDockRootView`; pause/cancel loop on background; restart and force refresh on foreground; keep `DockStore` as a content store with `load()` / `refresh()`; remove the tab-local loop. | Global status and Dock freshness cannot depend on Dock tab task or survive background accidentally. | Root-owned refresh/check loop controlled by lifecycle. | Dock/root/lifecycle tests where practical |
 | Dock projection | `CodexDock/State/SessionRowProjector.swift` | Section and row sorting | Current Swift projection prioritizes live statuses before limited history. | Preserve this behavior and keep relay output compatible with it. | Relay should not cut out rows Swift is designed to prioritize. | Live-first row survival contract. | `DockStoreTests`, relay tests |
-| Dock UI | `CodexDock/Features/Dock/DockView.swift` | `header` plus button area | Plus button disabled; no status pill. | Keep plus button; global indicator appears near top-right/root top. | User requested status near top area/by plus. | Passive `GlobalConnectivityIndicatorView`. | Manual simulator check |
+| Dock UI | `CodexDock/Features/Dock/DockView.swift` | `header` plus button area | Plus button disabled; no status pill. | Keep plus button; global indicator appears near top-right/root top. | User requested status near top area/by plus. | Passive `GlobalConnectivityIndicatorView`. | Manual physical `iPhone 14` check |
 | Archive | `CodexDock/State/ArchiveStore.swift` / `ArchiveView.swift` | `reload(showLoading:)`, `.empty(snapshot)` | All failures with zero rows can render Archive empty. | Represent all-offline/all-error as unavailable/error or show unavailable message from host states. | Empty archive is false when hosts are unreachable. | Archive state/content distinguishes unavailable from empty. | `DockStoreTests` or new archive tests |
 | Host settings | `CodexDock/State/HostSettingsStore.swift` | `statuses` | Manual test status private to Hosts tab. | Report test outcomes to `AppConnectivityStore`; align status vocabulary where useful. | Manual checks should update global indicator. | Reporter dependency or root observation. | Store tests |
 | Relay bootstrap | `CodexDock/Configuration/RelayBootstrapStore.swift` | `start()`, discovery callbacks | Starts once from view `.task`; no background/resume handling. | Stop/pause discovery on background; restart discovery or saved-manual handling on foreground if not ready; do not duplicate discovery callbacks. | First-run/manual relay setup must recover from app backgrounding too. | lifecycle-aware bootstrap start/resume API. | `DockStoreTests` or new bootstrap/lifecycle tests |
@@ -744,7 +756,7 @@ The root pill may live in a `.safeAreaInset(edge: .top)` or root overlay. The im
   - `rtk swift test`.
   - `rtk npm test`.
   - `rtk node --check scripts/dock-relay.mjs`.
-  - Real simulator check with `rtk make app SIM='iPhone 17'`.
+  - Physical `iPhone 14` check with `rtk make device-install DEVICE=00008110-000E04940240A01E DEVELOPMENT_TEAM=R6B8KXF3QW`, manual launch, and relay-backed host proof.
 
 ## Pattern Consolidation Sweep (anti-blinders; scoped by plan)
 
@@ -807,6 +819,12 @@ The root pill may live in a `.safeAreaInset(edge: .top)` or root overlay. The im
 * Rollback:
   - Revert the state-stream and ThreadDetailStore observation changes together. Do not keep a client state stream that no store consumes.
 
+* Implementation evidence:
+  - Phase 1 implemented on 2026-05-28 in the current working tree; later phases now complete the Connectivity plan under the parent physical-device deferral rule.
+  - Evidence is recorded in `docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28_IMPLEMENTATION_LOG.md`.
+  - Focused proof passed: `rtk swift test --filter AppServerClientTests` executed 34 tests with 5 skipped and 0 failures; `rtk swift test --filter ThreadDetailStoreTests` executed 21 tests with 0 failures.
+  - Later phases added reconnect/rehydrate, global status, background/resume, relay behavior, docs, full tests, and accepted simulator visual proof; physical `iPhone 14` behavior proof is deferred manual QA.
+
 ## Phase 2 - Reconnect And Thread Rehydrate
 
 * Goal:
@@ -837,6 +855,12 @@ The root pill may live in a `.safeAreaInset(edge: .top)` or root overlay. The im
   - Tests prove non-idempotent sends are not silently replayed after transport failure.
 * Rollback:
   - Revert reconnect policy and thread rehydrate together; Phase 1 stale visibility must remain if Phase 2 is rolled back independently during development.
+
+* Implementation evidence:
+  - Phase 2 implemented on 2026-05-28 in the current working tree; later phases now complete the Connectivity plan under the parent physical-device deferral rule.
+  - Evidence is recorded in `docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28_IMPLEMENTATION_LOG.md`.
+  - Focused proof passed: `rtk swift test --filter AppServerClientTests` executed 38 tests with 5 skipped and 0 failures; `rtk swift test --filter ThreadDetailStoreTests` executed 27 tests with 0 failures.
+  - Later implementation completed the app-wide connectivity store/indicator, background/resume lifecycle, relay behavior, docs, relay tests, and accepted simulator visual proof; physical `iPhone 14` behavior proof is deferred manual QA.
 
 ## Phase 3 - App-Wide Connectivity Store And Indicator
 
@@ -886,6 +910,13 @@ The root pill may live in a `.safeAreaInset(edge: .top)` or root overlay. The im
 * Rollback:
   - Revert `AppConnectivityStore` and indicator together. Do not leave tab-local duplicate status pills as a fallback.
 
+* Implementation evidence:
+  - Phase 3 implemented on 2026-05-28 in the current working tree; later phases now complete the Connectivity plan under the parent physical-device deferral rule.
+  - Evidence is recorded in `docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28_IMPLEMENTATION_LOG.md`.
+  - Focused proof passed: `rtk swift test --filter AppConnectivityStoreTests` executed 7 tests with 0 failures; `rtk swift test --filter DockStoreTests` executed 19 tests with 0 failures; `rtk swift test --filter ThreadDetailStoreTests` executed 27 tests with 0 failures; `rtk swift test` executed 129 tests with 5 skipped and 0 failures.
+  - Focused code readback proved all `CodexDockRootView` initializer paths create `_connectivityStore`, root mounts `GlobalConnectivityIndicatorView`, and `DockView.runRefreshLoop()` is removed in favor of root-owned `runDockRefreshLoop()`.
+  - Later phases added relay behavior, docs, relay tests, and accepted simulator visual proof; physical `iPhone 14` behavior proof is deferred manual QA.
+
 ## Phase 4 - App Background And Foreground Resume Lifecycle
 
 * Goal:
@@ -925,6 +956,15 @@ The root pill may live in a `.safeAreaInset(edge: .top)` or root overlay. The im
 * Rollback:
   - Revert lifecycle coordination as one unit. Do not leave partial per-screen background handlers, because that would recreate duplicate lifecycle truth.
 
+* Implementation evidence:
+  - Phase 4 implemented on 2026-05-28 in the current working tree; later phases now complete the Connectivity plan under the parent physical-device deferral rule.
+  - Evidence is recorded in `docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28_IMPLEMENTATION_LOG.md`.
+  - Focused proof passed: `rtk swift test --filter AppLifecycleCoordinatorTests` executed 3 tests with 0 failures; `rtk swift test --filter AppConnectivityStoreTests` executed 11 tests with 0 failures; `rtk swift test --filter DockConfigurationTests` executed 14 tests with 0 failures; `rtk swift test --filter ThreadDetailStoreTests` executed 31 tests with 0 failures; `rtk swift test --filter AppServerClientTests` executed 40 tests with 5 skipped and 0 failures.
+  - Full Swift proof passed: `rtk swift test` executed 147 tests with 5 skipped and 0 failures.
+  - `rtk git diff --check` passed.
+  - Focused code readback proved scene-phase observation exists in both `CodexDockBootstrapView` and `CodexDockRootView`, `DockView` passes lifecycle into `ThreadDetailStore`, root `runDockRefreshLoop()` checks `lifecycleCoordinator.allowsForegroundWork`, and no `DockView.runRefreshLoop()` implementation exists.
+  - Later phases added relay recovery/fail-loud behavior, README updates, relay tests, and accepted simulator visual proof; physical `iPhone 14` behavior proof is deferred manual QA.
+
 ## Phase 5 - Relay Recovery And Update Delivery Hardening
 
 * Goal:
@@ -963,12 +1003,20 @@ The root pill may live in a `.safeAreaInset(edge: .top)` or root overlay. The im
 * Rollback:
   - Revert relay hardening and tests together. Swift-side reconnect remains useful, but final acceptance cannot pass until relay behavior is restored.
 
-## Phase 6 - Final Verification, Runbook, And Simulator Proof
+* Implementation evidence:
+  - Phase 5 implemented on 2026-05-28 in the current working tree; Phase 6 later completed final runbook, service, and accepted simulator visual proof under the parent physical-device deferral rule.
+  - Evidence is recorded in `docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28_IMPLEMENTATION_LOG.md`.
+  - Relay proof passed: `rtk node --check scripts/dock-relay.mjs`; `rtk node --check scripts/dock-relay-json-rpc-client.mjs`; `rtk node --check scripts/dock-relay-test-helpers.mjs`; `rtk node --check scripts/dock-relay-phase5.test.mjs`; `rtk npm run test:relay` executed 33 tests with 0 failures; `rtk npm test` executed 33 tests with 0 failures.
+  - Focused Swift proof passed: `rtk swift test --filter AppServerClientTests` executed 40 tests with 5 skipped and 0 failures; `rtk swift test --filter ThreadDetailStoreTests` executed 31 tests with 0 failures.
+  - `rtk git diff --check` passed.
+  - Remaining Connectivity visual proof may use the Phase 6 user-approved non-Pro simulator fallback while physical `iPhone 14` WebDriverAgent automation is blocked. Physical visual navigation remains a deferred hardware follow-up, not a blocker for this Connectivity closeout.
+
+## Phase 6 - Final Verification, Runbook, And Physical iPhone Proof
 
 * Goal:
   - Prove the full destination map and update live documentation so future runs know how connectivity works.
 * Work:
-  - Run the combined verification set, update live docs, and manually verify the global indicator/reconnect/background-resume behavior on the canonical simulator path.
+  - Run the combined verification set, update live docs, and verify the global indicator/reconnect/background-resume behavior on the physical `iPhone 14` path when device automation is available. If physical WebDriverAgent is blocked, use the user-approved non-Pro simulator fallback for current visual proof and keep physical navigation as a deferred follow-up.
 * Checklist (must all be done):
   - Update `README.md` with global indicator states, reconnect behavior, background/resume behavior, relay/app-server status commands, and correct live-row priority wording.
   - Run `rtk swift test`.
@@ -978,30 +1026,47 @@ The root pill may live in a `.safeAreaInset(edge: .top)` or root overlay. The im
   - Run `rtk make app-server-status`.
   - Run `rtk make dock-relay-status`.
   - Run or explicitly skip with reason the optional real phone-reachable smoke using `CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4510` with no `CODEX_DOCK_APP_SERVER_BEARER_TOKEN` or `CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE` in the app/test environment. `.codex-dock/app-server.token` stays host-side for `rtk make services` / relay history access only.
-  - Run `rtk make app SIM='iPhone 17'`.
-  - Manually verify the indicator is visible on Dock, Archive, Hosts, and Session detail.
-  - Manually verify a relay/app-server interruption moves the indicator through reconnecting/offline/stale and returns to online/live without user action when services recover and the selected thread remains resumable.
-  - Manually background the app from Dock and from an open Session detail, resume it, and verify the indicator moves through backgrounded/resuming/reconnecting as appropriate and returns to online/live without user action when services remain reachable.
+  - Run `rtk make device-install DEVICE=00008110-000E04940240A01E DEVELOPMENT_TEAM=R6B8KXF3QW`.
+  - Open Codex Dock manually from the physical `iPhone 14` home screen when physical automation is available, or record the physical WebDriverAgent blocker.
+  - Verify the indicator is visible on Dock, Archive, Relay/Hosts, and Session detail. Physical `iPhone 14` proof is preferred; the accepted fallback is Mobile MCP proof on the non-Pro `feat_anim_1 - iPhone 17` simulator.
+  - Verify a relay/app-server interruption moves the indicator through reconnecting/offline/stale and returns to online/live without user action when services recover and the selected thread remains resumable. If this cannot be visually automated, keep unit/integration proof as the current evidence and record physical visual interruption proof as deferred.
+  - Background the app from Dock and from an open Session detail, resume it, and verify the indicator moves through backgrounded/resuming/reconnecting as appropriate and returns to online/live without user action when services remain reachable. If this cannot be physically automated, keep lifecycle tests as current proof and record physical visual background/resume proof as deferred.
 * Verification (required proof):
   - Command output from the test/service/status/app commands above.
-  - Manual simulator notes with exact date, simulator name, endpoint, background/resume steps, and observed indicator states.
+  - Physical-phone install/launch notes with exact date, device name, device id, and endpoint.
+  - Physical UI-navigation notes when WebDriverAgent is available; otherwise, accepted simulator fallback notes with exact simulator name, UDID, endpoint, Mobile MCP readback, screenshots, and any deferred physical-only steps.
 * Docs/comments (propagation; only if needed):
   - README update is required in this phase.
 * Exit criteria (all required):
   - All required tests pass, or any skipped real-host smoke has an explicit environment/access reason.
   - README matches the implemented connectivity behavior and no longer carries stale sorting/status wording.
   - `rtk make services`, `rtk make app-server-status`, and `rtk make dock-relay-status` have all run successfully before endpoint-dependent smoke/app checks.
-  - Manual simulator check confirms the root indicator appears across every primary screen.
-  - Manual simulator check confirms recoverable reconnect is automatic and fail-loud stale behavior is visible only when recovery cannot continue safely.
-  - Manual simulator check confirms background/resume is expected and recoverable: root checks restart, detail rehydrates, and no manual reconnect/navigation is required while services are reachable.
+  - Physical `iPhone 14` install/launch proof passes, and visual proof is recorded either from the physical phone or from the user-approved non-Pro simulator fallback while physical WebDriverAgent is blocked.
+  - Visual proof confirms the root indicator appears across Dock, Archive, Relay/Hosts, and Session detail on the accepted proof device.
+  - Automatic reconnect and fail-loud stale behavior are proven by focused Swift/relay tests; physical visual interruption proof remains preferred but may be deferred when device automation is blocked.
+  - Background/resume recovery is proven by lifecycle tests; physical visual background/resume proof remains preferred but may be deferred when device automation is blocked.
   - No unplanned duplicate connectivity status owner remains.
 * Rollback:
   - If final verification fails, reopen the phase whose contract failed; do not weaken this phase by editing acceptance criteria down.
+
+* Implementation evidence:
+  - Phase 6 automated/service and physical install/launch proof ran on 2026-05-28; physical visual UI automation is deferred because WebDriverAgent is not running on the real phone.
+  - Evidence is recorded in `docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28_IMPLEMENTATION_LOG.md`.
+  - Automated proof passed: `rtk swift test` executed 147 tests with 5 skipped and 0 failures; `rtk node --check scripts/dock-relay.mjs` passed; `rtk node --check scripts/dock-relay-json-rpc-client.mjs` passed; `rtk node --check scripts/dock-relay-test-helpers.mjs` passed; `rtk node --check scripts/dock-relay-phase5.test.mjs` passed; `rtk npm test` executed 33 tests with 0 failures.
+  - Service proof passed after the latest relay change: `rtk make dock-relay`, `rtk make app-server-status`, and `rtk make dock-relay-status` all returned healthy status for raw app-server `ws://192.168.50.117:4500` pid `93066` and relay `ws://192.168.50.117:4510` with phone auth `none`.
+  - Phone-reachable relay smoke passed with no phone-side bearer env: relay handshake, `thread/list`, and `thread/read` plus `thread/resume` passed; only the opt-in archive round trip skipped because `CODEX_DOCK_RUN_ARCHIVE_ROUND_TRIP=1` was not set.
+  - Physical `iPhone 14` proof passed for build/install/launch/process activity: `rtk make device-install DEVICE=00008110-000E04940240A01E DEVELOPMENT_TEAM=R6B8KXF3QW` installed the app, `xcrun devicectl ... process launch` launched it, and pid `4340` was running after a final non-secret relay-env physical launch.
+  - Physical UI automation blocker: Mobile MCP screenshot and accessibility inspection failed on physical device `00008110-000E04940240A01E` because WebDriverAgent is not running.
+  - User-approved non-Pro simulator visual fallback passed on `feat_anim_1 - iPhone 17`, UDID `BAD95C8E-3E57-4818-9B90-E4ED22593B4B`.
+  - `rtk make app SIM=BAD95C8E-3E57-4818-9B90-E4ED22593B4B` built, installed, and launched `com.aelaguiz.CodexDockApp` against relay `ws://192.168.50.117:4510`.
+  - Screenshot `/tmp/codex-client/20260528T144220Z/iphone17-sim-connectivity-fixed.png` shows the root `Online` indicator, host `Amir-M5`, endpoint `ws://192.168.50.117:4510`, `206 sessions`, and real Dock rows.
+  - Mobile MCP simulator proof saved screenshots for Dock, Archive, Relay, and Session detail under `/tmp/codex-client/20260528T144220Z/mobile-mcp-proof/`; accessibility readback confirmed the root indicator and relay-backed content on those screens.
+  - The simulator pass found and fixed a SwiftUI render-mutation bug: `CodexDockRootView.init(registry:...)` no longer mutates the published connectivity store during view construction; `rtk swift test --filter AppConnectivityStoreTests` executed 11 tests with 0 failures after the fix.
 <!-- arch_skill:block:phase_plan:end -->
 
 # 8) Verification Strategy (common-sense; non-blocking)
 
-Avoid verification bureaucracy. "Non-blocking" here means no extra ceremony or artificial gates; it does not make phase proof optional. Each phase's `Verification` and `Exit criteria` are required for that phase, and Phase 6's final tests/runbook/simulator proof are required for the whole plan. The optional real phone-reachable smoke may be skipped only with an explicit environment or access reason. Prefer existing credible checks that prove the behavior directly. Add focused tests for new lifecycle contracts and reconnection behavior. Keep visual/manual checks short and realistic. Do not add repo-policing scripts, deletion-proof tests, doc inventory gates, or fragile visual constants.
+Avoid verification bureaucracy. "Non-blocking" here means no extra ceremony or artificial gates; it does not make phase proof optional. Each phase's `Verification` and `Exit criteria` are required for that phase, and Phase 6's final tests/runbook/physical `iPhone 14` proof are required for the whole plan. The optional real phone-reachable smoke may be skipped only with an explicit environment or access reason. Prefer existing credible checks that prove the behavior directly. Add focused tests for new lifecycle contracts and reconnection behavior. Keep visual/manual checks short and realistic. Do not add repo-policing scripts, deletion-proof tests, doc inventory gates, or fragile visual constants.
 
 ## 8.1 Unit tests (contracts)
 
@@ -1020,14 +1085,14 @@ Avoid verification bureaucracy. "Non-blocking" here means no extra ceremony or a
 ## 8.3 E2E / device tests (realistic)
 
 - `rtk make services` starts/reuses raw app-server plus relay.
-- `rtk make app SIM='iPhone 17'` launches the app with `CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS=ws://192.168.50.117:4510`.
-- Manual final check: global indicator is visible on Dock, Archive, Hosts, and Session detail; stopping/restarting relay or app-server moves the indicator through reconnect/offline/live and detail returns to live without user action when the thread remains resumable; backgrounding/resuming from Dock and Session detail moves through backgrounded/resuming/reconnecting as appropriate and returns to online/live automatically while services remain reachable.
+- `rtk make device-install DEVICE=00008110-000E04940240A01E DEVELOPMENT_TEAM=R6B8KXF3QW` installs the app on the physical `iPhone 14`, then the app is launched from the phone home screen or with `xcrun devicectl device process launch`.
+- Manual final check: global indicator is visible on Dock, Archive, Relay/Hosts, and Session detail. Physical `iPhone 14` proof is preferred; while physical WebDriverAgent is blocked, the accepted non-Pro simulator fallback can cover visual navigation, and Swift/relay tests cover reconnect and background/resume contracts until physical navigation can be repeated.
 
 # 9) Rollout / Ops / Telemetry
 
 ## 9.1 Rollout plan
 
-Implement behind no runtime flag. This is a hardening refactor of the current app behavior, not an alternate mode. Keep the existing host environment variables, service targets, and relay endpoint. Update tests before relying on manual simulator proof.
+Implement behind no runtime flag. This is a hardening refactor of the current app behavior, not an alternate mode. Keep the existing host environment variables, service targets, and relay endpoint. Update tests before relying on manual physical-device proof.
 
 ## 9.2 Telemetry changes
 
@@ -1041,7 +1106,7 @@ Update `README.md` after implementation to explain:
 - how automatic reconnect behaves for app-server and relay drops, including retry progress and the narrow cases where manual action is required;
 - how background/resume behaves, including backgrounded/resuming indicator states and why long-running background WebSocket delivery is not required;
 - how to verify services with `rtk make app-server-status` and `rtk make dock-relay-status`;
-- how to run the simulator check with `rtk make app SIM='iPhone 17'`.
+- how to run the physical `iPhone 14` check with `rtk make device-install DEVICE=00008110-000E04940240A01E DEVELOPMENT_TEAM=R6B8KXF3QW`.
 
 <!-- arch_skill:block:consistency_pass:start -->
 ## Consistency Pass
@@ -1049,7 +1114,7 @@ Update `README.md` after implementation to explain:
 - Scope checked:
   - Frontmatter, TL;DR, Section 0 through Section 10, planning passes, auto-plan receipts, and helper-block drift.
   - Owner path consistency across `AppServerClient`, `ThreadDetailStore`, `AppConnectivityStore`, `AppLifecycleCoordinator`, `CodexDockRootView`, `CodexDockBootstrapView`, and `scripts/dock-relay.mjs`.
-  - Phase checklist and exit-criteria coverage for reconnect, rehydrate, global indicator, background/resume lifecycle, relay hardening, tests, docs, and simulator proof.
+  - Phase checklist and exit-criteria coverage for reconnect, rehydrate, global indicator, background/resume lifecycle, relay hardening, tests, docs, and physical `iPhone 14` proof.
 - Findings summary:
   - Cold readers agreed the core architecture is aligned but flagged stale helper metadata, verification wording, missing service-status proof, branchy Dock refresh ownership, missing stream-contract proof, incomplete relay fail-loud Swift proof, and root initializer coverage.
 - Integrated repairs:
@@ -1060,7 +1125,7 @@ Update `README.md` after implementation to explain:
   - Made `connectionStates` the primary liveness signal and added Phase 1 stream-contract exit criteria.
   - Chose downstream WebSocket close as the relay fail-loud contract for unrecoverable upstream death and added Swift proof obligations.
   - Required all `CodexDockRootView` initializer paths to create or receive the same `AppConnectivityStore` and required `AppConnectivityStoreTests`.
-  - Added a dedicated background/resume lifecycle phase with root-owned scene-phase coordination, foreground revalidation, detail rehydrate, bootstrap discovery restart, voice safety, tests, and simulator proof.
+  - Added a dedicated background/resume lifecycle phase with root-owned scene-phase coordination, foreground revalidation, detail rehydrate, bootstrap discovery restart, voice safety, tests, and physical `iPhone 14` proof.
 - Remaining inconsistencies: none
 - Unresolved decisions: none
 - Unauthorized scope cuts: none
@@ -1140,4 +1205,4 @@ Intent says: backgrounding should be an expected, accepted, elegant get-well-wor
 
 Decision: add a dedicated background/resume lifecycle phase. Root/bootstrap owns SwiftUI scene-phase translation; background pauses foreground-only refresh/discovery/retry work without spending retry budget or reporting false unrecoverable errors; foreground active restarts checks, relay discovery if needed, and open-thread compact rehydrate before returning to online/live.
 
-Consequences: long-running background WebSocket delivery remains out of scope, but foreground resume is now in scope and must be proven by lifecycle tests plus simulator background/resume notes. The plan must not allow tab-local scene-phase side doors or a separate background-only reconnect implementation.
+Consequences: long-running background WebSocket delivery remains out of scope, but foreground resume is now in scope and must be proven by lifecycle tests plus physical `iPhone 14` background/resume notes. The plan must not allow tab-local scene-phase side doors or a separate background-only reconnect implementation.

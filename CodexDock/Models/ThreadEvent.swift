@@ -29,9 +29,55 @@ public enum ThreadEventKind: String, Equatable, Sendable, CaseIterable {
     }
 }
 
+public enum ThreadEventVisibilityCategory: String, Equatable, Sendable, CaseIterable {
+    case message
+    case thinking
+    case tooling
+    case request
+    case system
+    case unknown
+}
+
+public enum ThreadEventVisibilityMode: String, Equatable, Sendable, CaseIterable, Identifiable {
+    case messages
+    case messagesAndThinking
+    case everything
+
+    public var id: String {
+        rawValue
+    }
+
+    public var next: ThreadEventVisibilityMode {
+        switch self {
+        case .messages:
+            return .messagesAndThinking
+        case .messagesAndThinking:
+            return .everything
+        case .everything:
+            return .messages
+        }
+    }
+
+    public func includes(_ event: ThreadEvent) -> Bool {
+        switch self {
+        case .messages:
+            return event.visibilityCategory == .message
+        case .messagesAndThinking:
+            return event.visibilityCategory == .message || event.visibilityCategory == .thinking
+        case .everything:
+            return true
+        }
+    }
+
+    public func visibleEvents(from events: [ThreadEvent]) -> [ThreadEvent] {
+        ThreadEventDisplayOrder.newestFirst(events.filter { includes($0) })
+    }
+}
+
 public struct ThreadEvent: Equatable, Identifiable, Sendable {
     public let id: String
     public let kind: ThreadEventKind
+    public let visibilityCategory: ThreadEventVisibilityCategory
     public var title: String
     public var body: String
     public let date: Date?
@@ -46,6 +92,7 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
     public init(
         id: String,
         kind: ThreadEventKind,
+        visibilityCategory: ThreadEventVisibilityCategory = .unknown,
         title: String,
         body: String,
         date: Date? = nil,
@@ -59,6 +106,7 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
     ) {
         self.id = id
         self.kind = kind
+        self.visibilityCategory = visibilityCategory
         self.title = title
         self.body = body
         self.date = date
@@ -82,7 +130,7 @@ public enum ThreadEventDisplayOrder {
                 date: group
                     .compactMap { $0.event.displayGroupDate ?? $0.event.date }
                     .max() ?? .distantPast,
-                sequence: group.map(\.groupSequence).max() ?? 0
+                sequence: group.compactMap(\.groupSequence).max()
             )
         }
 
@@ -93,22 +141,30 @@ public enum ThreadEventDisplayOrder {
                 if leftInfo.date != rightInfo.date {
                     return leftInfo.date > rightInfo.date
                 }
-                if leftInfo.sequence != rightInfo.sequence {
-                    return leftInfo.sequence > rightInfo.sequence
+                if let leftSequence = leftInfo.sequence,
+                   let rightSequence = rightInfo.sequence,
+                   leftSequence != rightSequence {
+                    return leftSequence > rightSequence
                 }
                 return left.groupKey < right.groupKey
             }
 
-            let leftItem = left.event.itemSequence ?? left.offset
-            let rightItem = right.event.itemSequence ?? right.offset
-            if leftItem != rightItem {
+            if let leftItem = left.event.itemSequence,
+               let rightItem = right.event.itemSequence,
+               leftItem != rightItem {
                 return leftItem < rightItem
             }
+            if left.itemKey != right.itemKey {
+                return left.itemKey < right.itemKey
+            }
 
-            let leftEvent = left.event.eventSequence ?? left.offset
-            let rightEvent = right.event.eventSequence ?? right.offset
-            if leftEvent != rightEvent {
+            if let leftEvent = left.event.eventSequence,
+               let rightEvent = right.event.eventSequence,
+               leftEvent != rightEvent {
                 return leftEvent < rightEvent
+            }
+            if left.event.id != right.event.id {
+                return left.event.id < right.event.id
             }
 
             return left.offset < right.offset
@@ -129,14 +185,21 @@ public enum ThreadEventDisplayOrder {
             return "event:\(event.id)"
         }
 
-        var groupSequence: Int {
-            event.turnSequence ?? offset
+        var groupSequence: Int? {
+            event.turnSequence
+        }
+
+        var itemKey: String {
+            if let itemID = event.itemID {
+                return "item:\(itemID)"
+            }
+            return "event:\(event.id)"
         }
     }
 
     private struct GroupInfo {
         let date: Date
-        let sequence: Int
+        let sequence: Int?
     }
 }
 
@@ -159,6 +222,7 @@ public enum ThreadEventNormalizer {
                 params: params,
                 method: notification.method,
                 kind: .agentMessage,
+                visibilityCategory: .message,
                 title: "Agent update",
                 key: "delta",
                 now: now
@@ -168,6 +232,7 @@ public enum ThreadEventNormalizer {
                 params: params,
                 method: notification.method,
                 kind: .agentMessage,
+                visibilityCategory: .thinking,
                 title: "Reasoning update",
                 key: "delta",
                 now: now
@@ -177,6 +242,7 @@ public enum ThreadEventNormalizer {
                 params: params,
                 method: notification.method,
                 kind: .output,
+                visibilityCategory: .tooling,
                 title: "Command output",
                 key: "delta",
                 now: now
@@ -191,6 +257,7 @@ public enum ThreadEventNormalizer {
             return ThreadEvent(
                 id: "thread-status-\(params["threadId"]?.stringValue ?? "unknown")-\(now.timeIntervalSince1970)",
                 kind: .system,
+                visibilityCategory: .system,
                 title: "Thread status",
                 body: status,
                 date: now,
@@ -201,6 +268,7 @@ public enum ThreadEventNormalizer {
             return ThreadEvent(
                 id: "thread-closed-\(params["threadId"]?.stringValue ?? "unknown")-\(now.timeIntervalSince1970)",
                 kind: .system,
+                visibilityCategory: .system,
                 title: "Thread closed",
                 body: "The app-server closed this thread.",
                 date: now,
@@ -224,6 +292,7 @@ public enum ThreadEventNormalizer {
         return ThreadEvent(
             id: "request-\(request.id)",
             kind: .request,
+            visibilityCategory: .request,
             title: requestTitle(for: request.method),
             body: body,
             date: now,
@@ -248,6 +317,7 @@ public enum ThreadEventNormalizer {
                 ThreadEvent(
                     id: "unknown-turn-\(UUID().uuidString)",
                     kind: .unknown,
+                    visibilityCategory: .unknown,
                     title: "Unsupported turn",
                     body: "This turn shape is not supported yet.",
                     turnSequence: turnSequence,
@@ -283,6 +353,7 @@ public enum ThreadEventNormalizer {
                 ThreadEvent(
                     id: "unknown-item-\(UUID().uuidString)",
                     kind: .unknown,
+                    visibilityCategory: .unknown,
                     title: "Unsupported item",
                     body: "This item shape is not supported yet.",
                     date: defaultDate,
@@ -305,6 +376,7 @@ public enum ThreadEventNormalizer {
         func makeEvent(
             suffix: String,
             kind: ThreadEventKind,
+            visibilityCategory: ThreadEventVisibilityCategory,
             title: String,
             body: String,
             eventSequence: Int = 0
@@ -312,6 +384,7 @@ public enum ThreadEventNormalizer {
             ThreadEvent(
                 id: "\(eventTurnID)-\(eventItemID)-\(suffix)",
                 kind: kind,
+                visibilityCategory: visibilityCategory,
                 title: title,
                 body: body,
                 date: date,
@@ -331,6 +404,7 @@ public enum ThreadEventNormalizer {
                 makeEvent(
                     suffix: "user",
                     kind: .userMessage,
+                    visibilityCategory: .message,
                     title: "User message",
                     body: userInputText(object["content"]) ?? "User input"
                 )
@@ -340,6 +414,7 @@ public enum ThreadEventNormalizer {
                 makeEvent(
                     suffix: "agent",
                     kind: .agentMessage,
+                    visibilityCategory: .message,
                     title: "Agent message",
                     body: firstNonEmpty(object["text"]?.stringValue, "Agent message") ?? "Agent message"
                 )
@@ -349,6 +424,7 @@ public enum ThreadEventNormalizer {
                 makeEvent(
                     suffix: "plan",
                     kind: .agentMessage,
+                    visibilityCategory: .thinking,
                     title: "Plan",
                     body: firstNonEmpty(object["text"]?.stringValue, "Plan update") ?? "Plan update"
                 )
@@ -359,6 +435,7 @@ public enum ThreadEventNormalizer {
                 makeEvent(
                     suffix: "reasoning",
                     kind: .agentMessage,
+                    visibilityCategory: .thinking,
                     title: "Reasoning",
                     body: body
                 )
@@ -369,6 +446,7 @@ public enum ThreadEventNormalizer {
                 makeEvent(
                     suffix: "command",
                     kind: .command,
+                    visibilityCategory: .tooling,
                     title: "Command",
                     body: firstNonEmpty(command, "Command") ?? "Command"
                 )
@@ -378,6 +456,7 @@ public enum ThreadEventNormalizer {
                     makeEvent(
                         suffix: "output",
                         kind: .output,
+                        visibilityCategory: .tooling,
                         title: "Command output",
                         body: output,
                         eventSequence: 1
@@ -390,6 +469,7 @@ public enum ThreadEventNormalizer {
                 makeEvent(
                     suffix: "file-change",
                     kind: .request,
+                    visibilityCategory: .request,
                     title: "File change",
                     body: "File changes are available on desktop."
                 )
@@ -399,6 +479,7 @@ public enum ThreadEventNormalizer {
                 makeEvent(
                     suffix: "tool",
                     kind: .command,
+                    visibilityCategory: .tooling,
                     title: "Tool call",
                     body: object["tool"]?.stringValue ?? object["namespace"]?.stringValue ?? "Tool call"
                 )
@@ -408,6 +489,7 @@ public enum ThreadEventNormalizer {
                 makeEvent(
                     suffix: "unknown",
                     kind: .unknown,
+                    visibilityCategory: .unknown,
                     title: "Unsupported event",
                     body: "Unsupported event type: \(type)"
                 )
@@ -419,6 +501,7 @@ public enum ThreadEventNormalizer {
         params: [String: JSONValue],
         method: String,
         kind: ThreadEventKind,
+        visibilityCategory: ThreadEventVisibilityCategory,
         title: String,
         key: String,
         now: Date
@@ -431,6 +514,7 @@ public enum ThreadEventNormalizer {
         return ThreadEvent(
             id: "\(turnID ?? "turn")-\(itemID ?? "item")-\(method)",
             kind: kind,
+            visibilityCategory: visibilityCategory,
             title: title,
             body: body,
             date: now,

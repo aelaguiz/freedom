@@ -19,13 +19,26 @@ related:
 
 # TL;DR
 
+## Supersession Note - 2026-05-28
+
+`docs/CODEX_DOCK_HOST_PORT_CONFIG_TAILSCALE_OPS_SEPARATION_2026-05-28.md`
+supersedes this plan anywhere it describes generated app config as host IDs
+plus `_WS`, `_AUTH_MODE`, `_NAME`, bearer/token fields, or a Tailscale host
+service profile. Current app-facing config is endpoint-only:
+`CODEX_DOCK_HOSTS=<host>:<port>[,<host>:<port>]`. Host-service status and
+relay health remain operator diagnostics, not app config.
+
 Outcome: Codex Dock can connect to every machine where the user runs Codex, starting with `Amir-M5` on macOS and `home` on Linux, through the same per-host Dock service shape. The app must work over ordinary configured URLs, including LAN IPs, MagicDNS names, Tailscale IPs, or any other reachable host address, and it must fail visibly with enough diagnostics to fix the host instead of leaving the client stuck.
 
-Problem: the current service setup is Mac-specific, LaunchAgent-specific, and hard-coded to `192.168.50.117`. `home` is reachable over SSH and Tailscale (`100.66.11.7`) but has no Dock relay or raw app-server listening on ports `4510` or `4500`. The app has multi-host UI concepts, but host services, setup, health, reconnect, logs, and client error visibility are not yet an end-to-end cross-machine system.
+Original problem: at plan start, the service setup was Mac-specific, LaunchAgent-specific, and hard-coded to `192.168.50.117`. `home` was reachable over SSH and Tailscale (`100.66.11.7`) but had no Dock relay or raw app-server listening on ports `4510` or `4500`. The app had multi-host UI concepts, but host services, setup, health, reconnect, logs, and client error visibility were not yet an end-to-end cross-machine system.
 
 Approach: make each Codex host run the same local service bundle: a raw Codex app-server on loopback plus a Dock relay as the app-facing endpoint. Add a platform-aware setup script that installs the bundle with launchd on macOS and systemd user services on Linux. Treat Tailscale as a supported endpoint configuration profile, not as a product dependency. Fold host-service robustness into the same plan: health/status endpoints, structured logs, fail-loud relay behavior, and client-visible errors that feed the Connectivity-owned reconnect/rehydration path.
 
+Current closeout as of 2026-05-28: the agent-side Multi-host scope is implemented and accepted under the parent physical-device deferral rule. `Amir-M5` has live launchd proof through `rtk make services`; `home` has live Linux `systemd-user` proof at `ws://100.66.11.7:4510`; `.codex-dock/host.env` is the non-secret generated app config; README runbook coverage is updated; and simulator proof shows both hosts, source-specific partial errors, and healthy-host rows preserved when one host is down.
+
 Plan: first create a cross-platform host service contract and setup script, then wire host registry/app config to use the configured endpoints, then add server/client robustness and debug surfaces, then verify both `Amir-M5` and `home` end to end over at least one non-loopback network path, with Tailscale documented as an easy profile rather than the only path. In the top-level dock, this plan runs after Agents, Connectivity, and Realtime so the portable service setup encodes the final Dock query model, app-wide status lifecycle, and relay-owned Realtime transcription contract.
+
+Current physical-device rule as of 2026-05-28: `docs/CODEX_DOCK_CROSS_PLAN_IMPLEMENTATION_DOCK_2026-05-28.md` supersedes older physical-phone proof wording in this plan. Do not run, require, retry, wait on, or ask for physical iPhone install/launch, Mobile MCP, screenshots, audio, accessibility, or any other physical-only check for Multi-host work unless Amir explicitly asks in that turn. Use simulator/local/real-relay/service-status proof, assume the physical path works for planning purposes when those checks pass, and record physical-only checks in the parent deferred physical-device manual QA checklist.
 
 Non-negotiables: no Tailscale dependency in core app architecture, no Mac-only service lifecycle, no hard-coded host IPs in the app path, no silent spinner failure, no relay that hides upstream death, no unredacted secrets in logs/status, no duplicate host status truth, and no runtime fallback shim that pretends a host works when its service is down.
 
@@ -218,8 +231,8 @@ Outputs for final proof:
 - The current Codex daemon-managed app-server uses a Unix socket and is not phone-reachable.
 - Direct `codex app-server --listen ws://...` supports TCP WebSocket listeners and requires websocket auth for non-loopback listeners.
 - The current Dock relay is Node ESM using `ws`.
-- Current service targets are Mac launchd only and have `APP_SERVER_HOST ?= 192.168.50.117`.
-- `home` is Ubuntu Linux with systemd and has Codex, Node, SSH, and Tailscale installed, but no current service on `:4500` or `:4510`.
+- At plan start, service targets were Mac launchd only and had `APP_SERVER_HOST ?= 192.168.50.117`; Phase 3B/3C now route service management through the host-service wrapper for both launchd and systemd user services.
+- At plan start, `home` was Ubuntu Linux with systemd, Codex, Node, SSH, and Tailscale installed, but no Dock service on `:4500` or `:4510`; Phase 3C now has a live `systemd-user` Dock service on `home` at `ws://100.66.11.7:4510`.
 - The iOS app can use `URLSessionWebSocketTask` for `ws://` and `wss://` URLs.
 - Physical or simulator app connectivity only requires a reachable endpoint. Tailscale can provide that endpoint, but the app must not require it.
 
@@ -245,25 +258,25 @@ Outputs for final proof:
 ## 2.1 What exists today
 
 - The Swift app can connect to a configured WebSocket endpoint, list sessions, open live thread detail, send text, answer supported request cards, archive/unarchive, edit hosts in memory, and run voice transcription.
-- `rtk make services` starts a raw Codex app-server and Dock relay on this Mac using launchd-generated plist files under `.codex-dock/`.
-- The raw app-server currently uses `ws://0.0.0.0:4500` with capability-token auth.
+- `rtk make services` starts a raw Codex app-server and Dock relay through the host-service wrapper, using generated launchd files on macOS and generated systemd user files on Linux.
+- The raw app-server now binds loopback by default in the host-service path, using `ws://127.0.0.1:4500` with capability-token auth.
 - The relay currently listens on `0.0.0.0:4510`, accepts no phone-side auth by default through `--phone-auth none`, uses a host-side raw history token through `--history-auth-token-file`, calls local raw history at `ws://127.0.0.1:4500`, and discovers local loopback Codex app-server processes.
 - The current default app endpoint is `ws://192.168.50.117:4510`.
 - `CODEX_DOCK_HOSTS` can name multiple hosts, and the Swift stores can fan out across configured host endpoints.
-- `home` is online in Tailscale at `100.66.11.7`, SSH-able, and has Codex and Node installed, but it has no running Dock service on the expected ports.
+- `home` is online in Tailscale at `100.66.11.7`, SSH-able, has Codex and Node installed, and Phase 3C proved a running Dock relay at `ws://100.66.11.7:4510` backed by loopback raw app-server history.
 
-## 2.2 What's broken / missing (concrete)
+## 2.2 What was broken at plan start and current resolution
 
-- Service setup is Mac-only and does not install systemd user services on Linux.
-- Host IPs and host IDs are still hard-coded around `Amir-M5`.
-- There is no single host setup command that can run on each Codex machine.
-- There is no generated multi-host app config artifact that the app/runbook can consume cleanly.
-- Tailscale is currently a manual endpoint idea, not a clean setup profile.
-- The relay lacks a durable upstream reconnect/fail-loud policy.
-- Swift live detail can silently lose updates because stream termination is not surfaced strongly enough to the user.
-- App-wide connectivity state is split across raw client state, Dock host load state, Hosts manual test state, and detail live state.
-- Status/debug output is not enough to tell whether the raw app-server, relay, live loopback discovery, or app endpoint is broken.
-- The current Makefile status checks are coupled to one host and one local runtime directory.
+- Resolved: README/runbook coverage now describes the cross-platform host-service wrapper, loopback raw app-server, app-facing relay, `.codex-dock/service.env` versus `.codex-dock/host.env`, exact Mac and `home` commands, and physical-device deferral.
+- Resolved: default local examples now make `Amir-M5` plus `home` setup explicit instead of Mac-only.
+- Resolved: the single host-service path now has exact macOS launchd and Linux systemd user command examples.
+- Resolved: generated app config lives in `.codex-dock/host.env`; simulator app behavior proof shows `Amir-M5` and `home` loaded with `bearer_configured=false`.
+- Resolved: Tailscale is documented as an endpoint/profile option, not as a Swift, relay, or service-manager dependency.
+- Resolved by Connectivity and relay hardening: upstream reconnect/fail-loud behavior, visible Swift live-detail stream termination, and app-wide connectivity truth now flow through the existing connectivity owner.
+- Resolved: status/debug output now includes service status, doctor/log helpers, relay `/readyz`, `/healthz`, and redacted `/statusz` so raw app-server, relay, live loopback discovery, transcription health, and app endpoint failures are distinguishable.
+- Resolved: Makefile status checks now route through the host-service wrapper instead of one-off inline Mac-only service logic.
+- Still deferred: physical device behavior checks are Amir-owned manual QA under the parent physical-device rule.
+- Still unclaimed by design: Realtime transcription on `home` remains disabled unless `OPENAI_API_KEY` is intentionally configured there later.
 
 ## 2.3 Constraints implied by the problem
 
@@ -272,6 +285,7 @@ Outputs for final proof:
 - The app must accept host URLs that are LAN, DNS, Tailscale, or simulator/dev endpoints.
 - Robustness work must include both server-side behavior and client-side visibility.
 - Setup/debug docs must be good enough that a future host can be added without rereading the implementation.
+- Current resolution: these constraints are implemented for the current agent-side scope; physical manual QA remains deferred to Amir.
 
 # 3) Research Grounding (external + internal "ground truth")
 
@@ -281,15 +295,15 @@ Outputs for final proof:
 
 Internal sources read:
 
-- `README.md`: current runbook describes direct `codex app-server --listen ws://0.0.0.0:4500 --ws-auth capability-token --ws-token-file ...`, `rtk make services`, Mac-local `.codex-dock/`, and environment variables for one real host plus a placeholder `home` host.
-- `Makefile`: current service lifecycle is launchd-only, defaults `APP_SERVER_HOST ?= 192.168.50.117`, writes `.env`, starts raw app-server on `:4500`, starts Dock relay on `:4510`, and writes LaunchAgent plist files into `.codex-dock/`.
-- `scripts/dock-relay.mjs`: current relay is the app-facing Node WebSocket endpoint, merges live/history thread data, proxies/resumes threads upstream, and has `/readyz` and `/healthz`; it does not yet have a complete status/debug/reconnect contract.
+- `README.md`: plan-start readback described direct `codex app-server --listen ws://0.0.0.0:4500 --ws-auth capability-token --ws-token-file ...`, `rtk make services`, Mac-local `.codex-dock/`, and environment variables for one real host plus a placeholder `home` host. Current closeout: README now documents the host-service wrapper, loopback raw app-server, app-facing relay, `.codex-dock/service.env` versus `.codex-dock/host.env`, exact Mac and `home` commands, and physical-device deferral.
+- `Makefile`: plan-start lifecycle was launchd-only, defaulted `APP_SERVER_HOST ?= 192.168.50.117`, wrote `.env`, started raw app-server on `:4500`, started Dock relay on `:4510`, and wrote LaunchAgent plist files into `.codex-dock/`. Current closeout: normal service/status/app simulator paths route through the host-service wrapper and generated non-secret `.codex-dock/host.env` without overwriting `.env`.
+- `scripts/dock-relay.mjs`: plan-start relay was the app-facing Node WebSocket endpoint, merged live/history thread data, proxied/resumed threads upstream, and had `/readyz` and `/healthz`; it did not yet have a complete status/debug/reconnect contract. Current closeout: relay `/statusz` is implemented and redacted, `/readyz` and `/healthz` are split, fail-loud/retryable behavior is tested, and status/log surfaces avoid secrets.
 - `scripts/dock-relay.test.mjs`: current Node tests cover helper behavior, merge logic, archived list handling, and source markers, not full WebSocket/service robustness.
 - `CodexDock/AppServer/AppServerClient.swift`: current Swift JSON-RPC client has connection state internally, request timeouts, and stream continuations, but no public state stream, reconnect loop, or reusable stream lifecycle after disconnect.
 - `CodexDock/State/ThreadDetailStore.swift`: current detail store connects once, reads compact history, resumes with `excludeTurns: true`, and observes notification/request streams; stream end is not yet a strong reconnect/error story.
 - `CodexDock/State/DockStore.swift`, `CodexDock/State/ArchiveStore.swift`, `CodexDock/State/HostSettingsStore.swift`, `CodexDock/Configuration/DockHostConfiguration.swift`, `CodexDock/Configuration/HostRegistry.swift`: multi-host config and fanout exist, but persisted host setup, service status, and one app-wide connectivity truth are incomplete.
 - `CodexDock/Features/Dock/DockView.swift`: root view owns Dock/Archive/Hosts state, but no root-owned app connectivity rollup.
-- `CodexDock/Voice/TranscriptionService.swift`: the worktree currently defaults production voice to one-shot relay transcription through `RelayTranscriptionClient`, while `OpenAITranscriptionClient` still exists as a direct side door. The Realtime plan runs before this plan and supersedes the one-shot production contract; multi-host setup should configure/report the final relay-owned Realtime path, not preserve file upload as a fallback.
+- `CodexDock/Voice/TranscriptionService.swift`: production voice uses the relay-owned Realtime transcription contract. Multi-host setup should configure/report the final relay-owned Realtime path and must not preserve file upload or direct Swift OpenAI transcription as a fallback.
 - `CodexDock/Configuration/DockHostConfiguration.swift`, `RelayBootstrapStore.swift`, and `RelayDiscovery.swift`: the implemented physical path uses optional bearer host config, Bonjour discovery, saved non-secret relay config, and manual URL fallback. Multi-host generated app config must align with that no-secret shape.
 - `docs/CODEX_APP_SERVER_RAMP_UP_2026-05-27.md`: local doc says daemon-managed app-server is Unix-socket-only for control-plane use, while a direct `codex app-server --listen ws://...` listener is needed for network-visible app access.
 - `docs/CODEX_DOCK_AGENTS_TAB_LIVE_COUNTS_2026-05-28.md`: preceding top-level phase changes Dock loading to typed source queries and counted tab snapshots; host status/fanout code should use that final loader shape.
@@ -301,8 +315,8 @@ Runtime facts checked on 2026-05-28:
 
 - Current Mac: `codex-cli 0.135.0-alpha.2`, macOS on `Amir-M5`, Tailscale IPv4 `100.72.74.74`, Tailscale client `1.96.4`, tailscaled `1.96.2`.
 - Current Codex daemon on Mac reports managed app-server version `0.132.0` on Unix socket `/Users/aelaguiz/.codex/app-server-control/app-server-control.sock`.
-- `home` over SSH: Linux host `amir-server`, Codex at `/home/aelaguiz/.local/bin/codex`, `codex-cli 0.135.0-alpha.2`, Node `v18.19.1`, systemd `255`, Tailscale IPv4 `100.66.11.7`.
-- `home` has no daemon socket at `/home/aelaguiz/.codex/app-server-control/app-server-control.sock` and no listener reachable on `100.66.11.7:4500` or `100.66.11.7:4510`.
+- `home` over SSH: Linux host `amir-server`, Codex at `/home/aelaguiz/.local/bin/codex`, `codex-cli 0.135.0-alpha.2`, Node `v18.19.1`, npm `9.2.0`, rtk `0.37.2`, systemd `255`, Tailscale IPv4 `100.66.11.7`.
+- Initial `home` check found no daemon socket at `/home/aelaguiz/.codex/app-server-control/app-server-control.sock` and no listener reachable on `100.66.11.7:4500` or `100.66.11.7:4510`; Phase 3C later proved the generated `systemd-user` bundle running with app-facing relay `ws://100.66.11.7:4510`.
 - `home` already has unrelated Tailscale Serve config for `home.fairy-salmon.ts.net:443` proxying to `http://127.0.0.1:18789`; this plan must not overwrite it.
 
 External/current sources checked:
@@ -332,7 +346,7 @@ External/current sources checked:
 - Existing Serve config on `home` means setup must be additive and explicit. A "Tailscale profile" may print recommended commands or manage a named service only when asked; it must not call `tailscale serve reset` or replace unrelated entries.
 - Therefore: Tailscale support belongs in endpoint-generation and runbook/profile helpers. Swift app code, Node relay protocol, and service lifecycle must only need a URL and auth mode.
 
-## 3.4 Current implementation risks found during research
+## 3.4 Plan-start implementation risks found during research
 
 - Mac-only lifecycle: all service rendering is inline Makefile plist generation; there is no Linux systemd user path.
 - Host lock-in: `APP_SERVER_HOST ?= 192.168.50.117`, `CODEX_DOCK_REAL_HOST_ID=Amir-M5`, and default `CODEX_DOCK_HOSTS ?= Amir-M5` make the current path one-machine-first.
@@ -343,6 +357,8 @@ External/current sources checked:
 - Detail store robustness gap: `ThreadDetailStore.load()` is guarded by `didLoad`, so reconnect/rehydrate needs a deliberate path rather than calling `load()` again.
 - App-wide status gap: Dock/Archive/Hosts/detail each has local status language; there is no single root-owned connectivity store that prevents contradictory "host looks fine here, offline there" UI.
 - Secret-surface gap: current `.env` can contain host-service secrets such as `OPENAI_API_KEY` for relay-side use, and `app-server-env` can print raw-token file references for host-side tools. The current simulator launch path does not pass `OPENAI_API_KEY` or raw token env into the app, so the remaining gap is separating host-service config from generated app config and keeping that app config non-secret.
+
+Current closeout: the risks above are resolved for the current agent-side scope. The host-service wrapper supports macOS launchd and Linux systemd user services, raw app-server binds loopback by default in the host-service path, relay `/statusz` and doctor/log helpers are redacted, app-wide connectivity is owned by Connectivity, generated app config is non-secret `.codex-dock/host.env`, and `.env` remains user-owned.
 
 ## 3.5 Compatibility posture
 
@@ -368,13 +384,13 @@ None at the architecture level. The no-phone-secret physical path is already the
 
 <!-- arch_skill:block:research_grounding:end -->
 
-# 4) Current Architecture (as-is)
+# 4) Plan-Start Architecture (historical as-is)
 
 <!-- arch_skill:block:current_architecture:start -->
 
-## 4.1 Runtime shape today
+## 4.1 Runtime shape at plan start
 
-The current app path is already a useful prototype, but it is not yet a robust multi-host product:
+At plan start, the app path was already a useful prototype, but it was not yet a robust multi-host product:
 
 - The iOS app talks JSON-RPC over WebSocket to a configured app-server-like endpoint.
 - In normal Dock use, that endpoint should be the Node Dock relay on `:4510`, not the raw Codex app-server on `:4500`.
@@ -382,12 +398,12 @@ The current app path is already a useful prototype, but it is not yet a robust m
   - raw Codex app-server history endpoint at `ws://127.0.0.1:4500`;
   - locally discovered live Codex app-server loopback processes;
   - OpenAI transcription only in the modified/uncommitted relay work that is already present in the tree.
-- The app has multi-host host IDs and fanout stores, but the service setup only really provisions `Amir-M5`.
-- `home` exists as an intended second host but has no running Dock service.
+- The app had multi-host host IDs and fanout stores, but the service setup only really provisioned `Amir-M5`.
+- `home` existed as an intended second host but had no running Dock service.
 
-## 4.2 Service lifecycle today
+## 4.2 Service lifecycle at plan start
 
-`Makefile` owns service lifecycle. It is convenient but too narrow:
+`Makefile` owned service lifecycle. It was convenient but too narrow:
 
 - It generates launchd plists inline.
 - It assumes macOS `launchctl`.
@@ -399,7 +415,7 @@ The current app path is already a useful prototype, but it is not yet a robust m
 - It starts Dock relay on `0.0.0.0:4510`.
 - It writes `.env` with `CODEX_DOCK_HOSTS=Amir-M5` by default and an empty `CODEX_DOCK_HOST_HOME_WS`.
 
-There is no platform-neutral service contract yet. The setup logic is not reusable on Linux without copying and translating it manually.
+There was no platform-neutral service contract yet. The setup logic was not reusable on Linux without copying and translating it manually.
 
 ## 4.3 App configuration today
 
@@ -773,7 +789,7 @@ None. The implementation has choices about exact file names and whether app conf
 
 <!-- arch_skill:block:phase_plan:start -->
 
-This child plan is active but deferred behind top-level Phases 1-3. Section 7 is the internal execution order only after Agents, Connectivity, and Realtime have met their exit criteria. Do not start cross-platform host-service setup, generated host config, or final two-host proof until the top-level Phase 4 entry conditions are true.
+This child plan is active but deferred behind top-level Phases 1-3. Section 7 is the internal execution order only after Agents, Connectivity, and Realtime have met their exit criteria. A narrow Phase 1A preparatory exception may dry-render the host-service contract and test launchd/systemd output without installing services, replacing Makefile targets, configuring `home`, proving app behavior, or claiming Multi-host readiness. Do not start real cross-platform host-service setup, generated host config consumption, or final two-host proof until the top-level Phase 4 entry conditions are true.
 
 ## Phase 0 - Top-Level Prerequisite Check
 
@@ -851,6 +867,12 @@ Stop condition:
 
 - Do not proceed to real service installation until dry-run render and redaction tests pass.
 
+Implementation note:
+
+- Phase 1A dry-run rendering is implemented in `scripts/codex-dock-host-service.mjs` with focused tests in `scripts/codex-dock-host-service.test.mjs`. It is preparatory only: service install/start, `Makefile` wrapper replacement, `home` setup, app smoke proof, and Multi-host readiness remain unclaimed.
+- Phase 1A CLI hardening is implemented: declared value options reject missing or empty values, unknown flags are rejected instead of silently becoming booleans, and `--help` is the only current boolean option.
+- Phase 1B lifecycle core is implemented behind fake-runner proof: `install`, `start`, `stop`, `restart`, `status`, `logs`, and `doctor` now have launchd/systemd command paths, install-scoped token creation/reuse with mode `0600`, local health probes, redacted logs/status/errors, payload/cookie/header redaction, minimal child-process env, and a Node 25-safe `--service-env-file` script option. This is still not real launchd/systemd host proof.
+
 ## Phase 2 - Relay Status, Errors, And Upstream Robustness
 
 Goal: make the server side debuggable and fail-loud before relying on app reconnect.
@@ -893,6 +915,12 @@ Exit evidence:
 Stop condition:
 
 - Do not proceed to app reconnect work until the relay can explain its own failure states through status/logs and client-visible errors.
+
+Implementation note:
+
+- Phase 2 relay status/error/upstream-robustness slice is implemented in `scripts/dock-relay.mjs`, `scripts/dock-relay-status.mjs`, `scripts/dock-relay-json-rpc-client.mjs`, `scripts/dock-relay-phase5.test.mjs`, and `Makefile`.
+- Implemented coverage includes host ID/name relay metadata, `/statusz`, split `/readyz` process readiness versus `/healthz` static config, `rtk make dock-relay-status` surfacing `/statusz`, active downstream/upstream counters, raw health/live discovery/error tracking, relay-enforced `excludeTurns: true` on live `thread/resume`, upstream JSON-RPC code preservation for `-32001`, retryable overload error data, bounded exponential reconnect delay with jitter, malformed downstream parse-error status, pending upstream request rejection proof, and redacted Realtime transcription status/errors.
+- This does not claim final Multi-host readiness. Fake-runner host-service lifecycle proof now exists, but real launchd/systemd host proof, `Makefile` wrapper replacement, `home` setup, generated two-host app config, and app multi-host smoke remain later phases. Physical-device checks stay deferred manual QA under the parent dock rule.
 
 ## Phase 3 - Make Service Setup Real On Mac And Linux
 
@@ -937,13 +965,21 @@ Stop condition:
 
 - Do not change Swift host UX until both service platforms have a status contract the app can consume or at least display consistently.
 
+Implementation note:
+
+- Phase 3A lifecycle core is implemented in the setup script/tests only. The script can render, install, start, stop, restart, status, logs, and doctor through injected launchd/systemd runners, and tests prove service order, token reuse, status/log redaction, command failure redaction, payload/cookie/header redaction, child env scrubbing, and Node 25-safe CLI option parsing.
+- Phase 3B Makefile wrapper/live Mac proof is implemented: `rtk make services` now goes through the host-service wrapper, generated service env stays under `.codex-dock/`, live Mac launchd services are loaded from `.codex-dock/services/`, raw app-server binds loopback, relay is the app-facing endpoint, status/doctor fail nonready states, relay `/statusz` requires raw-history health, and app-facing relay `/readyz` is checked for non-simulator profiles. Proof passed for `rtk make services`, `rtk make app-server-status`, `rtk make dock-relay-status`, `rtk make host-service-doctor`, aggregate `rtk npm test`, and simulator launch on `BAD95C8E-3E57-4818-9B90-E4ED22593B4B`.
+- Phase 4A generated two-host env/app-consumption proof is implemented: `.codex-dock/host.env` is generated as non-secret app config, `rtk make app` reads only that file for simulator `SIMCTL_CHILD_CODEX_DOCK_*` values, and simulator logs showed `HostRegistry` loaded `Amir-M5` plus `home` with no app-facing bearer tokens.
+- Phase 3C live Linux systemd proof is implemented on `home`: the same host-service wrapper installed and started `systemd-user` services, `host-service-status` reported `status: ready`, `host-service-doctor` reported `status: passed`, Mac-side `curl` reached `http://100.66.11.7:4510/readyz` and `/statusz`, and generated `home` app config stayed non-secret and host-scoped.
+- Not yet claimed: README runbook rewrite or final Multi-host app behavior.
+
 ## Phase 4 - App Host Config And Connectivity Inputs
 
 Goal: make the app consume multi-host setup cleanly through the Connectivity plan's status owner.
 
 Implementation steps:
 
-- Add generated config parsing if the chosen artifact is JSON. If env remains the first implementation, tighten env validation and document it as generated by setup.
+- Add generated config parsing if the chosen artifact is JSON. If env remains the first implementation, tighten env validation and document it as generated by setup. Phase 4A chose env-first and tightened that path; JSON/persistence remains deferred until there is a concrete installed-app need.
 - Update `DockHostConfiguration` and `HostRegistry` to support:
   - stable host IDs;
   - display names;
@@ -976,6 +1012,12 @@ Exit evidence:
 Stop condition:
 
 - Do not mark client robustness done until indefinite loading states are eliminated for known server/relay failures.
+
+Implementation note:
+
+- Phase 4A is implemented with env-first generated app config. The canonical generated app artifact is `.codex-dock/host.env`, derived from host-service state and whitelisted to app-safe `CODEX_DOCK_*` keys only. `rtk make app` reads that file for simulator launch instead of hard-coding host env or sourcing `.codex-dock/service.env`.
+- `HostRegistry` now rejects duplicate `CODEX_DOCK_HOSTS`, rejects invalid per-host auth modes, treats `AUTH_MODE=none` as no app-facing token even if token-shaped env is present, and requires scoped token input for explicit `AUTH_MODE=bearer`.
+- Proof passed for the generated two-host env with `Amir-M5` and `home`, simulator app consumption, full Swift tests, aggregate Node tests, service status, and live `home` systemd service readiness. This still does not claim final two-host app behavior or one-host-down behavior.
 
 ## Phase 5 - Multi-Host Verification Of Swift Reconnect And Detail Rehydration
 
@@ -1042,6 +1084,14 @@ Exit evidence:
 - One host failure is visible and does not hide the healthy host.
 - Tailscale profile works when Tailscale is available, but the documented non-Tailscale profile also works.
 
+Implementation note:
+
+- README/runbook coverage is implemented for the cross-platform host-service wrapper, macOS launchd path, Linux `home` systemd user path, generated `.codex-dock/service.env` versus `.codex-dock/host.env`, app-safe host config, Tailscale profile, physical-device deferral, and exact `Amir-M5`/`home` commands.
+- Final non-physical app smoke passed on simulator `BAD95C8E-3E57-4818-9B90-E4ED22593B4B`: `rtk make app ... CODEX_DOCK_HOSTS='Amir-M5,home' CODEX_DOCK_HOST_HOME_WS='ws://100.66.11.7:4510'` launched the real app, logs showed both hosts loaded from env with no bearer configured, Mobile MCP showed both host cards, `Amir-M5` rows remained visible, and the `Home` host showed real source-specific partial status.
+- One-host failure proof passed by relaunching the simulator with `CODEX_DOCK_HOST_HOME_WS=ws://127.0.0.1:9`: the app showed `Partial`, explicit `Home` load failures, and preserved healthy `Amir-M5` rows. The final simulator launch restored `home` to `ws://100.66.11.7:4510`.
+- Screenshots are saved under `/tmp/codex-client/20260528T213700Z/`: `multi-host-smoke-001-two-host-partial.png`, `multi-host-smoke-002-home-offline.png`, and `multi-host-smoke-003-restored-home.png`.
+- Final non-physical Multi-host closeout is accepted. Physical-device checks remain deferred manual QA under the parent dock rule. Realtime transcription on `home` is not claimed because `home` intentionally has no copied `OPENAI_API_KEY`.
+
 ## Implementation Order Summary
 
 This is the internal order after top-level Phase 4 entry conditions are true. It does not authorize starting Multi-host before Agents, Connectivity, and Realtime have landed.
@@ -1075,6 +1125,8 @@ Avoid verification bureaucracy. Prefer existing tests, service health checks, an
 - Host service status command checks against local endpoints.
 
 ## 8.3 E2E / device tests (realistic)
+
+Physical iPhone checks in this section are deferred manual QA under the parent dock rule. Use simulator/local/real-relay/service-status proof for agent closeout unless Amir explicitly asks for physical testing in that turn, and keep the physical checklist in `docs/CODEX_DOCK_CROSS_PLAN_IMPLEMENTATION_DOCK_2026-05-28.md` section 5.1 current.
 
 - `Amir-M5` service install/start/status.
 - `home` service install/start/status over SSH.

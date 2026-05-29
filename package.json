@@ -4,8 +4,9 @@
   "type": "module",
   "scripts": {
     "dock-relay": "node scripts/dock-relay.mjs",
-    "test": "npm run test:relay",
-    "test:relay": "node --test scripts/dock-relay.test.mjs"
+    "test": "npm run test:relay && npm run test:host-service",
+    "test:relay": "node --test scripts/dock-relay.test.mjs scripts/dock-relay-phase5.test.mjs scripts/dock-relay-realtime-transcription.test.mjs",
+    "test:host-service": "node --test scripts/codex-dock-host-service.test.mjs"
   },
   "dependencies": {
     "ws": "^8.18.3"

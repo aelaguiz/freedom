@@ -67,7 +67,10 @@ public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
         for host: DockHostConfiguration,
         query: DockSessionQuery
     ) async throws -> DockLoadResult {
-        try await withClient(for: host) { client in
+        let startedAt = Date()
+        let sourceKinds = query.sourceKinds?.map(\.rawValue).joined(separator: ",")
+        DockLog.dock.info("dock client load started host_id=\(host.id, privacy: .public) endpoint=\(DockLog.endpoint(host.webSocketURL), privacy: .public) archived=\(query.archived, privacy: .public) source_kinds=\(DockLog.publicID(sourceKinds), privacy: .public)")
+        return try await withClient(for: host) { client in
             let response = try await client.threadList(
                 params: ThreadListParams(
                     limit: sessionPageLimit,
@@ -80,6 +83,7 @@ public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
                 timeout: .seconds(10)
             )
             let mapped = SessionSummaryMapper.map(response: response, hostID: host.id)
+            DockLog.dock.info("dock client load finished host_id=\(host.id, privacy: .public) archived=\(query.archived, privacy: .public) rows=\(mapped.summaries.count, privacy: .public) mapping_failures=\(mapped.failures.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
 
             return DockLoadResult(
                 summaries: mapped.summaries,
@@ -89,21 +93,25 @@ public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
     }
 
     public func archiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
+        DockLog.dock.notice("dock archive started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")
         _ = try await withClient(for: host) { client in
             try await client.threadArchive(
                 params: ThreadArchiveParams(threadId: threadID),
                 timeout: .seconds(10)
             )
         }
+        DockLog.dock.notice("dock archive finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")
     }
 
     public func unarchiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
+        DockLog.archive.notice("archive restore started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")
         _ = try await withClient(for: host) { client in
             try await client.threadUnarchive(
                 params: ThreadUnarchiveParams(threadId: threadID),
                 timeout: .seconds(10)
             )
         }
+        DockLog.archive.notice("archive restore finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")
     }
 
     private func withClient<Value>(
@@ -112,7 +120,7 @@ public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
     ) async throws -> Value {
         let client = AppServerClient(
             webSocketURL: host.webSocketURL,
-            bearerToken: host.bearerToken
+            bearerToken: nil
         )
 
         do {
@@ -286,15 +294,7 @@ public struct DockHostViewModel: Equatable, Identifiable, Sendable {
     public init(host: DockHostConfiguration) {
         self.id = host.id
         self.displayName = host.displayName
-        self.endpoint = Self.displayEndpoint(for: host.webSocketURL)
-    }
-
-    private static func displayEndpoint(for url: URL) -> String {
-        let scheme = url.scheme.map { "\($0)://" } ?? ""
-        let host = url.host ?? url.absoluteString
-        let port = url.port.map { ":\($0)" } ?? ""
-        let path = url.path.isEmpty || url.path == "/" ? "" : url.path
-        return "\(scheme)\(host)\(port)\(path)"
+        self.endpoint = host.endpoint.displayEndpoint
     }
 }
 
@@ -344,6 +344,24 @@ public enum DockHostLoadStatus: Equatable, Sendable {
             return "Offline"
         case .error:
             return "Error"
+        }
+    }
+
+    public var isUnavailable: Bool {
+        switch self {
+        case .offline, .error:
+            return true
+        case .loaded, .partial, .empty:
+            return false
+        }
+    }
+
+    public var unavailableMessage: String? {
+        switch self {
+        case .offline(let message), .error(let message):
+            return message
+        case .loaded, .partial, .empty:
+            return nil
         }
     }
 }
@@ -438,6 +456,7 @@ public final class DockStore: ObservableObject {
     private let now: @Sendable () -> Date
     private var isLoading = false
     private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
+    private weak var connectivityReporter: (any AppConnectivityReporting)?
 
     public var hostConfiguration: DockHostConfiguration? {
         hosts.first
@@ -496,7 +515,13 @@ public final class DockStore: ObservableObject {
         hosts = registry.hosts
         actionError = nil
         state = .idle(DockHostViewModel(host: registry.hosts[0]))
+        connectivityReporter?.reportDockState(state)
         await reload(showLoading: true)
+    }
+
+    public func setConnectivityReporter(_ reporter: (any AppConnectivityReporting)?) {
+        connectivityReporter = reporter
+        reporter?.reportDockState(state)
     }
 
     public func load() async {
@@ -522,16 +547,20 @@ public final class DockStore: ObservableObject {
     @discardableResult
     public func archive(_ row: DockRowViewModel) async -> Bool {
         guard let host = hostConfiguration(for: row.id.hostID) else {
+            DockLog.dock.error("dock archive skipped missing host_id=\(row.id.hostID, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
             actionError = "Host \(row.id.hostID) is no longer configured."
             return false
         }
 
         do {
+            DockLog.dock.notice("dock archive action started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
             try await archiver.archiveThread(row.id.threadID, on: host)
             actionError = nil
             await refresh()
+            DockLog.dock.notice("dock archive action finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
             return true
         } catch {
+            DockLog.dock.error("dock archive action failed host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             actionError = error.localizedDescription
             return false
         }
@@ -539,24 +568,35 @@ public final class DockStore: ObservableObject {
 
     private func reload(showLoading: Bool) async {
         guard !hosts.isEmpty else {
+            DockLog.dock.warning("dock reload skipped reason=no_hosts")
             return
         }
         guard !isLoading else {
+            DockLog.dock.debug("dock reload skipped reason=already_loading")
             return
         }
 
+        let startedAt = Date()
+        let signpostState = DockSignpost.dock.beginInterval("dock.reload")
+        DockLog.dock.notice("dock reload started hosts=\(self.hosts.count, privacy: .public) show_loading=\(showLoading, privacy: .public)")
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            DockSignpost.dock.endInterval("dock.reload", signpostState)
+            isLoading = false
+        }
 
         let hostViewModel = DockHostViewModel(host: hosts[0])
         if showLoading {
             state = .loading(hostViewModel)
+            connectivityReporter?.reportDockState(state)
         }
 
         do {
             localMetadata = try await metadataStore.load()
+            DockLog.persistence.debug("dock metadata loaded entries=\(self.localMetadata.count, privacy: .public)")
         } catch {
             localMetadata = [:]
+            DockLog.persistence.warning("dock metadata load failed error=\(DockLog.errorSummary(error), privacy: .public)")
         }
 
         let results = await loadAllHosts()
@@ -576,6 +616,8 @@ public final class DockStore: ObservableObject {
         } else {
             state = .loaded(snapshot)
         }
+        connectivityReporter?.reportDockState(state)
+        DockLog.dock.notice("dock reload finished hosts=\(self.hosts.count, privacy: .public) rows=\(snapshot.rowCount, privacy: .public) mapping_failures=\(snapshot.mappingFailures.count, privacy: .public) scope_failures=\(snapshot.scopeLoadFailures.count, privacy: .public) conflicts=\(snapshot.scopeConflicts.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
     }
 
     private struct ScopedHostLoadOutcome: Sendable {
@@ -671,9 +713,15 @@ public final class DockStore: ObservableObject {
         host: DockHostConfiguration,
         query: DockSessionQuery
     ) async -> Result<DockLoadResult, DockLoadFailure> {
+        let startedAt = Date()
+        let scope = DockSessionScope.allCases.first { $0.query == query }?.rawValue ?? "custom"
+        DockLog.dock.debug("dock scope load started host_id=\(host.id, privacy: .public) scope=\(scope, privacy: .public)")
         do {
-            return .success(try await loader.loadSessions(for: host, query: query))
+            let result = try await loader.loadSessions(for: host, query: query)
+            DockLog.dock.debug("dock scope load finished host_id=\(host.id, privacy: .public) scope=\(scope, privacy: .public) rows=\(result.summaries.count, privacy: .public) mapping_failures=\(result.mappingFailures.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+            return .success(result)
         } catch {
+            DockLog.dock.warning("dock scope load failed host_id=\(host.id, privacy: .public) scope=\(scope, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             return .failure(mapLoadFailure(error))
         }
     }
@@ -865,9 +913,12 @@ public final class DockStore: ObservableObject {
 
     private func save(metadata: LocalThreadMetadata, for key: LocalThreadMetadataKey) async {
         do {
+            DockLog.persistence.debug("dock metadata save started host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) has_metadata=\(!metadata.isEmpty, privacy: .public)")
             localMetadata = try await metadataStore.save(metadata.isEmpty ? nil : metadata, for: key)
             await refresh()
+            DockLog.persistence.debug("dock metadata save finished host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) entries=\(self.localMetadata.count, privacy: .public)")
         } catch {
+            DockLog.persistence.error("dock metadata save failed host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             state = .error(DockHostViewModel(host: hosts[0]), error.localizedDescription)
         }
     }

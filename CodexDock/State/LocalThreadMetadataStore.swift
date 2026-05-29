@@ -57,11 +57,13 @@ public actor FileLocalThreadMetadataStore: LocalThreadMetadataStoring {
 
     public func load() async throws -> [LocalThreadMetadataKey: LocalThreadMetadata] {
         if let cache {
+            DockLog.persistence.debug("thread metadata load cache hit entries=\(cache.count, privacy: .public)")
             return cache
         }
 
         let loaded: [LocalThreadMetadataKey: LocalThreadMetadata]
         if FileManager.default.fileExists(atPath: fileURL.path) {
+            DockLog.persistence.debug("thread metadata load started path=\(self.fileURL.path, privacy: .public)")
             let data = try Data(contentsOf: fileURL)
             let entries = try JSONDecoder().decode([Entry].self, from: data)
             loaded = Dictionary(uniqueKeysWithValues: entries.map { ($0.key, $0.metadata) })
@@ -69,6 +71,7 @@ public actor FileLocalThreadMetadataStore: LocalThreadMetadataStoring {
             loaded = [:]
         }
         cache = loaded
+        DockLog.persistence.debug("thread metadata load finished entries=\(loaded.count, privacy: .public)")
         return loaded
     }
 
@@ -82,8 +85,10 @@ public actor FileLocalThreadMetadataStore: LocalThreadMetadataStoring {
         } else {
             values.removeValue(forKey: key)
         }
+        DockLog.persistence.debug("thread metadata persist started host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) entries=\(values.count, privacy: .public)")
         try persist(values)
         cache = values
+        DockLog.persistence.debug("thread metadata persist finished host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) entries=\(values.count, privacy: .public)")
         return values
     }
 

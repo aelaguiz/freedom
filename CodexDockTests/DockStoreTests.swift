@@ -36,7 +36,7 @@ final class DockStoreTests: XCTestCase {
             return XCTFail("Expected loaded state, got \(store.state)")
         }
 
-        XCTAssertEqual(snapshot.host.displayName, "Amir-M5")
+        XCTAssertEqual(snapshot.host.displayName, host.displayName)
         XCTAssertEqual(snapshot.rowCount, 2)
         XCTAssertEqual(snapshot.sections.map(\.title), ["main", "feature/dock"])
         XCTAssertEqual(snapshot.sections[0].rows[0].status, .needsMe)
@@ -231,12 +231,12 @@ final class DockStoreTests: XCTestCase {
         }
 
         XCTAssertEqual(snapshot.rowCount, 1)
-        XCTAssertEqual(snapshot.hostStates.map(\.id), ["Amir-M5", "Home"])
+        XCTAssertEqual(snapshot.hostStates.map(\.id), [amir.id, home.id])
         XCTAssertEqual(snapshot.hostStates[0].status, .loaded(rowCount: 1))
         XCTAssertEqual(snapshot.hostStates[1].status, .offline("Home unreachable"))
-        XCTAssertEqual(snapshot.sections.map(\.title), ["Amir-M5 / main"])
+        XCTAssertEqual(snapshot.sections.map(\.title), ["\(amir.displayName) / main"])
         XCTAssertEqual(snapshot.sections[0].rows[0].status, .running)
-        XCTAssertEqual(store.hostConfiguration(for: "Home"), home)
+        XCTAssertEqual(store.hostConfiguration(for: home.id), home)
     }
 
     @MainActor
@@ -282,7 +282,7 @@ final class DockStoreTests: XCTestCase {
             .loaded(rowCount: 1),
             .loaded(rowCount: 1)
         ])
-        XCTAssertEqual(snapshot.sections.map(\.title), ["Amir-M5 / main", "Home / main"])
+        XCTAssertEqual(snapshot.sections.map(\.title), ["\(amir.displayName) / main", "\(home.displayName) / main"])
         XCTAssertEqual(snapshot.sections.map(\.rows.count), [1, 1])
         XCTAssertEqual(snapshot.sections[0].rows[0].status, .idle)
         XCTAssertEqual(snapshot.sections[1].rows[0].status, .limited)
@@ -500,6 +500,24 @@ final class DockStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testArchiveStoreShowsUnavailableWhenAllHostsFail() async throws {
+        let host = makeHost()
+        let registry = try HostRegistry(hosts: [host])
+        let loader = RecordingDockSessionLoader(results: [
+            .failure(.offline("relay stopped")),
+        ])
+        let store = ArchiveStore(registry: registry, loader: loader)
+
+        await store.load()
+
+        guard case let .unavailable(snapshot, message) = store.state else {
+            return XCTFail("Expected unavailable archive, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.rowCount, 0)
+        XCTAssertTrue(message.contains("relay stopped"))
+    }
+
+    @MainActor
     func testHostSettingsSaveEditAndTestUseSharedRegistry() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
@@ -514,7 +532,7 @@ final class DockStoreTests: XCTestCase {
                     prompt: "Live host"
                 )
             ])),
-            "Home": .failure(.offline("Home unreachable"))
+            "100.66.11.7:4510": .failure(.offline("Home unreachable"))
         ])
         let configurationStore = InMemoryLocalDockConfigurationStore()
         let store = HostSettingsStore(
@@ -526,36 +544,37 @@ final class DockStoreTests: XCTestCase {
 
         try await store.saveHost(
             replacing: nil,
-            id: "Home",
-            displayName: "Home",
-            webSocketURL: "ws://100.66.11.7:4510"
+            host: "100.66.11.7",
+            port: "4510"
         )
 
-        XCTAssertEqual(store.registry?.hosts.map(\.id), ["Amir-M5", "Home"])
-        XCTAssertNil(store.registry?.hosts.first(where: { $0.id == "Home" })?.bearerToken)
+        XCTAssertEqual(store.registry?.hosts.map(\.id), [host.id, "100.66.11.7:4510"])
         let savedHomeConfiguration = await configurationStore.savedConfiguration()
-        XCTAssertEqual(savedHomeConfiguration?.webSocketURL.absoluteString, "ws://100.66.11.7:4510")
-        XCTAssertNil(savedHomeConfiguration?.hostConfiguration.bearerToken)
-
-        await store.test("Home")
         XCTAssertEqual(
-            store.rows.first(where: { $0.id == "Home" })?.status,
+            try savedHomeConfiguration?.relayEndpoints.map(\.displayEndpoint),
+            [host.id, "100.66.11.7:4510"]
+        )
+
+        await store.test("100.66.11.7:4510")
+        XCTAssertEqual(
+            store.rows.first(where: { $0.id == "100.66.11.7:4510" })?.status,
             .offline("Home unreachable", checkedAt: Date(timeIntervalSince1970: 2_000))
         )
 
         try await store.saveHost(
-            replacing: "Home",
-            id: "Home",
-            displayName: "Home Server",
-            webSocketURL: "ws://100.66.11.7:4520"
+            replacing: "100.66.11.7:4510",
+            host: "100.66.11.7",
+            port: "4520"
         )
 
-        let edited = try XCTUnwrap(store.registry?.hosts.first(where: { $0.id == "Home" }))
-        XCTAssertEqual(edited.displayName, "Home Server")
+        let edited = try XCTUnwrap(store.registry?.hosts.first(where: { $0.id == "100.66.11.7:4520" }))
+        XCTAssertEqual(edited.displayName, "100.66.11.7:4520")
         XCTAssertEqual(edited.webSocketURL.absoluteString, "ws://100.66.11.7:4520")
-        XCTAssertNil(edited.bearerToken)
         let savedEditedConfiguration = await configurationStore.savedConfiguration()
-        XCTAssertEqual(savedEditedConfiguration?.webSocketURL.absoluteString, "ws://100.66.11.7:4520")
+        XCTAssertEqual(
+            try savedEditedConfiguration?.relayEndpoints.map(\.displayEndpoint),
+            [host.id, "100.66.11.7:4520"]
+        )
     }
 
     @MainActor
@@ -571,15 +590,14 @@ final class DockStoreTests: XCTestCase {
         do {
             try await store.saveHost(
                 replacing: nil,
-                id: "SecretRelay",
-                displayName: "Secret Relay",
-                webSocketURL: "ws://token@192.168.50.117:4510"
+                host: "token@192.168.50.117",
+                port: "4510"
             )
-            XCTFail("Expected credential-bearing relay URL to be rejected")
+            XCTFail("Expected credential-bearing relay host to be rejected")
         } catch {
             XCTAssertEqual(
                 error as? HostSettingsError,
-                .invalidEndpoint("ws://token@192.168.50.117:4510")
+                .invalidEndpoint("token@192.168.50.117:4510")
             )
         }
     }
@@ -834,21 +852,21 @@ private actor InMemoryLocalThreadMetadataStore: LocalThreadMetadataStoring {
 }
 
 private actor InMemoryLocalDockConfigurationStore: LocalDockConfigurationStoring {
-    private var saved: LocalRelayConfiguration?
+    private var saved: LocalRelayEndpointList?
 
-    init(saved: LocalRelayConfiguration? = nil) {
+    init(saved: LocalRelayEndpointList? = nil) {
         self.saved = saved
     }
 
-    func load() async throws -> LocalRelayConfiguration? {
+    func load() async throws -> LocalRelayEndpointList? {
         saved
     }
 
-    func save(_ configuration: LocalRelayConfiguration) async throws {
+    func save(_ configuration: LocalRelayEndpointList) async throws {
         saved = configuration
     }
 
-    func savedConfiguration() -> LocalRelayConfiguration? {
+    func savedConfiguration() -> LocalRelayEndpointList? {
         saved
     }
 }
@@ -875,13 +893,13 @@ private func querySortKey(_ query: DockSessionQuery) -> String {
 private func makeHost(
     id: String = "Amir-M5",
     displayName: String = "Amir-M5",
-    url: String = "ws://192.168.50.117:4500"
+    url: String? = nil
 ) -> DockHostConfiguration {
-    DockHostConfiguration(
-        id: id,
-        displayName: displayName,
-        webSocketURL: URL(string: url)!,
-        bearerToken: "test-token"
+    let defaultURL = id == "Amir-M5" ? "ws://192.168.50.117:4500" : "ws://\(id):4500"
+    let parsedURL = URL(string: url ?? defaultURL)!
+    return try! DockHostConfiguration(
+        host: parsedURL.host!,
+        port: parsedURL.port!
     )
 }
 

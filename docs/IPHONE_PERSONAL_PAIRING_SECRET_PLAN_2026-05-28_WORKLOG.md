@@ -7,7 +7,7 @@ Plan: `docs/IPHONE_PERSONAL_PAIRING_SECRET_PLAN_2026-05-28.md`
 
 - Implemented the Mac relay as the no-phone-secret boundary.
 - Implemented iPhone relay discovery/bootstrap with optional bearer host config.
-- Moved production voice transcription to relay-backed JSON-RPC.
+- Moved production voice transcription to relay-backed Realtime JSON-RPC.
 - Added the physical `rtk make device-install` path with the repo defaulting to the paired iPhone 14 and automatic signing team `R6B8KXF3QW`.
 - Updated README and the stale iPhone UX spec so they no longer teach phone-side OpenAI keys or bearer-token simulator launch as the real route.
 
@@ -17,11 +17,11 @@ Status: implemented.
 
 - Added `--phone-auth none|bearer`; `make services` runs the relay with `--phone-auth none`.
 - Kept raw/history app-server bearer auth inside the relay through `--history-auth-token-file`.
-- Added `audio/transcribe` to the relay.
+- Historical note: this phase originally added one-shot `audio/transcribe`; Realtime Phase 5 now supersedes it with `audio/transcription/*` and rejects raw `audio/transcribe`.
 - The relay reads `OPENAI_API_KEY` from Mac env or `.env`.
-- The relay default transcription model is `gpt-4o-transcribe`.
-- Phone-supplied transcription model selection is rejected.
-- Added audio payload validation, size limit, timeout, safe upstream errors, and no transcript/audio/key logging.
+- The relay default Realtime transcription model is `gpt-realtime-whisper`.
+- Phone-supplied transcription model/provider selection is rejected.
+- Added Realtime chunk validation, pending-buffer limits, timeout, safe upstream errors, and no transcript/audio/key logging.
 - Added `_codexdock._tcp` Bonjour advertisement with non-secret TXT records.
 - Added Node tests for auth boundary, history token boundary, unsupported methods, transcription request shape, model ownership, payload validation, missing key, upstream failure, empty transcript, timeout, and log redaction.
 - Split relay transcription and Bonjour helpers out of the main relay script after a strict maintainability review pushed back on the main relay file crossing 1,000 lines.
@@ -38,12 +38,12 @@ Follow-up syntax/structure proof:
 
 ```sh
 rtk node --check scripts/dock-relay.mjs
-rtk node --check scripts/dock-relay-transcription.mjs
+rtk node --check scripts/dock-relay-realtime-transcription.mjs
 rtk node --check scripts/dock-relay-bonjour.mjs
 rtk npm test
 ```
 
-Result: syntax checks passed, and 14 relay tests still passed after the split.
+Result: syntax checks passed, and relay tests passed after the split.
 
 ## Phase 2 - iPhone Discovery And No-Token Host Config
 
@@ -71,14 +71,11 @@ Result: passed, 86 tests, 5 real-host smoke tests skipped because their explicit
 
 ## Phase 3 - Relay Voice Transcription
 
-Status: implemented.
+Status: superseded by Realtime Phase 5 cleanup.
 
-- Added `AudioTranscribeParams` and `AudioTranscribeResponseDTO`.
-- Added `AppServerMethods.audioTranscribe` and `AppServerClient.audioTranscribe`.
-- Added `RelayTranscriptionClient`.
-- Changed `ThreadDetailStore` production default to `RelayTranscriptionClient(host:)`.
-- Kept `OpenAITranscriptionClient` as non-default reusable code only; production app bootstrap no longer constructs it.
-- Existing composer voice behavior tests still prove transcript insertion, no auto-submit, editable draft, and failure recovery.
+- Historical one-shot artifacts (`AudioTranscribeParams`, `AudioTranscribeResponseDTO`, `AppServerMethods.audioTranscribe`, `AppServerClient.audioTranscribe`, `RelayTranscriptionClient`, and `OpenAITranscriptionClient`) have been superseded by relay-owned Realtime transcription.
+- Current production default is `RelayRealtimeTranscriptionClient(host:)`.
+- Existing composer voice behavior tests still prove live draft insertion, no auto-submit, edit locking while active, and failure recovery.
 
 Proof:
 

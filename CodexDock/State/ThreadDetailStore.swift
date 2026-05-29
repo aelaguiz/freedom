@@ -2,6 +2,7 @@ import Combine
 import Foundation
 
 public protocol ThreadDetailSession: Sendable {
+    var connectionStates: AsyncStream<AppServerConnectionState> { get }
     var notifications: AsyncStream<JSONRPCNotification> { get }
     var serverRequests: AsyncStream<JSONRPCRequest> { get }
 
@@ -19,21 +20,44 @@ extension AppServerClient: ThreadDetailSession {}
 
 public protocol ThreadDetailSessionMaking: Sendable {
     func makeSession(for host: DockHostConfiguration) -> any ThreadDetailSession
+    func makeSession(
+        for host: DockHostConfiguration,
+        foregroundWorkGate: (any AppForegroundWorkGating)?
+    ) -> any ThreadDetailSession
+}
+
+public extension ThreadDetailSessionMaking {
+    func makeSession(
+        for host: DockHostConfiguration,
+        foregroundWorkGate: (any AppForegroundWorkGating)?
+    ) -> any ThreadDetailSession {
+        makeSession(for: host)
+    }
 }
 
 public struct AppServerThreadDetailSessionFactory: ThreadDetailSessionMaking {
     public init() {}
 
     public func makeSession(for host: DockHostConfiguration) -> any ThreadDetailSession {
+        makeSession(for: host, foregroundWorkGate: nil)
+    }
+
+    public func makeSession(
+        for host: DockHostConfiguration,
+        foregroundWorkGate: (any AppForegroundWorkGating)?
+    ) -> any ThreadDetailSession {
         AppServerClient(
             webSocketURL: host.webSocketURL,
-            bearerToken: host.bearerToken
+            bearerToken: nil,
+            connectionPolicy: .liveDetail,
+            foregroundWorkGate: foregroundWorkGate
         )
     }
 }
 
 public enum ThreadDetailLiveState: Equatable, Sendable {
     case connecting
+    case reconnecting(String)
     case live
     case stale(String)
     case closed
@@ -42,6 +66,8 @@ public enum ThreadDetailLiveState: Equatable, Sendable {
         switch self {
         case .connecting:
             return "Connecting"
+        case .reconnecting:
+            return "Reconnecting"
         case .live:
             return "Live"
         case .stale:
@@ -65,7 +91,7 @@ public struct ThreadDetailHeader: Equatable, Sendable {
 
     public init(host: DockHostConfiguration, row: DockRowViewModel) {
         self.hostID = host.id
-        self.hostName = host.displayName
+        self.hostName = host.endpoint.displayEndpoint
         self.threadID = row.id.threadID
         self.title = row.title
         self.repository = row.repository
@@ -89,129 +115,113 @@ public enum ThreadDetailStoreState: Equatable, Sendable {
     case error(ThreadDetailHeader, String)
 }
 
-public struct ComposerState: Equatable, Sendable {
-    public var draft: String
-    public var isSending: Bool
-    public var lastError: String?
-    public var voice: ComposerVoiceState
-
-    public init(
-        draft: String = "",
-        isSending: Bool = false,
-        lastError: String? = nil,
-        voice: ComposerVoiceState = ComposerVoiceState()
-    ) {
-        self.draft = draft
-        self.isSending = isSending
-        self.lastError = lastError
-        self.voice = voice
-    }
-
-    public var canSend: Bool {
-        !isSending
-            && !voice.phase.isBusy
-            && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-}
-
-public enum ComposerVoicePhase: Equatable, Sendable {
-    case idle
-    case recording
-    case transcribing
-
-    public var isBusy: Bool {
-        self == .recording || self == .transcribing
-    }
-
-    public var label: String {
-        switch self {
-        case .idle:
-            return "Dictate"
-        case .recording:
-            return "Recording"
-        case .transcribing:
-            return "Transcribing"
-        }
-    }
-}
-
-public struct ComposerVoiceState: Equatable, Sendable {
-    public var phase: ComposerVoicePhase
-    public var lastError: String?
-
-    public init(phase: ComposerVoicePhase = .idle, lastError: String? = nil) {
-        self.phase = phase
-        self.lastError = lastError
-    }
-}
-
 @MainActor
 public final class ThreadDetailStore: ObservableObject {
+    private struct CompactThreadRead {
+        let thread: ThreadDTO
+        let turns: [JSONValue]
+    }
+
     @Published public private(set) var state: ThreadDetailStoreState
-    @Published public private(set) var composer = ComposerState()
+    @Published public internal(set) var composer = ComposerState()
     @Published public private(set) var requestCards: [ServerRequestCard] = []
 
     private let host: DockHostConfiguration
-    private let row: DockRowViewModel
+    let row: DockRowViewModel
     private let header: ThreadDetailHeader
     private let factory: any ThreadDetailSessionMaking
-    private let voiceCapture: any VoiceCaptureControlling
-    private let transcriptionService: any TranscriptionServicing
+    let transcriptionService: any RealtimeTranscriptionServicing
+    let liveVoiceCaptureController: any LiveVoiceCaptureControlling
+    private let lifecycleCoordinator: AppLifecycleCoordinator?
+    private weak var connectivityReporter: (any AppConnectivityReporting)?
     private let now: @Sendable () -> Date
 
     private var session: (any ThreadDetailSession)?
+    private var connectionTask: Task<Void, Never>?
     private var notificationTask: Task<Void, Never>?
     private var requestTask: Task<Void, Never>?
+    private var recoveryTask: Task<Void, Never>?
+    private var lifecycleTask: Task<Void, Never>?
+    var transcriptionTask: Task<Void, Never>?
+    var voiceCaptureTask: Task<Void, Never>?
+    var activeTranscriptionSession: (any RealtimeTranscriptionSession)?
+    var activeVoiceCaptureSession: (any LiveVoiceCaptureSession)?
+    var activeDictationSegment: ActiveDictationSegment?
+    private var handledForegroundResumeGeneration: Int?
     private var events: [ThreadEvent] = []
     private var liveState: ThreadDetailLiveState = .connecting
+    private var latestConnectionState: AppServerConnectionState = .idle
     private var activeTurnID: String?
     private var didLoad = false
+    private var isClosing = false
 
     public init(
         host: DockHostConfiguration,
         row: DockRowViewModel,
         factory: any ThreadDetailSessionMaking = AppServerThreadDetailSessionFactory(),
-        voiceCapture: any VoiceCaptureControlling = VoiceCaptureController(),
-        transcriptionService: (any TranscriptionServicing)? = nil,
+        realtimeTranscriptionService: (any RealtimeTranscriptionServicing)? = nil,
+        liveVoiceCaptureController: (any LiveVoiceCaptureControlling)? = nil,
+        lifecycleCoordinator: AppLifecycleCoordinator? = nil,
+        connectivityReporter: (any AppConnectivityReporting)? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.host = host
         self.row = row
         self.header = ThreadDetailHeader(host: host, row: row)
         self.factory = factory
-        self.voiceCapture = voiceCapture
-        self.transcriptionService = transcriptionService ?? RelayTranscriptionClient(host: host)
+        self.transcriptionService = realtimeTranscriptionService ?? RelayRealtimeTranscriptionClient(host: host)
+        self.liveVoiceCaptureController = liveVoiceCaptureController
+            ?? (realtimeTranscriptionService == nil
+                ? LiveVoiceCaptureController()
+                : SilentLiveVoiceCaptureController())
+        self.lifecycleCoordinator = lifecycleCoordinator
+        self.connectivityReporter = connectivityReporter
         self.now = now
         self.state = .idle(ThreadDetailHeader(host: host, row: row))
+        startLifecycleObservation()
     }
 
     deinit {
+        connectionTask?.cancel()
         notificationTask?.cancel()
         requestTask?.cancel()
+        recoveryTask?.cancel()
+        lifecycleTask?.cancel()
+        transcriptionTask?.cancel()
+        voiceCaptureTask?.cancel()
         let session = session
+        let activeTranscriptionSession = activeTranscriptionSession
+        let activeVoiceCaptureSession = activeVoiceCaptureSession
         Task {
+            await activeVoiceCaptureSession?.cancel()
+            await activeTranscriptionSession?.cancel()
             await session?.disconnect()
         }
     }
 
     public func load() async {
         guard !didLoad else {
+            DockLog.threadDetail.debug("thread detail load skipped reason=already_loaded host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
             return
         }
         didLoad = true
 
         guard row.id.hostID == host.id else {
+            DockLog.threadDetail.error("thread detail load failed reason=host_mismatch expected=\(self.host.id, privacy: .public) actual=\(self.row.id.hostID, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
             state = .error(
                 header,
-                "This row belongs to host \(row.id.hostID), not \(host.id)."
+                "This row belongs to host \(self.row.id.hostID), not \(self.host.id)."
             )
             return
         }
 
         state = .loading(header)
         liveState = .connecting
+        isClosing = false
+        let startedAt = Date()
+        DockLog.threadDetail.notice("thread detail load started host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
 
-        let session = factory.makeSession(for: host)
+        let session = factory.makeSession(for: host, foregroundWorkGate: lifecycleCoordinator)
         self.session = session
 
         do {
@@ -219,123 +229,97 @@ public final class ThreadDetailStore: ObservableObject {
                 params: .codexDock(version: "0.1.0"),
                 timeout: .seconds(5)
             )
+            latestConnectionState = .connected
             startObservation(session: session)
 
-            let readResponse = try await session.threadRead(
-                params: ThreadReadParams(threadId: row.id.threadID, includeTurns: false),
-                timeout: .seconds(10)
-            )
-            let turnsResponse = try await session.threadTurnsList(
-                params: ThreadTurnsListParams(threadId: row.id.threadID, limit: 10),
-                timeout: .seconds(10)
-            )
-            let readThread = readResponse.thread.replacingTurns(turnsResponse.data)
-            try replaceEvents(from: readThread, liveState: .connecting)
+            let compactRead = try await readCompactThread(session: session)
+            DockLog.threadDetail.info("thread detail compact read finished host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) turns=\(compactRead.turns.count, privacy: .public)")
+            try replaceEvents(from: compactRead.thread, liveState: .connecting)
 
             do {
-                let resumeResponse = try await session.threadResume(
-                    params: ThreadResumeParams(threadId: row.id.threadID, excludeTurns: true),
-                    timeout: .seconds(10)
+                let liveThread = try await resumeCompactThread(
+                    session: session,
+                    turns: compactRead.turns
                 )
-                let liveThread = resumeResponse.thread.replacingTurns(turnsResponse.data)
                 try replaceEvents(from: liveThread, liveState: .live)
+                DockLog.threadDetail.notice("thread detail load finished live host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) events=\(self.events.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
             } catch {
                 liveState = .stale(message(from: error))
                 publishLoaded()
+                DockLog.threadDetail.warning("thread detail resume failed; loaded stale host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             }
         } catch {
             state = .error(header, message(from: error))
             await session.disconnect()
+            DockLog.threadDetail.error("thread detail load failed host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
         }
     }
 
     public func close() {
+        DockLog.threadDetail.notice("thread detail close requested host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
+        isClosing = true
+        connectionTask?.cancel()
+        connectionTask = nil
         notificationTask?.cancel()
         notificationTask = nil
         requestTask?.cancel()
         requestTask = nil
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        lifecycleTask?.cancel()
+        lifecycleTask = nil
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
+        voiceCaptureTask?.cancel()
+        voiceCaptureTask = nil
+
+        let activeVoiceCaptureSession = activeVoiceCaptureSession
+        self.activeVoiceCaptureSession = nil
+        let activeTranscriptionSession = activeTranscriptionSession
+        self.activeTranscriptionSession = nil
+        if let activeDictationSegment {
+            composer.draft = activeDictationSegment.baseDraft
+        }
+        activeDictationSegment = nil
+        composer.voice = ComposerVoiceState()
 
         let session = session
         self.session = nil
         Task {
+            await activeVoiceCaptureSession?.cancel()
+            await activeTranscriptionSession?.cancel()
             await session?.disconnect()
         }
     }
 
     public func updateDraft(_ draft: String) {
+        guard composer.canEditDraft else {
+            return
+        }
         composer.draft = draft
-        composer.lastError = nil
-    }
-
-    public func beginVoiceCapture() async {
-        guard !composer.isSending, !composer.voice.phase.isBusy else {
-            return
-        }
-
-        composer.voice = ComposerVoiceState(phase: .recording)
-
-        do {
-            _ = try await voiceCapture.startRecording()
-        } catch {
-            composer.voice = ComposerVoiceState(phase: .idle, lastError: voiceMessage(from: error))
-        }
-    }
-
-    public func finishVoiceCapture() async {
-        guard composer.voice.phase == .recording else {
-            return
-        }
-
-        composer.voice = ComposerVoiceState(phase: .transcribing)
-
-        do {
-            let audioFile = try await voiceCapture.stopRecording()
-            defer {
-                try? FileManager.default.removeItem(at: audioFile)
-            }
-            let transcript = try await transcriptionService.transcribe(audioFile: audioFile)
-            try insertTranscript(transcript)
-            composer.voice = ComposerVoiceState()
-        } catch {
-            composer.voice = ComposerVoiceState(phase: .idle, lastError: voiceMessage(from: error))
-        }
-    }
-
-    public func cancelVoiceCapture() async {
-        await voiceCapture.cancelRecording()
-        composer.voice = ComposerVoiceState()
-    }
-
-    private func insertTranscript(_ transcript: String) throws {
-        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw TranscriptionServiceError.emptyTranscript
-        }
-
-        let existing = composer.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if existing.isEmpty {
-            composer.draft = trimmed
-        } else {
-            composer.draft = "\(existing) \(trimmed)"
-        }
         composer.lastError = nil
     }
 
     public func sendDraft() async {
         guard let session else {
             composer.lastError = "Thread is not connected."
+            DockLog.threadDetail.warning("send draft skipped reason=no_session thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
             return
         }
         guard !composer.voice.phase.isBusy else {
             composer.lastError = "Finish dictation before sending."
+            DockLog.threadDetail.warning("send draft skipped reason=voice_busy thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
             return
         }
 
         let text = composer.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
+            DockLog.threadDetail.debug("send draft skipped reason=empty thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
             return
         }
 
+        let startedAt = Date()
+        DockLog.threadDetail.notice("send draft started thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) characters=\(text.count, privacy: .public) active_turn=\((self.activeTurnID != nil), privacy: .public)")
         composer.isSending = true
         composer.lastError = nil
 
@@ -359,9 +343,11 @@ public final class ThreadDetailStore: ObservableObject {
             }
             composer.draft = ""
             composer.isSending = false
+            DockLog.threadDetail.notice("send draft finished thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) active_turn_id=\(DockLog.publicID(self.activeTurnID), privacy: .public)")
         } catch {
             composer.isSending = false
             composer.lastError = message(from: error)
+            DockLog.threadDetail.error("send draft failed thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
         }
     }
 
@@ -378,6 +364,7 @@ public final class ThreadDetailStore: ObservableObject {
     public func respond(to cardID: String, action: ServerRequestCardAction) async {
         guard let session else {
             setCardStatus(cardID: cardID, status: .failed("Thread is not connected."))
+            DockLog.threadDetail.warning("request card response skipped reason=no_session card_id=\(DockLog.publicID(cardID), privacy: .public)")
             return
         }
         guard let index = requestCards.firstIndex(where: { $0.id == cardID }) else {
@@ -390,34 +377,264 @@ public final class ThreadDetailStore: ObservableObject {
         }
 
         setCardStatus(cardID: cardID, status: .responding)
+        let startedAt = Date()
+        DockLog.threadDetail.notice("request card response started card_id=\(DockLog.publicID(cardID), privacy: .public) method=\(card.method, privacy: .public) action=\(action.logDescription, privacy: .public)")
         do {
             try await session.sendResponse(id: card.requestID, result: payload)
             setCardStatus(cardID: cardID, status: .resolved)
+            DockLog.threadDetail.notice("request card response finished card_id=\(DockLog.publicID(cardID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
         } catch {
             setCardStatus(cardID: cardID, status: .failed(message(from: error)))
+            DockLog.threadDetail.error("request card response failed card_id=\(DockLog.publicID(cardID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
         }
     }
 
     private func startObservation(session: any ThreadDetailSession) {
+        connectionTask?.cancel()
         notificationTask?.cancel()
         requestTask?.cancel()
+
+        connectionTask = Task { [weak self] in
+            for await state in session.connectionStates {
+                self?.handle(connectionState: state)
+            }
+        }
 
         notificationTask = Task { [weak self] in
             for await notification in session.notifications {
                 self?.handle(notification: notification)
             }
+            DockLog.threadDetail.warning("thread notification stream ended")
+            self?.markLiveSessionStale("Live update stream ended.")
         }
 
         requestTask = Task { [weak self] in
             for await request in session.serverRequests {
                 self?.handle(request: request)
             }
+            DockLog.threadDetail.warning("server request stream ended")
+            self?.markLiveSessionStale("Server request stream ended.")
+        }
+    }
+
+    private func startLifecycleObservation() {
+        guard let lifecycleCoordinator else {
+            return
+        }
+
+        let snapshots = lifecycleCoordinator.makeSnapshotStream()
+        lifecycleTask?.cancel()
+        lifecycleTask = Task { [weak self] in
+            for await snapshot in snapshots {
+                await self?.handle(lifecycleSnapshot: snapshot)
+            }
+        }
+    }
+
+    private func handle(lifecycleSnapshot snapshot: AppLifecycleSnapshot) async {
+        switch snapshot.phase {
+        case .backgrounded:
+            await handleAppBackgrounded()
+        case .foregroundResuming:
+            await handleForegroundResuming(snapshot)
+        case .active, .inactive:
+            return
+        }
+    }
+
+    private func handleAppBackgrounded() async {
+        guard !isClosing else {
+            return
+        }
+
+        recoveryTask?.cancel()
+        recoveryTask = nil
+
+        if composer.voice.phase.isBusy {
+            DockLog.voice.notice("voice capture stopping reason=backgrounded thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
+            let activeTranscriptionSession = activeTranscriptionSession
+            await cancelActiveVoiceCapture()
+            failActiveDictation(message: "Dictation stopped because the app moved to the background.")
+            await activeTranscriptionSession?.cancel()
+        }
+
+        guard case .loaded = state, liveState != .closed else {
+            return
+        }
+
+        liveState = .stale("Backgrounded")
+        DockLog.threadDetail.notice("thread detail marked stale reason=backgrounded thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
+        publishLoaded()
+    }
+
+    private func handleForegroundResuming(_ snapshot: AppLifecycleSnapshot) async {
+        guard handledForegroundResumeGeneration != snapshot.resumeGeneration else {
+            return
+        }
+        handledForegroundResumeGeneration = snapshot.resumeGeneration
+
+        guard !isClosing,
+              case .loaded = state,
+              liveState != .closed,
+              let session else {
+            return
+        }
+
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        if latestConnectionState == .connected {
+            await rehydrateAfterReconnect(session: session, reason: "Resuming")
+        } else if latestConnectionState.shouldWaitForForegroundRehydrate {
+            markLiveSessionReconnecting("Resuming")
+        } else {
+            markLiveSessionStale(message(from: latestConnectionState))
+        }
+    }
+
+    private func handle(connectionState: AppServerConnectionState) {
+        latestConnectionState = connectionState
+        DockLog.threadDetail.debug("thread detail connection state=\(connectionState.logDescription, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
+        switch connectionState {
+        case .reconnecting(_, let reason):
+            markLiveSessionReconnecting(reason)
+        case .connected:
+            startRehydrateAfterReconnectIfNeeded()
+        case .offline(let reason):
+            markLiveSessionStale(reason)
+        case .error(let message):
+            markLiveSessionStale(message)
+        case .closed(let reason):
+            markLiveSessionStale(reason)
+        case .idle, .connecting:
+            return
+        }
+    }
+
+    private func message(from connectionState: AppServerConnectionState) -> String {
+        switch connectionState {
+        case .idle:
+            return "Waiting for connection."
+        case .connecting:
+            return "Connecting."
+        case .connected:
+            return "Connected."
+        case .reconnecting(_, let reason):
+            return reason
+        case .offline(let reason):
+            return reason
+        case .error(let message):
+            return message
+        case .closed(let reason):
+            return reason
+        }
+    }
+
+    private func readCompactThread(session: any ThreadDetailSession) async throws -> CompactThreadRead {
+        let startedAt = Date()
+        let signpostState = DockSignpost.threadDetail.beginInterval("thread.readCompact")
+        defer {
+            DockSignpost.threadDetail.endInterval("thread.readCompact", signpostState)
+        }
+        let readResponse = try await session.threadRead(
+            params: ThreadReadParams(threadId: row.id.threadID, includeTurns: false),
+            timeout: .seconds(10)
+        )
+        let turnsResponse = try await session.threadTurnsList(
+            params: ThreadTurnsListParams(threadId: row.id.threadID, limit: 10),
+            timeout: .seconds(10)
+        )
+        DockLog.threadDetail.info("thread compact read finished thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) turns=\(turnsResponse.data.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+        return CompactThreadRead(
+            thread: readResponse.thread.replacingTurns(turnsResponse.data),
+            turns: turnsResponse.data
+        )
+    }
+
+    private func resumeCompactThread(
+        session: any ThreadDetailSession,
+        turns: [JSONValue]
+    ) async throws -> ThreadDTO {
+        let startedAt = Date()
+        let signpostState = DockSignpost.threadDetail.beginInterval("thread.resume")
+        defer {
+            DockSignpost.threadDetail.endInterval("thread.resume", signpostState)
+        }
+        let resumeResponse = try await session.threadResume(
+            params: ThreadResumeParams(threadId: row.id.threadID, excludeTurns: true),
+            timeout: .seconds(10)
+        )
+        DockLog.threadDetail.info("thread resume finished thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) turns=\(turns.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+        return resumeResponse.thread.replacingTurns(turns)
+    }
+
+    private func startRehydrateAfterReconnectIfNeeded() {
+        guard !isClosing,
+              recoveryTask == nil,
+              case .loaded = state,
+              case let .reconnecting(reason) = liveState,
+              let session else {
+            return
+        }
+
+        recoveryTask = Task { [weak self] in
+            await self?.rehydrateAfterReconnect(session: session, reason: reason)
+        }
+    }
+
+    private func rehydrateAfterReconnect(
+        session: any ThreadDetailSession,
+        reason: String
+    ) async {
+        guard !isClosing, case .loaded = state else {
+            recoveryTask = nil
+            return
+        }
+
+        liveState = .reconnecting(reason)
+        DockLog.threadDetail.notice("thread detail rehydrate started thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) reason=\(DockLog.redacted(reason), privacy: .public)")
+        publishLoaded()
+
+        do {
+            let compactRead = try await readCompactThread(session: session)
+            let liveThread = try await resumeCompactThread(session: session, turns: compactRead.turns)
+            try mergeEvents(from: liveThread, liveState: .live)
+            DockLog.threadDetail.notice("thread detail rehydrate finished thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) events=\(self.events.count, privacy: .public)")
+        } catch {
+            liveState = .stale(message(from: error))
+            publishLoaded()
+            DockLog.threadDetail.warning("thread detail rehydrate failed thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+        }
+
+        recoveryTask = nil
+    }
+
+    private func markLiveSessionReconnecting(_ message: String) {
+        guard !isClosing, case .loaded = state else {
+            return
+        }
+        switch liveState {
+        case .closed:
+            return
+        case .connecting, .reconnecting, .live, .stale:
+            liveState = .reconnecting(message)
+            DockLog.threadDetail.notice("thread detail reconnecting thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) reason=\(DockLog.redacted(message), privacy: .public)")
+            publishLoaded()
         }
     }
 
     private func replaceEvents(from thread: ThreadDTO, liveState: ThreadDetailLiveState) throws {
         try validate(thread: thread)
         events = ThreadEventNormalizer.events(from: thread)
+        activeTurnID = activeTurnID(from: thread)
+        self.liveState = liveState
+        publishLoaded()
+    }
+
+    private func mergeEvents(from thread: ThreadDTO, liveState: ThreadDetailLiveState) throws {
+        try validate(thread: thread)
+        for event in ThreadEventNormalizer.events(from: thread) {
+            appendOrMerge(event)
+        }
         activeTurnID = activeTurnID(from: thread)
         self.liveState = liveState
         publishLoaded()
@@ -445,6 +662,7 @@ public final class ThreadDetailStore: ObservableObject {
         } else {
             liveState = .live
         }
+        DockLog.threadDetail.debug("thread notification handled method=\(notification.method, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) live_state=\(self.liveState.logDescription, privacy: .public)")
 
         guard let event = ThreadEventNormalizer.event(from: notification, now: now()) else {
             publishLoaded()
@@ -462,6 +680,22 @@ public final class ThreadDetailStore: ObservableObject {
         liveState = .live
         upsertRequestCard(ServerRequestCard.make(from: request, now: now()))
         appendOrMerge(ThreadEventNormalizer.event(from: request, now: now()))
+        DockLog.threadDetail.notice("server request received method=\(request.method, privacy: .public) request_id=\(DockLog.publicID(request.id), privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
+        publishLoaded()
+    }
+
+    private func markLiveSessionStale(_ message: String) {
+        guard !isClosing, case .loaded = state else {
+            return
+        }
+        switch liveState {
+        case .closed, .stale:
+            return
+        case .connecting, .reconnecting, .live:
+            break
+        }
+        liveState = .stale(message)
+        DockLog.threadDetail.warning("thread detail marked stale thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) reason=\(DockLog.redacted(message), privacy: .public)")
         publishLoaded()
     }
 
@@ -486,6 +720,7 @@ public final class ThreadDetailStore: ObservableObject {
                 events: ThreadEventDisplayOrder.newestFirst(events)
             )
         )
+        connectivityReporter?.reportThreadDetail(host: host, liveState: liveState)
     }
 
     private func setCardStatus(cardID: String, status: ServerRequestCardStatus) {
@@ -581,12 +816,65 @@ public final class ThreadDetailStore: ObservableObject {
         return error.localizedDescription
     }
 
-    private func voiceMessage(from error: Error) -> String {
-        if let localizedError = error as? LocalizedError,
-           let description = localizedError.errorDescription {
-            return description
+}
+
+private extension AppServerConnectionState {
+    var logDescription: String {
+        switch self {
+        case .idle:
+            return "idle"
+        case .connecting:
+            return "connecting"
+        case .connected:
+            return "connected"
+        case .reconnecting(let attempt, let reason):
+            return "reconnecting(attempt=\(attempt),reason=\(DockLog.redacted(reason)))"
+        case .offline(let reason):
+            return "offline(reason=\(DockLog.redacted(reason)))"
+        case .error(let message):
+            return "error(message=\(DockLog.redacted(message)))"
+        case .closed(let reason):
+            return "closed(reason=\(DockLog.redacted(reason)))"
         }
-        return "Voice input failed."
+    }
+
+    var shouldWaitForForegroundRehydrate: Bool {
+        switch self {
+        case .idle, .connecting, .reconnecting:
+            return true
+        case .connected, .offline, .error, .closed:
+            return false
+        }
+    }
+}
+
+private extension ThreadDetailLiveState {
+    var logDescription: String {
+        switch self {
+        case .connecting:
+            return "connecting"
+        case .reconnecting:
+            return "reconnecting"
+        case .live:
+            return "live"
+        case .stale:
+            return "stale"
+        case .closed:
+            return "closed"
+        }
+    }
+}
+
+private extension ServerRequestCardAction {
+    var logDescription: String {
+        switch self {
+        case .accept:
+            return "accept"
+        case .decline:
+            return "decline"
+        case .submitInput:
+            return "submitInput"
+        }
     }
 }
 

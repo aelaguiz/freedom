@@ -3,17 +3,22 @@
 Plan: docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28.md
 Audit log: docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28_PLAN_AUDIT.md
 Current plan verdict: ready
-Current implementation code-review verdict: not-run
-Last reviewed: 2026-05-28T12:01:57Z
+Current implementation code-review verdict: approved for current Connectivity closeout with deferred physical WebDriverAgent follow-up
+Last reviewed: 2026-05-28T14:51:10Z
 Scope: whole plan
 
 ## Current Blocking Findings
 
 None open.
 
-## Current Non-Blocking Findings
+## Current Deferred Follow-Ups
 
-None open.
+- [ ] CONN-PROOF-001 - Physical visual automation remains deferred by WebDriverAgent
+  - Lens: proof-and-phase-exit, docs-contract-drift
+  - Evidence: `mobile_list_elements_on_screen` and `mobile_save_screenshot` on physical device `00008110-000E04940240A01E` both returned `WebDriverAgent is not running on device (tunnel okay, port forwarding okay)`.
+  - Current accepted proof: Mobile MCP works on the user-approved non-Pro simulator `feat_anim_1 - iPhone 17`, UDID `BAD95C8E-3E57-4818-9B90-E4ED22593B4B`; saved screenshots under `/tmp/codex-client/20260528T144220Z/mobile-mcp-proof/` prove Dock, Archive, Relay, and Session detail with the root online indicator against `ws://192.168.50.117:4510`.
+  - Consequence: no current Connectivity closeout blocker remains. Physical `iPhone 14` screen/navigation automation is still deferred until WebDriverAgent runs on the real device.
+  - Required follow-through: run the physical `iPhone 14` visual proof after WebDriverAgent is running.
 
 ## Resolved Cross-Plan Findings
 
@@ -45,9 +50,74 @@ None open.
   - Status: resolved
   - Resolution evidence: Section 4.1, Phase 5 exit criteria, and Phase 6 smoke wording now carry this through.
 
+## Resolved Implementation Findings
+
+- [x] CONN-IMPL-001 - Initial `thread/resume` could outlive a closed downstream phone socket
+  - Lens: caller-invariant-state, relay lifecycle, security/network boundary
+  - Evidence: `resumeThread` created a new upstream client and awaited `initialize`/`thread/resume` before assigning `session.upstream`; if the phone WebSocket closed during that wait, the close handler only closed the old assigned upstream.
+  - Required repair: bind initial resume work to the downstream session generation and close any just-created upstream if the downstream socket closes or a newer resume supersedes it.
+  - Status: resolved
+  - Resolution evidence: `scripts/dock-relay.mjs` now checks `isSessionActive(...)` before attaching/forwarding upstream clients; `scripts/dock-relay-phase5.test.mjs` adds `thread/resume abandons initial upstream if downstream closes before resume completes`; `rtk npm run test:relay` and `rtk npm test` each executed 33 tests with 0 failures.
+
+- [x] CONN-IMPL-002 - Relay Phase 5 growth needed decomposition before final review
+  - Lens: tiny-team-maintainability, elegance-and-code-judo
+  - Evidence: relay runtime/test work was large enough to make `scripts/dock-relay.mjs` and relay tests hard to scan.
+  - Required repair: split the JSON-RPC upstream client and Phase 5 tests without changing the relay contract.
+  - Status: resolved
+  - Resolution evidence: `scripts/dock-relay-json-rpc-client.mjs`, `scripts/dock-relay-phase5.test.mjs`, and `scripts/dock-relay-test-helpers.mjs` now own the extracted client, Phase 5 tests, and shared test helpers; current key file sizes stay below 1k lines except pre-existing `CodexDockTests/AppServerClientTests.swift`.
+
+- [x] CONN-IMPL-003 - Latest-message row preview requirement was not assigned to an acceptance owner
+  - Lens: cross-plan ownership, docs-contract-drift
+  - Evidence: user reported Dock doc summaries show the original message instead of the latest message, and that row readability requirement was not clearly owned by Connectivity.
+  - Required repair: place the requirement in the top-level dock plan so it cannot be lost between child plans.
+  - Status: resolved for scope assignment
+  - Resolution evidence: `docs/CODEX_DOCK_CROSS_PLAN_IMPLEMENTATION_DOCK_2026-05-28.md` now has the non-negotiable, shared baseline bullet, and `Cross-Cutting Final Acceptance - Dock Row Latest-Message Preview` section.
+
+- [x] CONN-IMPL-004 - Reconnect could open a transport after the app backgrounded during backoff sleep
+  - Lens: no-background-spin, caller-invariant-state
+  - Evidence: `AppServerClient.runReconnectLoop(reason:)` checked the foreground gate before sleeping, but did not re-check it after sleeping and before `openTransport(mode:)`.
+  - Required repair: re-check foreground work immediately before reconnect open/initialize.
+  - Status: resolved
+  - Resolution evidence: `AppServerClient` now waits on `foregroundWorkGate` after backoff and before opening transport; `testReconnectDoesNotOpenIfAppBackgroundsDuringBackoffSleep` covers the race.
+
+- [x] CONN-IMPL-005 - Foreground resume could rehydrate before the socket was connected and strand detail stale
+  - Lens: foreground-claims-need-proof, thread-detail lifecycle
+  - Evidence: `ThreadDetailStore.handleForegroundResuming(_:)` ran compact read/turns/resume immediately even when the latest connection state was reconnecting.
+  - Required repair: track latest connection state, wait in `.reconnecting("Resuming")` until `.connected`, then run compact rehydrate.
+  - Status: resolved
+  - Resolution evidence: `ThreadDetailStore` now tracks `latestConnectionState`; `testForegroundResumeWaitsForReconnectBeforeRehydratingDetail` proves no read is attempted until `.connected`.
+
+- [x] CONN-IMPL-006 - Root resume could overwrite `Resuming` with old tab/store facts
+  - Lens: foreground-claims-need-proof, root lifecycle ownership
+  - Evidence: `resumeForegroundWork()` rebound connectivity reporters before refresh work completed, causing stores to replay stale pre-background state.
+  - Required repair: keep lifecycle `Resuming` as an overlay until active resume finishes; do not rebind/replay old store state at the start of resume.
+  - Status: resolved
+  - Resolution evidence: `resumeForegroundWork()` no longer calls `bindConnectivity()`; `AppConnectivityStore` masks source observations with lifecycle `resuming` until `.active`; `testLifecycleResumingMasksOldStoreFactsUntilActiveClearsIt` covers the behavior.
+
+- [x] CONN-IMPL-007 - App-wide connectivity was still last-writer-wins per host
+  - Lens: canonical-owner-and-SSOT, drift-proof-coupling
+  - Evidence: Dock, Archive, host tests, thread detail, and lifecycle all wrote into the same `records[host.id]` snapshot slot.
+  - Required repair: keep separate observations by source and roll them up with explicit precedence.
+  - Status: resolved
+  - Resolution evidence: `AppConnectivityStore` now stores per-host observations for Dock, Archive, host tests, and thread detail plus a lifecycle overlay; `testThreadDetailStaleIsNotOverwrittenByDockOnline` covers the stale-over-online case.
+
+- [x] CONN-IMPL-008 - Bootstrap non-ready states bypassed the global indicator path
+  - Lens: bootstrap lifecycle, global indicator ownership
+  - Evidence: `CodexDockBootstrapView` rendered `.starting`, `.discovering`, and `.failed` directly without `AppConnectivityStore`/`GlobalConnectivityIndicatorView`.
+  - Required repair: mount the same global indicator/store around non-ready bootstrap and pass that store into root when the registry becomes ready.
+  - Status: resolved
+  - Resolution evidence: `CodexDockBootstrapView` owns a bootstrap `AppConnectivityStore`, reports `RelayBootstrapState`, overlays `GlobalConnectivityIndicatorView` for non-ready states, and passes that same store into `CodexDockRootView`; `testBootstrapNonReadyStatesUseGlobalConnectivityStatus` covers state mapping.
+
+- [x] CONN-IMPL-009 - Root view initialization mutated published connectivity state during SwiftUI rendering
+  - Lens: caller-invariant-state, SwiftUI lifecycle, proof-and-phase-exit
+  - Evidence: the non-Pro simulator initially rendered a blank app surface and repeatedly logged `Publishing changes from within view updates`.
+  - Required repair: do not call published-state mutators from `CodexDockRootView.init(registry:...)`.
+  - Status: resolved
+  - Resolution evidence: `CodexDockRootView.init(registry:...)` no longer calls `connectivityStore.configure(registry)` during view construction; the simulator rendered normally afterward; `rtk swift test --filter AppConnectivityStoreTests` executed 11 tests with 0 failures.
+
 ## Current Implementation Findings
 
-Not run. This audit is plan-readiness only; implementation has not started from this plan.
+No open code-review findings against the Connectivity implementation. The remaining open item is a deferred physical-device automation follow-up, not a current Connectivity blocker: physical visual verification waits on WebDriverAgent, as recorded in `CONN-PROOF-001`.
 
 ## Relevant Code Coverage Ledger
 
@@ -205,3 +275,93 @@ Not run. This audit is plan-readiness only; implementation has not started from 
 - Findings carried forward: none
 - Verdict: ready
 - Next audit focus: implementation-audit after Connectivity code changes, especially Agents scoped-outcome preservation, bootstrap lifecycle coverage, and `phoneAuth: none` proof
+
+### Pass 5 - 2026-05-28T14:25:36Z
+
+- Mode: implementation-audit
+- Scope: Connectivity implementation through Phase 6 partial proof
+- Baseline reviewed: current worktree after relay generation guards, test split, physical `iPhone 14` relaunch proof, and latest-message row preview scope assignment
+- Test/CI context accepted, if supplied: `rtk swift test` executed 142 tests with 5 skipped and 0 failures; `rtk npm run test:relay` executed 33 tests with 0 failures; `rtk npm test` executed 33 tests with 0 failures; no-phone-bearer real-host smoke executed 4 tests with 1 skipped and 0 failures; `rtk make dock-relay` reported relay pid `56959`
+- Agents/lenses run:
+  - Carver audited the Node relay implementation and found the initial `thread/resume` downstream-close leak; parent fixed and retested it.
+  - Zeno audited plan/proof drift and found stale simulator wording, WDA visual-proof blocker, and unassigned latest-message preview scope; parent repaired the docs and kept the WDA blocker open.
+  - Parent ran `plan-audit` implementation lenses plus `thermo-nuclear-code-quality-review` maintainability checks.
+- Code areas read:
+  - `scripts/dock-relay.mjs`
+  - `scripts/dock-relay-json-rpc-client.mjs`
+  - `scripts/dock-relay.test.mjs`
+  - `scripts/dock-relay-phase5.test.mjs`
+  - `scripts/dock-relay-test-helpers.mjs`
+  - `CodexDock/AppServer/AppServerClient.swift`
+  - `CodexDock/State/ThreadDetailStore.swift`
+  - `CodexDock/State/AppConnectivityStore.swift`
+  - `CodexDock/State/AppLifecycleCoordinator.swift`
+  - `CodexDock/Features/Dock/DockView.swift`
+  - `CodexDock/Features/Dock/CodexDockBootstrapView.swift`
+  - `CodexDockTests/ThreadDetailStoreTests.swift`
+  - `CodexDockTests/ThreadDetailStoreLifecycleTests.swift`
+  - `README.md`
+  - parent/top-level dock plan and implementation log
+- Findings added:
+  - CONN-PROOF-001 remains open as proof-only blocker.
+  - CONN-IMPL-001 through CONN-IMPL-003 were found and resolved during the audit pass.
+- Findings carried forward:
+  - At this pass, physical visual UI proof still required WebDriverAgent or accepted manual confirmation; Pass 7 later accepted the non-Pro simulator fallback for current Connectivity closeout.
+- Verdict: approve-with-notes for code shape at this pass; Pass 7 later approved current Connectivity closeout with deferred physical WebDriverAgent follow-up.
+- Next audit focus:
+  - Once WebDriverAgent is available, verify the physical `iPhone 14` root indicator across Dock, Archive, Hosts, and Session detail and close `CONN-PROOF-001`.
+
+### Pass 6 - 2026-05-28T14:38:13Z
+
+- Mode: implementation-audit follow-up
+- Scope: Swift blockers reported by Bohr after Pass 5
+- Baseline reviewed: current worktree after background-reconnect, foreground-rehydrate, connectivity-rollup, root-resume, and bootstrap-indicator repairs
+- Test/CI context accepted, if supplied: `rtk swift test` executed 147 tests with 5 skipped and 0 failures; `rtk swift test --filter AppConnectivityStoreTests` executed 11 tests with 0 failures; `rtk swift test --filter ThreadDetailStoreTests` executed 31 tests with 0 failures; `rtk swift test --filter AppServerClientTests` executed 40 tests with 5 skipped and 0 failures; `rtk swift test --filter DockConfigurationTests` executed 14 tests with 0 failures; `rtk npm test` executed 33 tests with 0 failures; no-phone-bearer real-host smoke executed 4 tests with 1 skipped and 0 failures; physical `iPhone 14` install/launch/process proof passed
+- Agents/lenses run:
+  - Bohr audited the Swift implementation and reported five blocking findings.
+  - Parent fixed each finding and reran focused plus full verification.
+- Code areas read:
+  - `CodexDock/AppServer/AppServerClient.swift`
+  - `CodexDock/State/ThreadDetailStore.swift`
+  - `CodexDock/State/AppConnectivityStore.swift`
+  - `CodexDock/Features/Dock/DockView.swift`
+  - `CodexDock/Features/Dock/CodexDockBootstrapView.swift`
+  - `CodexDockTests/AppServerClientTests.swift`
+  - `CodexDockTests/ThreadDetailStoreLifecycleTests.swift`
+  - `CodexDockTests/AppConnectivityStoreTests.swift`
+- Findings added:
+  - CONN-IMPL-004 through CONN-IMPL-008.
+- Findings resolved:
+  - CONN-IMPL-004 through CONN-IMPL-008.
+- Findings carried forward:
+  - At this pass, CONN-PROOF-001 remained open because WebDriverAgent was still not running on physical device `00008110-000E04940240A01E`; Pass 7 later accepted simulator visual proof for current Connectivity closeout.
+- Verdict: approve-with-notes for code shape at this pass; Pass 7 later approved current Connectivity closeout with deferred physical WebDriverAgent follow-up.
+- Next audit focus:
+  - Physical `iPhone 14` screen/navigation proof after WebDriverAgent is available, plus final latest-message row-preview implementation before top-level acceptance.
+
+### Pass 7 - 2026-05-28T14:51:10Z
+
+- Mode: implementation-audit follow-up
+- Scope: user-directed non-Pro simulator proof after physical WebDriverAgent blocker
+- Baseline reviewed: current worktree after simulator launch, SwiftUI render-mutation fix, Mobile MCP simulator navigation proof, and doc proof-status repairs
+- Test/CI context accepted, if supplied: `rtk swift test --filter AppConnectivityStoreTests` executed 11 tests with 0 failures after the SwiftUI fix; prior full Swift/relay proof from Pass 6 remains accepted context
+- Agents/lenses run:
+  - Ohm audited proof-status drift across the Connectivity and top-level dock docs.
+  - Parent used Mobile MCP on simulator `BAD95C8E-3E57-4818-9B90-E4ED22593B4B` to capture Dock, Archive, Relay, and Session detail proof.
+- Code areas read:
+  - `CodexDock/Features/Dock/DockView.swift`
+  - `docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28.md`
+  - `docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28_IMPLEMENTATION_LOG.md`
+  - `docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28_PLAN_AUDIT.md`
+  - `docs/CODEX_DOCK_CONNECTIVITY_RESILIENCE_2026-05-28_THERMONUCLEAR_REVIEW.md`
+  - top-level dock plan and audit
+- Findings added:
+  - CONN-IMPL-009 was found and resolved during simulator proof.
+- Findings resolved:
+  - CONN-IMPL-009.
+  - CONN-PROOF-001 is no longer a current Connectivity closeout blocker because Mobile MCP simulator proof is accepted for this slice.
+- Findings carried forward:
+  - Physical `iPhone 14` screen/navigation automation remains deferred until WebDriverAgent runs on device `00008110-000E04940240A01E`.
+- Verdict: approved for current Connectivity closeout with deferred physical WebDriverAgent follow-up.
+- Next audit focus:
+  - Realtime transcription plan entry, plus later physical `iPhone 14` visual navigation proof when WebDriverAgent is available.

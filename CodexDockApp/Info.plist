@@ -25,14 +25,14 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Connect to Codex app-server hosts on your private network.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_codexdock._tcp</string>
 	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Connect to the Mac Dock relay on your private network.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Hold the microphone button to dictate a message into the Codex composer.</string>
+	<string>Use the microphone for live tap or hold dictation into the Codex composer.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

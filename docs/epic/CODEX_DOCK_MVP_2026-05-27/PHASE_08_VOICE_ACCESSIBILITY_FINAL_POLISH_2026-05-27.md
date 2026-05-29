@@ -152,8 +152,8 @@ screens without obvious accessibility/layout breakage.
 
 - Voice writes into the existing composer.
 - Send remains explicit.
-- The `.env` OpenAI API key is user-declared client-scoped and safe to embed in
-  the iPhone client, but the key value and transcripts are not logged.
+- The `.env` OpenAI API key is Mac-side only. The iPhone client must not receive
+  it; voice uses the relay-owned Realtime transcription path.
 - Rotation mockup stays post-V1 only.
 
 # 1) Key Design Considerations (what matters most)
@@ -167,10 +167,11 @@ screens without obvious accessibility/layout breakage.
 
 ## 1.2 Constraints
 
-- OpenAI API details should be verified at implementation time.
-- `.env` contains the client OpenAI API key; the user has said this key is safe
-  to embed in the client for the transcription path. Do not print the key value
-  in docs, logs, telemetry, screenshots, or errors.
+- OpenAI Realtime API details should be verified at implementation time.
+- `.env` may contain the Mac-side OpenAI API key for the relay. Do not pass it
+  into the app, and do not print the key value, raw audio, base64 audio,
+  transcripts, provider response bodies, logs, telemetry, screenshots, or
+  errors.
 
 ## 1.3 Architectural principles (rules we will enforce)
 
@@ -268,7 +269,7 @@ Voice must deepen the existing composer path.
 ## On-disk structure (future)
 - `Voice/VoiceCaptureController.swift`.
 - `Voice/TranscriptionService.swift`.
-- `OpenAITranscriptionClient` inside `Voice/TranscriptionService.swift`.
+- `RelayRealtimeTranscriptionClient` and Realtime abstractions inside `Voice/`.
 - `Features/Session/ComposerView.swift` extension.
 - `CodexDockTests/ThreadDetailStoreTests.swift` voice coverage.
 ## Control paths (future)
@@ -294,7 +295,7 @@ Voice must deepen the existing composer path.
 | ---- | ---- | ------------------ | ---------------- | --------------- | --- | ------------------ | -------------- |
 | Voice | `TranscriptionService.swift` | service | Missing | Add speech-to-text boundary | Provider isolation | async transcribe | Unit |
 | Voice | `VoiceCaptureController.swift` | capture | Missing | Add hold/release recording | UX requirement | capture API | Manual/unit |
-| Provider | `OpenAITranscriptionClient.swift` | OpenAI | Missing | Implement transcription | Required voice mode | provider | Integration/manual |
+| Provider | `RelayRealtimeTranscriptionClient` | OpenAI Realtime through Mac relay | Implemented | Keep relay-owned Realtime transcription | Required voice mode without phone secrets | provider | Integration/manual |
 | Composer | `ComposerView.swift` / store | voice state | Typed only | Insert transcript into text field | In-place voice | composer state | Unit |
 | Polish | UI views | accessibility | Basic | Dynamic Type/touch/labels pass | MVP quality | UI | Manual |
 ## Migration notes
@@ -375,7 +376,7 @@ Exit criteria (all required):
 
 Completed work:
 - Added iOS microphone capture through `VoiceCaptureController`.
-- Added OpenAI transcription through `OpenAITranscriptionClient`.
+- Historical note: the earlier direct `OpenAITranscriptionClient` path has been superseded by relay-owned Realtime transcription.
 - Added app launch and `.env` model/key wiring without printing key values.
 - Verified voice denial and provider-stubbed transcript insertion paths.
 

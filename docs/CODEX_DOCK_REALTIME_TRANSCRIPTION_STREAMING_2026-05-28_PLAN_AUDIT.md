@@ -3,17 +3,145 @@
 Plan: `docs/CODEX_DOCK_REALTIME_TRANSCRIPTION_STREAMING_2026-05-28.md`
 Audit log: `docs/CODEX_DOCK_REALTIME_TRANSCRIPTION_STREAMING_2026-05-28_PLAN_AUDIT.md`
 Current plan verdict: ready
-Current implementation code-review verdict: not-run
-Last reviewed: 2026-05-28T12:01:57Z
+Current implementation code-review verdict: Phase 5 cutover cleanup and structural cleanup passed programmatic/real-relay proof; basic physical iPhone 14 Realtime audio proof passed by user manual test; detailed manual closeout checklist passed by user manual physical iPhone 14 check on 2026-05-28
+Last reviewed: 2026-05-28T20:14:00Z
 Scope: whole plan
 
-## Current Blocking Findings
+## Current Code/Design Blocking Findings
 
-None.
+None. Realtime closeout is accepted for the current installed build, and the current code/design review has no unresolved blocking findings.
+
+## Current Acceptance Proof Blockers
+
+- None for current Realtime closeout.
+- Physical Mobile MCP was intentionally not used because WebDriverAgent is not running on `00008110-000E04940240A01E`; user manual testing is the physical proof source.
+- The source checklist is now carried in `docs/CODEX_DOCK_REALTIME_TRANSCRIPTION_STREAMING_2026-05-28.md` under Phase 5 "Verification (required proof)", and the evidence capture ledger is `docs/CODEX_DOCK_REALTIME_TRANSCRIPTION_STREAMING_2026-05-28_IMPLEMENTATION_LOG.md` under "Manual Physical iPhone 14 Closeout Checklist".
 
 ## Current Non-Blocking Findings
 
 None.
+
+## 2026-05-28 Manual Physical Checklist Completion Audit
+
+Verdict: approve for Realtime manual physical closeout evidence.
+
+Evidence reviewed:
+
+- User confirmed the remaining physical iPhone 14 manual checklist had already been checked and asked to mark it off in the docs.
+- The implementation log now records the checklist rows as passed by user manual check.
+- The check ran against the physical iPhone 14 path, not mocks, fake Swift sessions, simulator-only evidence, or physical Mobile MCP.
+
+Acceptance boundary:
+
+- Realtime manual physical closeout is accepted for the current installed build.
+- A later voice/composer/capture/relay transcription code change invalidates this physical evidence and should add a fresh physical checklist item to Amir's deferred manual QA list rather than blocking implementation.
+
+## 2026-05-28 Manual Physical Checklist Canonicalization Audit
+
+Verdict: superseded by the completion audit above. The checklist source/evidence locations remain correct.
+
+Evidence reviewed:
+
+- The Realtime plan now owns the required physical iPhone 14 checklist in Phase 5 "Verification (required proof)".
+- The implementation log owns the evidence capture ledger and points back to the Realtime plan as the source checklist.
+- The top-level dock plan points to both the source checklist and evidence ledger.
+- The Multi-host implementation log now treats Phase 1B/Phase 2 as unblocked by Realtime manual evidence.
+- `README.md` now gives the short physical iPhone 14 manual test list and tells the tester where to record evidence.
+
+Verification:
+
+- `rtk git diff --check -- README.md docs/CODEX_DOCK_REALTIME_TRANSCRIPTION_STREAMING_2026-05-28.md docs/CODEX_DOCK_REALTIME_TRANSCRIPTION_STREAMING_2026-05-28_IMPLEMENTATION_LOG.md docs/CODEX_DOCK_CROSS_PLAN_IMPLEMENTATION_DOCK_2026-05-28.md docs/CODEX_DOCK_MULTI_HOST_SERVICE_SETUP_ROBUSTNESS_2026-05-28_IMPLEMENTATION_LOG.md`
+- `rtk make app-server-status` returned HTTP 200 OK for `ws://192.168.50.117:4500`.
+- `rtk make dock-relay-status` returned readyz OK for `ws://192.168.50.117:4510` with `phone auth: none`.
+- `.env` mtime remained `1779986258`.
+
+Remaining proof gap:
+
+- None for Realtime manual physical closeout on the current installed build. Future physical checks are deferred manual QA under the parent dock operating rule when later voice/composer/capture/relay transcription changes land.
+
+## 2026-05-28 Realtime Structural Cleanup Implementation Audit
+
+Verdict: pass for code shape, automated proof, and physical install/launch; later completion audit above records detailed checklist evidence as passed by user manual check.
+
+Evidence reviewed:
+
+- `CodexDock/State/ThreadDetailStore.swift` was split so voice/composer state and voice-capture orchestration now live in `CodexDock/State/ThreadDetailStore+Voice.swift`. Current line counts: `ThreadDetailStore.swift` `890`; `ThreadDetailStore+Voice.swift` `556`.
+- `scripts/dock-relay.mjs` was split so thread list/read/archive aggregation now lives in `scripts/dock-relay-thread-data.mjs`. Current line counts: `dock-relay.mjs` `649`; `dock-relay-thread-data.mjs` `657`.
+- The relay extraction boundary was tested and repaired: `thread/resume` still needed `collectLiveRows`, `initializeClient`, `parseLimit`, and `JsonRpcWebSocketClient` available to the server/session module.
+- Physical iPhone 14 install/launch still targets `00008110-000E04940240A01E`; no physical Mobile MCP was used.
+- `.env` mtime remained `1779986258` after the cleanup and install.
+
+Verification passed:
+
+- `rtk node --check scripts/dock-relay.mjs`
+- `rtk node --check scripts/dock-relay-thread-data.mjs`
+- `rtk node --test scripts/dock-relay-phase5.test.mjs` - 14 tests, 0 failures.
+- `rtk npm run test:relay` - 41 tests, 0 failures.
+- `rtk npm test` - 41 tests, 0 failures.
+- `rtk swift test --filter ThreadDetailStoreTests` - 51 tests, 0 failures.
+- `rtk swift test --filter ComposerVoiceControlsPresentationTests` - 4 tests, 0 failures.
+- `rtk swift test` - 183 tests, 5 skipped, 0 failures.
+- `rtk xcodegen generate --spec project.yml`
+- `rtk xcodebuild -project CodexDock.xcodeproj -scheme CodexDockApp -destination 'id=BAD95C8E-3E57-4818-9B90-E4ED22593B4B' build`
+- `rtk make device-install DEVICE=00008110-000E04940240A01E DEVELOPMENT_TEAM=R6B8KXF3QW`
+- `rtk xcrun devicectl device process launch --device 00008110-000E04940240A01E --terminate-existing com.aelaguiz.CodexDockApp`
+- `rtk make dock-relay-status` - relay pid `3815`, endpoint `ws://192.168.50.117:4510`, `phone auth: none`, readyz OK.
+- `rtk git diff --check`
+
+Remaining proof gap:
+
+- The structural cleanup closes the code-shape finding. The later completion audit above closes the manual iPhone 14 evidence gap for the current installed build.
+
+## 2026-05-28 Physical iPhone 14 Basic Audio Pass And Listening Color Update
+
+Verdict: source-truth update recorded; superseded by the structural implementation-audit pass above for current code-shape review.
+
+Evidence reviewed:
+
+- User manual physical iPhone 14 feedback after the empty-transcript relay fix: `Okay, that worked.` This supersedes the earlier crash and empty-transcript failures for the basic physical Realtime audio path.
+- The app was then changed so active listening UI is blue instead of red in `CodexDock/Features/Session/ComposerView.swift`; red remains reserved for actual error labels.
+- Focused proof after that UI change: `rtk swift test --filter ComposerVoiceControlsPresentationTests` executed 4 tests with 0 failures, `rtk git diff --check -- CodexDock/Features/Session/ComposerView.swift` passed, and `rtk make device-install DEVICE=00008110-000E04940240A01E DEVELOPMENT_TEAM=R6B8KXF3QW` plus `rtk xcrun devicectl device process launch --device 00008110-000E04940240A01E --terminate-existing com.aelaguiz.CodexDockApp` installed/launched the build on the physical iPhone 14.
+- Secret hygiene evidence after install: `.env` mtime remained `1779986258`; relay status was healthy at `ws://192.168.50.117:4510` with `phone auth: none`.
+
+Remaining proof gap:
+
+- Superseded by the completion audit above. The detailed manual checklist is marked passed by user manual check for the current installed build.
+
+## 2026-05-28 Phase 5 Implementation Audit
+
+Verdict: pass for cutover cleanup; physical/manual acceptance remains outside this automated audit.
+
+Evidence reviewed:
+
+- Swift one-shot side doors removed: `TranscriptionServicing`, `OpenAITranscriptionClient`, `OpenAITranscriptionConfiguration`, `RelayTranscriptionClient`, `AppServerMethods.audioTranscribe`, `AppServerClient.audioTranscribe(...)`, `AudioTranscribeParams`, `AudioTranscribeResponseDTO`, and `CodexDock/AppServer/AudioTranscriptionDTO.swift`.
+- Old m4a production capture removed: `VoiceCaptureControlling`, `VoiceCaptureController`, `VoiceCaptureError.notRecording`, and dead m4a fake capture test helper are gone; production dictation uses `LiveVoiceCaptureControlling`.
+- Relay one-shot path removed or rejected: `scripts/dock-relay-transcription.mjs` deleted, old helper imports/exports/config removed from `scripts/dock-relay.mjs`, Makefile no longer writes/passes `CODEX_DOCK_OPENAI_TRANSCRIPTION_MODEL` or `--openai-transcription-model`, and `scripts/dock-relay.test.mjs` proves raw `audio/transcribe` returns `-32601`.
+- Metadata/docs updated: README, AGENTS.md, `project.yml`, generated `CodexDockApp/Info.plist`, iPhone pairing plan/worklog, iPhone UX spec, Multi-host plan, and Phase 8 voice docs now point to relay-owned Realtime dictation or explicitly mark one-shot material as historical.
+- Search evidence: runtime/config search for `audioTranscribe`, `AppServerMethods.audioTranscribe`, `AudioTranscribe`, `TranscriptionServicing`, `OpenAITranscriptionClient`, `OpenAITranscriptionConfiguration`, `RelayTranscriptionClient`, `VoiceCaptureControlling`, `VoiceCaptureController(`, `notRecording`, `CODEX_DOCK_OPENAI_TRANSCRIPTION_MODEL`, `CODEX_DOCK_TRANSCRIPTION_MAX_BYTES`, `--openai-transcription-model`, `dock-relay-transcription`, `transcribeAudio`, and `decodedAudioTranscribeParams` returned only Realtime names/test negative guards, not deleted runtime side doors.
+- Generated project evidence: `rtk xcodegen generate --spec project.yml` regenerated the project and `CodexDockApp/Info.plist`; Xcode build removed stale `AudioTranscriptionDTO` objects.
+- Secret/env evidence: `.env` mtime stayed `1779986258`; generated `.codex-dock/service.env` contains Realtime model/delay config and no old one-shot model env.
+
+Verification passed:
+
+- `rtk node --check scripts/dock-relay-realtime-transcription.mjs`
+- `rtk node --check scripts/dock-relay.mjs`
+- `rtk node --check scripts/dock-relay.test.mjs`
+- `rtk swift test --filter AppServerClientTests` - 43 tests, 5 explicit real-host skips, 0 failures.
+- `rtk swift test --filter ThreadDetailStoreTests` - 49 tests, 0 failures after stale OpenAI error expectations were updated to relay wording.
+- `rtk swift test` - 173 tests, 5 explicit real-host skips, 0 failures.
+- `rtk npm run test:relay` - 38 tests, 0 failures.
+- `rtk xcodebuild -project CodexDock.xcodeproj -scheme CodexDockApp -destination 'id=BAD95C8E-3E57-4818-9B90-E4ED22593B4B' build` - passed.
+- Name-based simulator build with `name=iPhone 17` failed only because no simulator has that exact name; available matching simulator is `feat_anim_1 - iPhone 17` at `BAD95C8E-3E57-4818-9B90-E4ED22593B4B`.
+- `rtk make dock-relay` restarted the relay with cutover code; `rtk make dock-relay-status` showed pid `88873`, endpoint `ws://192.168.50.117:4510`, `phone auth: none`, readyz OK.
+- Real relay-to-OpenAI cutover proof passed through `ws://192.168.50.117:4510`: raw `audio/transcribe` rejected, Realtime session started with `MODEL=gpt-realtime-whisper`, `DELAY=low`, `CHUNKS=3`, `DELTA_COUNT=10`, terminal `audio/transcription/completed`, `COMPLETED_TEXT_BYTES=48`, `COMPLETED_TEXT_SHA256=8e9c23af0bbe80abc5244e2094cb1475a8a28dd05457bc9a116ce2cac037e366`. Transcript text, key, audio, and base64 were not printed.
+- `rtk make app SIM=BAD95C8E-3E57-4818-9B90-E4ED22593B4B` built, installed, and launched the simulator app as `com.aelaguiz.CodexDockApp: 87615`.
+- `rtk make device-install DEVICE=00008110-000E04940240A01E DEVELOPMENT_TEAM=R6B8KXF3QW` built and installed `com.aelaguiz.CodexDockApp` on the physical iPhone 14 target.
+- `rtk git diff --check` passed.
+
+Audit notes:
+
+- The first real-relay proof attempt failed because the proof harness split PCM16 into odd-byte chunks. A direct provider probe confirmed the error was invalid PCM chunking, not app/relay code. The proof was rerun with even chunk boundaries and passed.
+- Physical Mobile MCP was not retried; this follows the repo instruction and Amir's explicit direction. The current physical iPhone 14 proof is user manual evidence, and future physical checks are deferred manual QA under the parent dock operating rule.
 
 ## Resolved Cross-Plan Findings
 
@@ -147,7 +275,25 @@ None.
 
 ## Current Implementation Findings
 
-Not run. This audit is pre-implementation plan-readiness only.
+- Realtime Phase 1 relay code is preflight-complete but not accepted from mocks.
+- Fake-upstream/mock relay tests are useful code checks but do not count as real proof.
+- Realtime Phase 2 Swift store/composer code is preflight-complete but not accepted from fake streaming sessions.
+- Realtime Phase 3 typed Swift relay-client code is preflight-complete but not accepted from scripted relay notifications.
+- Realtime Phase 4 live PCM capture/audio-forwarding/tap-control code is preflight-complete but not accepted from fake capture chunks or scripted relay responses.
+- Phase 2 correctly removed the hidden automatic store fallback to one-shot `audio/transcribe`; Phase 3 now wires default store voice construction to the typed relay-backed streaming client; Phase 4 now wires live capture chunks into `RealtimeTranscriptionSession.appendAudio(...)`, keeps hold dictation mode-scoped, adds tap-to-start/tap-to-stop dictation, and adds route/interruption cleanup. Real relay/OpenAI proof, basic physical iPhone 14 Realtime audio proof, and detailed manual physical checklist proof have passed for the current installed build.
+- Phase 2 fake-session tests are useful state-machine checks but do not count as real phone/relay/audio proof.
+- Phase 3 scripted relay-notification tests are useful client/store integration checks but do not count as real phone/relay/audio proof.
+- Phase 4 fake capture chunk tests are useful app-code checks because they prove the store now calls `appendAudio(...)`, but they still do not count as real microphone/relay/OpenAI proof.
+- Phase 4 current preflight checks passed: `rtk swift test --filter ComposerVoiceControlsPresentationTests` executed 4 tests with 0 failures; `rtk swift test --filter ThreadDetailStoreTests` executed 49 tests with 0 failures; `rtk swift test` executed 175 tests with 5 skipped and 0 failures; `rtk npm test` executed 42 tests with 0 failures; `rtk xcodegen generate --spec project.yml` passed; Xcode simulator build passed on `BAD95C8E-3E57-4818-9B90-E4ED22593B4B`; `rtk git diff --check` passed; physical `iPhone 14` install/launch passed with process `4434`.
+- Earlier Phase 4 fallback app proof was real relay-backed but not successful dictation acceptance: Mobile MCP on simulator `BAD95C8E-3E57-4818-9B90-E4ED22593B4B` showed `ws://192.168.50.117:4510 · 206 sessions`, opened a real thread detail view, showed `Hold to dictate` and `Start dictation`, and tapping `Start dictation` surfaced `App-server rejected request: OpenAI Realtime transcription key is not configured on the relay`.
+- Required acceptance proof at that checkpoint: real relay-to-OpenAI Realtime path with Mac-side `OPENAI_API_KEY`, representative PCM streamed through the relay contract, real OpenAI transcription events, redacted evidence, and physical `iPhone 14` client proof or an explicit accepted blocker/fallback. Later sections above record that proof as passed for the current installed build.
+- Prior read-only implementation audit findings for pending queue enforcement, malformed upstream event handling, and `OpenAI-Safety-Identifier` provider-control proof were repaired in `scripts/dock-relay-realtime-transcription.mjs` and `scripts/dock-relay-realtime-transcription.test.mjs`; the full relay preflight suite now passes 41 tests with 0 failures.
+- Prior strict review findings for plaintext `ws://` OpenAI key risk, relay shutdown cleanup, Realtime transcription URL mismatch, and missing cleanup-path tests were repaired; production endpoint validation now requires `wss:`, tests use an injected WebSocket factory, shutdown closes active downstream sockets, and the upstream URL is forced to `intent=transcription` with no `model` query.
+- Real relay-to-OpenAI proof passed after the user restored `.env` and service env generation was changed to write only `.codex-dock/service.env`: local JSON-RPC client -> `ws://192.168.50.117:4510` relay -> OpenAI Realtime transcription. Redacted evidence: `PCM_BYTES=123920`, `MODEL=gpt-realtime-whisper`, `APPEND_OK=1`, `CHUNKS=3`, `COMMIT_OK=1`, `DELTA_COUNT=9`, `TERMINAL_METHOD=audio/transcription/completed`, `COMPLETED_TEXT_BYTES=47`, `COMPLETED_TEXT_SHA256=a49fef874c839fee25b98c117f0f266d2ae983fdcf0de808e974564019d655ee`, and `CLOSED_SEEN=1`.
+- `.env` preservation is now enforced in `Makefile`: `rtk make env-file` writes `.codex-dock/service.env`, refuses `ENV_FILE=.env`, reads `.env` only as input for values such as `OPENAI_API_KEY`, and preserved `.env` mtime `1779986258` during verification.
+- The approved non-Pro simulator app-side smoke exposed and then verified a real crash fix: before the fix, tapping `Start dictation` produced `SIGTRAP` after `AVAudioEngine` startup; after the fix, `rtk make app SIM=BAD95C8E-3E57-4818-9B90-E4ED22593B4B` launched pid `37271`, Mobile MCP tapped `Start dictation`, and the app stayed open with visible error `Voice recording could not start.` This is fail-visible simulator proof only, not successful voice acceptance.
+- Physical iPhone 14 install/launch after the crash fix passed: `rtk make device-install DEVICE=00008110-000E04940240A01E DEVELOPMENT_TEAM=R6B8KXF3QW` installed the app, `devicectl ... process launch` launched it, process listing showed pid `4473`, and `.env` mtime stayed unchanged. Physical UI readback is still blocked by WebDriverAgent.
+- Physical UI-readback blocker at that checkpoint: Mobile MCP could see physical iPhone 14 `00008110-000E04940240A01E`, but screenshot and element listing failed because WebDriverAgent was not running. Physical install/launch passed, and the user-approved non-Pro simulator fallback rendered real relay-backed Dock rows and thread detail controls. Current fallback screenshots: `/tmp/codex-client/20260528T161315Z/realtime-phase4-smoke/001_dock_connected_fallback.png`, `/tmp/codex-client/20260528T163230Z/realtime-phase4-tap-controls-fallback.png`, and `/tmp/codex-client/20260528T163230Z/realtime-phase4-missing-key-fallback.png`. Per the parent dock operating rule, missing physical UI-readback is not a current stop condition.
 
 ## Relevant Code Coverage Ledger
 

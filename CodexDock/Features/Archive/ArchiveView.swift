@@ -94,6 +94,13 @@ public struct ArchiveView: View {
                 title: "Archive empty",
                 message: "Archived sessions from configured hosts will appear here."
             )
+        case let .unavailable(snapshot, message):
+            snapshotContent(snapshot)
+            DockMessageView(
+                icon: "wifi.exclamationmark",
+                title: "Archive unavailable",
+                message: message
+            )
         case let .loaded(snapshot):
             snapshotContent(snapshot)
         }

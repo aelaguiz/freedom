@@ -12,6 +12,15 @@ public struct ArchiveSnapshot: Equatable, Sendable {
             count + section.rows.count
         }
     }
+
+    public var unavailableMessage: String? {
+        guard !hostStates.isEmpty,
+              hostStates.allSatisfy(\.status.isUnavailable) else {
+            return nil
+        }
+        return hostStates.map { "\($0.host.displayName): \($0.status.unavailableMessage ?? $0.status.subtitle)" }
+            .joined(separator: "; ")
+    }
 }
 
 public enum ArchiveStoreState: Equatable, Sendable {
@@ -20,6 +29,7 @@ public enum ArchiveStoreState: Equatable, Sendable {
     case loading([DockHostViewModel])
     case loaded(ArchiveSnapshot)
     case empty(ArchiveSnapshot)
+    case unavailable(ArchiveSnapshot, String)
 }
 
 @MainActor
@@ -34,6 +44,7 @@ public final class ArchiveStore: ObservableObject {
     private let now: @Sendable () -> Date
     private var isLoading = false
     private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
+    private weak var connectivityReporter: (any AppConnectivityReporting)?
 
     public init(
         registry: HostRegistry,
@@ -69,7 +80,13 @@ public final class ArchiveStore: ObservableObject {
         hosts = registry.hosts
         actionError = nil
         state = .idle(registry.hosts.map(DockHostViewModel.init))
+        connectivityReporter?.reportArchiveState(state)
         await reload(showLoading: true)
+    }
+
+    public func setConnectivityReporter(_ reporter: (any AppConnectivityReporting)?) {
+        connectivityReporter = reporter
+        reporter?.reportArchiveState(state)
     }
 
     public func load() async {
@@ -83,16 +100,20 @@ public final class ArchiveStore: ObservableObject {
     @discardableResult
     public func restore(_ row: DockRowViewModel) async -> Bool {
         guard let host = hosts.first(where: { $0.id == row.id.hostID }) else {
+            DockLog.archive.error("archive restore skipped missing host_id=\(row.id.hostID, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
             actionError = "Host \(row.id.hostID) is no longer configured."
             return false
         }
 
         do {
+            DockLog.archive.notice("archive restore action started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
             try await archiver.unarchiveThread(row.id.threadID, on: host)
             actionError = nil
             await refresh()
+            DockLog.archive.notice("archive restore action finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
             return true
         } catch {
+            DockLog.archive.error("archive restore action failed host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             actionError = error.localizedDescription
             return false
         }
@@ -100,28 +121,45 @@ public final class ArchiveStore: ObservableObject {
 
     private func reload(showLoading: Bool) async {
         guard !hosts.isEmpty else {
+            DockLog.archive.warning("archive reload skipped reason=no_hosts")
             return
         }
         guard !isLoading else {
+            DockLog.archive.debug("archive reload skipped reason=already_loading")
             return
         }
 
+        let startedAt = Date()
+        let signpostState = DockSignpost.archive.beginInterval("archive.reload")
+        DockLog.archive.notice("archive reload started hosts=\(self.hosts.count, privacy: .public) show_loading=\(showLoading, privacy: .public)")
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            DockSignpost.archive.endInterval("archive.reload", signpostState)
+            isLoading = false
+        }
 
         if showLoading {
             state = .loading(hosts.map(DockHostViewModel.init))
+            connectivityReporter?.reportArchiveState(state)
         }
 
         do {
             localMetadata = try await metadataStore.load()
+            DockLog.persistence.debug("archive metadata loaded entries=\(self.localMetadata.count, privacy: .public)")
         } catch {
             localMetadata = [:]
+            DockLog.persistence.warning("archive metadata load failed error=\(DockLog.errorSummary(error), privacy: .public)")
         }
 
         let results = await loadAllHosts()
         let snapshot = makeSnapshot(results: results)
-        state = snapshot.rowCount == 0 ? .empty(snapshot) : .loaded(snapshot)
+        if snapshot.rowCount == 0, let message = snapshot.unavailableMessage {
+            state = .unavailable(snapshot, message)
+        } else {
+            state = snapshot.rowCount == 0 ? .empty(snapshot) : .loaded(snapshot)
+        }
+        connectivityReporter?.reportArchiveState(state)
+        DockLog.archive.notice("archive reload finished hosts=\(self.hosts.count, privacy: .public) rows=\(snapshot.rowCount, privacy: .public) mapping_failures=\(snapshot.mappingFailures.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
     }
 
     private struct HostLoadOutcome: Sendable {
@@ -133,12 +171,17 @@ public final class ArchiveStore: ObservableObject {
         await withTaskGroup(of: HostLoadOutcome.self) { group in
             for host in hosts {
                 group.addTask { [loader] in
+                    let startedAt = Date()
+                    DockLog.archive.debug("archive host load started host_id=\(host.id, privacy: .public)")
                     do {
+                        let result = try await loader.loadSessions(for: host, query: .archivedHuman)
+                        DockLog.archive.debug("archive host load finished host_id=\(host.id, privacy: .public) rows=\(result.summaries.count, privacy: .public) mapping_failures=\(result.mappingFailures.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
                         return HostLoadOutcome(
                             host: host,
-                            result: .success(try await loader.loadSessions(for: host, query: .archivedHuman))
+                            result: .success(result)
                         )
                     } catch {
+                        DockLog.archive.warning("archive host load failed host_id=\(host.id, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
                         return HostLoadOutcome(
                             host: host,
                             result: .failure(Self.mapLoadFailure(error))

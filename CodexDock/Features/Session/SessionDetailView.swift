@@ -8,6 +8,7 @@ import AppKit
 
 public struct SessionDetailView: View {
     @StateObject private var store: ThreadDetailStore
+    @State private var visibilityMode: ThreadEventVisibilityMode = .messages
 
     public init(store: ThreadDetailStore) {
         _store = StateObject(wrappedValue: store)
@@ -45,7 +46,12 @@ public struct SessionDetailView: View {
             ProgressView()
                 .frame(maxWidth: .infinity, minHeight: 140)
         case let .loaded(snapshot):
-            DetailHeaderView(header: snapshot.header, liveState: snapshot.liveState)
+            DetailHeaderView(
+                header: snapshot.header,
+                liveState: snapshot.liveState,
+                visibilityMode: visibilityMode,
+                onCycleVisibility: cycleVisibilityMode
+            )
             if case let .stale(message) = snapshot.liveState {
                 DetailMessageView(
                     icon: "wifi.exclamationmark",
@@ -55,7 +61,11 @@ public struct SessionDetailView: View {
             }
             ComposerView(store: store)
             RequestCardsView(store: store)
-            EventTimelineView(events: snapshot.events)
+            EventTimelineView(
+                events: visibilityMode.visibleEvents(from: snapshot.events),
+                visibilityMode: visibilityMode,
+                hasUnfilteredEvents: !snapshot.events.isEmpty
+            )
         case let .error(header, message):
             DetailHeaderView(header: header, liveState: .stale(message))
             DetailMessageView(
@@ -75,11 +85,29 @@ public struct SessionDetailView: View {
         Color(.background)
         #endif
     }
+
+    private func cycleVisibilityMode() {
+        visibilityMode = visibilityMode.next
+    }
 }
 
 private struct DetailHeaderView: View {
     let header: ThreadDetailHeader
     let liveState: ThreadDetailLiveState
+    let visibilityMode: ThreadEventVisibilityMode?
+    let onCycleVisibility: (() -> Void)?
+
+    init(
+        header: ThreadDetailHeader,
+        liveState: ThreadDetailLiveState,
+        visibilityMode: ThreadEventVisibilityMode? = nil,
+        onCycleVisibility: (() -> Void)? = nil
+    ) {
+        self.header = header
+        self.liveState = liveState
+        self.visibilityMode = visibilityMode
+        self.onCycleVisibility = onCycleVisibility
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -103,11 +131,7 @@ private struct DetailHeaderView: View {
                 Spacer(minLength: 8)
             }
 
-            HStack(spacing: 8) {
-                DetailPill(label: header.hostName, systemImage: "desktopcomputer", color: .blue)
-                DetailPill(label: liveState.label, systemImage: liveIcon, color: liveColor)
-                DetailPill(label: header.statusLabel, systemImage: "circle.dashed", color: .secondary)
-            }
+            statusRow
 
             Text("\(header.threadID) · \(header.lastActivity)")
                 .font(.caption)
@@ -118,10 +142,73 @@ private struct DetailHeaderView: View {
         .padding(.vertical, 4)
     }
 
+    @ViewBuilder
+    private var statusRow: some View {
+        if let visibilityMode, let onCycleVisibility {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    pillGroup
+                    Spacer(minLength: 8)
+                    VisibilityModeButton(mode: visibilityMode, onCycle: onCycleVisibility)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    pillGroup
+                    VisibilityModeButton(mode: visibilityMode, onCycle: onCycleVisibility)
+                }
+            }
+        } else {
+            pillGroup
+        }
+    }
+
+    @ViewBuilder
+    private var pillGroup: some View {
+        ViewThatFits(in: .horizontal) {
+            pillRow
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    hostPill
+                    livePill
+                }
+                statusPill
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                hostPill
+                livePill
+                statusPill
+            }
+        }
+    }
+
+    private var pillRow: some View {
+        HStack(spacing: 8) {
+            hostPill
+            livePill
+            statusPill
+        }
+    }
+
+    private var hostPill: some View {
+        DetailPill(label: header.hostName, systemImage: "desktopcomputer", color: .blue)
+    }
+
+    private var livePill: some View {
+        DetailPill(label: liveState.label, systemImage: liveIcon, color: liveColor)
+    }
+
+    private var statusPill: some View {
+        DetailPill(label: header.statusLabel, systemImage: "circle.dashed", color: .secondary)
+    }
+
     private var liveIcon: String {
         switch liveState {
         case .connecting:
             return "antenna.radiowaves.left.and.right"
+        case .reconnecting:
+            return "arrow.triangle.2.circlepath"
         case .live:
             return "dot.radiowaves.left.and.right"
         case .stale:
@@ -135,6 +222,8 @@ private struct DetailHeaderView: View {
         switch liveState {
         case .connecting:
             return .secondary
+        case .reconnecting:
+            return .orange
         case .live:
             return .green
         case .stale:
@@ -142,6 +231,69 @@ private struct DetailHeaderView: View {
         case .closed:
             return .red
         }
+    }
+}
+
+private extension ThreadEventVisibilityMode {
+    var buttonLabel: String {
+        switch self {
+        case .messages:
+            return "Messages"
+        case .messagesAndThinking:
+            return "Thinking"
+        case .everything:
+            return "Everything"
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .messages:
+            return "Timeline visibility: Messages"
+        case .messagesAndThinking:
+            return "Timeline visibility: Messages and Thinking"
+        case .everything:
+            return "Timeline visibility: Everything"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .messages:
+            return "text.bubble"
+        case .messagesAndThinking:
+            return "lightbulb"
+        case .everything:
+            return "square.stack.3d.up"
+        }
+    }
+
+    var emptyStateTitle: String {
+        switch self {
+        case .messages:
+            return "No messages"
+        case .messagesAndThinking:
+            return "No messages or thinking"
+        case .everything:
+            return "No transcript"
+        }
+    }
+}
+
+private struct VisibilityModeButton: View {
+    let mode: ThreadEventVisibilityMode
+    let onCycle: () -> Void
+
+    var body: some View {
+        Button(action: onCycle) {
+            Label(mode.buttonLabel, systemImage: mode.systemImage)
+                .lineLimit(1)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .font(.caption.weight(.semibold))
+        .accessibilityLabel(mode.accessibilityLabel)
+        .accessibilityHint("Cycles timeline visibility")
     }
 }
 
@@ -163,14 +315,24 @@ private struct DetailPill: View {
 
 private struct EventTimelineView: View {
     let events: [ThreadEvent]
+    let visibilityMode: ThreadEventVisibilityMode
+    let hasUnfilteredEvents: Bool
 
     var body: some View {
         if events.isEmpty {
-            DetailMessageView(
-                icon: "text.bubble",
-                title: "No transcript",
-                message: "This thread returned no readable events."
-            )
+            if hasUnfilteredEvents {
+                DetailMessageView(
+                    icon: visibilityMode.systemImage,
+                    title: visibilityMode.emptyStateTitle,
+                    message: "This visibility mode has no readable events."
+                )
+            } else {
+                DetailMessageView(
+                    icon: "text.bubble",
+                    title: "No transcript",
+                    message: "This thread returned no readable events."
+                )
+            }
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(events) { event in

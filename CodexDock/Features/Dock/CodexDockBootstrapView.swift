@@ -7,16 +7,40 @@ import AppKit
 #endif
 
 public struct CodexDockBootstrapView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var store: RelayBootstrapStore
+    @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
+    @StateObject private var connectivityStore: AppConnectivityStore
 
     public init(store: RelayBootstrapStore = RelayBootstrapStore()) {
         _store = StateObject(wrappedValue: store)
+        _lifecycleCoordinator = StateObject(wrappedValue: AppLifecycleCoordinator())
+        _connectivityStore = StateObject(wrappedValue: AppConnectivityStore())
     }
 
     public var body: some View {
         content
             .task {
+                connectivityStore.reportBootstrapState(store.state)
                 store.start()
+                store.handleLifecycle(lifecycleCoordinator.snapshot)
+                connectivityStore.reportBootstrapState(store.state)
+            }
+            .onChange(of: scenePhase) { _, scenePhase in
+                lifecycleCoordinator.handle(appScenePhase(from: scenePhase))
+                store.handleLifecycle(lifecycleCoordinator.snapshot)
+                connectivityStore.reportLifecycle(lifecycleCoordinator.snapshot)
+                connectivityStore.reportBootstrapState(store.state)
+            }
+            .onChange(of: store.state) { _, state in
+                connectivityStore.reportBootstrapState(state)
+            }
+            .overlay(alignment: .topTrailing) {
+                if !isReady {
+                    GlobalConnectivityIndicatorView(store: connectivityStore)
+                        .padding(.top, 8)
+                        .padding(.trailing, 16)
+                }
             }
     }
 
@@ -28,7 +52,8 @@ public struct CodexDockBootstrapView: View {
                 title: "Connecting",
                 message: "Finding Codex Dock relay",
                 relays: [],
-                manualURLText: $store.manualURLText,
+                manualHostText: $store.manualHostText,
+                manualPortText: $store.manualPortText,
                 onUseRelay: { _ in },
                 onManualConnect: {
                     Task {
@@ -41,7 +66,8 @@ public struct CodexDockBootstrapView: View {
                 title: "Relay",
                 message: message ?? "Finding Codex Dock relay",
                 relays: relays,
-                manualURLText: $store.manualURLText,
+                manualHostText: $store.manualHostText,
+                manualPortText: $store.manualPortText,
                 onUseRelay: { relay in
                     Task {
                         await store.use(relay)
@@ -54,14 +80,19 @@ public struct CodexDockBootstrapView: View {
                 }
             )
         case .ready(let registry):
-            CodexDockRootView(registry: registry)
+            CodexDockRootView(
+                registry: registry,
+                lifecycleCoordinator: lifecycleCoordinator,
+                connectivityStore: connectivityStore
+            )
                 .id(registry.hosts.map(\.id).joined(separator: "|"))
         case .failed(let message):
             RelaySetupView(
                 title: "Relay Error",
                 message: message,
                 relays: [],
-                manualURLText: $store.manualURLText,
+                manualHostText: $store.manualHostText,
+                manualPortText: $store.manualPortText,
                 onUseRelay: { _ in },
                 onManualConnect: {
                     Task {
@@ -71,13 +102,34 @@ public struct CodexDockBootstrapView: View {
             )
         }
     }
+
+    private var isReady: Bool {
+        if case .ready = store.state {
+            return true
+        }
+        return false
+    }
+
+    private func appScenePhase(from scenePhase: ScenePhase) -> AppScenePhase {
+        switch scenePhase {
+        case .active:
+            return .active
+        case .inactive:
+            return .inactive
+        case .background:
+            return .background
+        @unknown default:
+            return .inactive
+        }
+    }
 }
 
 private struct RelaySetupView: View {
     let title: String
     let message: String
     let relays: [DiscoveredRelay]
-    @Binding var manualURLText: String
+    @Binding var manualHostText: String
+    @Binding var manualPortText: String
     let onUseRelay: (DiscoveredRelay) -> Void
     let onManualConnect: () -> Void
 
@@ -143,7 +195,7 @@ private struct RelaySetupView: View {
                                 Text(relay.displayName)
                                     .font(.headline)
                                     .foregroundStyle(.primary)
-                                Text(relay.webSocketURL.absoluteString)
+                                Text(relay.endpoint.displayEndpoint)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
@@ -174,7 +226,8 @@ private struct RelaySetupView: View {
             HStack(spacing: 8) {
                 Image(systemName: "link")
                     .foregroundStyle(.secondary)
-                manualField
+                manualHostField
+                manualPortField
             }
             .font(.subheadline)
             .padding(.horizontal, 12)
@@ -190,19 +243,31 @@ private struct RelaySetupView: View {
                     .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(manualURLText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(manualHostText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || manualPortText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 
     @ViewBuilder
-    private var manualField: some View {
+    private var manualHostField: some View {
         #if os(iOS)
-        TextField("ws://192.168.50.117:4510", text: $manualURLText)
+        TextField("192.168.50.117", text: $manualHostText)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .keyboardType(.URL)
         #else
-        TextField("ws://192.168.50.117:4510", text: $manualURLText)
+        TextField("192.168.50.117", text: $manualHostText)
+        #endif
+    }
+
+    @ViewBuilder
+    private var manualPortField: some View {
+        #if os(iOS)
+        TextField("4510", text: $manualPortText)
+            .keyboardType(.numberPad)
+            .frame(width: 72)
+        #else
+        TextField("4510", text: $manualPortText)
+            .frame(width: 72)
         #endif
     }
 

@@ -13,6 +13,14 @@ related:
 
 # TL;DR
 
+## Supersession Note - 2026-05-28
+
+`docs/CODEX_DOCK_HOST_PORT_CONFIG_TAILSCALE_OPS_SEPARATION_2026-05-28.md`
+supersedes this plan anywhere it describes bootstrap host config as URL-backed
+or token-bearing app config. The no-secret phone path now stores only relay
+endpoints, accepts Bonjour host+port discovery, and computes the relay
+WebSocket URL only at the transport boundary.
+
 - Outcome: A physical iPhone install of Codex Dock can be opened from the home screen, discover the Mac relay on the local network, load sessions, and use voice transcription without any OpenAI key, Codex app-server token, or relay bearer token on the phone.
 - Problem: The current app works through simulator launch environment variables. That cannot survive normal physical-device launch because the app bootstrap requires env-provided host/token config, and voice transcription currently reads `OPENAI_API_KEY` on the phone.
 - Approach: Make `scripts/dock-relay.mjs` the single phone-facing owner for privileged work. The Mac relay keeps raw Codex and OpenAI secrets, advertises a Bonjour service, accepts the local personal phone path without client auth, and exposes only named app JSON-RPC methods.
@@ -149,9 +157,13 @@ Codex Dock is done for this change when a physical iPhone build installed once w
 - The relay remains a narrow app API. Unsupported methods return JSON-RPC `-32601`.
 - The raw/history app-server token remains Mac-side only and is used only by the relay to reach the raw app-server.
 - OpenAI transcription happens on the Mac relay side and must not log the key, raw audio, base64 audio, transcript text, or full OpenAI response body.
-- Relay transcription enforces a practical audio payload size limit and timeout so a phone recording cannot turn the JSON-RPC socket into an unbounded memory sink.
+- Relay Realtime transcription enforces chunk and pending-buffer limits so phone microphone streaming cannot turn the JSON-RPC socket into an unbounded memory sink.
 - `ws://` is acceptable only for the personal trusted LAN/Tailscale V1 boundary; public or hostile-network exposure is outside this plan.
 - Runtime fallback policy is forbidden. The app should either discover/connect through the chosen path, use the explicit dev-only env path, or fail visibly with a setup/offline UI.
+
+## 0.1 Voice Transcription Supersession
+
+As of 2026-05-28, `docs/CODEX_DOCK_REALTIME_TRANSCRIPTION_STREAMING_2026-05-28.md` supersedes every voice-transcription instruction in this plan that prescribed completed-file upload, m4a/mp4 payloads, `audio/transcribe`, `gpt-4o-transcribe`, `CODEX_DOCK_OPENAI_TRANSCRIPTION_MODEL`, or direct Swift OpenAI transcription. Current production voice uses live PCM chunks from the iPhone, relay-owned Realtime methods `audio/transcription/start`, `audio/transcription/append`, `audio/transcription/commit`, and `audio/transcription/cancel`, Mac-side `OPENAI_API_KEY`, Mac-side `CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL=gpt-realtime-whisper`, no phone-supplied provider config, no phone OpenAI secret, no one-shot fallback, and no auto-submit.
 
 # 1) Key Design Considerations (what matters most)
 
@@ -171,7 +183,7 @@ Codex Dock is done for this change when a physical iPhone build installed once w
 - The relay already fronts app-facing JSON-RPC methods and calls the raw/history app-server with a Mac-side bearer token.
 - Physical iOS launch cannot rely on simulator-only `SIMCTL_CHILD_*` env injection.
 - iOS local-network discovery requires Bonjour permission declarations in app metadata.
-- Voice capture produces a local m4a file; the relay transcription API must accept that audio without exposing the OpenAI key to Swift.
+- Voice capture streams live PCM chunks; the relay Realtime API must accept those chunks without exposing the OpenAI key or provider config to Swift.
 
 ## 1.3 Architectural principles (rules we will enforce)
 
@@ -179,7 +191,7 @@ Codex Dock is done for this change when a physical iPhone build installed once w
 - Phone config contains connection coordinates only: relay identity/name/URL/status and non-secret manual fallback values.
 - Prefer direct behavior boundaries over repo-policing checks. The shipped phone path should have no API surface where a token is required, not merely a test that strings are absent.
 - Preserve simulator/env config as a clearly marked dev path, not as a runtime shim for physical use.
-- Keep relay methods named and purpose-specific. `audio/transcribe` is allowed; arbitrary OpenAI forwarding is not.
+- Keep relay methods named and purpose-specific. Realtime voice uses only the `audio/transcription/*` method family; arbitrary OpenAI forwarding and legacy `audio/transcribe` are not allowed.
 - Discovery should produce the same `DockHostConfiguration` shape used by Dock, Archive, Hosts, and thread detail so the rest of the app keeps one host contract.
 
 ## 1.4 Known tradeoffs (explicit)
@@ -198,7 +210,7 @@ Codex Dock is done for this change when a physical iPhone build installed once w
 - `CodexDockApp/CodexDockApp.swift` synchronously constructs `CodexDockRootView(registry: try HostRegistry.fromEnvironment())`; missing env config becomes a configuration-error UI.
 - `DockHostConfiguration` requires a non-empty bearer token.
 - `HostSettingsStore` and `HostsView` require manual token entry for saved hosts and keep those changes in memory.
-- `OpenAITranscriptionClient` reads `OPENAI_API_KEY` from process environment and sends audio directly to OpenAI from Swift.
+- Realtime voice uses the Mac relay; Swift must not read `OPENAI_API_KEY` or send audio directly to OpenAI.
 
 ## 2.2 What’s broken / missing (concrete)
 
@@ -224,14 +236,7 @@ Codex Dock is done for this change when a physical iPhone build installed once w
 
 - Apple local-network/Bonjour platform model - adopt only the product implication: an iOS app that browses Bonjour services needs local-network usage copy and Bonjour service declarations. The implementation should use the existing project metadata path (`project.yml` plus generated Info.plist), not a new build system.
 - Bonjour service discovery pattern - adopt service advertisement plus resolution to host/port; reject QR or secret-pairing payloads for V1 because they move setup burden and can tempt token transfer back onto the phone.
-- OpenAI audio transcription HTTP API - adopt server-side use through the relay because the existing Swift client already posts multipart audio to `/v1/audio/transcriptions`; reject phone-side OpenAI client construction in production because the API key would have to be available on the phone.
-- Independent transcription model scan, checked 2026-05-28:
-  - Artificial Analysis tracks `gpt-4o-transcribe` across real-world speech datasets with diverse accents, domain language, and acoustic conditions: https://artificialanalysis.ai/speech-to-text/models/openai-gpt-4o-transcribe
-  - UsefulAI's 2026 transcription roundup places `gpt-4o-transcribe` as the best OpenAI-native choice, with better AA-WER than hosted Whisper variants and `gpt-4o-mini-transcribe` as the cheaper budget tier: https://usefulai.mintlify.app/models/ai-transcription-models
-  - APIScout's 2026 STT comparison says the GPT-4o transcription family beats Whisper, while `gpt-4o-mini-transcribe` is the cost-first pick: https://apiscout.dev/guides/speech-to-text-api-comparison-2026
-  - The Decoder's March 2026 Artificial Analysis coverage shows OpenAI is not the overall STT leader, but still places Whisper Large v3 mid-pack and gives the broader benchmark context: https://the-decoder.com/elevenlabs-and-google-dominate-artificial-analysis-updated-speech-to-text-benchmark/
-  - Nils Durner's diarization writeup says the diarization variant is for speaker separation and should not be the default when diarization is not needed: https://ndurner.github.io/gpt-4o-diarize
-  - Decision for this app: default the relay to `gpt-4o-transcribe` for composer dictation. Do not default to `whisper-1`; use `gpt-4o-mini-transcribe` only as an explicit cost-saving Mac-side override; keep `gpt-4o-transcribe-diarize` out of V1 unless the app later needs speaker labels.
+- OpenAI Realtime transcription - adopt server-side use through the relay because the iPhone must never receive the OpenAI key or choose provider config. The earlier completed-file transcription model scan in this doc is historical and superseded for production dictation; current production voice uses `gpt-realtime-whisper` through the relay-owned Realtime transcription session.
 
 ## 3.2 Internal ground truth (code as spec)
 
@@ -272,12 +277,12 @@ Codex Dock is done for this change when a physical iPhone build installed once w
 - Prompt surfaces / agent contract to reuse:
   - Not applicable. This change is app/relay runtime code, not prompt or model behavior.
 - Native model or agent capabilities to lean on:
-  - Not applicable for the app architecture. OpenAI transcription remains a normal API call, now server-side.
+  - Not applicable for the app architecture. OpenAI Realtime transcription remains a normal API call, now relay-side.
 - Existing grounding / tool / file exposure:
   - The relay already has Mac process access to env/files and can read `.env` or process env without involving the phone.
   - The app already has local-network and microphone permission copy in metadata; Bonjour declarations are the missing piece.
 - Duplicate or drifting paths relevant to this change:
-  - Swift phone-side `OpenAITranscriptionClient` is a drifting production path once relay transcription exists. It may remain as a reusable/testable client only if not constructed by the physical phone app path.
+  - Swift phone-side direct OpenAI/file-upload transcription is a drifting production path once relay Realtime transcription exists and must be deleted or kept out of the app target.
   - Host token editing in Hosts UI becomes stale for the physical path and should move behind dev-only behavior or be removed from the primary UI.
   - README simulator env launch snippets become stale if presented as the phone runbook.
 - Capability-first opportunities before new tooling:
@@ -310,7 +315,7 @@ Codex Dock is done for this change when a physical iPhone build installed once w
   - `CodexDock/AppServer/*` - JSON-RPC and WebSocket transport.
   - `CodexDock/State/*` - Dock, Archive, Hosts, Thread Detail, and local metadata stores.
   - `CodexDock/Features/*` - UI.
-  - `CodexDock/Voice/*` - microphone capture and OpenAI transcription.
+  - `CodexDock/Voice/*` - live microphone capture and relay-owned Realtime transcription.
   - `project.yml` and `CodexDockApp/Info.plist` - app metadata.
   - `CodexDockTests/*` - Swift tests.
 
@@ -320,7 +325,7 @@ Codex Dock is done for this change when a physical iPhone build installed once w
 - Physical path today: no install-only/home-screen flow exists; if installed manually, app startup sees no env config and shows configuration error.
 - Relay path today: phone connects to relay with `Authorization: Bearer <token>`; relay authenticates to raw/history app-server with the Mac token and forwards only named JSON-RPC methods.
 - Token path today: `.codex-dock/app-server.token` is generated by `Makefile`, used by the raw app-server, also used as the relay app-facing auth token, and injected into simulator launch env. That is acceptable as a simulator/debug bridge but is not an acceptable physical-phone secret boundary.
-- Voice path today: iPhone captures m4a audio, `OpenAITranscriptionClient` reads `OPENAI_API_KEY`, posts directly to OpenAI, then `ThreadDetailStore` inserts returned text into the composer draft.
+- Voice path today: iPhone captures live PCM chunks, `RelayRealtimeTranscriptionClient` streams them through the relay-owned Realtime contract, and `ThreadDetailStore` reconciles transcript deltas/finals into the composer draft.
 
 ## 4.3 Object model + key abstractions
 
@@ -328,7 +333,7 @@ Codex Dock is done for this change when a physical iPhone build installed once w
 - `HostRegistry` groups one or more host configs and is currently built from environment variables.
 - `AppServerClient` already accepts `bearerToken: String?`, so the lower transport can support no-client-auth.
 - `HostSettingsStore` owns editable host registry state in memory and currently validates that tokens exist.
-- `ThreadDetailStore` receives a `TranscriptionServicing` dependency but defaults it to phone-side `OpenAITranscriptionClient`.
+- `ThreadDetailStore` receives a `RealtimeTranscriptionServicing` dependency and defaults it to `RelayRealtimeTranscriptionClient` for the current host.
 
 ## 4.4 Observability + failure behavior today
 
@@ -363,8 +368,8 @@ Token
 ## 5.1 On-disk structure (future)
 
 - Relay:
-  - `scripts/dock-relay.mjs` adds no-client-auth local mode, Bonjour advertisement, `.env`/env OpenAI key loading, and `audio/transcribe`.
-  - `scripts/dock-relay.test.mjs` expands from helper-only tests to cover server/auth/transcription boundaries.
+  - `scripts/dock-relay.mjs` adds no-client-auth local mode, Bonjour advertisement, `.env`/env OpenAI key loading, and relay-owned Realtime transcription methods.
+  - `scripts/dock-relay.test.mjs` expands from helper-only tests to cover server/auth/Realtime transcription boundaries.
   - `package.json` / `package-lock.json` add a Bonjour dependency only if the implementation chooses a Node-managed advertiser instead of a managed `dns-sd` child process.
 - iOS:
   - `CodexDock/Configuration/RelayDiscovery.swift` owns Bonjour service browsing/resolution and maps service metadata into non-secret discovered relay values.
@@ -372,7 +377,7 @@ Token
   - `DockHostConfiguration` changes `bearerToken` to optional.
   - `HostRegistry` keeps env parsing for simulator/dev but accepts no-token hosts.
   - `HostSettingsStore` and `HostsView` become a relay connection surface with discovery, current relay status, and manual non-secret URL fallback.
-  - `TranscriptionService.swift` adds `RelayTranscriptionClient` or an equivalent relay-backed implementation.
+  - `TranscriptionService.swift` owns the Realtime transcription abstractions used by `RelayRealtimeTranscriptionClient`.
   - `project.yml` and `CodexDockApp/Info.plist` include `NSBonjourServices`.
 
 ## 5.2 Control paths (future)
@@ -388,12 +393,12 @@ Token
   - bootstrap builds `DockHostConfiguration(id:name:webSocketURL:bearerToken:nil)`;
   - Dock, Archive, Hosts, and Thread Detail use that registry.
 - Voice path:
-  - iPhone captures m4a audio;
-  - `RelayTranscriptionClient` sends JSON-RPC `audio/transcribe` to the relay with MIME type and base64 audio;
-  - the phone does not choose the OpenAI model;
-  - the relay uses Mac-side `CODEX_DOCK_OPENAI_TRANSCRIPTION_MODEL` when set, otherwise defaults to `gpt-4o-transcribe`;
-  - relay calls OpenAI from the Mac and returns `{ "text": "..." }`;
-  - `ThreadDetailStore` inserts text into the draft and does not auto-submit.
+  - iPhone captures live PCM16 mono 24 kHz chunks;
+  - `RelayRealtimeTranscriptionClient` sends JSON-RPC `audio/transcription/start`, `audio/transcription/append`, `audio/transcription/commit`, and `audio/transcription/cancel` through the relay;
+  - the phone does not choose the OpenAI model, endpoint, delay, language allowlist, or provider config;
+  - the relay uses Mac-side `CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL` when set, otherwise defaults to `gpt-realtime-whisper`;
+  - relay streams to OpenAI Realtime from the Mac and forwards sanitized delta/completed/failed/canceled/closed events;
+  - `ThreadDetailStore` inserts live deltas/finals into the draft and does not auto-submit.
 - Simulator/dev path:
   - env parsing remains available for `rtk make app SIM=...`;
   - simulator can still pass tokens if the relay is running in bearer mode for dev tests, but this is not physical acceptance.
@@ -404,21 +409,23 @@ Token
 - `DiscoveredRelay` contains only non-secret fields: stable id/service name, display name, host name/address, port, TXT display metadata, and generated WebSocket URL.
 - `RelayDiscovery` provides discovered relay updates and can be faked in tests.
 - `RelaySettingsStore` or equivalent stores only non-secret selected/manual relay values under Application Support JSON.
-- `RelayTranscriptionClient` conforms to `TranscriptionServicing` and reuses `AppServerClient`/JSON-RPC instead of raw OpenAI HTTP from Swift.
+- `RelayRealtimeTranscriptionClient` conforms to `RealtimeTranscriptionServicing` and reuses `AppServerClient`/JSON-RPC instead of raw OpenAI HTTP from Swift.
 - Relay config separates:
   - `phoneAuth: none | bearer`;
   - `relayBearerToken` only required when `phoneAuth == bearer`;
   - `historyBearerToken` always required for raw/history app-server access;
   - `openAIAPIKey` loaded Mac-side only.
+  - `openAIRealtimeTranscriptionModel` and related Realtime limits/delay loaded Mac-side only.
 
 ## 5.4 Invariants and boundaries
 
 - Phone-to-relay V1 auth: none on trusted private network.
 - Relay-to-history auth: bearer token from `.codex-dock/app-server.token`.
-- Relay API: named app methods only, plus `audio/transcribe`; unsupported methods return `-32601`.
-- `audio/transcribe` accepts bounded m4a/mp4 audio payloads, not arbitrary files or arbitrary OpenAI parameters.
-- The relay default transcription model is `gpt-4o-transcribe`, selected from the 2026 independent web scan for this app's short composer-dictation use case.
-- The phone request cannot set arbitrary OpenAI models. Cost-first model changes, such as `gpt-4o-mini-transcribe`, are Mac-side relay config only.
+- Relay API: named app methods only, plus the Realtime `audio/transcription/*` method family; unsupported methods return `-32601`.
+- Legacy raw `audio/transcribe` is rejected after the Realtime cutover.
+- Realtime transcription accepts bounded PCM chunks and rejects arbitrary files or arbitrary OpenAI parameters.
+- The relay default Realtime transcription model is `gpt-realtime-whisper`.
+- The phone request cannot set arbitrary OpenAI models or Realtime provider config. Model/delay changes are Mac-side relay config only.
 - Relay TXT records must not include tokens, paths, prompts, transcripts, audio, or thread data.
 - Swift production path must not construct `OpenAITranscriptionClient` from `OPENAI_API_KEY`.
 - Local manual fallback is URL-only and non-secret.
@@ -458,7 +465,7 @@ No token field appears in the primary physical-phone flow.
 | Relay auth | `scripts/dock-relay.mjs` | `parseArgs`, `main`, `assertAuthorized`, `server.on("upgrade")` | `--auth-token-file` required; phone must send bearer | Add `--phone-auth none|bearer`; no-client mode skips phone bearer while preserving history token | Physical phone cannot receive relay token | `phoneAuth=none` local V1 | Node relay auth tests |
 | Relay raw app-server boundary | `scripts/dock-relay.mjs` | `JsonRpcWebSocketClient`, history calls | History bearer token used Mac-side | Keep required and never expose downstream | Secret stays on Mac | history token only in relay config | Node relay tests |
 | Relay discovery | `scripts/dock-relay.mjs`, `package.json` | server startup/shutdown | No Bonjour advertisement | Advertise `_codexdock._tcp` with non-secret TXT | Phone discovers relay without setup | Bonjour service on relay port | Manual/device; unit around metadata builder |
-| Relay transcription | `scripts/dock-relay.mjs` | `handleRequest` | No `audio/transcribe` method | Add server-side method using Mac OpenAI key and `gpt-4o-transcribe` default | Removes OpenAI key and model selection from phone | JSON-RPC `audio/transcribe`; relay owns model choice | Node fake OpenAI tests; Swift relay client tests |
+| Relay transcription | `scripts/dock-relay.mjs` | `handleRequest` | Realtime voice methods live behind the relay; legacy `audio/transcribe` is historical | Add/keep relay-owned Realtime methods and reject raw `audio/transcribe` | Removes OpenAI key and provider config from phone and prevents slow upload fallback | JSON-RPC `audio/transcription/*`; relay owns model/delay choice | Node fake OpenAI tests; Swift Realtime relay client tests |
 | Relay method boundary | `scripts/dock-relay.mjs` | default method case | Unsupported methods fail `-32601` | Preserve | Avoid generic proxy | named methods only | Existing/new Node tests |
 | Build services | `Makefile` | `services`, `dock-relay`, `env-file` | Starts token-auth relay; writes env for simulator, including token/OpenAI key values | Start relay in no-client-auth V1, pass/load OpenAI key only into the relay process, keep secrets out of app-consumed output | One Mac service command | `rtk make services` owns Mac readiness | Make/docs review |
 | Device install | `Makefile` | new target | No physical install-only target | Add `device-install` for `iphoneos` build/install without launch/env | User installs app once, opens manually | install-only physical path | Manual proof |
@@ -470,8 +477,8 @@ No token field appears in the primary physical-phone flow.
 | Non-secret persistence | `CodexDock/Configuration/RelaySettingsStore.swift` or equivalent | new | Only thread metadata persisted | Store selected/manual relay values only | Reopen without env; support manual fallback | Application Support JSON | Swift persistence tests |
 | Hosts UI/store | `CodexDock/State/HostSettingsStore.swift`, `CodexDock/Features/Hosts/HostsView.swift` | token-centric editor | Requires token | Show discovered/current/manual URL; no primary token field | UI matches secret boundary | relay status surface | Swift store/UI-adjacent tests |
 | Dock/Archive stores | `CodexDock/State/DockStore.swift`, `CodexDock/State/ArchiveStore.swift`, `CodexDock/Features/Dock/DockView.swift` | consume registry | Work if registry exists | Update from discovery/bootstrap registry | Main app uses discovered relay | same host contract | Existing Dock tests |
-| Thread detail | `CodexDock/State/ThreadDetailStore.swift` | default transcription service | Defaults to phone-side OpenAI client | Default physical path gets relay-backed service | Voice no phone key | `RelayTranscriptionClient` | ThreadDetail tests |
-| Voice service | `CodexDock/Voice/TranscriptionService.swift` | `OpenAITranscriptionClient` | Reads `OPENAI_API_KEY` in Swift | Add relay-backed client; keep OpenAI client only outside physical app path if useful | Server-owned OpenAI key | JSON-RPC audio client | Swift transcription tests |
+| Thread detail | `CodexDock/State/ThreadDetailStore.swift` | default transcription service | Uses relay-backed Realtime client | Keep default physical path relay-backed with no one-shot fallback | Voice no phone key | `RelayRealtimeTranscriptionClient` | ThreadDetail tests |
+| Voice service | `CodexDock/Voice/TranscriptionService.swift` | Realtime service/session abstractions | Streams relay Realtime sessions | Delete direct Swift OpenAI/file-upload paths | Server-owned OpenAI key | JSON-RPC Realtime audio client | Swift transcription tests |
 | Real-host smoke tests | `CodexDockTests/AppServerClientTests.swift` | phone-reachable handshake/list/detail/archive tests | Treat phone-reachable endpoint as bearer-authenticated and require token env/file | Split raw-auth/dev-only coverage from no-client-auth relay physical-path coverage | Prevent old phone-token proof from remaining canonical | physical relay smoke must work without bearer token | AppServerClient smoke tests |
 | README/runbook | `README.md` | service/simulator/app sections | Simulator env token path foregrounded | Document `make services`, `device-install`, home-screen launch, discovery, no phone secrets | Prevent stale operational truth | physical runbook | Docs review |
 | UX/product docs | `docs/CODEX_DOCK_IPHONE_UX_SPEC_2026-05-27.md` | requirement says `.env` key safe to embed | Stale/conflicting with relay-owned secret plan | Update or annotate as superseded by this plan | Avoid reviving phone key approach | server-owned secret stance | Docs review |
@@ -485,10 +492,11 @@ No token field appears in the primary physical-phone flow.
 - Deprecated APIs (if any):
   - `DockHostConfiguration.bearerToken: String` becomes `String?`.
   - `HostSettingsStore.saveHost(... bearerToken:)` is replaced or relaxed for the no-secret physical route.
+  - Completed-file transcription, `audio/transcribe`, and direct Swift OpenAI clients are superseded by relay Realtime voice.
 - Delete list:
   - Remove primary physical UI requirement for token entry.
   - Remove physical acceptance language based on simulator env launch.
-  - Do not delete `OpenAITranscriptionClient` unless implementation makes it clearly unused; do remove it from the physical app default path.
+  - Delete `OpenAITranscriptionClient` and one-shot relay/file-upload voice code once Realtime is the production path.
 - Adjacent surfaces tied to the same contract family:
   - Include now: Makefile, README, project metadata, Swift tests, Node tests.
   - Explicitly out of scope: App Store, hostile network, per-device pairing, `wss://`, mTLS.
@@ -529,10 +537,10 @@ No token field appears in the primary physical-phone flow.
   - Add relay config for `phoneAuth=none|bearer`; default `make services` uses `none` for local personal V1.
   - Keep raw/history app-server bearer token required inside the relay.
   - Preserve unsupported method rejection with JSON-RPC `-32601`.
-  - Add server-side `audio/transcribe` using a Mac-side OpenAI key loaded from env or `.env`.
-  - Default relay transcription to `gpt-4o-transcribe` based on the 2026 independent web scan; allow only Mac-side `CODEX_DOCK_OPENAI_TRANSCRIPTION_MODEL` override.
-  - Reject phone-supplied OpenAI model selection.
-  - Add a bounded audio payload size limit and transcription request timeout.
+  - Historical voice note: this phase originally added one-shot `audio/transcribe`; Realtime Phase 5 supersedes that route with `audio/transcription/*` and rejects raw `audio/transcribe`.
+  - Default relay Realtime transcription to `gpt-realtime-whisper`; allow only Mac-side `CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL` and `CODEX_DOCK_REALTIME_TRANSCRIPTION_DELAY` overrides.
+  - Reject phone-supplied OpenAI model/provider selection.
+  - Add bounded Realtime chunk and pending-buffer limits.
   - Add safe transcription errors for missing OpenAI key and upstream failures.
   - Ensure relay logging excludes OpenAI key, raw Codex token, relay bearer token, raw audio, base64 audio, transcript text, prompts, thread bodies, and full OpenAI response body.
   - Add Bonjour advertisement for `_codexdock._tcp` with non-secret TXT metadata.
@@ -543,10 +551,10 @@ No token field appears in the primary physical-phone flow.
 * Exit criteria (all required):
   - A WebSocket client can connect to the relay with no Authorization header when `phoneAuth=none`.
   - The relay still uses bearer auth for raw/history app-server calls.
-  - `audio/transcribe` returns transcript text through the relay and never exposes the OpenAI key to the client.
-  - Tests prove the relay uses `gpt-4o-transcribe` by default and ignores/rejects phone-side model selection.
-  - Oversized or malformed audio transcription payloads fail safely before an OpenAI call.
-  - Transcription upstream timeout behavior is tested and returns a safe relay error.
+  - Realtime transcription returns delta/completed events through the relay and never exposes the OpenAI key to the client.
+  - Tests prove the relay uses relay-side Realtime provider config and rejects phone-side provider selection.
+  - Oversized or malformed audio chunks fail safely before unbounded buffering.
+  - Realtime upstream timeout behavior is tested and returns a safe relay error.
   - `_codexdock._tcp` advertisement is started on the relay port with only non-secret TXT metadata, and advertisement shutdown is owned by the relay lifecycle.
   - Unsupported methods still return `-32601`.
   - Physical-path real-host smoke tests no longer require phone bearer token env/file.
@@ -579,23 +587,23 @@ No token field appears in the primary physical-phone flow.
   - Manual fallback stores only URL/name/id data, never secrets.
 * Rollback: Revert Swift discovery/bootstrap/config changes; keep relay Phase 1 intact.
 
-## Phase 3 - Voice uses relay transcription
+## Phase 3 - Voice uses relay Realtime transcription
 
 * Goal: Remove phone-side OpenAI key dependency from the production voice path while preserving composer behavior.
-* Status: Implemented and programmatically verified on 2026-05-28.
-* Work: Swap the physical default transcription service to relay-backed JSON-RPC.
+* Status: Implemented by the Realtime plan and programmatically verified on 2026-05-28.
+* Work: Use relay-backed Realtime JSON-RPC for production dictation.
 * Checklist (must all be done):
-  - Add `RelayTranscriptionClient` conforming to `TranscriptionServicing`.
-  - Add `AppServerMethods.audioTranscribe` and request/response DTOs or local encoding.
-  - Ensure the Swift request sends only audio metadata and payload, not OpenAI key or model choice.
-  - Wire `ThreadDetailStore`/session detail construction so the default physical path uses relay-backed transcription for the current host.
+  - Add `RelayRealtimeTranscriptionClient` conforming to `RealtimeTranscriptionServicing`.
+  - Add typed `audio/transcription/*` request/notification DTOs.
+  - Ensure Swift sends only audio chunks and session control, not OpenAI key, model choice, endpoint, or provider config.
+  - Wire `ThreadDetailStore`/session detail construction so the default physical path uses relay-backed Realtime transcription for the current host.
   - Keep transcript insertion, no auto-submit, draft editability, and failure recovery behavior unchanged.
-  - Prevent production app bootstrap from constructing `OpenAITranscriptionClient` with `OPENAI_API_KEY`.
-  - Add Swift tests for relay transcription request shape, success, failure, draft preservation, and no auto-submit.
+  - Prevent production app bootstrap from constructing direct Swift OpenAI/file-upload transcription with `OPENAI_API_KEY`.
+  - Add Swift tests for relay Realtime request/event shape, success, failure, draft preservation, and no auto-submit.
 * Verification (required proof): `rtk swift test`.
 * Docs/comments (propagation; only if needed): None unless the relay transcription client has a non-obvious payload size or MIME invariant.
 * Exit criteria (all required):
-  - Voice transcription succeeds through the relay client in tests.
+  - Voice transcription succeeds through the relay Realtime client in tests.
   - Existing composer voice behavior tests still pass.
   - The production app path has no `OPENAI_API_KEY` dependency.
 * Rollback: Revert relay-backed voice wiring; do not reintroduce phone-side key handling to physical acceptance.
@@ -636,9 +644,9 @@ Avoid verification bureaucracy. Prefer existing credible signals that prove ship
   - no-client-auth accepts missing Authorization only in `phoneAuth=none`;
   - bearer mode still rejects missing/bad Authorization;
   - unsupported methods return `-32601`;
-  - `audio/transcribe` validates params and handles missing key safely;
-  - `audio/transcribe` defaults to `gpt-4o-transcribe` and does not let the phone choose arbitrary OpenAI models;
-  - timeout and oversized-payload behavior fail safely before leaking audio or OpenAI details;
+  - Realtime `audio/transcription/*` validates params and handles missing key safely;
+  - Realtime transcription uses relay-owned `gpt-realtime-whisper` defaults and does not let the phone choose arbitrary OpenAI models or provider config;
+  - timeout and oversized-chunk behavior fail safely before leaking audio or OpenAI details;
   - captured logs do not include keys, tokens, audio, base64 payloads, transcript text, prompts, thread bodies, or full OpenAI responses;
   - Bonjour advertisement metadata contains only non-secret relay name/version/auth-mode values.
 - Swift:
@@ -646,8 +654,8 @@ Avoid verification bureaucracy. Prefer existing credible signals that prove ship
   - env fallback remains dev-only capable;
   - discovery metadata/manual URL maps into host config;
   - relay settings persistence stores no secrets;
-  - relay transcription request/response/failure handling;
-  - relay transcription client sends no model choice from the phone.
+  - relay Realtime transcription event/failure handling;
+  - relay Realtime transcription client sends no model or provider choice from the phone.
 
 ## 8.2 Integration tests (flows)
 
@@ -696,7 +704,7 @@ This is personal local software. No staged multi-user rollout is needed.
 - Scope checked:
   - Frontmatter, TL;DR, Sections 0-10, helper blocks, receipts state, research/model decision, target architecture, call-site audit, phase obligations, verification, rollout, and decision log.
 - Findings summary:
-  - Main architecture is consistent: Mac relay owns secrets, physical iPhone uses no client auth, Bonjour is discovery, `gpt-4o-transcribe` is relay default, simulator/env is dev-only.
+  - Main architecture is consistent: Mac relay owns secrets, physical iPhone uses no client auth, Bonjour is discovery, Realtime transcription is relay-owned, simulator/env is dev-only.
   - Repairs were required for stale helper status, physical proof wording, Section 8 wording, real-host bearer-token smoke tests, Bonjour proof, timeout proof, and full sensitive-output proof.
 - Integrated repairs:
   - Marked external research grounding done because the web scan is now in Section 3.
@@ -768,11 +776,11 @@ Decision: V1 uses no client bearer token for the phone-to-relay hop on trusted L
 
 Consequences: Hostile-network hardening is out of scope for V1 and listed as later work.
 
-## 2026-05-28 - Independent-web-scan: transcription model default
+## 2026-05-28 - Independent-web-scan: completed-file transcription model default superseded by Realtime
 
 Context
 
-The user asked to search online, not rely on OpenAI API docs, for the best OpenAI transcription model for this app as of May 2026.
+The user asked to search online, not rely on OpenAI API docs, for the best OpenAI transcription model for this app as of May 2026. This decision applied to the earlier completed-file transcription path and is now superseded for production voice by the Realtime transcription plan.
 
 Options
 
@@ -783,12 +791,13 @@ Options
 
 Decision
 
-Use `gpt-4o-transcribe` as the V1 relay default for composer dictation. The app needs short, high-accuracy, single-speaker-ish dictation into a text box, not meeting diarization or cheapest possible bulk transcription. `gpt-4o-mini-transcribe` remains a Mac-side override if cost becomes more important. `gpt-4o-transcribe-diarize` is not V1 because speaker labels are not part of the UI.
+Historical decision: use `gpt-4o-transcribe` as the completed-file relay default for composer dictation. Current production voice does not use that path; it uses relay-owned Realtime transcription with `gpt-realtime-whisper`.
 
 Consequences
 
 - Relay owns transcription model choice.
-- The phone sends audio only and cannot request arbitrary OpenAI models.
+- The phone streams audio chunks only and cannot request arbitrary OpenAI models or provider config.
+- The old one-shot model default is not a production fallback after Realtime cutover.
 - This is not a claim that OpenAI is the best STT vendor overall; the scan found stronger non-OpenAI leaders, but the requested stack is OpenAI-backed and already has an OpenAI key on the Mac.
 
 Follow-ups
@@ -804,4 +813,4 @@ All meaning-bearing content from the previous local-relay draft was re-homed int
 - Converted the previous noncanonical local-relay plan into the full `arch-step` scaffold on 2026-05-28.
 - Kept the source plan's strongest requirements: install once, open app, Bonjour discovery, server-owned OpenAI/Codex secrets, no phone token, no QR secret pairing, no simulator env acceptance, relay-side transcription, and physical-device manual proof.
 - Changed the iOS discovery implementation detail from `NWBrowser` to resolved Bonjour host/port because the existing app transport is URL-based. This is recorded in the Decision Log.
-- Added the independent-web-scan transcription policy on 2026-05-28: default relay transcription to `gpt-4o-transcribe`; keep `gpt-4o-mini-transcribe` as a Mac-side cost override; do not use `whisper-1` or diarization as the V1 default.
+- Added the independent-web-scan transcription policy on 2026-05-28 for the old completed-file path; Realtime production voice supersedes it with relay-owned `gpt-realtime-whisper`.

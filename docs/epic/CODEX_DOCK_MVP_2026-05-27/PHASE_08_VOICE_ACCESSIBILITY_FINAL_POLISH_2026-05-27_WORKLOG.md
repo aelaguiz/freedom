@@ -31,7 +31,7 @@ Out of V1:
 
 ## OpenAI Provider Grounding
 
-Official OpenAI docs checked on 2026-05-28:
+Historical completed-file OpenAI docs checked on 2026-05-28, superseded for production by relay-owned Realtime transcription:
 
 - Speech-to-text guide:
   `https://platform.openai.com/docs/guides/speech-to-text?lang=curl`
@@ -40,13 +40,10 @@ Official OpenAI docs checked on 2026-05-28:
 - `gpt-4o-transcribe` model page:
   `https://platform.openai.com/docs/models/gpt-4o-transcribe`
 
-Implementation matches the documented shape used for completed audio files:
-
-- Endpoint: `POST https://api.openai.com/v1/audio/transcriptions`.
-- Model default: `gpt-4o-transcribe`.
-- File type: `.m4a`, a supported upload type.
-- Response format: `json`, which the API reference lists as the supported
-  response format for `gpt-4o-transcribe`.
+Current production voice no longer uses completed-file upload. It streams live
+PCM chunks to the Mac relay with `audio/transcription/*`; the relay owns
+`OPENAI_API_KEY`, `CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL`, and provider
+configuration.
 
 ## Implemented
 
@@ -55,8 +52,8 @@ Voice:
 - Added `CodexDock/Voice/VoiceCaptureController.swift`.
 - Added `CodexDock/Voice/TranscriptionService.swift`.
 - Added `NSMicrophoneUsageDescription`.
-- Added `OPENAI_API_KEY` and `CODEX_DOCK_OPENAI_TRANSCRIPTION_MODEL` app launch
-  wiring through `rtk make app`.
+- Historical note: earlier app-launch OpenAI env wiring is superseded. Current
+  simulator/device launch must not pass `OPENAI_API_KEY` into the app.
 - Preserved existing `.env` key values without printing them.
 - Added composer voice state, recording/transcribing phases, and inline
   recording/error labels.

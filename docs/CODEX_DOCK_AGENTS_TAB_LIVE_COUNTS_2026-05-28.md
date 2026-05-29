@@ -22,6 +22,7 @@ related:
 - Approach: Preserve source/origin metadata in the app-facing model, classify rows once, project counted Dock tabs from the same predicates used by the UI, and teach the relay to honor `sourceKinds` for live rows.
 - Plan: First prove source classification and no-leak behavior in the data pipeline, then wire counted Dock tabs, then verify relay and UI behavior against fixture and live-shaped rows. In the top-level dock, this plan runs after the implemented no-phone-secret iPhone relay baseline and before connectivity resilience, because connectivity should consume the final Dock query/snapshot/count model instead of the old UI-local filters.
 - Non-negotiables: no JSON-mode guessing, no prompt-content heuristics, no duplicate filter predicates, no fixtures that mock away structured source metadata, and no runtime fallback that hides unknown origin.
+- Current physical-device rule: `docs/CODEX_DOCK_CROSS_PLAN_IMPLEMENTATION_DOCK_2026-05-28.md` supersedes older physical-proof wording in this plan. Do not require, retry, or wait on physical-device checks for Agents tabs/counts unless Amir explicitly asks; use simulator/local/real-relay proof and record physical-only checks in the parent deferred physical-device test list.
 
 <!-- arch_skill:block:planning_passes:start -->
 <!--

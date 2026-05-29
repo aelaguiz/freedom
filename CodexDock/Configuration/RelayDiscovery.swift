@@ -7,10 +7,11 @@ public let codexDockBonjourDomain = "local."
 public struct DiscoveredRelay: Equatable, Identifiable, Sendable {
     public let id: String
     public let displayName: String
-    public let hostName: String
-    public let port: Int
+    public let endpoint: DockRelayEndpoint
     public let txtRecords: [String: String]
-    public let webSocketURL: URL
+
+    public var hostName: String { endpoint.host }
+    public var port: Int { endpoint.port }
 
     public init?(
         displayName: String,
@@ -19,28 +20,18 @@ public struct DiscoveredRelay: Equatable, Identifiable, Sendable {
         txtRecords: [String: String] = [:]
     ) {
         let normalizedHostName = Self.normalizedHostName(hostName)
-        guard port > 0,
-              let url = URL(string: "ws://\(normalizedHostName):\(port)"),
-              url.host?.isEmpty == false
-        else {
+        guard let endpoint = try? DockRelayEndpoint(host: normalizedHostName, port: port) else {
             return nil
         }
 
-        self.id = "\(normalizedHostName):\(port)"
+        self.id = endpoint.id
         self.displayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.hostName = normalizedHostName
-        self.port = port
+        self.endpoint = endpoint
         self.txtRecords = txtRecords
-        self.webSocketURL = url
     }
 
     public var hostConfiguration: DockHostConfiguration {
-        DockHostConfiguration(
-            id: hostName,
-            displayName: displayName.isEmpty ? hostName : displayName,
-            webSocketURL: webSocketURL,
-            bearerToken: nil
-        )
+        DockHostConfiguration(endpoint: endpoint)
     }
 
     private static func normalizedHostName(_ value: String) -> String {
@@ -52,39 +43,62 @@ public struct DiscoveredRelay: Equatable, Identifiable, Sendable {
     }
 }
 
-public struct LocalRelayConfiguration: Codable, Equatable, Sendable {
-    public let displayName: String
-    public let webSocketURL: URL
+public struct PersistedRelayEndpoint: Codable, Equatable, Sendable {
+    public let host: String
+    public let port: Int
 
-    public init(displayName: String, webSocketURL: URL) {
-        self.displayName = displayName
-        self.webSocketURL = webSocketURL
+    public init(endpoint: DockRelayEndpoint) {
+        self.host = endpoint.host
+        self.port = endpoint.port
     }
 
-    public var hostConfiguration: DockHostConfiguration {
-        DockHostConfiguration(
-            id: webSocketURL.host ?? "codex-dock-relay",
-            displayName: displayName,
-            webSocketURL: webSocketURL,
-            bearerToken: nil
-        )
+    public var endpoint: DockRelayEndpoint {
+        get throws {
+            try DockRelayEndpoint(host: host, port: port)
+        }
+    }
+}
+
+public struct LocalRelayEndpointList: Codable, Equatable, Sendable {
+    public let endpoints: [PersistedRelayEndpoint]
+
+    public init(endpoints: [DockRelayEndpoint]) {
+        var seen: Set<String> = []
+        self.endpoints = endpoints.compactMap { endpoint in
+            guard seen.insert(endpoint.id).inserted else {
+                return nil
+            }
+            return PersistedRelayEndpoint(endpoint: endpoint)
+        }
+    }
+
+    public var relayEndpoints: [DockRelayEndpoint] {
+        get throws {
+            try endpoints.map { try $0.endpoint }
+        }
+    }
+
+    public var hostConfigurations: [DockHostConfiguration] {
+        get throws {
+            try relayEndpoints.map(DockHostConfiguration.init(endpoint:))
+        }
     }
 }
 
 public protocol LocalDockConfigurationStoring: Sendable {
-    func load() async throws -> LocalRelayConfiguration?
-    func save(_ configuration: LocalRelayConfiguration) async throws
+    func load() async throws -> LocalRelayEndpointList?
+    func save(_ configuration: LocalRelayEndpointList) async throws
 }
 
 public actor FileLocalDockConfigurationStore: LocalDockConfigurationStoring {
     private let fileURL: URL
-    private var cache: LocalRelayConfiguration?
+    private var cache: LocalRelayEndpointList?
 
     public init(fileURL: URL = FileLocalDockConfigurationStore.defaultFileURL()) {
         self.fileURL = fileURL
     }
 
-    public func load() async throws -> LocalRelayConfiguration? {
+    public func load() async throws -> LocalRelayEndpointList? {
         if let cache {
             return cache
         }
@@ -92,12 +106,17 @@ public actor FileLocalDockConfigurationStore: LocalDockConfigurationStoring {
             return nil
         }
         let data = try Data(contentsOf: fileURL)
-        let configuration = try JSONDecoder().decode(LocalRelayConfiguration.self, from: data)
+        let configuration: LocalRelayEndpointList
+        do {
+            configuration = try JSONDecoder().decode(LocalRelayEndpointList.self, from: data)
+        } catch {
+            configuration = try Self.migrateLegacyConfiguration(from: data)
+        }
         cache = configuration
         return configuration
     }
 
-    public func save(_ configuration: LocalRelayConfiguration) async throws {
+    public func save(_ configuration: LocalRelayEndpointList) async throws {
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -116,6 +135,27 @@ public actor FileLocalDockConfigurationStore: LocalDockConfigurationStoring {
             .appendingPathComponent("CodexDock", isDirectory: true)
             .appendingPathComponent("relay-config.json")
     }
+
+    private struct LegacyLocalRelayConfiguration: Decodable {
+        let webSocketURL: URL
+    }
+
+    private static func migrateLegacyConfiguration(from data: Data) throws -> LocalRelayEndpointList {
+        let legacy = try JSONDecoder().decode(LegacyLocalRelayConfiguration.self, from: data)
+        let url = legacy.webSocketURL
+        guard url.scheme?.lowercased() == "ws",
+              let host = url.host,
+              let port = url.port,
+              url.user == nil,
+              url.password == nil,
+              url.path.isEmpty || url.path == "/",
+              url.query == nil,
+              url.fragment == nil
+        else {
+            throw DockHostConfigurationError.unsupportedLegacyURL(url.absoluteString)
+        }
+        return LocalRelayEndpointList(endpoints: [try DockRelayEndpoint(host: host, port: port)])
+    }
 }
 
 public protocol RelayDiscoveryManaging: AnyObject {
@@ -132,6 +172,7 @@ public final class BonjourRelayDiscovery: NSObject, ObservableObject, RelayDisco
 
     private let browser = NetServiceBrowser()
     private var services: [NetService] = []
+    private var isSearching = false
 
     public override init() {
         super.init()
@@ -139,6 +180,12 @@ public final class BonjourRelayDiscovery: NSObject, ObservableObject, RelayDisco
     }
 
     public func start() {
+        guard !isSearching else {
+            DockLog.relayDiscovery.debug("bonjour discovery start skipped reason=already_searching")
+            return
+        }
+        isSearching = true
+        DockLog.relayDiscovery.notice("bonjour discovery started type=\(codexDockBonjourServiceType, privacy: .public) domain=\(codexDockBonjourDomain, privacy: .public)")
         browser.searchForServices(
             ofType: codexDockBonjourServiceType,
             inDomain: codexDockBonjourDomain
@@ -146,6 +193,11 @@ public final class BonjourRelayDiscovery: NSObject, ObservableObject, RelayDisco
     }
 
     public func stop() {
+        guard isSearching else {
+            return
+        }
+        isSearching = false
+        DockLog.relayDiscovery.notice("bonjour discovery stopped service_count=\(self.services.count, privacy: .public) relay_count=\(self.relays.count, privacy: .public)")
         browser.stop()
         for service in services {
             service.stop()
@@ -156,6 +208,7 @@ public final class BonjourRelayDiscovery: NSObject, ObservableObject, RelayDisco
     private func add(_ service: NetService) {
         services.append(service)
         service.delegate = self
+        DockLog.relayDiscovery.info("bonjour service found name=\(service.name, privacy: .public) service_count=\(self.services.count, privacy: .public)")
         service.resolve(withTimeout: 4)
     }
 
@@ -163,6 +216,7 @@ public final class BonjourRelayDiscovery: NSObject, ObservableObject, RelayDisco
         services.removeAll { $0 === service }
         let name = service.name
         relays.removeAll { $0.displayName == name }
+        DockLog.relayDiscovery.info("bonjour service removed name=\(name, privacy: .public) relay_count=\(self.relays.count, privacy: .public)")
         onRelaysChanged?(relays)
     }
 
@@ -175,12 +229,14 @@ public final class BonjourRelayDiscovery: NSObject, ObservableObject, RelayDisco
                 txtRecords: Self.txtRecords(from: service.txtRecordData())
               )
         else {
+            DockLog.relayDiscovery.warning("bonjour service resolve ignored name=\(service.name, privacy: .public) reason=invalid_endpoint")
             return
         }
 
         relays.removeAll { $0.id == relay.id }
         relays.append(relay)
         relays.sort { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        DockLog.relayDiscovery.notice("bonjour service resolved relay_id=\(relay.id, privacy: .public) name=\(relay.displayName, privacy: .public) endpoint=\(DockLog.endpoint(relay.endpoint.webSocketURL), privacy: .public) relay_count=\(self.relays.count, privacy: .public)")
         onRelaysChanged?(relays)
     }
 
@@ -215,5 +271,12 @@ extension BonjourRelayDiscovery: NetServiceBrowserDelegate {
 extension BonjourRelayDiscovery: NetServiceDelegate {
     public nonisolated func netServiceDidResolveAddress(_ sender: NetService) {
         resolved(sender)
+    }
+
+    public nonisolated func netService(
+        _ sender: NetService,
+        didNotResolve errorDict: [String: NSNumber]
+    ) {
+        DockLog.relayDiscovery.warning("bonjour service resolve failed name=\(sender.name, privacy: .public) errors=\(errorDict.count, privacy: .public)")
     }
 }

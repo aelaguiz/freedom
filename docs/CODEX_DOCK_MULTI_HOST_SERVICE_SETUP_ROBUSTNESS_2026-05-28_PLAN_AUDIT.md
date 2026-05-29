@@ -3,9 +3,9 @@
 Plan: `docs/CODEX_DOCK_MULTI_HOST_SERVICE_SETUP_ROBUSTNESS_2026-05-28.md`
 Audit log: `docs/CODEX_DOCK_MULTI_HOST_SERVICE_SETUP_ROBUSTNESS_2026-05-28_PLAN_AUDIT.md`
 Current plan verdict: ready
-Current implementation code-review verdict: not-run
-Last reviewed: 2026-05-28T12:01:57Z
-Scope: whole plan
+Current implementation code-review verdict: approve
+Last reviewed: 2026-05-28T21:38:22Z
+Scope: whole plan; latest implementation audit covers Phase 6 README and final non-physical multi-host app smoke
 
 ## Current Blocking Findings
 
@@ -54,7 +54,27 @@ None.
 
 ## Current Implementation Findings
 
-Not run. This audit reviewed plan readiness, not implementation completion.
+None open for the implemented Phase 1A, Phase 2, Phase 1B/3A, Phase 3B, Phase 4A, Phase 3C, and Phase 6 slices.
+
+Reviewed Phase 1A, Phase 2, Phase 1B/3A, Phase 3B, Phase 4A, Phase 3C, and Phase 6 implementation:
+
+- `scripts/codex-dock-host-service.mjs`
+- `scripts/codex-dock-host-service-env.mjs`
+- `scripts/codex-dock-host-service-runtime.mjs`
+- `scripts/codex-dock-host-service.test.mjs`
+- `scripts/dock-relay.mjs`
+- `scripts/dock-relay-status.mjs`
+- `scripts/dock-relay-json-rpc-client.mjs`
+- `scripts/dock-relay-phase5.test.mjs`
+- `Makefile`
+- `package.json`
+- `CodexDock/Configuration/DockHostConfiguration.swift`
+- `CodexDock/Configuration/HostRegistry.swift`
+- `CodexDockTests/DockConfigurationTests.swift`
+- `README.md`
+- `docs/CODEX_DOCK_MULTI_HOST_SERVICE_SETUP_ROBUSTNESS_2026-05-28_IMPLEMENTATION_LOG.md`
+
+Scope boundary: approved for dry-run preflight, host-service CLI option hardening, relay-side status/error/upstream robustness, host-service lifecycle core, live Mac launchd wrapper proof, generated two-host env/simulator app consumption, live Linux `home` systemd proof, README runbook update, and final non-physical two-host app behavior proof. Physical-device behavior proof remains deferred manual QA under the parent dock rule. Realtime transcription on `home` is not approved because no OpenAI key is configured there.
 
 ## Relevant Code Coverage Ledger
 
@@ -134,3 +154,226 @@ The highest-risk area is correctly ordered: setup contract and relay diagnostics
 - Findings carried forward: none
 - Verdict: ready
 - Next audit focus: implementation-audit after Multi-host code changes, especially generated app config redaction, service/status separation, and verification that host setup consumes existing Connectivity/Realtime contracts
+
+### Pass 3 - 2026-05-28T19:56:00Z
+
+- Mode: implementation-audit
+- Scope: Multi-host Phase 1A preparatory dry-run renderer only
+- Baseline reviewed: Multi-host plan Phase 1 plus preparatory exception, implementation log, new host-service script/tests, and package script wiring
+- Test/CI context accepted, if supplied: `rtk node --check scripts/codex-dock-host-service.mjs` passed; `rtk npm test` passed 41 relay tests and 9 host-service tests with 0 failures; `rtk git diff --check` passed
+- Agents/lenses run: Bernoulli performed plan-backed implementation audit; Confucius performed thermonuclear maintainability review; parent synthesis ran plan-audit implementation-audit checks
+- Code areas read: host-service config construction, launchd/systemd rendering, app-config export, redaction, command dispatch, host-service tests, package scripts, implementation log status claims
+- Findings added: temporary review findings for CLI missing value handling, redaction by value shape, mutating token writer in dry-run slice, unsupported-command dispatch, and env app-config boundary
+- Findings resolved: all temporary findings were fixed before verdict:
+  - value-taking CLI options now reject missing values before config creation;
+  - redaction now sanitizes credentialed URLs and `OPENAI_API_KEY=value` strings even under generic keys;
+  - the mutating token writer was removed from the Phase 1A module and tests;
+  - unsupported lifecycle commands are rejected before config hydration;
+  - env app-config now includes auth mode and rejects line breaks.
+- Findings carried forward:
+  - Realtime detailed manual physical `iPhone 14` evidence remains a program gate before claiming final Realtime or Multi-host readiness.
+  - Real token creation/reuse remains deferred to the install/start phase because Phase 1A is dry-run only.
+- Verdict: approve for Phase 1A only
+- Next audit focus: Phase 1B/Phase 2 when real install/status or relay `/statusz` changes land
+
+### Pass 4 - 2026-05-28T20:36:17Z
+
+- Mode: implementation-audit
+- Scope: Phase 1A CLI hardening plus Phase 2 relay status/error/upstream-robustness slice
+- Baseline reviewed: relay implementation and status helper, upstream JSON-RPC client, focused relay Phase 5 tests, host-service CLI parser/tests, `Makefile` relay status target, child implementation log, and parent physical-device deferral rule
+- Test/CI context accepted, if supplied:
+  - `rtk node --check scripts/dock-relay.mjs && rtk node --check scripts/dock-relay-status.mjs && rtk node --check scripts/dock-relay-json-rpc-client.mjs && rtk node --check scripts/dock-relay-phase5.test.mjs` passed
+  - `rtk node --test scripts/dock-relay-phase5.test.mjs` passed 20 tests with 0 failures
+  - `rtk node --check scripts/codex-dock-host-service.mjs && rtk node --check scripts/codex-dock-host-service.test.mjs && rtk npm run test:host-service` passed 9 host-service tests with 0 failures
+  - `rtk npm run test:relay` passed 47 relay tests with 0 failures
+  - `rtk npm test` passed 47 relay tests and 9 host-service tests with 0 failures
+  - `rtk git diff --check` passed
+  - `.env` mtime remained `1779986258`
+- Agents/lenses run: Ampere performed read-only relay Phase 2 review; Ohm performed read-only host-service Phase 1B/thermonuclear follow-up review; parent synthesis ran implementation-audit checks against the plan's Phase 1/Phase 2 exit evidence
+- Code areas read: relay `/readyz`/`/healthz`/`/statusz`, live `thread/resume`, upstream recovery, upstream JSON-RPC error handling, downstream parse-error handling, relay status snapshot, `Makefile` status target, host-service CLI parser, and focused test coverage
+- Findings added and resolved during audit:
+  - real relay `thread/resume` did not enforce `excludeTurns: true`; fixed by normalizing live resume params and adding focused tests;
+  - upstream JSON-RPC `-32001` overload collapsed to generic `-32000`; fixed with `JsonRpcUpstreamError`, retryable overload data, and tests;
+  - `/readyz` and `/healthz` had identical static-config bodies; fixed so `/readyz` is process-ready and `/healthz` carries static config;
+  - `rtk make dock-relay-status` only printed `/readyz`; fixed to print `/statusz` too;
+  - malformed downstream JSON did not update status; fixed and tested;
+  - pending upstream request rejection was implemented but unproven; added direct proof;
+  - transcription status included extra language/delay fields and always said enabled; narrowed to enabled/model/endpoint host/key-present/last-error;
+  - host-service unknown CLI flags were silently accepted; fixed with an explicit boolean-option allowlist and focused tests.
+- Findings carried forward at this pass:
+  - real launchd/systemd `install`, `start`, `stop`, `restart`, `status`, `logs`, and `doctor` were still unimplemented at Pass 4 and became the next Phase 1B/Phase 3 work;
+  - install-scoped token creation/reuse with restrictive permissions was still unimplemented at Pass 4 and became part of the next lifecycle slice;
+  - generated two-host app config and app consumption remain unimplemented;
+  - final `Amir-M5` plus `home` behavior proof remains unclaimed;
+  - physical-device checks are deferred manual QA for Amir under the parent dock rule.
+- Verdict: approve for this Phase 1A/Phase 2 slice only
+- Next audit focus: service lifecycle adapters, install-scoped token writer, real redacted status/log/doctor surfaces, generated two-host app config, and Makefile wrapper replacement
+
+### Pass 5 - 2026-05-28T20:49:09Z
+
+- Mode: implementation-audit
+- Scope: Phase 1B/Phase 3A host-service lifecycle core behind injected launchd/systemd runners
+- Baseline reviewed: host-service lifecycle implementation, runtime helper, focused host-service tests, implementation log, child plan Phase 1/3 notes, parent physical-device deferral rule, and read-only subagent findings
+- Test/CI context accepted, if supplied:
+  - `rtk node --check scripts/codex-dock-host-service-runtime.mjs` passed
+  - `rtk node --check scripts/codex-dock-host-service.mjs` passed
+  - `rtk node --check scripts/codex-dock-host-service.test.mjs` passed
+  - `rtk npm run test:host-service` passed 17 tests with 0 failures
+  - `rtk npm test` passed 47 relay tests and 17 host-service tests with 0 failures
+  - `rtk git diff --check` passed
+  - `.env` mtime remained `1779986258`
+- Agents/lenses run: Boyle performed read-only lifecycle-scope review; Mendel performed read-only redaction/security review; parent synthesis ran implementation-audit checks against Phase 1B/Phase 3A exit evidence
+- Code areas read: token creation/reuse, service file writes, launchd/systemd command adapters, status health probes, logs/doctor output, redaction helper, child-process environment, CLI option parsing, and focused fake-runner coverage
+- Findings added and resolved during audit:
+  - systemd install initially used `enable --now`, which made install start services; fixed so install only links/reloads/enables and start owns process startup;
+  - systemd stop initially stopped both units in one command without explicit relay-before-raw order; fixed and tested;
+  - host-service output put safe token metadata under a `token` key that the redactor hid; fixed by using `appServerAuth.created`;
+  - JSON-RPC payload-looking log lines under `params`, `body`, `payload`, `request`, and `response` could leak prompt/transcript text; fixed with payload-container redaction and tests;
+  - cookie/session/header values could leak through status/log/doctor output; fixed with key/string redaction and tests;
+  - service-manager failure errors could print raw command args; fixed with redacted error construction and tests;
+  - service-manager child processes inherited parent env by default; fixed with minimal `HOME`/`PATH`/`LANG` env and tests;
+  - script CLI `--env-file` conflicted with Node 25; fixed by renaming the host-service option to `--service-env-file` while keeping rendered relay `--env-file` args.
+- Findings carried forward:
+  - live launchd/systemd proof is still unclaimed;
+  - `Makefile` wrapper replacement is still unimplemented;
+  - generated two-host app config and app consumption remain unimplemented;
+  - final `Amir-M5` plus `home` behavior proof remains unclaimed;
+  - physical-device checks are deferred manual QA for Amir under the parent dock rule.
+- Verdict: approve for Phase 1B/Phase 3A fake-runner lifecycle core only
+- Next audit focus: actual `Makefile` wrapper cutover, live Mac launchd proof, live Linux systemd proof on `home`, README runbook, generated two-host app config, and app multi-host smoke
+
+### Pass 6 - 2026-05-28T21:07:40Z
+
+- Mode: implementation-audit
+- Scope: Phase 3B Makefile wrapper cutover and live Mac launchd proof
+- Baseline reviewed: `Makefile`, host-service script/env/runtime/test modules, generated launchd files, live host-service status output, implementation log, parent physical-device deferral rule, and read-only subagent findings
+- Test/CI context accepted, if supplied:
+  - `rtk node --check scripts/codex-dock-host-service-env.mjs` passed
+  - `rtk node --check scripts/codex-dock-host-service-runtime.mjs` passed
+  - `rtk node --check scripts/codex-dock-host-service.mjs` passed
+  - `rtk node --check scripts/codex-dock-host-service.test.mjs` passed
+  - `rtk npm run test:host-service` passed 20 tests with 0 failures
+  - `rtk npm run test:relay` passed 47 tests with 0 failures
+  - `rtk make services` passed
+  - `rtk make app-server-status` passed with bundle `status: ready`
+  - `rtk make dock-relay-status` passed with bundle `status: ready`
+  - `rtk make host-service-doctor` passed with `status: passed`
+  - `rtk npm test` passed 47 relay tests and 20 host-service tests with 0 failures
+  - `rtk make app SIM='iPhone 17'` failed before build/launch only because the simulator name matched two devices
+  - `rtk make app SIM='BAD95C8E-3E57-4818-9B90-E4ED22593B4B'` passed on the accepted non-Pro simulator
+  - `rtk git diff --check` passed
+  - `.env` mtime remained `1779986258`
+- Agents/lenses run: Peirce performed read-only Makefile wrapper cutover review; Gibbs performed read-only live-proof risk review; parent synthesis ran implementation-audit checks against Phase 3 exit evidence.
+- Findings added and resolved during audit:
+  - `status` and `doctor` could previously return success for nonready state; fixed and tested before cutover.
+  - Host-service install previously passed a relay env file path without owning generated env file writes; fixed with `scripts/codex-dock-host-service-env.mjs`, generated `.codex-dock/service.env`, and non-secret `.codex-dock/host.env`.
+  - macOS `start` could force activity instead of reusing loaded services; fixed so running launchd services are reused.
+  - Relay status counted HTTP `200` `/statusz` without checking raw-history health; fixed with `snapshotOK` and `historyOK`.
+  - Status only proved loopback relay health; fixed so non-simulator profiles also check app-facing relay `/readyz`.
+  - Live launchd bootstrap returned exit `5` during old-service cutover; fixed with a retry in the host-service wrapper.
+  - A loaded but failing launchd service was being treated as reusable; fixed so install reuses only expected-path services with `state = running`.
+  - `codex app-server` rejects `ws://IP:PORT/` for `--listen`; fixed so raw app-server listen URLs render as `ws://IP:PORT`.
+  - The Makefile target names still implied separate service ownership; fixed by making `app-server` and `dock-relay` explicit compatibility aliases for the host service bundle and updating help text.
+- Findings carried forward:
+  - live Linux systemd proof on `home` is still unclaimed;
+  - generated two-host app config and app consumption remain unimplemented;
+  - README runbook rewrite remains unimplemented;
+  - final `Amir-M5` plus `home` app behavior proof remains unclaimed;
+  - physical-device checks are deferred manual QA for Amir under the parent dock rule.
+- Verdict: approve for Phase 3B Makefile wrapper and live Mac launchd proof only
+- Next audit focus: live Linux systemd proof on `home`, generated two-host app config, README runbook, and app multi-host smoke
+
+### Pass 7 - 2026-05-28T21:20:03Z
+
+- Mode: implementation-audit
+- Scope: Phase 4A generated two-host env and simulator app consumption
+- Baseline reviewed: `Makefile`, `scripts/codex-dock-host-service-env.mjs`, `scripts/codex-dock-host-service.test.mjs`, `DockHostConfiguration.swift`, `HostRegistry.swift`, `DockConfigurationTests.swift`, generated `.codex-dock/host.env`, simulator host-registry logs, implementation log, parent physical-device deferral rule, and read-only subagent findings
+- Test/CI context accepted, if supplied:
+  - `rtk node --check scripts/codex-dock-host-service-env.mjs && rtk node --check scripts/codex-dock-host-service.mjs` passed
+  - `rtk npm run test:host-service` passed 21 tests with 0 failures
+  - `rtk swift test --filter DockConfigurationTests` passed 18 tests with 0 failures
+  - `rtk make -n app SIM=BAD95C8E-3E57-4818-9B90-E4ED22593B4B CODEX_DOCK_HOSTS='Amir-M5,home' CODEX_DOCK_HOST_HOME_WS='ws://100.66.11.7:4510'` passed as a command-expansion proof
+  - `rtk make app SIM=BAD95C8E-3E57-4818-9B90-E4ED22593B4B CODEX_DOCK_HOSTS='Amir-M5,home' CODEX_DOCK_HOST_HOME_WS='ws://100.66.11.7:4510'` passed
+  - Generated `.codex-dock/host.env` contained `Amir-M5` and `home`, both `AUTH_MODE=none`, and no forbidden secret-shaped keys
+  - Simulator logs showed `host registry loaded from environment hosts=2` with `bearer_configured=false` for both hosts
+  - `rtk swift test --filter DockStoreTests` passed 19 tests with 0 failures
+  - `rtk make app-server-status && rtk make dock-relay-status` passed with bundle `status: ready`
+  - `rtk npm test` passed 47 relay tests and 21 host-service tests with 0 failures
+  - `rtk swift test` passed 187 tests with 5 skipped and 0 failures
+  - `rtk git diff --check` passed
+  - `.env` mtime remained `1779986258`
+- Findings added and resolved during audit:
+  - Generated app config was still partly a single-host artifact. Fixed by making `.codex-dock/host.env` copy all app-safe host keys from service env and preserving the existing env-first Swift bootstrap path.
+  - Simulator launch still hard-coded per-host env values from Make variables. Fixed so `rtk make app` reads only `.codex-dock/host.env` and exports safe `CODEX_DOCK_*` keys as `SIMCTL_CHILD_CODEX_DOCK_*`.
+  - Host env generation could have copied unrelated non-secret-but-not-app keys. Fixed with an explicit app-safe whitelist instead of copying every non-secret key.
+  - `HostRegistry` accepted duplicate host IDs and ignored generated `AUTH_MODE`. Fixed with duplicate rejection, `AUTH_MODE=none|bearer` parsing, nil-token behavior for `none`, and explicit token requirement for `bearer`.
+- Findings carried forward:
+  - live Linux systemd proof on `home` remains unclaimed;
+  - README runbook rewrite remains unimplemented;
+  - final `Amir-M5` plus `home` app behavior proof remains unclaimed because `home` is configured in app env but the real `home` service is not running yet;
+  - physical behavior checks are deferred manual QA for Amir.
+- Verdict: approve for Phase 4A generated env and simulator app-consumption proof only
+- Next audit focus: live Linux systemd proof on `home`, README runbook, and final app multi-host smoke
+
+### Pass 8 - 2026-05-28T21:31:28Z
+
+- Mode: implementation-audit
+- Scope: Phase 3C live Linux systemd proof on `home`
+- Baseline reviewed: child plan Phase 3/4 status, implementation log Phase 3C evidence, `Makefile`, host-service script/env/runtime/test modules, remote `home` status/doctor output, generated `home` `.codex-dock/host.env`, parent physical-device deferral rule, and read-only subagent findings
+- Test/CI context accepted, if supplied:
+  - remote deploy hygiene passed: `/home/aelaguiz/workspace/codex-client` had no `.env`, no `env.bak`, no `.codex-dock/`, and host-service files were present
+  - remote toolchain readback: Node `v18.19.1`, npm `9.2.0`, rtk `0.37.2`, `codex-cli 0.135.0-alpha.2`
+  - `rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk npm ci'` passed with 1 package installed and 0 vulnerabilities
+  - remote `rtk node --check` passed for host-service scripts
+  - remote `rtk npm run test:host-service` passed 21 tests with 0 failures
+  - remote `rtk make services HOST_SERVICE_PLATFORM=linux ... CODEX_DOCK_REAL_HOST_ID=home ... CODEX_DOCK_HOST_HOME_WS=ws://100.66.11.7:4510 ...` passed
+  - remote `host-service-status` passed with `status: ready`, `serviceManager: systemd-user`, raw app-server active, dock relay active, raw `/readyz` OK, relay `/readyz` OK, relay `/statusz` OK, and app-facing relay `/readyz` OK
+  - remote `host-service-doctor` passed with `status: passed` and `problems: []`
+  - local Mac `curl -fsS --max-time 5 http://100.66.11.7:4510/readyz` returned `{"ok":true,"service":"codex-dock-relay","auth":"none"}`
+  - local Mac `/statusz` proof showed host id `home`, history health `ok: true`, `phoneAuth: none`, `historyCredentialConfigured: true`, and transcription `enabled: false` / `keyPresent: false`
+  - generated `home` `.codex-dock/host.env` contained only non-secret `home` host config and no `AMIR_M5` or secret-shaped keys
+  - systemd readback showed `codex-dock-app-server.service` and `codex-dock-relay.service` active/running
+  - local `rtk npm test` passed 47 relay tests and 21 host-service tests with 0 failures
+  - local simulator app launch loaded `Amir-M5` plus `home` from generated env with `bearer_configured=false`
+  - `.env` mtime remained `1779986258`
+- Findings added and resolved during audit:
+  - Linux `systemctl --user link` was not idempotent when linked unit files already existed; fixed by using `systemctl --user link --force`.
+  - The service-manager child env was too strict for `systemctl --user`; fixed by preserving only non-secret `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`.
+  - Home-only generated app config still carried unlisted host keys; fixed so host-specific app env keys are emitted only for IDs listed in `CODEX_DOCK_HOSTS`.
+- Findings carried forward:
+  - README runbook rewrite remains unimplemented.
+  - final `Amir-M5` plus `home` app behavior proof remains unclaimed.
+  - Realtime transcription on `home` remains unclaimed because no `OPENAI_API_KEY` was copied to `home`; relay status correctly reports it disabled.
+  - physical behavior checks are deferred manual QA for Amir.
+- Verdict: approve for Phase 3C live Linux systemd proof on `home`
+- Next audit focus: README runbook and final app multi-host smoke
+
+### Pass 9 - 2026-05-28T21:38:22Z
+
+- Mode: implementation-audit
+- Scope: Phase 6 README runbook and final non-physical multi-host app smoke
+- Baseline reviewed: child plan Phase 6 exit evidence, implementation log Phase 6 evidence, `README.md`, parent physical-device deferral rule, generated `.codex-dock/host.env`, simulator app logs, Mobile MCP element readbacks, screenshots under `/tmp/codex-client/20260528T213700Z/`, Mac status output, and `home` relay `/readyz`/`/statusz`
+- Test/CI context accepted, if supplied:
+  - `rtk make app SIM=BAD95C8E-3E57-4818-9B90-E4ED22593B4B CODEX_DOCK_HOSTS='Amir-M5,home' CODEX_DOCK_HOST_HOME_WS='ws://100.66.11.7:4510'` passed
+  - generated `.codex-dock/host.env` contained `Amir-M5` and `home`, both `AUTH_MODE=none`, and no forbidden secret-shaped keys
+  - simulator logs showed `host registry loaded from environment hosts=2` and `bearer_configured=false` for both hosts
+  - Mobile MCP showed both host cards, `Amir-M5` rows visible, and `Home` source-specific partial status against `ws://100.66.11.7:4510`
+  - `rtk make app ... CODEX_DOCK_HOST_HOME_WS='ws://127.0.0.1:9'` passed for deliberate one-host failure proof
+  - Mobile MCP showed `Partial: Home: App-server disconnected: Could not connect to the server.`, explicit `Home Dock load failed` / `Home Agents load failed`, and preserved `Amir-M5 / main` rows
+  - final restore launch pointed `home` back to `ws://100.66.11.7:4510`
+  - `rtk make app-server-status && rtk make dock-relay-status` passed with Mac bundle `status: ready`
+  - Mac `curl` proof for `http://100.66.11.7:4510/readyz` and `/statusz` passed
+  - `rtk npm test` passed 47 relay tests and 21 host-service tests with 0 failures
+  - `rtk swift test --filter DockConfigurationTests` passed 18 tests with 0 failures
+  - `rtk git diff --check` passed
+  - `.env` mtime remained `1779986258`
+- Findings added:
+  - none.
+- Findings resolved:
+  - README runbook now matches the implemented host-service wrapper, generated env split, exact Mac/`home` commands, and physical-device deferral policy.
+  - Final non-physical two-host app behavior proof is implemented: both configured hosts load in the simulator, and one-host failure is visible without hiding the healthy host.
+- Findings carried forward:
+  - physical behavior checks are deferred manual QA for Amir under the parent dock rule.
+  - Realtime transcription on `home` remains unclaimed because no `OPENAI_API_KEY` is configured there; relay status correctly reports it disabled.
+- Verdict: approve for Phase 6 README and final non-physical multi-host app smoke
+- Next audit focus: no agent-side Multi-host implementation blocker remains; keep the parent physical QA checklist current when Amir tests physical devices.

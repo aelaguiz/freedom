@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -14,16 +13,49 @@ import {
   startBonjourAdvertisement,
 } from "./dock-relay-bonjour.mjs";
 import {
-  DEFAULT_TRANSCRIPTION_ENDPOINT,
-  DEFAULT_TRANSCRIPTION_MODEL,
-  decodedAudioTranscribeParams,
-  transcribeAudio,
-} from "./dock-relay-transcription.mjs";
+  defaultRelayLogger,
+  installRelayFatalHandlers,
+} from "./dock-relay-logger.mjs";
+import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
+import {
+  DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
+  DEFAULT_REALTIME_TRANSCRIPTION_ENDPOINT,
+  DEFAULT_REALTIME_TRANSCRIPTION_LANGUAGE,
+  DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+  RealtimeTranscriptionManager,
+} from "./dock-relay-realtime-transcription.mjs";
+import {
+  checkRawAppServerHealth,
+  classifyRelayRequestError,
+  createRelayStatusTracker,
+} from "./dock-relay-status.mjs";
+import {
+  aggregateLoadedList,
+  aggregateThreadList,
+  aggregateThreadRead,
+  archiveThread,
+  attentionFlagsForServerRequest,
+  collectLiveRows,
+  endpointForThread,
+  initializeClient,
+  listThreadTurns,
+  mergeActiveFlags,
+  mergeThreadListRows,
+  parseLimit,
+  pendingRequestsForActiveThread,
+  preferThread,
+  sanitizeRelayFields,
+  shouldCollectLiveRowsForThreadList,
+  statusPriority,
+  unarchiveThread,
+} from "./dock-relay-thread-data.mjs";
 import { threadMatchesSourceKinds } from "./dock-relay-source-filter.mjs";
 
-const DEFAULT_TIMEOUT_MS = 5_000;
 const RELAY_VERSION = "0.1.0";
 const DEFAULT_PHONE_AUTH = "none";
+const UPSTREAM_RECONNECT_ATTEMPTS = 2;
+const UPSTREAM_RECONNECT_DELAY_MS = 100;
+const UPSTREAM_RECONNECT_JITTER_MS = 25;
 
 function parseArgs(argv) {
   const result = {};
@@ -41,6 +73,10 @@ function parseArgs(argv) {
     index += 1;
   }
   return result;
+}
+
+function relayLogger(config) {
+  return config?.logger || defaultRelayLogger;
 }
 
 function readToken(path) {
@@ -94,11 +130,18 @@ function parsePhoneAuthMode(value) {
 }
 
 function jsonRpcError(id, code, message, data = undefined) {
-  const error = { code, message };
+  const error = {
+    code: Number.isInteger(code) ? code : -32000,
+    message,
+  };
   if (data !== undefined) {
     error.data = data;
   }
   return { jsonrpc: "2.0", id, error };
+}
+
+function jsonRpcErrorCode(error) {
+  return Number.isInteger(error?.code) ? error.code : -32000;
 }
 
 function jsonRpcResult(id, result) {
@@ -111,32 +154,27 @@ function sendJson(ws, value) {
   }
 }
 
+function isWebSocketOpen(ws) {
+  return ws?.readyState === WebSocket.OPEN;
+}
+
+function isSessionActive(session, downstreamWs, generation) {
+  return !session.closing
+    && session.generation === generation
+    && isWebSocketOpen(downstreamWs);
+}
+
+function throwIfSessionInactive(session, downstreamWs, generation) {
+  if (!isSessionActive(session, downstreamWs, generation)) {
+    throw new Error("downstream session closed");
+  }
+}
+
 function platformOs() {
   if (process.platform === "darwin") {
     return "macos";
   }
   return process.platform;
-}
-
-function statusPriority(thread) {
-  const status = thread?.status;
-  if (status?.type === "active") {
-    const flags = new Set(status.activeFlags || []);
-    if (flags.has("waitingOnApproval") || flags.has("waitingOnUserInput")) {
-      return 0;
-    }
-    return 1;
-  }
-  if (status?.type === "idle") {
-    return 2;
-  }
-  if (status?.type === "systemError") {
-    return 3;
-  }
-  if (status?.type === "notLoaded") {
-    return 5;
-  }
-  return 4;
 }
 
 function sleep(ms) {
@@ -145,586 +183,191 @@ function sleep(ms) {
   });
 }
 
-function attentionFlagsForServerRequest(message) {
-  switch (message?.method) {
-    case "item/commandExecution/requestApproval":
-    case "item/fileChange/requestApproval":
-    case "item/permissions/requestApproval":
-    case "applyPatchApproval":
-    case "execCommandApproval":
-      return ["waitingOnApproval"];
-    case "item/tool/requestUserInput":
-    case "mcpServer/elicitation/request":
-    case "item/tool/call":
-    case "account/chatgptAuthTokens/refresh":
-    case "attestation/generate":
-      return ["waitingOnUserInput"];
-    default:
-      return [];
-  }
-}
-
-function mergeActiveFlags(thread, additionalFlags) {
-  if (!additionalFlags.length) {
-    return thread;
-  }
-  const activeFlags = new Set(
-    thread?.status?.type === "active" ? thread.status.activeFlags || [] : [],
-  );
-  for (const flag of additionalFlags) {
-    activeFlags.add(flag);
-  }
+function liveResumeParams(params) {
   return {
-    ...thread,
-    status: {
-      type: "active",
-      activeFlags: [...activeFlags],
-    },
+    ...params,
+    excludeTurns: true,
   };
 }
 
-function rowTimestamp(thread) {
-  return Number(thread?.updatedAt ?? thread?.createdAt ?? 0);
-}
-
-function preferThread(candidate, existing) {
-  if (!existing) {
-    return candidate;
-  }
-  const candidatePriority = statusPriority(candidate);
-  const existingPriority = statusPriority(existing);
-  if (candidatePriority !== existingPriority) {
-    return candidatePriority < existingPriority ? candidate : existing;
-  }
-  return rowTimestamp(candidate) >= rowTimestamp(existing) ? candidate : existing;
-}
-
-function parseLimit(value, fallback) {
-  const number = Number(value);
-  if (!Number.isFinite(number) || number <= 0) {
-    return fallback;
-  }
-  return Math.floor(number);
-}
-
-function paginateStrings(values, params = {}) {
-  const sorted = [...values].sort();
-  const cursor = params.cursor;
-  let start = 0;
-  if (typeof cursor === "string" && cursor.length > 0) {
-    const cursorIndex = sorted.findIndex((value) => value === cursor);
-    start = cursorIndex >= 0 ? cursorIndex + 1 : sorted.findIndex((value) => value > cursor);
-    if (start < 0) {
-      start = sorted.length;
-    }
-  }
-  const limit = parseLimit(params.limit, sorted.length || 1);
-  const page = sorted.slice(start, start + limit);
-  const end = start + page.length;
-  return {
-    data: page,
-    nextCursor: end < sorted.length ? page[page.length - 1] : null,
-  };
-}
-
-function discoverLoopbackEndpoints() {
-  const ps = execFileSync("ps", ["-axo", "pid,command"], { encoding: "utf8" });
-  const endpoints = [];
-  for (const line of ps.split("\n")) {
-    const match = line.match(/^\s*(\d+)\s+.*codex app-server --listen (ws:\/\/127\.0\.0\.1:\d+)/);
-    if (match) {
-      endpoints.push({ pid: Number(match[1]), url: match[2] });
-    }
-  }
-  const byUrl = new Map();
-  for (const endpoint of endpoints) {
-    if (!byUrl.has(endpoint.url) || endpoint.pid < byUrl.get(endpoint.url).pid) {
-      byUrl.set(endpoint.url, endpoint);
-    }
-  }
-  return [...byUrl.values()].sort((lhs, rhs) => lhs.pid - rhs.pid);
-}
-
-class JsonRpcWebSocketClient {
-  constructor(
-    url,
-    {
-      bearerToken = null,
-      timeoutMs = DEFAULT_TIMEOUT_MS,
-      onNotification = null,
-      onRequest = null,
-    } = {},
-  ) {
-    this.url = url;
-    this.bearerToken = bearerToken;
-    this.timeoutMs = timeoutMs;
-    this.onNotification = onNotification;
-    this.onRequest = onRequest;
-    this.nextId = 1;
-    this.pending = new Map();
-    this.ws = null;
-  }
-
-  connect() {
-    if (this.ws) {
-      return Promise.resolve();
-    }
-    const headers = {};
-    if (this.bearerToken) {
-      headers.Authorization = `Bearer ${this.bearerToken}`;
-    }
-    return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.url, { headers });
-      const timer = setTimeout(() => {
-        reject(new Error(`timed out connecting to ${this.url}`));
-        ws.close();
-      }, this.timeoutMs);
-      ws.on("open", () => {
-        clearTimeout(timer);
-        this.ws = ws;
-        resolve();
-      });
-      ws.on("message", (data) => this.handleMessage(data));
-      ws.on("error", (error) => {
-        clearTimeout(timer);
-        this.rejectAll(error);
-        if (!this.ws) {
-          reject(error);
-        }
-      });
-      ws.on("close", () => {
-        this.rejectAll(new Error(`websocket closed: ${this.url}`));
-        this.ws = null;
-      });
-    });
-  }
-
-  handleMessage(data) {
-    let message;
-    try {
-      message = JSON.parse(data.toString());
-    } catch {
-      return;
-    }
-    if (message.id !== undefined && this.pending.has(String(message.id))) {
-      const pending = this.pending.get(String(message.id));
-      this.pending.delete(String(message.id));
-      clearTimeout(pending.timer);
-      if (message.error) {
-        pending.reject(new Error(`${pending.method}: ${JSON.stringify(message.error)}`));
-      } else {
-        pending.resolve(message.result);
-      }
-      return;
-    }
-
-    if (message.method && message.id !== undefined) {
-      this.onRequest?.(message);
-      return;
-    }
-
-    if (message.method) {
-      this.onNotification?.(message);
-    }
-  }
-
-  request(method, params = undefined) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error(`not connected: ${this.url}`));
-    }
-    const id = String(this.nextId);
-    this.nextId += 1;
-    const payload = { jsonrpc: "2.0", id, method };
-    if (params !== undefined) {
-      payload.params = params;
-    }
-    this.ws.send(JSON.stringify(payload));
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`timed out waiting for ${method} from ${this.url}`));
-      }, this.timeoutMs);
-      this.pending.set(id, { method, resolve, reject, timer });
-    });
-  }
-
-  notify(method, params = undefined) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    const payload = { jsonrpc: "2.0", method };
-    if (params !== undefined) {
-      payload.params = params;
-    }
-    this.ws.send(JSON.stringify(payload));
-  }
-
-  sendRaw(message) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return false;
-    }
-    this.ws.send(typeof message === "string" ? message : JSON.stringify(message));
-    return true;
-  }
-
-  close() {
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
-  }
-
-  rejectAll(error) {
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(error);
-    }
-    this.pending.clear();
-  }
-}
-
-async function withClient(url, options, operation) {
-  const client = new JsonRpcWebSocketClient(url, options);
-  await initializeClient(client);
-  try {
-    return await operation(client);
-  } finally {
-    client.close();
-  }
-}
-
-async function initializeClient(client) {
-  await client.connect();
-  await client.request("initialize", {
-    clientInfo: {
-      name: "codex_dock_relay",
-      title: "Codex Dock Relay",
-      version: RELAY_VERSION,
-    },
-    capabilities: {
-      experimentalApi: true,
-      requestAttestation: false,
-    },
-  });
-  client.notify("initialized");
-}
-
-async function readLoadedRows(endpoint) {
-  return withClient(endpoint.url, {}, async (client) => {
-    const loaded = await client.request("thread/loaded/list", { limit: 500 });
-    const results = await Promise.allSettled((loaded.data || []).map((threadId) => (
-      client.request("thread/read", {
-        threadId,
-        includeTurns: false,
-      })
-    )));
-    const rows = [];
-    for (let index = 0; index < results.length; index += 1) {
-      const result = results[index];
-      if (result.status === "rejected") {
-        console.error(
-          `dock-relay: failed to read ${loaded.data[index]} from ${endpoint.url}: ${result.reason?.message || result.reason}`,
-        );
-        continue;
-      }
-      if (result.value?.thread?.id) {
-        rows.push({ ...result.value.thread, dockRelaySource: endpoint });
-      }
-    }
-    return Promise.all(rows.map((row) => enrichRowAttention(row, endpoint)));
-  });
-}
-
-async function pendingRequestsForActiveThread(endpoint, threadId) {
-  const requests = [];
-  const client = new JsonRpcWebSocketClient(endpoint.url, {
-    bearerToken: endpoint.bearerToken || null,
-    onRequest: (message) => {
-      if (message?.params?.threadId === threadId) {
-        requests.push(message);
-      }
-    },
-  });
-  try {
-    await initializeClient(client);
-    await client.request("thread/resume", { threadId });
-    await sleep(100);
-    return requests;
-  } finally {
-    client.close();
-  }
-}
-
-async function enrichRowAttention(row, endpoint) {
-  if (row?.status?.type !== "active") {
-    return row;
-  }
-  const existingFlags = new Set(row.status.activeFlags || []);
-  if (existingFlags.has("waitingOnApproval") || existingFlags.has("waitingOnUserInput")) {
-    return row;
-  }
-
-  let requests;
-  try {
-    requests = await pendingRequestsForActiveThread(endpoint, row.id);
-  } catch (error) {
-    console.error(
-      `dock-relay: failed to inspect pending requests for ${row.id} from ${endpoint.url}: ${error.message || error}`,
-    );
-    return row;
-  }
-
-  const flags = requests.flatMap(attentionFlagsForServerRequest);
-  return mergeActiveFlags(row, flags);
-}
-
-async function collectLiveRows() {
-  const endpoints = discoverLoopbackEndpoints();
-  const results = await Promise.allSettled(endpoints.map(readLoadedRows));
-  const rowsById = new Map();
-  let failedEndpoints = 0;
-  for (let index = 0; index < results.length; index += 1) {
-    const result = results[index];
-    if (result.status === "rejected") {
-      failedEndpoints += 1;
-      console.error(
-        `dock-relay: failed to query ${endpoints[index].url}: ${result.reason?.message || result.reason}`,
-      );
-      continue;
-    }
-    for (const row of result.value) {
-      rowsById.set(row.id, preferThread(row, rowsById.get(row.id)));
-    }
-  }
-  return {
-    endpoints,
-    failedEndpoints,
-    rows: [...rowsById.values()],
-  };
-}
-
-async function readHistoryThreadList(config, params) {
-  return withClient(
-    config.historyUrl,
-    { bearerToken: config.historyBearerToken },
-    async (client) => client.request("thread/list", params),
-  );
-}
-
-async function readHistoryThread(config, params) {
-  return withClient(
-    config.historyUrl,
-    { bearerToken: config.historyBearerToken },
-    async (client) => client.request("thread/read", params),
-  );
-}
-
-async function readThreadFromEndpoint(endpoint, params) {
-  return withClient(
-    endpoint.url,
-    { bearerToken: endpoint.bearerToken || null },
-    async (client) => client.request("thread/read", params),
-  );
-}
-
-function sanitizeRelayFields(thread) {
-  if (!thread || typeof thread !== "object") {
-    return thread;
-  }
-  const { dockRelaySource, ...clean } = thread;
-  return clean;
-}
-
-function shouldCollectLiveRowsForThreadList(params = {}) {
-  return params.archived !== true;
-}
-
-function mergeThreadListRows(historyRows = [], liveRows = [], params = {}) {
-  const liveIds = new Set(liveRows.map((row) => row.id));
-  const merged = [];
-  for (const row of liveRows) {
-    merged.push(sanitizeRelayFields(row));
-  }
-  for (const row of historyRows) {
-    if (!liveIds.has(row.id)) {
-      merged.push(row);
-    }
-  }
-
-  merged.sort((lhs, rhs) => {
-    const timestampDelta = rowTimestamp(rhs) - rowTimestamp(lhs);
-    if (timestampDelta !== 0) {
-      return timestampDelta;
-    }
-    const statusDelta = statusPriority(lhs) - statusPriority(rhs);
-    if (statusDelta !== 0) {
-      return statusDelta;
-    }
-    return String(lhs.id || "").localeCompare(String(rhs.id || ""));
-  });
-
-  const limit = parseLimit(params.limit, merged.length || 1);
-  return merged.slice(0, limit);
-}
-
-async function aggregateThreadList(config, params = {}) {
-  if (!shouldCollectLiveRowsForThreadList(params)) {
-    const history = await readHistoryThreadList(config, params);
-    console.error(
-      `dock-relay: thread/list archived history=${history.data?.length || 0} live=0 returned=${history.data?.length || 0}`,
-    );
-    return history;
-  }
-
-  const [historyResult, liveResult] = await Promise.allSettled([
-    readHistoryThreadList(config, params),
-    collectLiveRows(),
-  ]);
-  if (historyResult.status === "rejected" && liveResult.status === "rejected") {
-    throw new Error(
-      `thread/list failed for history and live sources: history=${historyResult.reason?.message || historyResult.reason}; live=${liveResult.reason?.message || liveResult.reason}`,
-    );
-  }
-
-  const history = historyResult.status === "fulfilled"
-    ? historyResult.value
-    : { data: [] };
-  const live = liveResult.status === "fulfilled"
-    ? liveResult.value
-    : { endpoints: [], failedEndpoints: 1, rows: [] };
-
-  if (historyResult.status === "rejected") {
-    console.error(
-      `dock-relay: history thread/list failed: ${historyResult.reason?.message || historyResult.reason}`,
-    );
-  }
-  if (liveResult.status === "rejected") {
-    console.error(
-      `dock-relay: live thread/list failed: ${liveResult.reason?.message || liveResult.reason}`,
-    );
-  }
-
-  const filteredLiveRows = live.rows.filter((row) => (
-    threadMatchesSourceKinds(row, params.sourceKinds)
-  ));
-  const data = mergeThreadListRows(history.data || [], filteredLiveRows, params);
-  console.error(
-    `dock-relay: thread/list history=${history.data?.length || 0} live=${filteredLiveRows.length} endpoints=${live.endpoints.length} failed=${live.failedEndpoints} returned=${data.length}`,
-  );
-  return {
-    data,
-    nextCursor: null,
-    backwardsCursor: null,
-  };
-}
-
-async function aggregateLoadedList(params = {}) {
-  const live = await collectLiveRows();
-  const ids = live.rows.map((row) => row.id);
-  console.error(
-    `dock-relay: thread/loaded/list live=${ids.length} endpoints=${live.endpoints.length} failed=${live.failedEndpoints}`,
-  );
-  return paginateStrings(ids, params);
-}
-
-async function aggregateThreadRead(config, params = {}) {
-  if (!params.threadId) {
-    throw new Error("thread/read requires threadId");
-  }
-  const live = await collectLiveRows();
-  const liveRow = live.rows.find((row) => row.id === params.threadId);
-  if (liveRow) {
-    if (params.includeTurns) {
-      return readThreadFromEndpoint(liveRow.dockRelaySource, params);
-    }
-    return { thread: sanitizeRelayFields(liveRow) };
-  }
-  return readHistoryThread(config, params);
-}
-
-async function listThreadTurns(config, params = {}) {
-  if (!params.threadId) {
-    throw new Error("thread/turns/list requires threadId");
-  }
-  const endpoint = await endpointForThread(config, params.threadId);
-  return withClient(
-    endpoint.url,
-    { bearerToken: endpoint.bearerToken || null },
-    async (client) => client.request("thread/turns/list", params),
-  );
-}
-
-async function endpointForThread(config, threadId) {
-  const live = await collectLiveRows();
-  const liveRow = live.rows.find((row) => row.id === threadId);
-  if (liveRow?.dockRelaySource) {
-    return liveRow.dockRelaySource;
-  }
-  return {
-    url: config.historyUrl,
-    bearerToken: config.historyBearerToken,
-  };
-}
-
-async function archiveThread(config, params = {}) {
-  if (!params.threadId) {
-    throw new Error("thread/archive requires threadId");
-  }
-  const endpoint = await endpointForThread(config, params.threadId);
-  return withClient(
-    endpoint.url,
-    { bearerToken: endpoint.bearerToken || null },
-    async (client) => client.request("thread/archive", params),
-  );
-}
-
-async function unarchiveThread(config, params = {}) {
-  if (!params.threadId) {
-    throw new Error("thread/unarchive requires threadId");
-  }
-  return withClient(
-    config.historyUrl,
-    { bearerToken: config.historyBearerToken },
-    async (client) => client.request("thread/unarchive", params),
-  );
+function upstreamReconnectDelayMs(attempt) {
+  const exponentialDelay = UPSTREAM_RECONNECT_DELAY_MS * (2 ** Math.max(0, attempt - 1));
+  const jitter = Math.floor(Math.random() * (UPSTREAM_RECONNECT_JITTER_MS + 1));
+  return exponentialDelay + jitter;
 }
 
 async function resumeThread(config, params = {}, session, downstreamWs) {
   if (!params.threadId) {
     throw new Error("thread/resume requires threadId");
   }
+  const resumeParams = liveResumeParams(params);
 
+  session.generation += 1;
+  const generation = session.generation;
+  session.retryTask = null;
   session.upstream?.close();
   session.upstream = null;
 
-  const live = await collectLiveRows();
-  const liveRow = live.rows.find((row) => row.id === params.threadId);
+  const logger = relayLogger(config);
+  const live = await collectLiveRows(logger);
+  throwIfSessionInactive(session, downstreamWs, generation);
+  const liveRow = live.rows.find((row) => row.id === resumeParams.threadId);
   const endpoint = liveRow?.dockRelaySource || {
     url: config.historyUrl,
     bearerToken: config.historyBearerToken,
   };
-  const client = new JsonRpcWebSocketClient(endpoint.url, {
-    bearerToken: endpoint.bearerToken || null,
-    onNotification: (message) => sendJson(downstreamWs, message),
-    onRequest: (message) => sendJson(downstreamWs, message),
-  });
+  const client = makeSessionUpstreamClient(config, endpoint, session, downstreamWs, generation);
 
   try {
     await initializeClient(client);
-    const result = await client.request("thread/resume", params);
+    throwIfSessionInactive(session, downstreamWs, generation);
+    const result = await client.request("thread/resume", resumeParams);
+    throwIfSessionInactive(session, downstreamWs, generation);
     session.upstream = client;
-    console.error(
-      `dock-relay: thread/resume thread=${params.threadId} upstream=${endpoint.url}`,
-    );
+    session.resumeParams = { ...resumeParams };
+    session.endpoint = endpoint;
+    logger.info("thread_resume.succeeded", {
+      subsystem: "live-upstream",
+      hostId: config.hostId,
+      threadId: resumeParams.threadId,
+      endpointUrl: endpoint.url,
+    });
     return result;
   } catch (error) {
     client.close();
+    logger.warn("thread_resume.failed", {
+      threadId: params.threadId,
+      endpointUrl: endpoint.url,
+      error,
+    });
+    config.statusTracker?.recordUpstreamError(error, {
+      subsystem: "live-upstream",
+      threadId: params.threadId,
+      endpointUrl: endpoint.url,
+    });
     throw error;
   }
 }
 
+function makeSessionUpstreamClient(config, endpoint, session, downstreamWs, generation) {
+  let client;
+  client = new JsonRpcWebSocketClient(endpoint.url, {
+    bearerToken: endpoint.bearerToken || null,
+    logger: relayLogger(config),
+    onNotification: (message) => {
+      if (isSessionActive(session, downstreamWs, generation)) {
+        sendJson(downstreamWs, message);
+      }
+    },
+    onRequest: (message) => {
+      if (isSessionActive(session, downstreamWs, generation)) {
+        sendJson(downstreamWs, message);
+      }
+    },
+    onClose: () => {
+      handleSessionUpstreamClose(config, session, downstreamWs, client);
+    },
+  });
+  return client;
+}
+
+function handleSessionUpstreamClose(config, session, downstreamWs, closedClient) {
+  if (session.closing || session.upstream !== closedClient) {
+    return;
+  }
+  session.upstream = null;
+  if (!isWebSocketOpen(downstreamWs)) {
+    return;
+  }
+  if (!session.endpoint || !session.resumeParams?.threadId) {
+    config.statusTracker?.recordUpstreamError(new Error("upstream closed"), {
+      subsystem: "live-upstream",
+    });
+    downstreamWs.close(1011, "upstream closed");
+    return;
+  }
+  if (session.retryTask) {
+    return;
+  }
+  session.retryTask = recoverSessionUpstream(config, session, downstreamWs, session.generation);
+}
+
+async function recoverSessionUpstream(config, session, downstreamWs, generation) {
+  const endpoint = session.endpoint;
+  const resumeParams = session.resumeParams;
+  let lastError = null;
+  config.statusTracker?.recordReconnect({
+    active: true,
+    attempts: 0,
+  });
+
+  for (let attempt = 1; attempt <= UPSTREAM_RECONNECT_ATTEMPTS; attempt += 1) {
+    if (session.closing || session.generation !== generation || !isWebSocketOpen(downstreamWs)) {
+      session.retryTask = null;
+      config.statusTracker?.recordReconnect({
+        active: false,
+        attempts: attempt - 1,
+      });
+      return;
+    }
+
+    const client = makeSessionUpstreamClient(config, endpoint, session, downstreamWs, generation);
+    try {
+      await initializeClient(client);
+      await client.request("thread/resume", resumeParams);
+      if (!isSessionActive(session, downstreamWs, generation)) {
+        client.close();
+        session.retryTask = null;
+        return;
+      }
+      session.upstream = client;
+      session.retryTask = null;
+      config.statusTracker?.recordReconnect({
+        active: false,
+        attempts: attempt,
+      });
+      relayLogger(config).info("upstream.recovery_succeeded", {
+        threadId: resumeParams.threadId,
+        endpointUrl: endpoint.url,
+        attempt,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      config.statusTracker?.recordUpstreamError(error, {
+        subsystem: "live-upstream",
+        threadId: resumeParams.threadId,
+        endpointUrl: endpoint.url,
+        attempt,
+      });
+      client.close();
+      const delayMs = upstreamReconnectDelayMs(attempt);
+      config.statusTracker?.recordReconnect({
+        active: true,
+        attempts: attempt,
+        nextRetryAt: new Date(Date.now() + delayMs).toISOString(),
+      });
+      await sleep(delayMs);
+    }
+  }
+
+  session.retryTask = null;
+  config.statusTracker?.recordReconnect({
+    active: false,
+    attempts: UPSTREAM_RECONNECT_ATTEMPTS,
+  });
+  relayLogger(config).error("upstream.recovery_failed", {
+    threadId: resumeParams.threadId,
+    endpointUrl: endpoint.url,
+    error: lastError,
+  });
+  if (!session.closing && session.generation === generation && isWebSocketOpen(downstreamWs)) {
+    downstreamWs.close(1011, "upstream recovery failed");
+  }
+}
+
 async function forwardToActiveUpstream(session, method, params = {}) {
-  if (!session.upstream) {
+  if (!session.upstream?.isOpen()) {
     throw new Error(`${method} requires thread/resume on this connection first`);
   }
   return session.upstream.request(method, params);
@@ -742,7 +385,7 @@ async function handleRequest(config, method, params, session, downstreamWs) {
     case "thread/list":
       return aggregateThreadList(config, params || {});
     case "thread/loaded/list":
-      return aggregateLoadedList(params || {});
+      return aggregateLoadedList(params || {}, relayLogger(config));
     case "thread/read":
       return aggregateThreadRead(config, params || {});
     case "thread/turns/list":
@@ -753,8 +396,14 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       return archiveThread(config, params || {});
     case "thread/unarchive":
       return unarchiveThread(config, params || {});
-    case "audio/transcribe":
-      return transcribeAudio(config, params || {});
+    case "audio/transcription/start":
+      return session.realtimeTranscription.start(params || {});
+    case "audio/transcription/append":
+      return session.realtimeTranscription.append(params || {});
+    case "audio/transcription/commit":
+      return session.realtimeTranscription.commit(params || {});
+    case "audio/transcription/cancel":
+      return session.realtimeTranscription.cancel(params || {});
     case "turn/start":
     case "turn/steer":
     case "turn/interrupt":
@@ -779,20 +428,96 @@ function isPhoneRequestAuthorized(request, config) {
 }
 
 function startServer(config) {
+  config.logger = relayLogger(config);
+  const logger = config.logger;
   config.version = config.version || RELAY_VERSION;
+  config.hostId = config.hostId || process.env.CODEX_DOCK_REAL_HOST_ID || os.hostname();
+  config.hostName = config.hostName || process.env.CODEX_DOCK_REAL_HOST_NAME || config.hostId;
+  config.openAIRealtimeTranscriptionModel = config.openAIRealtimeTranscriptionModel
+    || DEFAULT_REALTIME_TRANSCRIPTION_MODEL;
+  config.openAIRealtimeTranscriptionEndpoint = config.openAIRealtimeTranscriptionEndpoint
+    || DEFAULT_REALTIME_TRANSCRIPTION_ENDPOINT;
+  config.realtimeTranscriptionLanguage = config.realtimeTranscriptionLanguage
+    || DEFAULT_REALTIME_TRANSCRIPTION_LANGUAGE;
+  config.realtimeTranscriptionDelay = config.realtimeTranscriptionDelay
+    || DEFAULT_REALTIME_TRANSCRIPTION_DELAY;
+  config.statusTracker = config.statusTracker || createRelayStatusTracker();
   config.phoneAuth = parsePhoneAuthMode(config.phoneAuth || DEFAULT_PHONE_AUTH);
   if (config.phoneAuth === "bearer" && !config.relayBearerToken) {
     throw new Error("relayBearerToken is required when phoneAuth is bearer");
   }
+  logger.info("relay.starting", {
+    subsystem: "relay",
+    hostId: config.hostId,
+    listenHost: config.listenHost,
+    port: config.port,
+    historyUrl: config.historyUrl,
+    phoneAuth: config.phoneAuth,
+    advertiseBonjour: config.advertiseBonjour !== false,
+  });
+
+  const sessions = new Set();
+  const downstreamSockets = new Set();
+
+  async function writeStatusResponse(response) {
+    await checkRawAppServerHealth(config, config.statusTracker);
+    try {
+      const live = await collectLiveRows(logger);
+      config.statusTracker.recordLiveDiscovery({
+        status: "up",
+        ok: true,
+        endpoints: live.endpoints.length,
+        failedEndpoints: live.failedEndpoints,
+        rows: live.rows.length,
+      });
+    } catch (error) {
+      config.statusTracker.recordLiveDiscovery({
+        status: "down",
+        ok: false,
+        error,
+      });
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(config.statusTracker.snapshot(config, {
+      downstreamActive: downstreamSockets.size,
+      upstreamActive: [...sessions].filter((session) => session.upstream?.isOpen()).length,
+    })));
+  }
 
   const server = http.createServer((request, response) => {
-    if (request.url === "/readyz" || request.url === "/healthz") {
+    if (request.url === "/readyz") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({
         ok: true,
         service: "codex-dock-relay",
         auth: config.phoneAuth,
       }));
+      return;
+    }
+    if (request.url === "/healthz") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        ok: true,
+        service: "codex-dock-relay",
+        auth: config.phoneAuth,
+        staticConfig: {
+          ok: true,
+          historyConfigured: Boolean(config.historyUrl),
+          transcriptionConfigured: Boolean(config.openAIRealtimeTranscriptionModel),
+        },
+      }));
+      return;
+    }
+    if (request.url === "/statusz") {
+      writeStatusResponse(response).catch((error) => {
+        logger.error("statusz.failed", { error });
+        response.writeHead(500, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          ok: false,
+          service: "codex-dock-relay",
+          error: "status unavailable",
+        }));
+      });
       return;
     }
     response.writeHead(404, { "content-type": "text/plain" });
@@ -803,6 +528,10 @@ function startServer(config) {
 
   server.on("upgrade", (request, socket, head) => {
     if (!isPhoneRequestAuthorized(request, config)) {
+      logger.warn("downstream.unauthorized", {
+        remoteAddress: socket.remoteAddress,
+        phoneAuth: config.phoneAuth,
+      });
       socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return;
@@ -812,44 +541,128 @@ function startServer(config) {
     });
   });
 
-  wss.on("connection", (ws) => {
-    const session = { upstream: null };
+  wss.on("connection", (ws, request) => {
+    downstreamSockets.add(ws);
+    logger.info("downstream.connected", {
+      remoteAddress: request?.socket?.remoteAddress,
+      activeConnections: downstreamSockets.size,
+    });
+    const session = {
+      upstream: null,
+      resumeParams: null,
+      endpoint: null,
+      retryTask: null,
+      closing: false,
+      generation: 0,
+      realtimeTranscription: null,
+    };
+    sessions.add(session);
+    session.realtimeTranscription = new RealtimeTranscriptionManager(config, {
+      sendNotification: (method, params) => {
+        sendJson(ws, { jsonrpc: "2.0", method, params });
+      },
+      logger,
+    });
 
     ws.on("close", () => {
+      downstreamSockets.delete(ws);
+      sessions.delete(session);
+      session.closing = true;
+      session.realtimeTranscription?.closeAll("downstream_closed");
       session.upstream?.close();
       session.upstream = null;
+      logger.info("downstream.closed", {
+        activeConnections: downstreamSockets.size,
+      });
     });
 
     ws.on("message", async (data) => {
+      const requestStartedAt = Date.now();
       let message;
       try {
         message = JSON.parse(data.toString());
       } catch {
+        const parseError = Object.assign(new Error("parse error"), { code: -32700 });
+        config.statusTracker?.recordClientFacingError(parseError, {
+          subsystem: "downstream",
+          method: "parse",
+          code: -32700,
+          retryable: false,
+        });
+        logger.warn("downstream.parse_error", {
+          subsystem: "downstream",
+          hostId: config.hostId,
+          bytes: data?.byteLength,
+        });
         sendJson(ws, jsonRpcError(null, -32700, "parse error"));
         return;
       }
 
       if (!message.method && message.id !== undefined) {
         if (!session.upstream?.sendRaw(message)) {
+          logger.warn("downstream.raw_response_rejected", {
+            id: String(message.id),
+            reason: "no_active_upstream_session",
+          });
           sendJson(ws, jsonRpcError(message.id, -32000, "no active upstream session"));
+        } else {
+          logger.debug("downstream.raw_response_forwarded", {
+            id: String(message.id),
+          });
         }
         return;
       }
 
       if (message.id === undefined) {
+        logger.debug("downstream.notification_ignored", {
+          method: message.method || "missing_method",
+        });
         return;
       }
 
       try {
         const result = await handleRequest(config, message.method, message.params, session, ws);
         sendJson(ws, jsonRpcResult(message.id, result));
+        logger.info("downstream.request_succeeded", {
+          subsystem: "downstream",
+          hostId: config.hostId,
+          method: message.method,
+          id: String(message.id),
+          durationMs: Date.now() - requestStartedAt,
+        });
       } catch (error) {
+        const errorData = classifyRelayRequestError(message.method, error);
+        const errorCode = jsonRpcErrorCode(error);
+        if (String(message.method || "").startsWith("audio/transcription/")) {
+          config.statusTracker?.recordTranscriptionError(error, {
+            subsystem: "transcription",
+            method: message.method,
+            code: errorCode,
+          });
+        }
+        config.statusTracker?.recordClientFacingError(error, {
+          subsystem: errorData?.subsystem || "relay",
+          method: message.method,
+          code: errorCode,
+          retryable: errorData?.retryable,
+        });
+        logger.warn("downstream.request_failed", {
+          subsystem: errorData?.subsystem || "relay",
+          hostId: config.hostId,
+          method: message.method,
+          id: String(message.id),
+          code: errorCode,
+          errorData,
+          durationMs: Date.now() - requestStartedAt,
+          error,
+        });
         sendJson(
           ws,
           jsonRpcError(
             message.id,
-            error.code || -32000,
+            errorCode,
             error.message || "relay error",
+            errorData,
           ),
         );
       }
@@ -864,9 +677,13 @@ function startServer(config) {
       }
       advertisement = startBonjourAdvertisement(config);
       resolve(address);
-      console.error(
-        `codex-dock-relay listening on ws://${config.listenHost}:${config.port}; history=${config.historyUrl}; phoneAuth=${config.phoneAuth}`,
-      );
+      logger.info("relay.listening", {
+        subsystem: "relay",
+        hostId: config.hostId,
+        endpointUrl: `ws://${config.listenHost}:${config.port}`,
+        historyUrl: config.historyUrl,
+        phoneAuth: config.phoneAuth,
+      });
     });
   });
 
@@ -878,12 +695,27 @@ function startServer(config) {
     },
     listening,
     close: () => new Promise((resolve, reject) => {
+      logger.info("relay.closing", {
+        activeConnections: downstreamSockets.size,
+      });
       advertisement?.kill();
+      for (const ws of downstreamSockets) {
+        ws.close(1001, "relay shutting down");
+      }
+      const forceTerminate = setTimeout(() => {
+        for (const ws of downstreamSockets) {
+          ws.terminate();
+        }
+      }, 250);
+      forceTerminate.unref?.();
       wss.close(() => {
+        clearTimeout(forceTerminate);
         server.close((error) => {
           if (error) {
+            logger.error("relay.close_failed", { error });
             reject(error);
           } else {
+            logger.info("relay.closed");
             resolve();
           }
         });
@@ -899,6 +731,7 @@ function installShutdownHandlers(serverHandle) {
       return;
     }
     closing = true;
+    serverHandle.logger?.info("relay.shutdown_signal");
     const forceExit = setTimeout(() => process.exit(0), 1_000);
     forceExit.unref();
     serverHandle.close()
@@ -914,6 +747,7 @@ function installShutdownHandlers(serverHandle) {
 }
 
 function main() {
+  installRelayFatalHandlers(defaultRelayLogger);
   const args = parseArgs(process.argv.slice(2));
   loadDotEnvFile(args["env-file"] || process.env.CODEX_DOCK_ENV_FILE || ".env");
   const relayTokenFile = args["auth-token-file"] || process.env.CODEX_DOCK_RELAY_TOKEN_FILE;
@@ -935,17 +769,28 @@ function main() {
     relayBearerToken: relayTokenFile ? readToken(relayTokenFile) : null,
     historyBearerToken: readToken(historyTokenFile),
     historyUrl: args["history-url"] || process.env.CODEX_DOCK_HISTORY_APP_SERVER_WS || "ws://127.0.0.1:4500",
+    hostId: args["host-id"] || process.env.CODEX_DOCK_REAL_HOST_ID || os.hostname(),
+    hostName: args["host-name"] || process.env.CODEX_DOCK_REAL_HOST_NAME || args["bonjour-name"],
     bonjourName: args["bonjour-name"] || process.env.CODEX_DOCK_BONJOUR_NAME || `Codex Dock ${os.hostname()}`,
     advertiseBonjour: (args["advertise-bonjour"] || process.env.CODEX_DOCK_ADVERTISE_BONJOUR || "1") !== "0",
     openAIAPIKey: process.env.OPENAI_API_KEY,
-    openAITranscriptionModel: args["openai-transcription-model"]
-      || process.env.CODEX_DOCK_OPENAI_TRANSCRIPTION_MODEL
-      || DEFAULT_TRANSCRIPTION_MODEL,
-    openAITranscriptionEndpoint: process.env.CODEX_DOCK_OPENAI_TRANSCRIPTION_ENDPOINT
-      || DEFAULT_TRANSCRIPTION_ENDPOINT,
-    transcriptionMaxBytes: process.env.CODEX_DOCK_TRANSCRIPTION_MAX_BYTES,
-    transcriptionTimeoutMs: process.env.CODEX_DOCK_OPENAI_TRANSCRIPTION_TIMEOUT_MS,
+    openAIRealtimeTranscriptionModel: process.env.CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL
+      || DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+    openAIRealtimeTranscriptionEndpoint: process.env.CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_ENDPOINT
+      || DEFAULT_REALTIME_TRANSCRIPTION_ENDPOINT,
+    realtimeTranscriptionLanguage: process.env.CODEX_DOCK_REALTIME_TRANSCRIPTION_LANGUAGE
+      || DEFAULT_REALTIME_TRANSCRIPTION_LANGUAGE,
+    realtimeTranscriptionDelay: process.env.CODEX_DOCK_REALTIME_TRANSCRIPTION_DELAY
+      || DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
+    realtimeTranscriptionAllowedLanguages: process.env.CODEX_DOCK_REALTIME_TRANSCRIPTION_ALLOWED_LANGUAGES,
+    realtimeTranscriptionMaxChunkBytes: process.env.CODEX_DOCK_REALTIME_TRANSCRIPTION_MAX_CHUNK_BYTES,
+    realtimeTranscriptionMaxPendingBytes: process.env.CODEX_DOCK_REALTIME_TRANSCRIPTION_MAX_PENDING_BYTES,
+    realtimeTranscriptionConnectTimeoutMs: process.env.CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_CONNECT_TIMEOUT_MS,
+    realtimeTranscriptionMaxDurationMs: process.env.CODEX_DOCK_REALTIME_TRANSCRIPTION_MAX_DURATION_MS,
+    openAISafetyIdentifier: process.env.CODEX_DOCK_OPENAI_SAFETY_IDENTIFIER,
+    logger: defaultRelayLogger,
   });
+  serverHandle.logger = defaultRelayLogger;
   installShutdownHandlers(serverHandle);
 }
 
@@ -956,16 +801,16 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
 export {
   attentionFlagsForServerRequest,
   buildBonjourAdvertisementArgs,
-  decodedAudioTranscribeParams,
   isPhoneRequestAuthorized,
   loadDotEnvFile,
   mergeThreadListRows,
   mergeActiveFlags,
+  pendingRequestsForActiveThread,
   preferThread,
+  RealtimeTranscriptionManager,
   sanitizeRelayFields,
   shouldCollectLiveRowsForThreadList,
   startServer,
   statusPriority,
   threadMatchesSourceKinds,
-  transcribeAudio,
 };

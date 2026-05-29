@@ -6,7 +6,7 @@ let package = Package(
     name: "codex-client",
     platforms: [
         .macOS(.v14),
-        .iOS(.v17),
+        .iOS("26.0"),
     ],
     products: [
         .library(name: "CodexDock", targets: ["CodexDock"]),

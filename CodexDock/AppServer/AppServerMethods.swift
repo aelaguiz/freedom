@@ -12,7 +12,15 @@ public enum AppServerMethods {
     public static let turnStart = "turn/start"
     public static let turnSteer = "turn/steer"
     public static let turnInterrupt = "turn/interrupt"
-    public static let audioTranscribe = "audio/transcribe"
+    public static let audioTranscriptionStart = "audio/transcription/start"
+    public static let audioTranscriptionAppend = "audio/transcription/append"
+    public static let audioTranscriptionCommit = "audio/transcription/commit"
+    public static let audioTranscriptionCancel = "audio/transcription/cancel"
+    public static let audioTranscriptionDelta = "audio/transcription/delta"
+    public static let audioTranscriptionCompleted = "audio/transcription/completed"
+    public static let audioTranscriptionFailed = "audio/transcription/failed"
+    public static let audioTranscriptionCanceled = "audio/transcription/canceled"
+    public static let audioTranscriptionClosed = "audio/transcription/closed"
 }
 
 public struct ClientInfo: Codable, Equatable, Sendable {
