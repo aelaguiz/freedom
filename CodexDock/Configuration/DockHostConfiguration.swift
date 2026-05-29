@@ -119,63 +119,18 @@ public struct DockRelayEndpoint: Codable, Equatable, Sendable, Identifiable {
 }
 
 public struct DockHostConfiguration: Equatable, Sendable, Identifiable {
-    public let endpoints: [DockRelayEndpoint]
-    public let relayInstanceID: String?
+    public let endpoint: DockRelayEndpoint
 
-    public var endpoint: DockRelayEndpoint { endpoints[0] }
-    public var id: String { relayInstanceID ?? endpoint.id }
-    public var displayName: String { relayInstanceID ?? endpoint.displayEndpoint }
+    public var id: String { endpoint.id }
+    public var displayName: String { endpoint.displayEndpoint }
     public var webSocketURL: URL { endpoint.webSocketURL }
-    public var webSocketURLs: [URL] { endpoints.map(\.webSocketURL) }
-    public var displayEndpointList: String {
-        endpoints.map(\.displayEndpoint).joined(separator: ", ")
-    }
 
-    public init(endpoint: DockRelayEndpoint, relayInstanceID: String? = nil) {
-        self.endpoints = [endpoint]
-        self.relayInstanceID = Self.normalizedRelayInstanceID(relayInstanceID)
-    }
-
-    public init(endpoints: [DockRelayEndpoint], relayInstanceID: String? = nil) throws {
-        guard let first = endpoints.first else {
-            throw DockHostConfigurationError.missingEndpoint
-        }
-        let normalizedRelayInstanceID = Self.normalizedRelayInstanceID(relayInstanceID)
-        var seen: Set<String> = []
-        var unique: [DockRelayEndpoint] = []
-        for endpoint in [first] + Array(endpoints.dropFirst()) {
-            guard seen.insert(endpoint.id).inserted else {
-                continue
-            }
-            unique.append(endpoint)
-        }
-        guard unique.count == 1 || normalizedRelayInstanceID != nil else {
-            throw DockHostConfigurationError.missingRelayInstanceIDForEndpointAliases
-        }
-        self.endpoints = unique
-        self.relayInstanceID = normalizedRelayInstanceID
+    public init(endpoint: DockRelayEndpoint) {
+        self.endpoint = endpoint
     }
 
     public init(host: String, port: Int) throws {
-        self.endpoints = [try DockRelayEndpoint(host: host, port: port)]
-        self.relayInstanceID = nil
-    }
-
-    private static func normalizedRelayInstanceID(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    public func validateRelayInstanceID(_ actual: String?) throws {
-        guard let expected = relayInstanceID else {
-            return
-        }
-        guard let actual = Self.normalizedRelayInstanceID(actual) else {
-            throw DockHostConfigurationError.relayInstanceMismatch(expected: expected, actual: "<missing>")
-        }
-        guard actual == expected else {
-            throw DockHostConfigurationError.relayInstanceMismatch(expected: expected, actual: actual)
-        }
+        self.endpoint = try DockRelayEndpoint(host: host, port: port)
     }
 }
 
@@ -185,15 +140,13 @@ public enum DockHostConfigurationError: Error, Equatable, LocalizedError, Sendab
     case invalidHost(String)
     case invalidPort(String)
     case duplicateHostID(String)
-    case unsupportedLegacyURL(String)
-    case relayInstanceMismatch(expected: String, actual: String)
+    case multipleHostsForSingleConfiguration(String)
     case rawAppServerEndpoint(String)
-    case missingRelayInstanceIDForEndpointAliases
 
     public var errorDescription: String? {
         switch self {
         case .missingEndpoint:
-            return "Set CODEX_DOCK_HOSTS to one or more relay endpoints like 192.168.50.117:4510."
+            return "Set CODEX_DOCK_HOSTS to one or more relay hosts like 192.168.50.117:4510."
         case let .invalidEndpoint(value):
             return "Codex Dock relay endpoint must be host:port with no scheme, path, query, username, or password: \(value)"
         case let .invalidHost(value):
@@ -202,14 +155,10 @@ public enum DockHostConfigurationError: Error, Equatable, LocalizedError, Sendab
             return "Codex Dock relay port must be an integer from 1 to 65535: \(value)"
         case let .duplicateHostID(hostID):
             return "CODEX_DOCK_HOSTS must not include the same endpoint more than once: \(hostID)"
-        case let .unsupportedLegacyURL(value):
-            return "Saved relay URL could not be migrated. Re-enter it as host and port: \(value)"
-        case let .relayInstanceMismatch(expected, actual):
-            return "Relay identity mismatch. Expected \(expected), but endpoint reported \(actual)."
+        case let .multipleHostsForSingleConfiguration(value):
+            return "Use HostRegistry.fromEnvironment for multiple CODEX_DOCK_HOSTS entries; a single host configuration can only use one host: \(value)"
         case let .rawAppServerEndpoint(value):
             return "Codex Dock app-facing hosts must point at the Dock relay on :4510, not the raw Codex app-server on :4500: \(value)"
-        case .missingRelayInstanceIDForEndpointAliases:
-            return "CODEX_DOCK_RELAY_INSTANCE_ID is required when CODEX_DOCK_HOSTS contains multiple endpoints for the same relay."
         }
     }
 }
@@ -220,11 +169,13 @@ public extension DockHostConfiguration {
     ) throws -> DockHostConfiguration {
         let endpoints = try DockRelayEndpoint.parseList(environment["CODEX_DOCK_HOSTS"])
         try endpoints.forEach { try $0.validateAppFacingRelayEndpoint() }
-        let configuration = try DockHostConfiguration(
-            endpoints: endpoints,
-            relayInstanceID: environment["CODEX_DOCK_RELAY_INSTANCE_ID"]
-        )
-        DockLog.hostConfiguration.notice("host configuration loaded host_id=\(configuration.id, privacy: .public) endpoints=\(configuration.endpoints.count, privacy: .public) first_endpoint=\(DockLog.endpoint(configuration.webSocketURL), privacy: .public)")
+        guard let endpoint = endpoints.first, endpoints.count == 1 else {
+            throw DockHostConfigurationError.multipleHostsForSingleConfiguration(
+                endpoints.map(\.id).joined(separator: ",")
+            )
+        }
+        let configuration = DockHostConfiguration(endpoint: endpoint)
+        DockLog.hostConfiguration.notice("host configuration loaded host_id=\(configuration.id, privacy: .public) endpoint=\(DockLog.endpoint(configuration.webSocketURL), privacy: .public)")
         return configuration
     }
 }

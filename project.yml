@@ -59,13 +59,28 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+  CodexDockUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: CodexDockUITests
+    dependencies:
+      - target: CodexDockApp
+      - target: CodexDock
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.aelaguiz.CodexDockUITests
 schemes:
   CodexDockApp:
     build:
       targets:
         CodexDockApp: all
         CodexDockTests: [test]
+        CodexDockUITests: [test]
     test:
       targets:
         - CodexDockTests
+        - CodexDockUITests
       gatherCoverageData: false

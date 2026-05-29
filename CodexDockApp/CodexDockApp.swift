@@ -12,6 +12,7 @@ struct CodexDockApp: App {
     var body: some Scene {
         WindowGroup {
             CodexDockBootstrapView()
+                .codexAutomationID(AutomationID.App.root)
         }
     }
 }

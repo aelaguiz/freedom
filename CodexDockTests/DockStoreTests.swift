@@ -45,7 +45,7 @@ final class DockStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testLoadKeepsLiveRowsAheadOfRecentLimitedHistory() async {
+    func testLoadKeepsLiveRowsAheadOfRecentNotLoadedHistory() async {
         let host = makeHost()
         let summaries = [
             makeSummary(
@@ -79,7 +79,7 @@ final class DockStoreTests: XCTestCase {
 
         XCTAssertEqual(snapshot.sections.map(\.title), ["zzz-live-work", "aaa-old-history"])
         XCTAssertEqual(snapshot.sections[0].rows[0].status, .running)
-        XCTAssertEqual(snapshot.sections[1].rows[0].status, .limited)
+        XCTAssertEqual(snapshot.sections[1].rows[0].status, .notLoaded)
     }
 
     @MainActor
@@ -148,7 +148,6 @@ final class DockStoreTests: XCTestCase {
             "All 0",
             "Needs me 0",
             "Running 0",
-            "Limited 0",
             "Agents 0"
         ])
     }
@@ -311,26 +310,31 @@ final class DockStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.sections.map(\.title), ["\(amir.displayName) / main", "\(home.displayName) / main"])
         XCTAssertEqual(snapshot.sections.map(\.rows.count), [1, 1])
         XCTAssertEqual(snapshot.sections[0].rows[0].status, .idle)
-        XCTAssertEqual(snapshot.sections[1].rows[0].status, .limited)
+        XCTAssertEqual(snapshot.sections[1].rows[0].status, .notLoaded)
     }
 
     func testDockTabsUseNormalizedRowStatusAndOrigin() {
+        XCTAssertEqual(DockRowStatusKind.notLoaded.label, "Not loaded")
+        XCTAssertEqual(DockTabID.allCases, [.all, .needsMe, .running, .agents])
         XCTAssertTrue(DockTabID.all.includes(makeRow(status: .idle)))
+        XCTAssertTrue(DockTabID.all.includes(makeRow(status: .notLoaded)))
         XCTAssertTrue(DockTabID.needsMe.includes(makeRow(status: .needsMe)))
         XCTAssertTrue(DockTabID.running.includes(makeRow(status: .running)))
         XCTAssertTrue(DockTabID.running.includes(makeRow(status: .idle)))
         XCTAssertTrue(DockTabID.running.includes(makeRow(status: .needsMe)))
         XCTAssertTrue(DockTabID.running.includes(makeRow(status: .failed)))
-        XCTAssertTrue(DockTabID.limited.includes(makeRow(status: .limited)))
         XCTAssertTrue(DockTabID.agents.includes(
             makeRow(status: .idle, origin: .agentOrAutomation(subtype: .exec))
+        ))
+        XCTAssertTrue(DockTabID.agents.includes(
+            makeRow(status: .notLoaded, origin: .agentOrAutomation(subtype: .exec))
         ))
         XCTAssertTrue(DockTabID.agents.includes(
             makeRow(status: .idle, origin: .unknown())
         ))
 
         XCTAssertFalse(DockTabID.needsMe.includes(makeRow(status: .running)))
-        XCTAssertFalse(DockTabID.limited.includes(makeRow(status: .idle)))
+        XCTAssertFalse(DockTabID.running.includes(makeRow(status: .notLoaded)))
         XCTAssertFalse(DockTabID.all.includes(
             makeRow(status: .idle, origin: .agentOrAutomation(subtype: .exec))
         ))
@@ -577,7 +581,7 @@ final class DockStoreTests: XCTestCase {
         XCTAssertEqual(store.registry?.hosts.map(\.id), [host.id, "100.66.11.7:4510"])
         let savedHomeConfiguration = await configurationStore.savedConfiguration()
         XCTAssertEqual(
-            try savedHomeConfiguration?.relayEndpoints.map(\.displayEndpoint),
+            try savedHomeConfiguration?.hostConfigurations.map { $0.endpoint.displayEndpoint },
             [host.id, "100.66.11.7:4510"]
         )
 
@@ -598,19 +602,14 @@ final class DockStoreTests: XCTestCase {
         XCTAssertEqual(edited.webSocketURL.absoluteString, "ws://100.66.11.7:4520")
         let savedEditedConfiguration = await configurationStore.savedConfiguration()
         XCTAssertEqual(
-            try savedEditedConfiguration?.relayEndpoints.map(\.displayEndpoint),
+            try savedEditedConfiguration?.hostConfigurations.map { $0.endpoint.displayEndpoint },
             [host.id, "100.66.11.7:4520"]
         )
     }
 
     @MainActor
-    func testHostSettingsAddsAliasesToRelayIdentityHost() async throws {
-        let host = try DockHostConfiguration(
-            endpoints: [
-                try DockRelayEndpoint(host: "amir-m5.fairy-salmon.ts.net", port: 4510),
-            ],
-            relayInstanceID: "Amir-M5"
-        )
+    func testHostSettingsAddCreatesSeparateHostAndEditReplacesSelectedHost() async throws {
+        let host = makeHost(url: "ws://amir-m5.fairy-salmon.ts.net:4510")
         let registry = try HostRegistry(hosts: [host])
         let configurationStore = InMemoryLocalDockConfigurationStore()
         let store = HostSettingsStore(
@@ -625,33 +624,37 @@ final class DockStoreTests: XCTestCase {
             port: "4510"
         )
 
-        XCTAssertEqual(store.registry?.hosts.map(\.id), ["Amir-M5"])
+        XCTAssertEqual(store.registry?.hosts.map(\.id), [
+            "amir-m5.fairy-salmon.ts.net:4510",
+            "home.fairy-salmon.ts.net:4510"
+        ])
         XCTAssertEqual(
-            store.registry?.hosts.first?.displayEndpointList,
-            "amir-m5.fairy-salmon.ts.net:4510, home.fairy-salmon.ts.net:4510"
+            store.rows.map(\.displayHost.endpoint),
+            ["amir-m5.fairy-salmon.ts.net:4510", "home.fairy-salmon.ts.net:4510"]
         )
-        let savedAliasConfiguration = await configurationStore.savedConfiguration()
-        XCTAssertEqual(savedAliasConfiguration?.relayInstanceID, "Amir-M5")
+        let savedAddedConfiguration = await configurationStore.savedConfiguration()
         XCTAssertEqual(
-            try savedAliasConfiguration?.relayEndpoints.map(\.displayEndpoint),
+            try savedAddedConfiguration?.hostConfigurations.map { $0.endpoint.displayEndpoint },
             ["amir-m5.fairy-salmon.ts.net:4510", "home.fairy-salmon.ts.net:4510"]
         )
 
         try await store.saveHost(
-            replacing: "Amir-M5",
+            replacing: "amir-m5.fairy-salmon.ts.net:4510",
             host: "backup.fairy-salmon.ts.net",
             port: "4510"
         )
 
-        XCTAssertEqual(store.registry?.hosts.map(\.id), ["Amir-M5"])
+        XCTAssertEqual(store.registry?.hosts.map(\.id), [
+            "backup.fairy-salmon.ts.net:4510",
+            "home.fairy-salmon.ts.net:4510"
+        ])
         XCTAssertEqual(
-            store.registry?.hosts.first?.displayEndpointList,
-            "backup.fairy-salmon.ts.net:4510, home.fairy-salmon.ts.net:4510"
+            store.rows.map(\.displayHost.endpoint),
+            ["backup.fairy-salmon.ts.net:4510", "home.fairy-salmon.ts.net:4510"]
         )
         let savedEditedConfiguration = await configurationStore.savedConfiguration()
-        XCTAssertEqual(savedEditedConfiguration?.relayInstanceID, "Amir-M5")
         XCTAssertEqual(
-            try savedEditedConfiguration?.relayEndpoints.map(\.displayEndpoint),
+            try savedEditedConfiguration?.hostConfigurations.map { $0.endpoint.displayEndpoint },
             ["backup.fairy-salmon.ts.net:4510", "home.fairy-salmon.ts.net:4510"]
         )
     }
@@ -956,21 +959,21 @@ private actor InMemoryLocalThreadMetadataStore: LocalThreadMetadataStoring {
 }
 
 private actor InMemoryLocalDockConfigurationStore: LocalDockConfigurationStoring {
-    private var saved: LocalRelayEndpointList?
+    private var saved: LocalRelayHostList?
 
-    init(saved: LocalRelayEndpointList? = nil) {
+    init(saved: LocalRelayHostList? = nil) {
         self.saved = saved
     }
 
-    func load() async throws -> LocalRelayEndpointList? {
+    func load() async throws -> LocalRelayHostList? {
         saved
     }
 
-    func save(_ configuration: LocalRelayEndpointList) async throws {
+    func save(_ configuration: LocalRelayHostList) async throws {
         saved = configuration
     }
 
-    func savedConfiguration() -> LocalRelayEndpointList? {
+    func savedConfiguration() -> LocalRelayHostList? {
         saved
     }
 }

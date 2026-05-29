@@ -37,6 +37,8 @@ struct MessageTypeFilterControl: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .font(.caption.weight(.semibold))
+            .accessibilityValue(ThreadDetailMessageFilter(kind: selectedKind).id)
+            .codexAutomationID(AutomationID.Session.messageFilter)
 
             if selectedKind != nil {
                 Button {
@@ -50,6 +52,7 @@ struct MessageTypeFilterControl: View {
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Clear message type filter")
                 .help("Clear filter")
+                .codexAutomationID(AutomationID.Session.clearMessageFilter)
             }
         }
     }
@@ -72,22 +75,24 @@ struct ThreadMessageListView: View {
     let onRequestAction: (String, ServerRequestCardAction) -> Void
 
     var body: some View {
-        if events.isEmpty {
+        VStack(alignment: .leading, spacing: 10) {
+            if events.isEmpty {
             if hasUnfilteredEvents {
                 DetailMessageView(
                     icon: filter.systemImage,
                     title: filter.emptyStateTitle,
-                    message: "No rows match this filter."
+                    message: "No rows match this filter.",
+                    automationID: AutomationID.Session.state(.noRowsMatch)
                 )
             } else {
                 DetailMessageView(
                     icon: "text.bubble",
                     title: "No transcript",
-                    message: "This thread returned no readable events."
+                    message: "This thread returned no readable events.",
+                    automationID: AutomationID.Session.state(.noTranscript)
                 )
             }
         } else {
-            VStack(alignment: .leading, spacing: 10) {
                 ForEach(events) { event in
                     ThreadMessageCard(
                         event: event,
@@ -98,6 +103,9 @@ struct ThreadMessageListView: View {
                 }
             }
         }
+        .accessibilityElement(children: .contain)
+        .codexAutomationID(AutomationID.Session.messageList)
+        .accessibilityValue("events=\(events.count); filter=\(filter.id)")
     }
 
     private func requestCard(for event: ThreadEvent) -> ServerRequestCard? {
@@ -117,6 +125,7 @@ struct DetailMessageView: View {
     let icon: String
     let title: String
     let message: String
+    var automationID: AutomationID? = nil
 
     var body: some View {
         VStack(spacing: 8) {
@@ -133,6 +142,9 @@ struct DetailMessageView: View {
         .frame(maxWidth: .infinity, minHeight: 140)
         .padding(16)
         .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(message)
+        .codexAutomationID(automationID)
     }
 }
 
@@ -171,12 +183,17 @@ private struct ThreadMessageCard: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityValue(messageAutomationValue)
+        .codexAutomationID(AutomationID.Session.messageCard(eventID: event.id))
     }
 
     @ViewBuilder
     private var statusBadges: some View {
         if let requestCard {
             statusBadge(requestCard.status.label, color: requestCard.status.color(for: requestCard.kind))
+                .accessibilityValue(requestCard.status.label)
+                .codexAutomationID(AutomationID.RequestCard.status(cardID: requestCard.id))
         }
         if event.isLive {
             statusBadge("Live", color: .green)
@@ -194,36 +211,43 @@ private struct ThreadMessageCard: View {
 
     @ViewBuilder
     private func requestControls(for card: ServerRequestCard) -> some View {
-        if card.detail != event.body {
-            Text(card.detail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-        }
+        VStack(alignment: .leading, spacing: 8) {
+            if card.detail != event.body {
+                Text(card.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
 
-        if card.needsTextInput {
-            TextField(
-                "Answer",
-                text: Binding(
-                    get: { card.inputDraft },
-                    set: { onRequestInputChange(card.id, $0) }
-                ),
-                axis: .vertical
-            )
-            .lineLimit(1...3)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
+            if card.needsTextInput {
+                TextField(
+                    "Answer",
+                    text: Binding(
+                        get: { card.inputDraft },
+                        set: { onRequestInputChange(card.id, $0) }
+                    ),
+                    axis: .vertical
+                )
+                .lineLimit(1...3)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .codexAutomationID(AutomationID.RequestCard.inputField(cardID: card.id))
+            }
 
-        if case let .failed(message) = card.status {
-            Label(message, systemImage: "exclamationmark.triangle")
-                .font(.caption)
-                .foregroundStyle(.red)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+            if case let .failed(message) = card.status {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .codexAutomationID(AutomationID.RequestCard.error(cardID: card.id))
+            }
 
-        requestActions(for: card)
+            requestActions(for: card)
+        }
+        .accessibilityElement(children: .contain)
+        .codexAutomationID(AutomationID.RequestCard.card(cardID: card.id))
+        .accessibilityValue(card.automationValue)
     }
 
     @ViewBuilder
@@ -238,6 +262,7 @@ private struct ThreadMessageCard: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(card.isBusyOrDone)
+                .codexAutomationID(AutomationID.RequestCard.declineButton(cardID: card.id))
 
                 Button {
                     onRequestAction(card.id, .accept)
@@ -246,6 +271,7 @@ private struct ThreadMessageCard: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(card.isBusyOrDone)
+                .codexAutomationID(AutomationID.RequestCard.approveButton(cardID: card.id))
             }
         case .userInput:
             Button {
@@ -255,6 +281,7 @@ private struct ThreadMessageCard: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(card.isBusyOrDone || card.inputDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .codexAutomationID(AutomationID.RequestCard.sendButton(cardID: card.id))
         case .mcpElicitation:
             Button {
                 onRequestAction(card.id, .decline)
@@ -263,11 +290,23 @@ private struct ThreadMessageCard: View {
             }
             .buttonStyle(.bordered)
             .disabled(card.isBusyOrDone)
+            .codexAutomationID(AutomationID.RequestCard.declineButton(cardID: card.id))
         case .unsupported:
             Label("Needs desktop", systemImage: "desktopcomputer")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .codexAutomationID(AutomationID.RequestCard.unsupportedState(cardID: card.id))
         }
+    }
+
+    private var messageAutomationValue: String {
+        [
+            "event=\(event.id)",
+            "kind=\(event.kind.rawValue)",
+            "visibility=\(event.visibilityCategory.rawValue)",
+            "live=\(event.isLive)",
+            requestCard.map { "request=\($0.id); request-status=\($0.status.label)" },
+        ].compactMap(\.self).joined(separator: "; ")
     }
 
     private var bodyFont: Font {
@@ -343,6 +382,15 @@ private extension ServerRequestCard {
         case .pending, .failed:
             return false
         }
+    }
+
+    var automationValue: String {
+        [
+            "card=\(id)",
+            "kind=\(kind.rawValue)",
+            "status=\(status.label)",
+            "needs-input=\(needsTextInput)",
+        ].joined(separator: "; ")
     }
 }
 

@@ -210,17 +210,8 @@ public final class HostSettingsStore: ObservableObject {
         DockLog.hostConfiguration.notice("host save started endpoint=\(endpoint.id, privacy: .public) replacing=\(DockLog.publicID(originalID), privacy: .public)")
 
         let newRegistry: HostRegistry
-        if let relayHost = singleRelayIdentityHost(in: currentHosts),
-           originalID == nil || originalID == relayHost.id {
-            let updatedHost = try updatedRelayIdentityHost(
-                relayHost,
-                endpoint: endpoint,
-                replacingPrimary: originalID != nil
-            )
-            newRegistry = try HostRegistry(hosts: [updatedHost])
-            statuses[relayHost.id] = .notChecked
-        } else if let originalID,
-                  let index = currentHosts.firstIndex(where: { $0.id == originalID }) {
+        if let originalID,
+           let index = currentHosts.firstIndex(where: { $0.id == originalID }) {
             let host = DockHostConfiguration(endpoint: endpoint)
             newRegistry = try HostRegistry(
                 hosts: currentHosts.enumerated().map { offset, existing in
@@ -249,7 +240,7 @@ public final class HostSettingsStore: ObservableObject {
         }
         let hosts = registry.hosts.filter { $0.id != hostID }
         if hosts.isEmpty {
-            try await configurationStore.save(LocalRelayEndpointList(endpoints: []))
+            try await configurationStore.save(LocalRelayHostList(hosts: []))
             statuses.removeValue(forKey: hostID)
             self.registry = nil
             configurationError = nil
@@ -265,23 +256,7 @@ public final class HostSettingsStore: ObservableObject {
     }
 
     private func persist(_ registry: HostRegistry) async throws {
-        let relayInstanceID = registry.hosts.count == 1 ? registry.hosts[0].relayInstanceID : nil
-        try await configurationStore.save(
-            LocalRelayEndpointList(
-                endpoints: registry.hosts.flatMap(\.endpoints),
-                relayInstanceID: relayInstanceID
-            )
-        )
-    }
-
-    private func singleRelayIdentityHost(in hosts: [DockHostConfiguration]) -> DockHostConfiguration? {
-        guard hosts.count == 1,
-              let host = hosts.first,
-              host.relayInstanceID != nil
-        else {
-            return nil
-        }
-        return host
+        try await configurationStore.save(LocalRelayHostList(hosts: registry.hosts))
     }
 
     private func conflictingEndpointID(
@@ -293,32 +268,11 @@ public final class HostSettingsStore: ObservableObject {
             if host.id == originalID {
                 continue
             }
-            if host.endpoints.contains(where: { $0.id == endpointID }) {
+            if host.id == endpointID {
                 return endpointID
             }
         }
         return nil
-    }
-
-    private func updatedRelayIdentityHost(
-        _ host: DockHostConfiguration,
-        endpoint: DockRelayEndpoint,
-        replacingPrimary: Bool
-    ) throws -> DockHostConfiguration {
-        let endpoints: [DockRelayEndpoint]
-        if replacingPrimary {
-            let aliases = host.endpoints.dropFirst().filter { $0.id != endpoint.id }
-            endpoints = [endpoint] + aliases
-        } else {
-            guard !host.endpoints.contains(where: { $0.id == endpoint.id }) else {
-                throw HostSettingsError.duplicateID(endpoint.id)
-            }
-            endpoints = host.endpoints + [endpoint]
-        }
-        return try DockHostConfiguration(
-            endpoints: endpoints,
-            relayInstanceID: host.relayInstanceID
-        )
     }
 
     private func normalized(_ value: String) -> String {

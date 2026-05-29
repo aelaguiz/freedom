@@ -120,9 +120,10 @@ Physical iPhone endpoint expectations:
   `192.168.50.74:4510`.
 - Keep these as separate per-device saved app configs. Do not collapse them
   into one baked-in or hard-coded host.
-- Both physical device configs should carry `relayInstanceID` /
-  `CODEX_DOCK_RELAY_INSTANCE_ID` as `Amir-M5`. The ID names the logical relay;
-  endpoint lists are just routes to that relay.
+- Saved app configs should contain only a `hosts` list of `{host, port}` values.
+  Relay identity stays Mac-side in relay status metadata such as
+  `CODEX_DOCK_REAL_HOST_ID`; do not persist or launch phone-side
+  `relayInstanceID` / `CODEX_DOCK_RELAY_INSTANCE_ID`.
 
 Loopback WebSockets such as `ws://127.0.0.1:4500`, Unix sockets, mocks, and
 scripted transports are local development tools. They are not physical-phone

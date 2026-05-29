@@ -107,7 +107,7 @@ final class DockStoreTestsProjection: XCTestCase {
         let snapshot = makeSnapshot(sections: [
             makeSection(title: "main", rows: [
                 makeRow(threadID: "main-running", title: "Main running", branch: "main", status: .running, lastActivity: 100),
-                makeRow(threadID: "main-limited", title: "Main limited", branch: "main", status: .limited, lastActivity: 500)
+                makeRow(threadID: "main-not-loaded", title: "Main not loaded", branch: "main", status: .notLoaded, lastActivity: 500)
             ]),
             makeSection(title: "feature", rows: [
                 makeRow(threadID: "feature-running", title: "Feature running", branch: "feature", status: .running, lastActivity: 300)
@@ -208,9 +208,9 @@ final class DockStoreTestsProjection: XCTestCase {
             snapshot.project(options: .init(selectedTab: .all, sortMode: .branch, showsIdle: true))
         )
 
-        XCTAssertEqual(branchCounts, [.all: 1, .needsMe: 0, .running: 1, .limited: 0, .agents: 0])
+        XCTAssertEqual(branchCounts, [.all: 1, .needsMe: 0, .running: 1, .agents: 0])
         XCTAssertEqual(newestCounts, branchCounts)
-        XCTAssertEqual(idleVisibleCounts, [.all: 2, .needsMe: 0, .running: 2, .limited: 0, .agents: 1])
+        XCTAssertEqual(idleVisibleCounts, [.all: 2, .needsMe: 0, .running: 2, .agents: 1])
     }
 }
 

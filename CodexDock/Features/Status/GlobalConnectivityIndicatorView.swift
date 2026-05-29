@@ -15,11 +15,9 @@ public struct GlobalConnectivityIndicatorView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .background(backgroundColor, in: Capsule())
-            .accessibilityLabel(accessibilityText)
-    }
-
-    private var accessibilityText: String {
-        "\(store.overallStatus.label): \(store.overallStatus.message)"
+            .accessibilityLabel(store.overallStatus.label)
+            .accessibilityValue(store.overallStatus.message)
+            .codexAutomationID(AutomationID.Connectivity.globalIndicator)
     }
 
     private var systemImage: String {

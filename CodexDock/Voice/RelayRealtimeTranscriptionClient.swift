@@ -51,8 +51,8 @@ public final class RelayRealtimeTranscriptionClient: RealtimeTranscriptionServic
         // OpenAI credentials are relay-owned; the phone sends only session and audio controls.
         let startedAt = Date()
         let hostID = host.id
-        let endpointCount = host.endpoints.count
-        DockLog.transcription.notice("relay transcription session start requested host_id=\(hostID, privacy: .public) endpoints=\(endpointCount, privacy: .public)")
+        let endpointURL = host.webSocketURL
+        DockLog.transcription.notice("relay transcription session start requested host_id=\(hostID, privacy: .public) endpoint=\(DockLog.endpoint(endpointURL), privacy: .public)")
         do {
             let retained = try await AppServerHostConnector(makeClient: makeClient)
                 .retainConnectedClient(for: host) { connection in

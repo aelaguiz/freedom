@@ -1462,13 +1462,10 @@ final class AppServerClientTests: XCTestCase {
     }
 
     @MainActor
-    func testThreadDetailSessionFactoryFallsBackAcrossRelayEndpoints() async throws {
+    func testThreadDetailSessionFactoryDoesNotFallbackAcrossRelayEndpoints() async throws {
         let primary = try DockRelayEndpoint(host: "127.0.0.1", port: 4511)
         let fallback = try DockRelayEndpoint(host: "127.0.0.1", port: 4512)
-        let host = try DockHostConfiguration(
-            endpoints: [primary, fallback],
-            relayInstanceID: "Amir-M5"
-        )
+        let host = DockHostConfiguration(endpoint: primary)
         let primaryTransport = ScriptedAppServerTransport(connectError: TestTransportError.offline)
         let fallbackTransport = ScriptedAppServerTransport()
         let clientFactory = EndpointRecordingClientFactory(clients: [
@@ -1479,36 +1476,35 @@ final class AppServerClientTests: XCTestCase {
             clientFactory.client(for: endpoint)
         }.makeSession(for: host)
 
-        let connectTask = Task {
-            try await session.connectAndInitialize(
+        do {
+            _ = try await session.connectAndInitialize(
                 params: .codexDock(version: "0.1.0"),
                 timeout: .seconds(1)
             )
+            XCTFail("Expected primary endpoint failure to fail the host")
+        } catch AppServerClientError.transport("offline") {
+            // Expected.
+        } catch {
+            XCTFail("Expected offline transport failure, got \(error)")
         }
-        try await respondToInitialize(transport: fallbackTransport, relayInstanceID: "Amir-M5")
-        let initialize = try await connectTask.value
 
-        XCTAssertEqual(initialize.relayInstanceID, "Amir-M5")
-        XCTAssertEqual(clientFactory.endpointIDsSnapshot(), [primary.id, fallback.id])
+        XCTAssertEqual(clientFactory.endpointIDsSnapshot(), [primary.id])
         let primaryConnectCount = await primaryTransport.connectCountSnapshot()
         let primaryDisconnectCount = await primaryTransport.disconnectCountSnapshot()
         let fallbackConnectCount = await fallbackTransport.connectCountSnapshot()
         XCTAssertEqual(primaryConnectCount, 1)
         XCTAssertEqual(primaryDisconnectCount, 1)
-        XCTAssertEqual(fallbackConnectCount, 1)
+        XCTAssertEqual(fallbackConnectCount, 0)
         await session.disconnect()
         let fallbackDisconnectCount = await fallbackTransport.disconnectCountSnapshot()
-        XCTAssertEqual(fallbackDisconnectCount, 1)
+        XCTAssertEqual(fallbackDisconnectCount, 0)
     }
 
     @MainActor
-    func testRelayRealtimeTranscriptionClientFallsBackAcrossRelayEndpoints() async throws {
+    func testRelayRealtimeTranscriptionClientDoesNotFallbackAcrossRelayEndpoints() async throws {
         let primary = try DockRelayEndpoint(host: "127.0.0.1", port: 4511)
         let fallback = try DockRelayEndpoint(host: "127.0.0.1", port: 4512)
-        let host = try DockHostConfiguration(
-            endpoints: [primary, fallback],
-            relayInstanceID: "Amir-M5"
-        )
+        let host = DockHostConfiguration(endpoint: primary)
         let primaryTransport = ScriptedAppServerTransport(connectError: TestTransportError.offline)
         let fallbackTransport = ScriptedAppServerTransport()
         let clientFactory = EndpointRecordingClientFactory(clients: [
@@ -1519,58 +1515,24 @@ final class AppServerClientTests: XCTestCase {
             clientFactory.client(for: endpoint)
         }
 
-        let startTask = Task {
-            try await service.startSession()
+        do {
+            _ = try await service.startSession()
+            XCTFail("Expected primary endpoint failure to fail transcription start")
+        } catch AppServerClientError.transport("offline") {
+            // Expected.
+        } catch {
+            XCTFail("Expected offline transport failure, got \(error)")
         }
-        try await respondToInitialize(transport: fallbackTransport, relayInstanceID: "Amir-M5")
-        let startRequest = try await fallbackTransport.nextSentRequest()
-        XCTAssertEqual(startRequest.method, AppServerMethods.audioTranscriptionStart)
-        await fallbackTransport.enqueue(
-            .response(
-                JSONRPCResponse(
-                    id: startRequest.id,
-                    result: try JSONValue.encoded(
-                        AudioTranscriptionStartResponseDTO(
-                            sessionId: "transcription-fallback",
-                            format: "audio/pcm",
-                            sampleRate: 24_000,
-                            model: "gpt-realtime-whisper"
-                        )
-                    )
-                )
-            )
-        )
-        let session = try await startTask.value
 
-        XCTAssertEqual(clientFactory.endpointIDsSnapshot(), [primary.id, fallback.id])
+        XCTAssertEqual(clientFactory.endpointIDsSnapshot(), [primary.id])
         let primaryConnectCount = await primaryTransport.connectCountSnapshot()
         let primaryDisconnectCount = await primaryTransport.disconnectCountSnapshot()
         let fallbackConnectCount = await fallbackTransport.connectCountSnapshot()
+        let fallbackDisconnectCount = await fallbackTransport.disconnectCountSnapshot()
         XCTAssertEqual(primaryConnectCount, 1)
         XCTAssertEqual(primaryDisconnectCount, 1)
-        XCTAssertEqual(fallbackConnectCount, 1)
-
-        let cancelTask = Task {
-            await session.cancel()
-        }
-        let cancelRequest = try await fallbackTransport.nextSentRequest()
-        XCTAssertEqual(cancelRequest.method, AppServerMethods.audioTranscriptionCancel)
-        await fallbackTransport.enqueue(
-            .response(
-                JSONRPCResponse(
-                    id: cancelRequest.id,
-                    result: try JSONValue.encoded(
-                        AudioTranscriptionCancelResponseDTO(
-                            sessionId: "transcription-fallback",
-                            canceled: true
-                        )
-                    )
-                )
-            )
-        )
-        await cancelTask.value
-        let fallbackDisconnectCount = await fallbackTransport.disconnectCountSnapshot()
-        XCTAssertEqual(fallbackDisconnectCount, 1)
+        XCTAssertEqual(fallbackConnectCount, 0)
+        XCTAssertEqual(fallbackDisconnectCount, 0)
     }
 
     @MainActor

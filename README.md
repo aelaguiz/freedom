@@ -343,7 +343,6 @@ OPENAI_API_KEY=<kept on Mac when configured>
 
 ```text
 CODEX_DOCK_HOSTS=amir-m5.fairy-salmon.ts.net:4510
-CODEX_DOCK_RELAY_INSTANCE_ID=Amir-M5
 ```
 
 List available simulators:
@@ -387,7 +386,7 @@ rtk make device-install
 ```
 
 By default this resolves the paired iPhone 14, signs with team `R6B8KXF3QW`,
-fresh-builds the app, installs it, writes the device's saved relay endpoints,
+fresh-builds the app, installs it, writes the device's saved relay host list,
 verifies the installed build number, and launches Codex Dock. Override only
 when you intentionally want a different phone or team:
 
@@ -414,7 +413,7 @@ rtk make iphone-14
 The iPhone 17 Pro (`CB9FFF0E-89AD-57B5-9C00-6552D814875E`) is configured with
 `amir-m5.fairy-salmon.ts.net:4510` and `home.fairy-salmon.ts.net:4510`. The
 iPhone 14 (`0A4EFF8B-54D8-58FB-B3FB-63263265B9CC`) is configured with
-`Amir-M5.local:4510` and `192.168.50.74:4510`. Verify saved endpoints without
+`Amir-M5.local:4510` and `192.168.50.74:4510`. Verify the saved host list without
 reinstalling:
 
 ```sh
@@ -429,7 +428,7 @@ passes `-allowProvisioningDeviceRegistration`, so a second paired iPhone can be
 registered into the development profile when Xcode is allowed to update
 provisioning.
 
-The install target launches Codex Dock after writing the saved endpoints. If the
+The install target launches Codex Dock after writing the saved host list. If the
 app is closed later, open it from the iPhone home screen; it connects with no
 phone-side bearer token, loads sessions, and sends dictation audio to the relay
 for transcription.
@@ -451,7 +450,7 @@ Record new evidence in the relevant plan log or in the deferred physical QA
 checklist in `docs/CODEX_DOCK_CROSS_PLAN_IMPLEMENTATION_DOCK_2026-05-28.md`.
 
 The physical install target builds for `iphoneos`, installs the app, writes the
-saved relay endpoints, verifies the installed build number, and launches the
+saved relay host list, verifies the installed build number, and launches the
 app. It does not pass simulator env, OpenAI keys, or raw Codex tokens to the
 phone.
 
@@ -483,6 +482,23 @@ Run generated-project tests on the `iPhone 17` simulator:
 
 ```sh
 rtk make app-test SIM='iPhone 17'
+```
+
+The generated-project test target includes UI automation smoke tests. Those
+tests use the accessibility tree as the primary proof: screens, controls, rows,
+visible state banners, and visible error states expose stable
+`codexdock.*` automation identifiers plus accessibility values where the state
+matters. Screenshots are useful triage evidence, but they are not the selector
+strategy for this workflow.
+
+By default the simulator and UI tests launch the app against the current
+two-host relay list: `amir-m5.fairy-salmon.ts.net:4510` and
+`home.fairy-salmon.ts.net:4510`. `CODEX_DOCK_HOSTS` is the complete host list
+for that launch, so saved or discovered hosts do not change the test surface.
+To use a different relay endpoint, pass a comma-separated host list:
+
+```sh
+CODEX_DOCK_UI_TEST_HOSTS='Amir-M5.local:4510' rtk make app-test SIM='iPhone 17'
 ```
 
 Builds and installs are Makefile-owned. Do not use raw Xcode, CoreDevice,

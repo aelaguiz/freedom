@@ -561,7 +561,6 @@ function serviceEntries(config) {
 function appConfigJSON(config) {
   return {
     version: 1,
-    relayInstanceID: config.host.id,
     hosts: [
       {
         host: config.relay.appEndpoint.host,
@@ -573,8 +572,7 @@ function appConfigJSON(config) {
 
 function appConfigEnv(config) {
   return [
-    `CODEX_DOCK_HOSTS=${envLineValue(config.relay.appEndpoint.serialized, "relay endpoint")}`,
-    `CODEX_DOCK_RELAY_INSTANCE_ID=${envLineValue(config.host.id, "relay instance ID")}`,
+    `CODEX_DOCK_HOSTS=${envLineValue(config.relay.appEndpoint.serialized, "relay host")}`,
     "",
   ].join("\n");
 }

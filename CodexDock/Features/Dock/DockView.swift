@@ -14,6 +14,7 @@ public struct CodexDockRootView: View {
     @StateObject private var connectivityStore: AppConnectivityStore
     @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
     @State private var foregroundResumeTask: Task<Void, Never>?
+    @State private var selectedRootTab: AutomationID.RootTab = .dock
 
     public init(store: DockStore) {
         _dockStore = StateObject(wrappedValue: store)
@@ -78,7 +79,7 @@ public struct CodexDockRootView: View {
     }
 
     public var body: some View {
-        TabView {
+        TabView(selection: $selectedRootTab) {
             DockView(
                 store: dockStore,
                 lifecycleCoordinator: lifecycleCoordinator,
@@ -90,7 +91,9 @@ public struct CodexDockRootView: View {
             )
                 .tabItem {
                     Label("Dock", systemImage: "rectangle.stack")
+                        .codexAutomationID(AutomationID.Root.tab(.dock))
                 }
+                .tag(AutomationID.RootTab.dock)
 
             ArchiveView(
                 store: archiveStore,
@@ -100,14 +103,21 @@ public struct CodexDockRootView: View {
             )
                 .tabItem {
                     Label("Archive", systemImage: "archivebox")
+                        .codexAutomationID(AutomationID.Root.tab(.archive))
                 }
+                .tag(AutomationID.RootTab.archive)
 
             HostsView(store: hostsStore)
                 .tabItem {
                     Label("Relay", systemImage: "desktopcomputer")
+                        .codexAutomationID(AutomationID.Root.tab(.relay))
                 }
+                .tag(AutomationID.RootTab.relay)
         }
         .tint(.blue)
+        .accessibilityElement(children: .contain)
+        .codexAutomationID(AutomationID.Root.tabs)
+        .accessibilityValue(selectedRootTab.rawValue)
         .task {
             bindConnectivity()
             await runDockRefreshLoop()
@@ -240,6 +250,9 @@ public struct DockView: View {
                 await store.refresh()
             }
         }
+        .accessibilityElement(children: .contain)
+        .codexAutomationID(AutomationID.Dock.root)
+        .accessibilityValue(dockScreenValue)
     }
 
     private var header: some View {
@@ -264,6 +277,7 @@ public struct DockView: View {
             .buttonStyle(.borderedProminent)
             .disabled(true)
             .accessibilityLabel("Add host")
+            .codexAutomationID(AutomationID.Dock.addHostButton)
         }
     }
 
@@ -271,10 +285,14 @@ public struct DockView: View {
         VStack(spacing: 12) {
             Picker("Filter", selection: $selectedTab) {
                 ForEach(currentTabs) { tab in
-                    Text(tab.label).tag(tab.id)
+                    Text(tab.label)
+                        .codexAutomationID(AutomationID.Dock.filterTab(tab.id.rawValue))
+                        .tag(tab.id)
                 }
             }
             .pickerStyle(.segmented)
+            .accessibilityValue(selectedTab.rawValue)
+            .codexAutomationID(AutomationID.Dock.filterPicker)
 
             ViewThatFits(in: .horizontal) {
                 sessionControlsRow
@@ -321,6 +339,8 @@ public struct DockView: View {
         }
         .pickerStyle(.segmented)
         .accessibilityLabel("Sort sessions")
+        .accessibilityValue(sortMode.rawValue)
+        .codexAutomationID(AutomationID.Dock.sortPicker)
     }
 
     private var idleToggle: some View {
@@ -342,6 +362,7 @@ public struct DockView: View {
         .accessibilityValue(showsIdle ? "On" : "Off")
         .accessibilityHint("Shows idle threads when enabled.")
         .accessibilityAddTraits(showsIdle ? .isSelected : [])
+        .codexAutomationID(AutomationID.Dock.idleToggle)
     }
 
     @ViewBuilder
@@ -350,8 +371,10 @@ public struct DockView: View {
         TextField("Search sessions", text: $searchText)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
+            .codexAutomationID(AutomationID.Dock.searchField)
         #else
         TextField("Search sessions", text: $searchText)
+            .codexAutomationID(AutomationID.Dock.searchField)
         #endif
     }
 
@@ -379,27 +402,47 @@ public struct DockView: View {
             DockMessageView(
                 icon: "exclamationmark.triangle",
                 title: "Relay not configured",
-                message: message
+                message: message,
+                automationID: AutomationID.Dock.state(.configurationError)
             )
         case let .idle(host):
-            HostSummaryView(host: host, subtitle: "Ready")
+            HostSummaryView(
+                host: host,
+                subtitle: "Ready",
+                automationID: AutomationID.Dock.hostSummary(hostID: host.id)
+            )
         case let .loading(host):
-            HostSummaryView(host: host, subtitle: "Loading")
+            HostSummaryView(
+                host: host,
+                subtitle: "Loading",
+                automationID: AutomationID.Dock.hostSummary(hostID: host.id)
+            )
             ProgressView()
                 .frame(maxWidth: .infinity, minHeight: 120)
+                .codexAutomationID(AutomationID.Dock.state(.loading))
         case let .offline(host, message):
-            HostSummaryView(host: host, subtitle: "Offline")
+            HostSummaryView(
+                host: host,
+                subtitle: "Offline",
+                automationID: AutomationID.Dock.hostSummary(hostID: host.id)
+            )
             DockMessageView(
                 icon: "wifi.exclamationmark",
                 title: "Host offline",
-                message: message
+                message: message,
+                automationID: AutomationID.Dock.state(.offline)
             )
         case let .error(host, message):
-            HostSummaryView(host: host, subtitle: "Error")
+            HostSummaryView(
+                host: host,
+                subtitle: "Error",
+                automationID: AutomationID.Dock.hostSummary(hostID: host.id)
+            )
             DockMessageView(
                 icon: "exclamationmark.octagon",
                 title: "Dock error",
-                message: message
+                message: message,
+                automationID: AutomationID.Dock.state(.error)
             )
         case let .loaded(snapshot):
             loadedContent(snapshot)
@@ -412,30 +455,52 @@ public struct DockView: View {
 
         return VStack(alignment: .leading, spacing: 16) {
             ForEach(snapshot.hostStates) { hostState in
-                HostSummaryView(hostState: hostState)
+                HostSummaryView(
+                    hostState: hostState,
+                    automationID: AutomationID.Dock.hostSummary(hostID: hostState.host.id)
+                )
             }
 
             if let actionError = store.actionError {
-                ActionErrorBanner(message: actionError)
+                ActionErrorBanner(
+                    message: actionError,
+                    automationID: AutomationID.Dock.state(.actionError)
+                )
             }
 
             if !snapshot.mappingFailures.isEmpty {
-                MappingFailureBanner(count: snapshot.mappingFailures.count)
+                MappingFailureBanner(
+                    count: snapshot.mappingFailures.count,
+                    automationID: AutomationID.Dock.state(.mappingFailure)
+                )
             }
 
             ForEach(snapshot.scopeConflicts) { conflict in
-                ScopeConflictBanner(conflict: conflict)
+                ScopeConflictBanner(
+                    conflict: conflict,
+                    automationID: AutomationID.Dock.scopeConflict(
+                        hostID: conflict.threadID.hostID,
+                        threadID: conflict.threadID.threadID
+                    )
+                )
             }
 
             ForEach(snapshot.scopeLoadFailures) { failure in
-                ScopeLoadFailureBanner(failure: failure)
+                ScopeLoadFailureBanner(
+                    failure: failure,
+                    automationID: AutomationID.Dock.scopeLoadFailure(
+                        hostID: failure.host.id,
+                        scopeID: failure.scope.rawValue
+                    )
+                )
             }
 
             if sections.isEmpty {
                 DockMessageView(
                     icon: "line.3.horizontal.decrease.circle",
                     title: emptyStateTitle(hasHiddenIdleMatches: projection.hiddenIdleMatchCount > 0),
-                    message: emptyStateMessage(hasHiddenIdleMatches: projection.hiddenIdleMatchCount > 0)
+                    message: emptyStateMessage(hasHiddenIdleMatches: projection.hiddenIdleMatchCount > 0),
+                    automationID: AutomationID.Dock.state(.empty)
                 )
             } else {
                 ForEach(sections) { section in
@@ -444,6 +509,7 @@ public struct DockView: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .textCase(.uppercase)
+                            .codexAutomationID(AutomationID.Dock.section(section.id))
 
                         VStack(spacing: 10) {
                             ForEach(section.rows) { row in
@@ -461,14 +527,24 @@ public struct DockView: View {
                                         DockRowView(row: row)
                                     }
                                     .buttonStyle(.plain)
+                                    .accessibilityElement(children: .combine)
+                                    .codexAutomationID(AutomationID.Dock.row(hostID: row.id.hostID, threadID: row.id.threadID))
+                                    .accessibilityValue(row.automationValue)
                                     .contextMenu {
                                         rowContextMenu(row)
                                     }
                                 } else {
-                                    DockRowView(row: row)
-                                        .contextMenu {
-                                            rowContextMenu(row)
-                                        }
+                                    DockRowView(
+                                        row: row,
+                                        automationID: AutomationID.Dock.row(
+                                            hostID: row.id.hostID,
+                                            threadID: row.id.threadID
+                                        )
+                                    )
+                                    .accessibilityValue(row.automationValue)
+                                    .contextMenu {
+                                        rowContextMenu(row)
+                                    }
                                 }
                             }
                         }
@@ -487,8 +563,30 @@ public struct DockView: View {
         )
     }
 
+    private var dockScreenValue: String {
+        switch store.state {
+        case .configurationError:
+            return "configuration-error"
+        case .idle(let host):
+            return "idle; host=\(host.id); filter=\(selectedTab.rawValue); sort=\(sortMode.rawValue); idle=\(showsIdle)"
+        case .loading(let host):
+            return "loading; host=\(host.id); filter=\(selectedTab.rawValue); sort=\(sortMode.rawValue); idle=\(showsIdle)"
+        case .loaded(let snapshot):
+            return "loaded; rows=\(snapshot.rowCount); filter=\(selectedTab.rawValue); sort=\(sortMode.rawValue); idle=\(showsIdle)"
+        case .offline(let host, _):
+            return "offline; host=\(host.id); filter=\(selectedTab.rawValue); sort=\(sortMode.rawValue); idle=\(showsIdle)"
+        case .error(let host, _):
+            return "error; host=\(host.id); filter=\(selectedTab.rawValue); sort=\(sortMode.rawValue); idle=\(showsIdle)"
+        }
+    }
+
     @ViewBuilder
     private func rowContextMenu(_ row: DockRowViewModel) -> some View {
+        rowActions(row)
+    }
+
+    @ViewBuilder
+    private func rowActions(_ row: DockRowViewModel) -> some View {
         Button {
             Task {
                 await store.setLabel("Watch", for: row)
@@ -496,6 +594,13 @@ public struct DockView: View {
         } label: {
             Label("Mark Watch", systemImage: "tag")
         }
+        .codexAutomationID(
+            AutomationID.Dock.rowAction(
+                hostID: row.id.hostID,
+                threadID: row.id.threadID,
+                action: .markWatch
+            )
+        )
 
         Button {
             Task {
@@ -504,6 +609,13 @@ public struct DockView: View {
         } label: {
             Label("Clear Label", systemImage: "tag.slash")
         }
+        .codexAutomationID(
+            AutomationID.Dock.rowAction(
+                hostID: row.id.hostID,
+                threadID: row.id.threadID,
+                action: .clearLabel
+            )
+        )
 
         Button(role: .destructive) {
             Task {
@@ -514,6 +626,13 @@ public struct DockView: View {
         } label: {
             Label("Archive", systemImage: "archivebox")
         }
+        .codexAutomationID(
+            AutomationID.Dock.rowAction(
+                hostID: row.id.hostID,
+                threadID: row.id.threadID,
+                action: .archive
+            )
+        )
 
         Menu {
             ForEach(DockRowRail.allCases, id: \.self) { rail in
@@ -524,6 +643,13 @@ public struct DockView: View {
                 } label: {
                     Label(rail.label, systemImage: rail.systemImage)
                 }
+                .codexAutomationID(
+                    AutomationID.Dock.rowColorAction(
+                        hostID: row.id.hostID,
+                        threadID: row.id.threadID,
+                        rail: rail.rawValue
+                    )
+                )
             }
 
             Button {
@@ -533,9 +659,23 @@ public struct DockView: View {
             } label: {
                 Label("Clear Color", systemImage: "circle.slash")
             }
+            .codexAutomationID(
+                AutomationID.Dock.rowAction(
+                    hostID: row.id.hostID,
+                    threadID: row.id.threadID,
+                    action: .clearColor
+                )
+            )
         } label: {
             Label("Color", systemImage: "paintpalette")
         }
+        .codexAutomationID(
+            AutomationID.Dock.rowAction(
+                hostID: row.id.hostID,
+                threadID: row.id.threadID,
+                action: .color
+            )
+        )
     }
 
     private func emptyStateTitle(hasHiddenIdleMatches: Bool) -> String {
@@ -555,8 +695,6 @@ public struct DockView: View {
             return "Nothing needs you"
         case .running:
             return "Nothing running"
-        case .limited:
-            return "No limited rows"
         case .agents:
             return "No agent sessions"
         }
@@ -579,289 +717,9 @@ public struct DockView: View {
             return "No sessions are waiting for approval or input."
         case .running:
             return "No live sessions are loaded on reachable hosts."
-        case .limited:
-            return "No limited history rows are visible."
         case .agents:
             return "No agent or automation sessions are loaded on reachable hosts."
         }
-    }
-}
-
-struct HostSummaryView: View {
-    let host: DockHostViewModel
-    let subtitle: String
-
-    init(host: DockHostViewModel, subtitle: String) {
-        self.host = host
-        self.subtitle = subtitle
-    }
-
-    init(hostState: DockHostStateViewModel) {
-        self.host = hostState.host
-        switch hostState.status {
-        case .loaded, .partial, .empty:
-            self.subtitle = hostState.status.subtitle
-        case .offline(let message), .error(let message):
-            self.subtitle = "\(hostState.status.subtitle): \(message)"
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "desktopcomputer")
-                .font(.system(size: 24))
-                .foregroundStyle(.blue)
-                .frame(width: 30, height: 30)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(host.displayName)
-                    .font(.headline)
-                Text("\(host.endpoint) · \(subtitle)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            .layoutPriority(1)
-
-            Spacer(minLength: 8)
-
-            Text("Codex")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.blue)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(.blue.opacity(0.12), in: Capsule())
-                .fixedSize()
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-struct MappingFailureBanner: View {
-    let count: Int
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle")
-                .foregroundStyle(.orange)
-            Text("\(count) sessions could not be normalized.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(12)
-        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-struct ActionErrorBanner: View {
-    let message: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.circle")
-                .foregroundStyle(.red)
-            Text(message)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-            Spacer()
-        }
-        .padding(12)
-        .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-struct ScopeLoadFailureBanner: View {
-    let failure: DockScopeLoadFailureViewModel
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
-                .foregroundStyle(.orange)
-            Text("\(failure.host.displayName) \(failure.scope.label) load failed: \(failure.message)")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-            Spacer()
-        }
-        .padding(12)
-        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-struct ScopeConflictBanner: View {
-    let conflict: DockScopeConflictViewModel
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "arrow.triangle.branch")
-                .foregroundStyle(.orange)
-            Text("Thread \(conflict.backendThreadID) appeared in multiple source scopes; showing it in \(conflict.winningScope.label).")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-            Spacer()
-        }
-        .padding(12)
-        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-struct DockMessageView: View {
-    let icon: String
-    let title: String
-    let message: String
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.title2)
-                .foregroundStyle(.secondary)
-            Text(title)
-                .font(.headline)
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, minHeight: 150)
-        .padding(16)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-struct DockRowView: View {
-    let row: DockRowViewModel
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(railColor)
-                .frame(width: 5)
-
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(alignment: .top, spacing: 8) {
-                    Text(row.title)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(2)
-
-                    Spacer(minLength: 8)
-
-                    Text(row.status.label)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(statusColor)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 4)
-                        .background(statusColor.opacity(0.12), in: Capsule())
-                }
-
-                Text("\(row.repository) · \(row.branch)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-
-                if let label = row.label {
-                    Label(label, systemImage: "tag")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Text(row.summary)
-                    .font(.footnote)
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-
-                HStack(spacing: 6) {
-                    Image(systemName: "clock")
-                    Text(row.lastActivity)
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private var railColor: Color {
-        switch row.rail {
-        case .blue:
-            return .blue
-        case .green:
-            return .green
-        case .orange:
-            return .orange
-        case .red:
-            return .red
-        case .violet:
-            return .purple
-        }
-    }
-
-    private var statusColor: Color {
-        switch row.status {
-        case .needsMe:
-            return .orange
-        case .running:
-            return .green
-        case .idle:
-            return .blue
-        case .limited:
-            return .purple
-        case .failed:
-            return .red
-        case .unknown:
-            return .secondary
-        }
-    }
-}
-
-private extension DockRowRail {
-    var label: String {
-        switch self {
-        case .blue:
-            return "Blue"
-        case .green:
-            return "Green"
-        case .orange:
-            return "Orange"
-        case .red:
-            return "Red"
-        case .violet:
-            return "Violet"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .blue:
-            return "circle.fill"
-        case .green:
-            return "circle.fill"
-        case .orange:
-            return "circle.fill"
-        case .red:
-            return "circle.fill"
-        case .violet:
-            return "circle.fill"
-        }
-    }
-}
-
-extension View {
-    @ViewBuilder
-    func dockNavigationChrome() -> some View {
-        #if os(iOS)
-        self.navigationBarHidden(true)
-        #else
-        self
-        #endif
     }
 }
 

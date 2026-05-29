@@ -34,6 +34,9 @@ public struct SessionDetailView: View {
         .onDisappear {
             store.close()
         }
+        .accessibilityElement(children: .contain)
+        .codexAutomationID(AutomationID.Session.root(threadID: store.row.id.threadID))
+        .accessibilityValue(sessionScreenValue)
     }
 
     @ViewBuilder
@@ -45,6 +48,7 @@ public struct SessionDetailView: View {
             DetailHeaderView(header: header, liveState: .connecting)
             ProgressView()
                 .frame(maxWidth: .infinity, minHeight: 140)
+                .codexAutomationID(AutomationID.Session.state(.loading))
         case let .loaded(snapshot):
             loadedContent(snapshot)
         case let .error(header, message):
@@ -52,7 +56,8 @@ public struct SessionDetailView: View {
             DetailMessageView(
                 icon: "exclamationmark.octagon",
                 title: "Thread unavailable",
-                message: message
+                message: message,
+                automationID: AutomationID.Session.state(.error)
             )
         }
     }
@@ -69,7 +74,8 @@ public struct SessionDetailView: View {
             DetailMessageView(
                 icon: "wifi.exclamationmark",
                 title: "Live updates stopped",
-                message: message
+                message: message,
+                automationID: AutomationID.Session.state(.stale)
             )
         }
         ComposerView(store: store)
@@ -97,6 +103,19 @@ public struct SessionDetailView: View {
         #else
         Color(.background)
         #endif
+    }
+
+    private var sessionScreenValue: String {
+        switch store.state {
+        case let .idle(header):
+            return "idle; host=\(header.hostID); thread=\(header.threadID); live=connecting"
+        case let .loading(header):
+            return "loading; host=\(header.hostID); thread=\(header.threadID); live=connecting"
+        case let .loaded(snapshot):
+            return "loaded; host=\(snapshot.header.hostID); thread=\(snapshot.header.threadID); live=\(snapshot.liveState.label); events=\(snapshot.events.count)"
+        case let .error(header, _):
+            return "error; host=\(header.hostID); thread=\(header.threadID); live=stale"
+        }
     }
 
 }
@@ -141,6 +160,9 @@ private struct DetailHeaderView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityValue("host=\(header.hostID); thread=\(header.threadID); live=\(liveState.label); status=\(header.statusLabel)")
+        .codexAutomationID(AutomationID.Session.header)
     }
 
     @ViewBuilder
@@ -179,14 +201,20 @@ private struct DetailHeaderView: View {
 
     private var hostPill: some View {
         DetailPill(label: header.hostName, systemImage: "desktopcomputer", color: .blue)
+            .accessibilityValue(header.hostID)
+            .codexAutomationID(AutomationID.Session.hostPill)
     }
 
     private var livePill: some View {
         DetailPill(label: liveState.label, systemImage: liveIcon, color: liveColor)
+            .accessibilityValue(liveState.label)
+            .codexAutomationID(AutomationID.Session.livePill)
     }
 
     private var statusPill: some View {
         DetailPill(label: header.statusLabel, systemImage: "circle.dashed", color: .secondary)
+            .accessibilityValue(header.statusLabel)
+            .codexAutomationID(AutomationID.Session.statusPill)
     }
 
     private var liveIcon: String {

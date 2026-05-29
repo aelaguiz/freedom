@@ -78,7 +78,7 @@ public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
     ) async throws -> DockLoadResult {
         let startedAt = Date()
         let sourceKinds = query.sourceKinds?.map(\.rawValue).joined(separator: ",")
-        DockLog.dock.info("dock client load started host_id=\(host.id, privacy: .public) endpoints=\(host.endpoints.count, privacy: .public) archived=\(query.archived, privacy: .public) source_kinds=\(DockLog.publicID(sourceKinds), privacy: .public)")
+        DockLog.dock.info("dock client load started host_id=\(host.id, privacy: .public) endpoint=\(DockLog.endpoint(host.webSocketURL), privacy: .public) archived=\(query.archived, privacy: .public) source_kinds=\(DockLog.publicID(sourceKinds), privacy: .public)")
         return try await withClient(for: host) { client in
             let result = try await loadSessions(
                 using: client,

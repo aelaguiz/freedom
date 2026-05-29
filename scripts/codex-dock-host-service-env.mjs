@@ -11,7 +11,6 @@ const DEFAULT_REALTIME_TRANSCRIPTION_DELAY = "low";
 const APP_SECRET_ENV_PATTERN = /(OPENAI_API_KEY|TOKEN|SECRET|BEARER|PASSWORD|COOKIE|SESSION)/i;
 const APP_SAFE_EXACT_ENV_KEYS = new Set([
   "CODEX_DOCK_HOSTS",
-  "CODEX_DOCK_RELAY_INSTANCE_ID",
 ]);
 const OLD_APP_CONFIG_HOST_ENV_PATTERN = /^CODEX_DOCK_HOST_[A-Z0-9_]+_(WS|APP_SERVER_WS|NAME|AUTH_MODE|TOKEN|BEARER_TOKEN|TOKEN_FILE|BEARER_TOKEN_FILE)$/;
 
@@ -66,7 +65,7 @@ function firstNonEmpty(...values) {
   return "";
 }
 
-function parseEndpointEntry(entry) {
+function parseHostEntry(entry) {
   const trimmed = String(entry || "").trim();
   const match = trimmed.match(/^(?:([^:/?#@\s]+)|\[([^\]]+)\]):(\d+)$/);
   if (!match) {
@@ -79,30 +78,30 @@ function parseEndpointEntry(entry) {
   };
 }
 
-function assertAppFacingRelayEndpoints(endpoints, name) {
-  for (const endpoint of endpoints) {
-    if (endpoint.port === 4500) {
-      throw new Error(`${name} must point at the Dock relay on :4510, not the raw Codex app-server on :4500: ${endpoint.value}`);
+function assertAppFacingRelayHosts(hosts, name) {
+  for (const host of hosts) {
+    if (host.port === 4500) {
+      throw new Error(`${name} must point at the Dock relay on :4510, not the raw Codex app-server on :4500: ${host.value}`);
     }
   }
 }
 
-function mergeEndpoints(value, endpoint) {
-  const endpoints = String(value || "")
+function mergeHosts(value, host) {
+  const hosts = String(value || "")
     .split(",")
     .map((entry) => entry.trim())
-    .map(parseEndpointEntry)
+    .map(parseHostEntry)
     .filter((entry) => entry !== null);
-  assertAppFacingRelayEndpoints(endpoints, "CODEX_DOCK_HOSTS");
-  if (!endpoints.some((entry) => entry.value === endpoint)) {
-    const parsedEndpoint = parseEndpointEntry(endpoint);
-    if (!parsedEndpoint) {
-      throw new Error(`relay endpoint must be host:port: ${endpoint}`);
+  assertAppFacingRelayHosts(hosts, "CODEX_DOCK_HOSTS");
+  if (!hosts.some((entry) => entry.value === host)) {
+    const parsedHost = parseHostEntry(host);
+    if (!parsedHost) {
+      throw new Error(`relay host must be host:port: ${host}`);
     }
-    assertAppFacingRelayEndpoints([parsedEndpoint], "CODEX_DOCK_HOSTS");
-    endpoints.unshift(parsedEndpoint);
+    assertAppFacingRelayHosts([parsedHost], "CODEX_DOCK_HOSTS");
+    hosts.unshift(parsedHost);
   }
-  return endpoints.map((entry) => entry.value).join(",");
+  return hosts.map((entry) => entry.value).join(",");
 }
 
 function serializeEnv(values, preferredOrder) {
@@ -127,6 +126,7 @@ function removeOldAppConfigEnv(values) {
       || key === "CODEX_DOCK_APP_SERVER_WS"
       || key === "CODEX_DOCK_APP_SERVER_BEARER_TOKEN"
       || key === "CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE"
+      || key === "CODEX_DOCK_RELAY_INSTANCE_ID"
       || OLD_APP_CONFIG_HOST_ENV_PATTERN.test(key)
     ) {
       delete values[key];
@@ -141,14 +141,9 @@ function generatedServiceEnvValues(config, runtime = {}) {
   removeOldAppConfigEnv(existing);
 
   const values = { ...existing };
-  values.CODEX_DOCK_HOSTS = mergeEndpoints(
+  values.CODEX_DOCK_HOSTS = mergeHosts(
     firstNonEmpty(runtimeEnv.CODEX_DOCK_HOSTS, existing.CODEX_DOCK_HOSTS),
     config.relay.appEndpoint.serialized,
-  );
-  values.CODEX_DOCK_RELAY_INSTANCE_ID = firstNonEmpty(
-    runtimeEnv.CODEX_DOCK_RELAY_INSTANCE_ID,
-    existing.CODEX_DOCK_RELAY_INSTANCE_ID,
-    config.host.id,
   );
   values.CODEX_DOCK_REAL_HOST_ID = config.host.id;
   values.CODEX_DOCK_REAL_HOST_NAME = config.host.displayName;
@@ -194,7 +189,6 @@ function generatedHostEnvValues(config, serviceValues) {
     }
   }
   values.CODEX_DOCK_HOSTS = serviceValues.CODEX_DOCK_HOSTS;
-  values.CODEX_DOCK_RELAY_INSTANCE_ID = serviceValues.CODEX_DOCK_RELAY_INSTANCE_ID;
   return values;
 }
 
@@ -202,7 +196,6 @@ function writeGeneratedEnvFiles(config, runtime = {}) {
   const serviceValues = generatedServiceEnvValues(config, runtime);
   const serviceOrder = [
     "CODEX_DOCK_HOSTS",
-    "CODEX_DOCK_RELAY_INSTANCE_ID",
     "CODEX_DOCK_REAL_HOST_ID",
     "CODEX_DOCK_REAL_HOST_NAME",
     "CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL",
@@ -214,7 +207,6 @@ function writeGeneratedEnvFiles(config, runtime = {}) {
   const hostValues = generatedHostEnvValues(config, serviceValues);
   const hostOrder = [
     "CODEX_DOCK_HOSTS",
-    "CODEX_DOCK_RELAY_INSTANCE_ID",
   ];
   writeFileAtomic(config.relay.hostEnvFile, serializeEnv(hostValues, hostOrder), 0o600);
 

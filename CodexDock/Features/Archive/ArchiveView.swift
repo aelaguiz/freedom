@@ -38,6 +38,9 @@ public struct ArchiveView: View {
                 await store.refresh()
             }
         }
+        .accessibilityElement(children: .contain)
+        .codexAutomationID(AutomationID.Archive.root)
+        .accessibilityValue(archiveScreenValue)
     }
 
     private var header: some View {
@@ -59,6 +62,7 @@ public struct ArchiveView: View {
             }
             .buttonStyle(.bordered)
             .accessibilityLabel("Refresh archive")
+            .codexAutomationID(AutomationID.Archive.refreshButton)
         }
     }
 
@@ -79,7 +83,8 @@ public struct ArchiveView: View {
             DockMessageView(
                 icon: "exclamationmark.triangle",
                 title: "Relay not configured",
-                message: message
+                message: message,
+                automationID: AutomationID.Archive.state(.configurationError)
             )
         case let .idle(hosts):
             hostList(hosts, subtitle: "Ready")
@@ -87,19 +92,22 @@ public struct ArchiveView: View {
             hostList(hosts, subtitle: "Loading")
             ProgressView()
                 .frame(maxWidth: .infinity, minHeight: 120)
+                .codexAutomationID(AutomationID.Archive.state(.loading))
         case let .empty(snapshot):
             snapshotContent(snapshot)
             DockMessageView(
                 icon: "archivebox",
                 title: "Archive empty",
-                message: "Archived sessions from configured hosts will appear here."
+                message: "Archived sessions from configured hosts will appear here.",
+                automationID: AutomationID.Archive.state(.empty)
             )
         case let .unavailable(snapshot, message):
             snapshotContent(snapshot)
             DockMessageView(
                 icon: "wifi.exclamationmark",
                 title: "Archive unavailable",
-                message: message
+                message: message,
+                automationID: AutomationID.Archive.state(.unavailable)
             )
         case let .loaded(snapshot):
             snapshotContent(snapshot)
@@ -109,7 +117,11 @@ public struct ArchiveView: View {
     private func hostList(_ hosts: [DockHostViewModel], subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(hosts) { host in
-                HostSummaryView(host: host, subtitle: subtitle)
+                HostSummaryView(
+                    host: host,
+                    subtitle: subtitle,
+                    automationID: AutomationID.Archive.hostSummary(hostID: host.id)
+                )
             }
         }
     }
@@ -117,15 +129,24 @@ public struct ArchiveView: View {
     private func snapshotContent(_ snapshot: ArchiveSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             ForEach(snapshot.hostStates) { hostState in
-                HostSummaryView(hostState: hostState)
+                HostSummaryView(
+                    hostState: hostState,
+                    automationID: AutomationID.Archive.hostSummary(hostID: hostState.host.id)
+                )
             }
 
             if let actionError = store.actionError {
-                ActionErrorBanner(message: actionError)
+                ActionErrorBanner(
+                    message: actionError,
+                    automationID: AutomationID.Archive.state(.actionError)
+                )
             }
 
             if !snapshot.mappingFailures.isEmpty {
-                MappingFailureBanner(count: snapshot.mappingFailures.count)
+                MappingFailureBanner(
+                    count: snapshot.mappingFailures.count,
+                    automationID: AutomationID.Archive.state(.mappingFailure)
+                )
             }
 
             ForEach(snapshot.sections) { section in
@@ -134,6 +155,7 @@ public struct ArchiveView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .textCase(.uppercase)
+                        .codexAutomationID(AutomationID.Archive.section(section.id))
 
                     VStack(spacing: 10) {
                         ForEach(section.rows) { row in
@@ -147,7 +169,11 @@ public struct ArchiveView: View {
 
     private func archiveRow(_ row: DockRowViewModel) -> some View {
         VStack(alignment: .trailing, spacing: 8) {
-            DockRowView(row: row)
+            DockRowView(
+                row: row,
+                automationID: AutomationID.Archive.row(hostID: row.id.hostID, threadID: row.id.threadID)
+            )
+                .accessibilityValue(row.automationValue)
 
             Button {
                 Task {
@@ -160,6 +186,7 @@ public struct ArchiveView: View {
                     .font(.subheadline.weight(.semibold))
             }
             .buttonStyle(.bordered)
+            .codexAutomationID(AutomationID.Archive.restoreButton(hostID: row.id.hostID, threadID: row.id.threadID))
         }
         .contextMenu {
             Button {
@@ -171,6 +198,24 @@ public struct ArchiveView: View {
             } label: {
                 Label("Restore", systemImage: "arrow.uturn.backward")
             }
+            .codexAutomationID(AutomationID.Archive.restoreButton(hostID: row.id.hostID, threadID: row.id.threadID))
+        }
+    }
+
+    private var archiveScreenValue: String {
+        switch store.state {
+        case .configurationError:
+            return "configuration-error"
+        case .idle(let hosts):
+            return "idle; hosts=\(hosts.count)"
+        case .loading(let hosts):
+            return "loading; hosts=\(hosts.count)"
+        case .loaded(let snapshot):
+            return "loaded; rows=\(snapshot.rowCount)"
+        case .empty(let snapshot):
+            return "empty; rows=\(snapshot.rowCount)"
+        case .unavailable(let snapshot, _):
+            return "unavailable; rows=\(snapshot.rowCount)"
         }
     }
 }

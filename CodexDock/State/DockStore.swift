@@ -5,7 +5,7 @@ public enum DockRowStatusKind: String, Equatable, Sendable, CaseIterable {
     case needsMe
     case running
     case idle
-    case limited
+    case notLoaded
     case failed
     case unknown
 
@@ -17,8 +17,8 @@ public enum DockRowStatusKind: String, Equatable, Sendable, CaseIterable {
             return "Running"
         case .idle:
             return "Idle"
-        case .limited:
-            return "Limited"
+        case .notLoaded:
+            return "Not loaded"
         case .failed:
             return "Error"
         case .unknown:
@@ -39,7 +39,6 @@ public enum DockTabID: String, CaseIterable, Identifiable, Equatable, Sendable {
     case all
     case needsMe
     case running
-    case limited
     case agents
 
     public var id: String { rawValue }
@@ -52,8 +51,6 @@ public enum DockTabID: String, CaseIterable, Identifiable, Equatable, Sendable {
             return "Needs me"
         case .running:
             return "Running"
-        case .limited:
-            return "Limited"
         case .agents:
             return "Agents"
         }
@@ -73,8 +70,6 @@ public enum DockTabID: String, CaseIterable, Identifiable, Equatable, Sendable {
                         || row.status == .idle
                         || row.status == .failed
                 )
-        case .limited:
-            return row.origin.kind == .humanInteractive && row.status == .limited
         case .agents:
             return row.origin.kind != .humanInteractive
         }
@@ -134,7 +129,7 @@ public struct DockHostViewModel: Equatable, Identifiable, Sendable {
     public init(host: DockHostConfiguration) {
         self.id = host.id
         self.displayName = host.displayName
-        self.endpoint = host.displayEndpointList
+        self.endpoint = host.endpoint.displayEndpoint
     }
 }
 

@@ -165,7 +165,6 @@ test("app-config output is app-facing and non-secret", () => {
 
   assert.deepEqual(json, {
     version: 1,
-    relayInstanceID: "home",
     hosts: [
       {
         host: "home.local",
@@ -174,7 +173,7 @@ test("app-config output is app-facing and non-secret", () => {
     ],
   });
   assert.match(envText, /CODEX_DOCK_HOSTS=home\.local:4510/);
-  assert.match(envText, /CODEX_DOCK_RELAY_INSTANCE_ID=home/);
+  assert.equal(envText.includes("CODEX_DOCK_RELAY_INSTANCE_ID"), false);
   assert.equal(envText.includes("CODEX_DOCK_HOST_HOME_WS"), false);
   assert.equal(envText.includes("CODEX_DOCK_HOST_HOME_NAME"), false);
   assert.equal(envText.includes("CODEX_DOCK_HOST_HOME_AUTH_MODE"), false);
@@ -314,10 +313,10 @@ test("install writes service files creates a token and calls launchd through an 
   assert.equal(output.stdout().includes("app-server.token"), false);
   assert.match(fs.readFileSync(path.join(cwd, ".codex-dock-test", "service.env"), "utf8"), /OPENAI_API_KEY=sk-testtesttesttesttest/);
   assert.match(fs.readFileSync(path.join(cwd, ".codex-dock-test", "service.env"), "utf8"), /CODEX_DOCK_HOSTS=home\.local:4510/);
-  assert.match(fs.readFileSync(path.join(cwd, ".codex-dock-test", "service.env"), "utf8"), /CODEX_DOCK_RELAY_INSTANCE_ID=home/);
+  assert.equal(fs.readFileSync(path.join(cwd, ".codex-dock-test", "service.env"), "utf8").includes("CODEX_DOCK_RELAY_INSTANCE_ID"), false);
   const generatedHostEnv = fs.readFileSync(path.join(cwd, ".codex-dock-test", "host.env"), "utf8");
   assert.match(generatedHostEnv, /CODEX_DOCK_HOSTS=home\.local:4510/);
-  assert.match(generatedHostEnv, /CODEX_DOCK_RELAY_INSTANCE_ID=home/);
+  assert.equal(generatedHostEnv.includes("CODEX_DOCK_RELAY_INSTANCE_ID"), false);
   assert.equal(generatedHostEnv.includes("CODEX_DOCK_HOST_HOME_AUTH_MODE"), false);
   assert.equal(generatedHostEnv.includes("CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS"), false);
   assert.equal(generatedHostEnv.includes("OPENAI_API_KEY"), false);
@@ -372,7 +371,7 @@ test("install writes two-host app env from app-safe service env keys only", asyn
 
   const hostEnv = fs.readFileSync(path.join(runtimeDir, "host.env"), "utf8");
   assert.match(hostEnv, /CODEX_DOCK_HOSTS=192\.168\.50\.117:4510,100\.66\.11\.7:4510/);
-  assert.match(hostEnv, /CODEX_DOCK_RELAY_INSTANCE_ID=Amir-M5/);
+  assert.equal(hostEnv.includes("CODEX_DOCK_RELAY_INSTANCE_ID"), false);
   assert.equal(hostEnv.includes("CODEX_DOCK_HOST_AMIR_M5_WS"), false);
   assert.equal(hostEnv.includes("CODEX_DOCK_HOST_AMIR_M5_NAME"), false);
   assert.equal(hostEnv.includes("CODEX_DOCK_HOST_AMIR_M5_AUTH_MODE"), false);
@@ -394,7 +393,6 @@ test("install rejects stale raw app-server endpoint in app-facing host env", asy
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.writeFileSync(path.join(runtimeDir, "service.env"), [
     "CODEX_DOCK_HOSTS=127.0.0.1:4500",
-    "CODEX_DOCK_RELAY_INSTANCE_ID=Amir-M5",
     "",
   ].join("\n"));
 
@@ -889,6 +887,6 @@ test("env app-config values reject line breaks", () => {
 
   assert.throws(
     () => appConfigEnv(config),
-    /relay endpoint must not contain line breaks/,
+    /relay host must not contain line breaks/,
   );
 });

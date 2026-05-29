@@ -29,6 +29,7 @@
 		48D9A54C1E505B0CC65E4654 /* CodexDockApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FACDCA51DD66D50C6A6F145 /* CodexDockApp.swift */; };
 		4D9CD10593ABDDD5F6E74BD9 /* ThreadDetailDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECA148D7F9C96BD5EDF6D709 /* ThreadDetailDTO.swift */; };
 		525C4D2542BCD14F9EFDE571 /* JSONRPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9C4FD936A8FB869F14F7F61 /* JSONRPC.swift */; };
+		54185947D767A9A31E000AB1 /* CodexDock.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; };
 		5B5103973B19887BEA32843D /* HostRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26B07B009451AB1728472ADB /* HostRegistry.swift */; };
 		5CA4A978F96296E0BD98EF3E /* ThreadDetailStoreLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35E7D89A1C77852FAEB08A81 /* ThreadDetailStoreLifecycleTests.swift */; };
 		5F045E715AFE5F40D383E82D /* SessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AC280DBF1FD9245AD8CD686 /* SessionDetailView.swift */; };
@@ -36,6 +37,7 @@
 		6B62194AAF786F06DEAB123A /* DockStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E8613594609B20254A5CA44 /* DockStoreTests.swift */; };
 		6D5E2B1582C73AADFE209E1D /* VoiceCaptureControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCC83E79154B50CD8B568FB4 /* VoiceCaptureControllerTests.swift */; };
 		707028C4833C4EDF781F645F /* AppLifecycleCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2FB5E493FCFDB443D53EB2 /* AppLifecycleCoordinatorTests.swift */; };
+		715D24A6FE0389A4DF3B207C /* CodexDockAutomationSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BDD9186F027807209C9C257 /* CodexDockAutomationSmokeTests.swift */; };
 		7430376B939E3611D67885F0 /* AppServerDockClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D76ACB118C0AE566FE1705F5 /* AppServerDockClient.swift */; };
 		74C104A7F7207E4AF17272C5 /* DockSessionProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C81305AA09AC5FF83868663 /* DockSessionProjection.swift */; };
 		7620B7A25D86E81210477475 /* AppServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABDB5847612728C391956985 /* AppServerClient.swift */; };
@@ -45,8 +47,10 @@
 		804101052873E16E35EA46C3 /* AppConnectivityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AC49015E8B9106FA9F6FBD7 /* AppConnectivityStore.swift */; };
 		8825645412ACF402887DF691 /* VoiceCaptureController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74E0150C92A43EF9216A31F1 /* VoiceCaptureController.swift */; };
 		8A21B73F18333A33FEA9DA97 /* CodexDock.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; };
+		8C3C7A78B136227B1485019D /* DockSharedViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA43C7C5E471419A46890F20 /* DockSharedViews.swift */; };
 		9279CDE0719C660E44CE9AE6 /* HostsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DD37C0E0D19E2FFE67D356E /* HostsView.swift */; };
 		948497183F2A3F44DEBFB7C0 /* CodexDock.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; };
+		9831B949551783839A91AFA5 /* AutomationID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870C8C923D6F72E707AFC7A6 /* AutomationID.swift */; };
 		99B452E9A8D07C40003708BF /* ThreadDetailStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D0EBB21C932928CC08AEA0D /* ThreadDetailStore.swift */; };
 		A0649B72566F4EFCAB2996F2 /* ThreadDetailStore+Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21007B26E118AEEE5C48CD44 /* ThreadDetailStore+Voice.swift */; };
 		AEAC4E8DC982EB5144DAAAC2 /* LocalThreadMetadataStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DC52B300359BB6026278F44 /* LocalThreadMetadataStore.swift */; };
@@ -64,16 +68,25 @@
 		DDB0A03F1EBE149E4FD5FB06 /* DockStoreTestsProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE68995BF09EC103770E8F3 /* DockStoreTestsProjection.swift */; };
 		E259E29A4592D3BF153F087F /* ServerRequestCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6FC9B9483DB6F49A90F5EC0 /* ServerRequestCardTests.swift */; };
 		E5FFD254DE0F4973C405B626 /* AppServerHostConnector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C93AD4A7645A6C045D62908 /* AppServerHostConnector.swift */; };
+		E6AB5F0143D40FE4C4AD699F /* AutomationIDTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FBFECB63661C31C8C327364 /* AutomationIDTests.swift */; };
 		E88D5BF2DC414497611228C9 /* GlobalConnectivityIndicatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0200A7C5EC37FC0A7ABCDA6 /* GlobalConnectivityIndicatorView.swift */; };
 		E8B4F584399DE2B51D9E3B1A /* DockHostConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C72CBCF6924E26CAC9D3AE /* DockHostConfiguration.swift */; };
 		F11E5071EA0DA1EA4CC4A2D1 /* DiagnosticsLoggingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E31AB3877106E108F7A6ECE7 /* DiagnosticsLoggingTests.swift */; };
 		F2F6C61CD4A8F9EAFBD8B174 /* CodexDock.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		F8EC4DFA76E5BB5676615A0F /* CodexDock.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		FCCB528C1F9D039F37EA63F2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2E1924934DAB8EC15214B207 /* Assets.xcassets */; };
 		FEA3427B9E20A65467D79334 /* SessionSummaryMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95146D412CB7EB8AAFF12FCC /* SessionSummaryMapper.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
 		20B4B36215944A681A99AF48 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8D5AF048B456EAB06428F169 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AFB39884AF01092F386A0061;
+			remoteInfo = CodexDock;
+		};
+		4EB0A00228EA3BEE04E6325E /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 8D5AF048B456EAB06428F169 /* Project object */;
 			proxyType = 1;
@@ -87,9 +100,27 @@
 			remoteGlobalIDString = AFB39884AF01092F386A0061;
 			remoteInfo = CodexDock;
 		};
+		B2D8A550EF791866B5A800D6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8D5AF048B456EAB06428F169 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1B43F1F1D80974244330CF93;
+			remoteInfo = CodexDockApp;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		40644AD8E9A49703F66D9026 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				F8EC4DFA76E5BB5676615A0F /* CodexDock.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		4AF83B01873711FB222C5456 /* Embed Frameworks */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -132,8 +163,10 @@
 		3C5D41B7D2FF05EE75C975E6 /* CodexDockBootstrapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexDockBootstrapView.swift; sourceTree = "<group>"; };
 		3DC48CE0A2682B2B0F223F12 /* ThreadEventNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadEventNormalizerTests.swift; sourceTree = "<group>"; };
 		3F035F07B0BBC9BE740ED620 /* AppServerThreadDetailSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerThreadDetailSession.swift; sourceTree = "<group>"; };
+		40F2C9EC21D726E41BCE5221 /* CodexDockUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CodexDockUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4487067DBDCABE61793B26B5 /* ThreadListMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadListMappingTests.swift; sourceTree = "<group>"; };
 		4A92948E4571E0CEE65CAE35 /* DockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockView.swift; sourceTree = "<group>"; };
+		4FBFECB63661C31C8C327364 /* AutomationIDTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationIDTests.swift; sourceTree = "<group>"; };
 		52C72CBCF6924E26CAC9D3AE /* DockHostConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockHostConfiguration.swift; sourceTree = "<group>"; };
 		54671D3A6F294D5E4280D81E /* ArchiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveView.swift; sourceTree = "<group>"; };
 		5A88532EFDA6E7D5544BB9EE /* ThreadMessageListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadMessageListView.swift; sourceTree = "<group>"; };
@@ -147,8 +180,10 @@
 		7B2F9B8D2B9BB539D75F5CDA /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		7BE68995BF09EC103770E8F3 /* DockStoreTestsProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockStoreTestsProjection.swift; sourceTree = "<group>"; };
 		7DD37C0E0D19E2FFE67D356E /* HostsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostsView.swift; sourceTree = "<group>"; };
+		870C8C923D6F72E707AFC7A6 /* AutomationID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationID.swift; sourceTree = "<group>"; };
 		8A41544D2CBD2C298312F3D3 /* HostSettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostSettingsStore.swift; sourceTree = "<group>"; };
 		8B717287F11303537B392BB6 /* CodexDockApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CodexDockApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8BDD9186F027807209C9C257 /* CodexDockAutomationSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexDockAutomationSmokeTests.swift; sourceTree = "<group>"; };
 		95146D412CB7EB8AAFF12FCC /* SessionSummaryMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSummaryMapper.swift; sourceTree = "<group>"; };
 		95A38808257E490A715D32C2 /* CodexDock.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = CodexDock.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		9AEFC520C4BAC0B3AE2B1174 /* ThreadDetailStoreTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailStoreTestSupport.swift; sourceTree = "<group>"; };
@@ -176,6 +211,7 @@
 		F9C3D49CF36AB4945916A749 /* ThreadDetailStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailStoreTests.swift; sourceTree = "<group>"; };
 		F9C4FD936A8FB869F14F7F61 /* JSONRPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPC.swift; sourceTree = "<group>"; };
 		FA032FF8D4142A8D3461B7DE /* ArchiveStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveStore.swift; sourceTree = "<group>"; };
+		FA43C7C5E471419A46890F20 /* DockSharedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockSharedViews.swift; sourceTree = "<group>"; };
 		FABBE94F4FF90D41C42F5683 /* AppServerClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerClientTests.swift; sourceTree = "<group>"; };
 		FCC83E79154B50CD8B568FB4 /* VoiceCaptureControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceCaptureControllerTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -194,6 +230,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				8A21B73F18333A33FEA9DA97 /* CodexDock.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FF17E10A6B71AC6EB98AF897 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				54185947D767A9A31E000AB1 /* CodexDock.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -240,6 +284,22 @@
 			path = Diagnostics;
 			sourceTree = "<group>";
 		};
+		261FFAD02C9BCF7958847C82 /* CodexDockUITests */ = {
+			isa = PBXGroup;
+			children = (
+				8BDD9186F027807209C9C257 /* CodexDockAutomationSmokeTests.swift */,
+			);
+			path = CodexDockUITests;
+			sourceTree = "<group>";
+		};
+		306D167EF165D14DD35CA311 /* Automation */ = {
+			isa = PBXGroup;
+			children = (
+				870C8C923D6F72E707AFC7A6 /* AutomationID.swift */,
+			);
+			path = Automation;
+			sourceTree = "<group>";
+		};
 		4491443AE184FB131E00EC87 /* Session */ = {
 			isa = PBXGroup;
 			children = (
@@ -254,6 +314,7 @@
 			isa = PBXGroup;
 			children = (
 				8D315853EAD6988CDE66FA53 /* AppServer */,
+				306D167EF165D14DD35CA311 /* Automation */,
 				8E0D46D336B13F74948B1046 /* Configuration */,
 				1A119C6F39398D9549D0E4D3 /* Diagnostics */,
 				BDBD782C35EF338B11A202CB /* Features */,
@@ -278,6 +339,7 @@
 				5377637F2463649CB9B4832A /* CodexDock */,
 				076CA8583D9ABCCC644B0E20 /* CodexDockApp */,
 				E078DC0BD3C087EDB2B9A994 /* CodexDockTests */,
+				261FFAD02C9BCF7958847C82 /* CodexDockUITests */,
 				CC4BD15D323B3A6F6A4FB089 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -353,6 +415,7 @@
 				95A38808257E490A715D32C2 /* CodexDock.framework */,
 				8B717287F11303537B392BB6 /* CodexDockApp.app */,
 				F50231B3D09A5BFB802F5AC2 /* CodexDockTests.xctest */,
+				40F2C9EC21D726E41BCE5221 /* CodexDockUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -361,6 +424,7 @@
 			isa = PBXGroup;
 			children = (
 				3C5D41B7D2FF05EE75C975E6 /* CodexDockBootstrapView.swift */,
+				FA43C7C5E471419A46890F20 /* DockSharedViews.swift */,
 				4A92948E4571E0CEE65CAE35 /* DockView.swift */,
 			);
 			path = Dock;
@@ -372,6 +436,7 @@
 				A210B5FEF921CE9BD7B07766 /* AppConnectivityStoreTests.swift */,
 				6A2FB5E493FCFDB443D53EB2 /* AppLifecycleCoordinatorTests.swift */,
 				FABBE94F4FF90D41C42F5683 /* AppServerClientTests.swift */,
+				4FBFECB63661C31C8C327364 /* AutomationIDTests.swift */,
 				08704B25134B1064DED004F8 /* ComposerVoiceControlsPresentationTests.swift */,
 				E31AB3877106E108F7A6ECE7 /* DiagnosticsLoggingTests.swift */,
 				20C2BA989B12A434DA92B379 /* DockConfigurationTests.swift */,
@@ -458,6 +523,27 @@
 			productReference = 95A38808257E490A715D32C2 /* CodexDock.framework */;
 			productType = "com.apple.product-type.framework";
 		};
+		F17ED81C5BBFE19B4C28A4F9 /* CodexDockUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3315B9C82AE3A1BD2C564D9D /* Build configuration list for PBXNativeTarget "CodexDockUITests" */;
+			buildPhases = (
+				4815A0E47E7AA2CE6DF7791B /* Sources */,
+				FF17E10A6B71AC6EB98AF897 /* Frameworks */,
+				40644AD8E9A49703F66D9026 /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				688D3BB3236E3879FB2E7202 /* PBXTargetDependency */,
+				128FFCA1D18D9C638C132FED /* PBXTargetDependency */,
+			);
+			name = CodexDockUITests;
+			packageProductDependencies = (
+			);
+			productName = CodexDockUITests;
+			productReference = 40F2C9EC21D726E41BCE5221 /* CodexDockUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -470,6 +556,9 @@
 					1B43F1F1D80974244330CF93 = {
 						DevelopmentTeam = R6B8KXF3QW;
 						ProvisioningStyle = Automatic;
+					};
+					F17ED81C5BBFE19B4C28A4F9 = {
+						TestTargetID = 1B43F1F1D80974244330CF93;
 					};
 				};
 			};
@@ -490,6 +579,7 @@
 				AFB39884AF01092F386A0061 /* CodexDock */,
 				1B43F1F1D80974244330CF93 /* CodexDockApp */,
 				40CA64A9C9CB32312CA00341 /* CodexDockTests */,
+				F17ED81C5BBFE19B4C28A4F9 /* CodexDockUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -513,6 +603,7 @@
 				7AF96D0A47BCA693F3A69031 /* AppConnectivityStoreTests.swift in Sources */,
 				707028C4833C4EDF781F645F /* AppLifecycleCoordinatorTests.swift in Sources */,
 				D265D19D042CE35098EF5521 /* AppServerClientTests.swift in Sources */,
+				E6AB5F0143D40FE4C4AD699F /* AutomationIDTests.swift in Sources */,
 				D35F6F371609F8CE905FBC36 /* ComposerVoiceControlsPresentationTests.swift in Sources */,
 				F11E5071EA0DA1EA4CC4A2D1 /* DiagnosticsLoggingTests.swift in Sources */,
 				BD5559D45BCDA5E6D68317D1 /* DockConfigurationTests.swift in Sources */,
@@ -529,6 +620,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		4815A0E47E7AA2CE6DF7791B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				715D24A6FE0389A4DF3B207C /* CodexDockAutomationSmokeTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		6E5BE5A54D85B4C2FBC87D59 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -542,10 +641,12 @@
 				0B0323F75A5305EB84D9B0AB /* AppServerThreadDetailSession.swift in Sources */,
 				1463EC33BFEF2CA641D47CAE /* ArchiveStore.swift in Sources */,
 				3101E586A0F08E291A67103D /* ArchiveView.swift in Sources */,
+				9831B949551783839A91AFA5 /* AutomationID.swift in Sources */,
 				7B25578066AF31343072FDB2 /* CodexDockBootstrapView.swift in Sources */,
 				D04A2A41E6D1672534665C4A /* ComposerView.swift in Sources */,
 				E8B4F584399DE2B51D9E3B1A /* DockHostConfiguration.swift in Sources */,
 				74C104A7F7207E4AF17272C5 /* DockSessionProjection.swift in Sources */,
+				8C3C7A78B136227B1485019D /* DockSharedViews.swift in Sources */,
 				08C32D79593965966136996A /* DockStore.swift in Sources */,
 				486650859FCE02D4B036B60B /* DockView.swift in Sources */,
 				E88D5BF2DC414497611228C9 /* GlobalConnectivityIndicatorView.swift in Sources */,
@@ -593,10 +694,20 @@
 			target = AFB39884AF01092F386A0061 /* CodexDock */;
 			targetProxy = 5C3D07B873A2F7B6297E19C2 /* PBXContainerItemProxy */;
 		};
+		128FFCA1D18D9C638C132FED /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AFB39884AF01092F386A0061 /* CodexDock */;
+			targetProxy = 4EB0A00228EA3BEE04E6325E /* PBXContainerItemProxy */;
+		};
 		4D50ABF9E7473EBBE8A6B44A /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = AFB39884AF01092F386A0061 /* CodexDock */;
 			targetProxy = 20B4B36215944A681A99AF48 /* PBXContainerItemProxy */;
+		};
+		688D3BB3236E3879FB2E7202 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1B43F1F1D80974244330CF93 /* CodexDockApp */;
+			targetProxy = B2D8A550EF791866B5A800D6 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -636,6 +747,24 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.aelaguiz.CodexDockTests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		49D5871AC1608A3C551895F8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.aelaguiz.CodexDockUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = CodexDockApp;
 			};
 			name = Release;
 		};
@@ -737,6 +866,24 @@
 				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
+		};
+		88F0EB1715107244A1FC7AB2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.aelaguiz.CodexDockUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = CodexDockApp;
+			};
+			name = Debug;
 		};
 		9A9EACE17167C8F04CBA6CF0 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -856,6 +1003,15 @@
 			buildConfigurations = (
 				F72B3FA45773B6D16883FA38 /* Debug */,
 				887FDAA11A3B2CF82F9B2F55 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3315B9C82AE3A1BD2C564D9D /* Build configuration list for PBXNativeTarget "CodexDockUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				88F0EB1715107244A1FC7AB2 /* Debug */,
+				49D5871AC1608A3C551895F8 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

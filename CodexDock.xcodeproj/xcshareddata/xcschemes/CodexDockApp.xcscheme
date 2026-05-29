@@ -35,6 +35,20 @@
                ReferencedContainer = "container:CodexDock.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "F17ED81C5BBFE19B4C28A4F9"
+               BuildableName = "CodexDockUITests.xctest"
+               BlueprintName = "CodexDockUITests"
+               ReferencedContainer = "container:CodexDock.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -61,6 +75,17 @@
                BlueprintIdentifier = "40CA64A9C9CB32312CA00341"
                BuildableName = "CodexDockTests.xctest"
                BlueprintName = "CodexDockTests"
+               ReferencedContainer = "container:CodexDock.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "F17ED81C5BBFE19B4C28A4F9"
+               BuildableName = "CodexDockUITests.xctest"
+               BlueprintName = "CodexDockUITests"
                ReferencedContainer = "container:CodexDock.xcodeproj">
             </BuildableReference>
          </TestableReference>

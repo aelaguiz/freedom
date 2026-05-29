@@ -70,11 +70,11 @@ final class DockStoreScopeTests: XCTestCase {
                     ),
                     makeSummary(
                         hostID: host.id,
-                        threadID: "human-limited",
+                        threadID: "human-not-loaded",
                         branch: "main",
                         status: .notLoaded,
                         lastActivity: Date(timeIntervalSince1970: 1_800),
-                        prompt: "Human limited"
+                        prompt: "Human not loaded"
                     )
                 ])
             ),
@@ -114,7 +114,6 @@ final class DockStoreScopeTests: XCTestCase {
             .all: 2,
             .needsMe: 1,
             .running: 1,
-            .limited: 1,
             .agents: 2
         ])
 
@@ -124,7 +123,6 @@ final class DockStoreScopeTests: XCTestCase {
                 .all: 2,
                 .needsMe: 1,
                 .running: 1,
-                .limited: 1,
                 .agents: 1
             ]
         )
@@ -134,7 +132,6 @@ final class DockStoreScopeTests: XCTestCase {
                 .all: 2,
                 .needsMe: 1,
                 .running: 1,
-                .limited: 1,
                 .agents: 2
             ]
         )

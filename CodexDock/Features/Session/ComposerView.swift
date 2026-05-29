@@ -88,6 +88,7 @@ public struct ComposerView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .codexAutomationID(AutomationID.Composer.messageField)
 
                 holdMicButton
                 tapMicButton
@@ -110,6 +111,8 @@ public struct ComposerView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(!store.composer.canSend)
                 .accessibilityLabel("Send")
+                .accessibilityValue(sendButtonAutomationValue)
+                .codexAutomationID(AutomationID.Composer.sendButton)
             }
 
             voiceStatus
@@ -119,8 +122,12 @@ public struct ComposerView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
+                    .codexAutomationID(AutomationID.Composer.composerError)
             }
         }
+        .accessibilityElement(children: .contain)
+        .codexAutomationID(AutomationID.Composer.root)
+        .accessibilityValue(composerAutomationValue)
     }
 
     private var holdMicButton: some View {
@@ -153,6 +160,7 @@ public struct ComposerView: View {
         .accessibilityLabel(voicePresentation.holdAccessibilityLabel)
         .accessibilityHint(voicePresentation.holdAccessibilityHint)
         .accessibilityValue(voicePresentation.accessibilityValue)
+        .codexAutomationID(AutomationID.Composer.holdMicButton)
     }
 
     private var tapMicButton: some View {
@@ -171,6 +179,7 @@ public struct ComposerView: View {
         .accessibilityLabel(voicePresentation.tapAccessibilityLabel)
         .accessibilityHint(voicePresentation.tapAccessibilityHint)
         .accessibilityValue(voicePresentation.accessibilityValue)
+        .codexAutomationID(AutomationID.Composer.tapMicButton)
     }
 
     @ViewBuilder
@@ -182,23 +191,43 @@ public struct ComposerView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
+                    .codexAutomationID(AutomationID.Composer.voiceError)
             }
         case .starting:
             Label(voicePresentation.statusText ?? "", systemImage: voicePresentation.statusSystemImage ?? "mic")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.blue)
+                .accessibilityValue(voicePresentation.accessibilityValue)
+                .codexAutomationID(AutomationID.Composer.voiceStatus)
         case .streaming:
             Label(voicePresentation.statusText ?? "", systemImage: voicePresentation.statusSystemImage ?? "mic.fill")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.blue)
+                .accessibilityValue(voicePresentation.accessibilityValue)
+                .codexAutomationID(AutomationID.Composer.voiceStatus)
         case .finalizing:
             Label(voicePresentation.statusText ?? "", systemImage: voicePresentation.statusSystemImage ?? "waveform")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.blue)
+                .accessibilityValue(voicePresentation.accessibilityValue)
+                .codexAutomationID(AutomationID.Composer.voiceStatus)
         }
     }
 
     private var voicePresentation: ComposerVoiceControlsPresentation {
         ComposerVoiceControlsPresentation(composer: store.composer)
+    }
+
+    private var composerAutomationValue: String {
+        [
+            "can-edit=\(store.composer.canEditDraft)",
+            "can-send=\(store.composer.canSend)",
+            "sending=\(store.composer.isSending)",
+            "voice=\(voicePresentation.accessibilityValue)",
+        ].joined(separator: "; ")
+    }
+
+    private var sendButtonAutomationValue: String {
+        store.composer.isSending ? "sending" : (store.composer.canSend ? "enabled" : "disabled")
     }
 }

@@ -51,6 +51,7 @@ public struct CodexDockBootstrapView: View {
             RelaySetupView(
                 title: "Connecting",
                 message: "Finding Codex Dock relay",
+                automationState: .starting,
                 relays: [],
                 manualHostText: $store.manualHostText,
                 manualPortText: $store.manualPortText,
@@ -65,6 +66,7 @@ public struct CodexDockBootstrapView: View {
             RelaySetupView(
                 title: "Relay",
                 message: message ?? "Finding Codex Dock relay",
+                automationState: .discovering,
                 relays: relays,
                 manualHostText: $store.manualHostText,
                 manualPortText: $store.manualPortText,
@@ -90,6 +92,7 @@ public struct CodexDockBootstrapView: View {
             RelaySetupView(
                 title: "Relay Error",
                 message: message,
+                automationState: .failed,
                 relays: [],
                 manualHostText: $store.manualHostText,
                 manualPortText: $store.manualPortText,
@@ -127,6 +130,7 @@ public struct CodexDockBootstrapView: View {
 private struct RelaySetupView: View {
     let title: String
     let message: String
+    let automationState: AutomationID.StateKind
     let relays: [DiscoveredRelay]
     @Binding var manualHostText: String
     @Binding var manualPortText: String
@@ -148,6 +152,9 @@ private struct RelaySetupView: View {
             .background(backgroundColor)
             .dockNavigationChrome()
         }
+        .accessibilityElement(children: .contain)
+        .codexAutomationID(AutomationID.Bootstrap.root)
+        .accessibilityValue("\(automationState.rawValue); \(message)")
     }
 
     private var header: some View {
@@ -177,7 +184,8 @@ private struct RelaySetupView: View {
             DockMessageView(
                 icon: "wifi",
                 title: "Searching",
-                message: "No Codex Dock relay is visible on this network."
+                message: "No Codex Dock relay is visible on this network.",
+                automationID: AutomationID.Bootstrap.state(automationState)
             )
         } else {
             VStack(alignment: .leading, spacing: 10) {
@@ -213,6 +221,8 @@ private struct RelaySetupView: View {
                         .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityValue("\(relay.id); \(relay.endpoint.displayEndpoint)")
+                    .codexAutomationID(AutomationID.Bootstrap.discoveredRelayRow(relay.id))
                 }
             }
         }
@@ -244,6 +254,7 @@ private struct RelaySetupView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(manualHostText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || manualPortText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .codexAutomationID(AutomationID.Bootstrap.manualConnectButton)
         }
     }
 
@@ -254,8 +265,10 @@ private struct RelaySetupView: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .keyboardType(.URL)
+            .codexAutomationID(AutomationID.Bootstrap.manualHostField)
         #else
         TextField("192.168.50.117", text: $manualHostText)
+            .codexAutomationID(AutomationID.Bootstrap.manualHostField)
         #endif
     }
 
@@ -265,9 +278,11 @@ private struct RelaySetupView: View {
         TextField("4510", text: $manualPortText)
             .keyboardType(.numberPad)
             .frame(width: 72)
+            .codexAutomationID(AutomationID.Bootstrap.manualPortField)
         #else
         TextField("4510", text: $manualPortText)
             .frame(width: 72)
+            .codexAutomationID(AutomationID.Bootstrap.manualPortField)
         #endif
     }
 

@@ -97,7 +97,7 @@ struct SessionRowProjector {
             return 3
         case .unknown:
             return 4
-        case .limited:
+        case .notLoaded:
             return 5
         }
     }
@@ -131,7 +131,7 @@ struct SessionRowProjector {
                 ? .needsMe
                 : .running
         case .notLoaded:
-            return .limited
+            return .notLoaded
         case .systemError:
             return .failed
         case .unknown:

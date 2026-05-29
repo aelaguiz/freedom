@@ -30,6 +30,9 @@ public struct HostsView: View {
             .background(hostsBackgroundColor)
             .dockNavigationChrome()
         }
+        .accessibilityElement(children: .contain)
+        .codexAutomationID(AutomationID.Relay.root)
+        .accessibilityValue(relayScreenValue)
     }
 
     private var header: some View {
@@ -52,6 +55,7 @@ public struct HostsView: View {
             .buttonStyle(.bordered)
             .disabled(store.rows.isEmpty)
             .accessibilityLabel("Test relay connections")
+            .codexAutomationID(AutomationID.Relay.testAllButton)
         }
     }
 
@@ -71,7 +75,8 @@ public struct HostsView: View {
             DockMessageView(
                 icon: "exclamationmark.triangle",
                 title: "Relay not configured",
-                message: configurationError
+                message: configurationError,
+                automationID: AutomationID.Relay.state(.configurationError)
             )
         } else {
             hostRows
@@ -128,16 +133,28 @@ public struct HostsView: View {
                             .labelStyle(.iconOnly)
                     }
                     .buttonStyle(.borderless)
+                    .codexAutomationID(AutomationID.Relay.cancelButton)
                 }
             }
 
             VStack(spacing: 10) {
-                HostTextField(title: "Host", text: $draft.host)
-                HostTextField(title: "Port", text: $draft.port)
+                HostTextField(
+                    title: "Host",
+                    text: $draft.host,
+                    automationID: AutomationID.Relay.hostField
+                )
+                HostTextField(
+                    title: "Port",
+                    text: $draft.port,
+                    automationID: AutomationID.Relay.portField
+                )
             }
 
             if let validationMessage {
-                ActionErrorBanner(message: validationMessage)
+                ActionErrorBanner(
+                    message: validationMessage,
+                    automationID: AutomationID.Relay.state(.validationError)
+                )
             }
 
             Button {
@@ -149,9 +166,13 @@ public struct HostsView: View {
                     .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
+            .codexAutomationID(AutomationID.Relay.saveButton)
         }
         .padding(14)
         .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .codexAutomationID(AutomationID.Relay.editor)
+        .accessibilityValue(editingHostID == nil ? "add" : "edit; host=\(editingHostID ?? "")")
     }
 
     private func saveDraft() {
@@ -169,6 +190,13 @@ public struct HostsView: View {
                 validationMessage = error.localizedDescription
             }
         }
+    }
+
+    private var relayScreenValue: String {
+        if store.configurationError != nil {
+            return "configuration-error"
+        }
+        return "loaded; hosts=\(store.rows.count); editor=\(editingHostID == nil ? "add" : "edit")"
     }
 }
 
@@ -218,22 +246,28 @@ private struct HostSettingsRow: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(row.status == .testing)
+                .codexAutomationID(AutomationID.Relay.rowTestButton(hostID: row.id))
 
                 Button(action: onEdit) {
                     Label("Edit", systemImage: "pencil")
                         .font(.subheadline.weight(.semibold))
                 }
                 .buttonStyle(.bordered)
+                .codexAutomationID(AutomationID.Relay.rowEditButton(hostID: row.id))
 
                 Button(role: .destructive, action: onRemove) {
                     Label("Remove", systemImage: "trash")
                         .font(.subheadline.weight(.semibold))
                 }
                 .buttonStyle(.bordered)
+                .codexAutomationID(AutomationID.Relay.rowRemoveButton(hostID: row.id))
             }
         }
         .padding(12)
         .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityValue("\(row.id); \(row.status.title); \(row.status.detail)")
+        .codexAutomationID(AutomationID.Relay.row(hostID: row.id))
     }
 
     private var statusColor: Color {
@@ -256,6 +290,7 @@ private struct HostTextField: View {
     let title: String
     @Binding var text: String
     var isSecure = false
+    var automationID: AutomationID? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -267,7 +302,9 @@ private struct HostTextField: View {
                 .padding(.horizontal, 10)
                 .frame(height: 40)
                 .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .codexAutomationID(automationID)
         }
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder
