@@ -29,7 +29,7 @@ public struct AppServerHostConnector: Sendable {
     public func connectAndInitialize(
         for host: DockHostConfiguration,
         params: InitializeParams = .codexDock(version: "0.1.0"),
-        timeout: Duration = .seconds(5)
+        timeout: Duration = CodexDockConstants.AppServer.connectInitializeTimeout
     ) async throws -> AppServerHostConnection {
         let endpoint = host.endpoint
         let client = makeClient(endpoint)
@@ -45,7 +45,7 @@ public struct AppServerHostConnector: Sendable {
     public func withConnectedClient<Value>(
         for host: DockHostConfiguration,
         params: InitializeParams = .codexDock(version: "0.1.0"),
-        timeout: Duration = .seconds(5),
+        timeout: Duration = CodexDockConstants.AppServer.connectInitializeTimeout,
         operation: @Sendable (AppServerHostConnection) async throws -> Value
     ) async throws -> Value {
         let connection = try await connectAndInitialize(
@@ -66,7 +66,7 @@ public struct AppServerHostConnector: Sendable {
     public func retainConnectedClient<Value>(
         for host: DockHostConfiguration,
         params: InitializeParams = .codexDock(version: "0.1.0"),
-        timeout: Duration = .seconds(5),
+        timeout: Duration = CodexDockConstants.AppServer.connectInitializeTimeout,
         operation: @Sendable (AppServerHostConnection) async throws -> Value
     ) async throws -> (connection: AppServerHostConnection, value: Value) {
         let connection = try await connectAndInitialize(

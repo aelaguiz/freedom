@@ -289,7 +289,7 @@ public final class BonjourRelayDiscovery: NSObject, ObservableObject, RelayDisco
         services.append(service)
         service.delegate = self
         DockLog.relayDiscovery.info("bonjour service found name=\(service.name, privacy: .public) service_count=\(self.services.count, privacy: .public)")
-        service.resolve(withTimeout: 4)
+        service.resolve(withTimeout: CodexDockConstants.Dock.bonjourResolveTimeout)
     }
 
     private func remove(_ service: NetService) {

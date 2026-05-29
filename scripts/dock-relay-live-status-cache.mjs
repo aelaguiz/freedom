@@ -1,9 +1,10 @@
 import { defaultRelayLogger } from "./dock-relay-logger.mjs";
+import {
+  LIVE_STATUS_MAX_AGE_MS,
+  LIVE_STATUS_REFRESH_INTERVAL_MS,
+} from "./dock-relay-constants.mjs";
 
-const DEFAULT_LIVE_STATUS_MAX_AGE_MS = 5_000;
-const DEFAULT_LIVE_STATUS_REFRESH_INTERVAL_MS = 2_500;
-
-function liveOverlayForSnapshot(snapshot, maxAgeMs = DEFAULT_LIVE_STATUS_MAX_AGE_MS) {
+function liveOverlayForSnapshot(snapshot, maxAgeMs = LIVE_STATUS_MAX_AGE_MS) {
   const ageMs = snapshot.checkedAtMs ? Date.now() - snapshot.checkedAtMs : null;
   if (snapshot.ok && ageMs !== null && ageMs <= maxAgeMs) {
     if (snapshot.failedEndpoints > 0) {
@@ -44,8 +45,8 @@ class LiveStatusCache {
     collectLiveRows,
     logger = defaultRelayLogger,
     statusTracker = null,
-    refreshIntervalMs = DEFAULT_LIVE_STATUS_REFRESH_INTERVAL_MS,
-    maxAgeMs = DEFAULT_LIVE_STATUS_MAX_AGE_MS,
+    refreshIntervalMs = LIVE_STATUS_REFRESH_INTERVAL_MS,
+    maxAgeMs = LIVE_STATUS_MAX_AGE_MS,
   }) {
     this.collectLiveRows = collectLiveRows;
     this.logger = logger;

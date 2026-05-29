@@ -5,9 +5,13 @@ import {
   readTextIfExists,
   writeFileAtomic,
 } from "./codex-dock-host-service-runtime.mjs";
+import {
+  DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
+  DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+  DOCK_RELAY_PORT,
+  RAW_APP_SERVER_PORT,
+} from "./dock-relay-constants.mjs";
 
-const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
-const DEFAULT_REALTIME_TRANSCRIPTION_DELAY = "low";
 const APP_SECRET_ENV_PATTERN = /(OPENAI_API_KEY|TOKEN|SECRET|BEARER|PASSWORD|COOKIE|SESSION)/i;
 const APP_SAFE_EXACT_ENV_KEYS = new Set([
   "CODEX_DOCK_HOSTS",
@@ -80,8 +84,8 @@ function parseHostEntry(entry) {
 
 function assertAppFacingRelayHosts(hosts, name) {
   for (const host of hosts) {
-    if (host.port === 4500) {
-      throw new Error(`${name} must point at the Dock relay on :4510, not the raw Codex app-server on :4500: ${host.value}`);
+    if (host.port === RAW_APP_SERVER_PORT) {
+      throw new Error(`${name} must point at the Dock relay on :${DOCK_RELAY_PORT}, not the raw Codex app-server on :${RAW_APP_SERVER_PORT}: ${host.value}`);
     }
   }
 }

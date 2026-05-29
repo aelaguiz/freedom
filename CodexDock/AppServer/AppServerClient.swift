@@ -32,10 +32,10 @@ public struct AppServerConnectionPolicy: Sendable, Equatable {
 
     public static let liveDetail = AppServerConnectionPolicy(
         reconnect: AppServerReconnectPolicy(
-            maxAttempts: 3,
-            initialDelayMilliseconds: 500,
-            maxDelayMilliseconds: 5_000,
-            jitterRatio: 0.2
+            maxAttempts: CodexDockConstants.AppServer.reconnectMaxAttempts,
+            initialDelayMilliseconds: CodexDockConstants.AppServer.reconnectInitialDelayMilliseconds,
+            maxDelayMilliseconds: CodexDockConstants.AppServer.reconnectMaxDelayMilliseconds,
+            jitterRatio: CodexDockConstants.AppServer.reconnectJitterRatio
         )
     )
 }
@@ -63,7 +63,7 @@ public struct AppServerReconnectPolicy: Sendable, Equatable {
     }
 
     func delay(for attempt: Int) -> Duration {
-        let exponent = max(0, min(attempt - 1, 20))
+        let exponent = max(0, min(attempt - 1, CodexDockConstants.AppServer.maximumBackoffExponent))
         let multiplier = 1 << exponent
         let baseDelay = min(maxDelayMilliseconds, initialDelayMilliseconds * multiplier)
         let jitterWindow = Int(Double(baseDelay) * jitterRatio)
@@ -153,7 +153,7 @@ public actor AppServerClient {
     private var receiveTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private var initializeParams: InitializeParams?
-    private var initializeTimeout: Duration = .seconds(10)
+    private var initializeTimeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     private var isExplicitlyDisconnected = false
 
     public init(
@@ -204,7 +204,7 @@ public actor AppServerClient {
 
     public func connectAndInitialize(
         params: InitializeParams = .codexDock(),
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> InitializeResponse {
         let startedAt = Date()
         let signpostState = DockSignpost.appServer.beginInterval("app-server.connectAndInitialize")
@@ -237,7 +237,7 @@ public actor AppServerClient {
     public func sendRequest(
         method: String,
         params: JSONValue? = nil,
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> JSONValue {
         try await sendRequest(
             id: allocateRequestID(),
@@ -251,7 +251,7 @@ public actor AppServerClient {
     public func sendRequest<Response: Decodable>(
         method: String,
         params: JSONValue? = nil,
-        timeout: Duration = .seconds(10),
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
         as responseType: Response.Type
     ) async throws -> Response {
         let result = try await sendRequest(method: method, params: params, timeout: timeout)
@@ -269,7 +269,7 @@ public actor AppServerClient {
 
     public func threadList(
         params: ThreadListParams = ThreadListParams(),
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> ThreadListResponseDTO {
         try await sendRequest(
             method: AppServerMethods.threadList,
@@ -281,7 +281,7 @@ public actor AppServerClient {
 
     public func threadRead(
         params: ThreadReadParams,
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> ThreadReadResponseDTO {
         try await sendRequest(
             method: AppServerMethods.threadRead,
@@ -293,7 +293,7 @@ public actor AppServerClient {
 
     public func threadTurnsList(
         params: ThreadTurnsListParams,
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> ThreadTurnsListResponseDTO {
         try await sendRequest(
             method: AppServerMethods.threadTurnsList,
@@ -305,7 +305,7 @@ public actor AppServerClient {
 
     public func threadResume(
         params: ThreadResumeParams,
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> ThreadResumeResponseDTO {
         try await sendRequest(
             method: AppServerMethods.threadResume,
@@ -317,7 +317,7 @@ public actor AppServerClient {
 
     public func threadArchive(
         params: ThreadArchiveParams,
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> ThreadArchiveResponseDTO {
         try await sendRequest(
             method: AppServerMethods.threadArchive,
@@ -329,7 +329,7 @@ public actor AppServerClient {
 
     public func threadUnarchive(
         params: ThreadUnarchiveParams,
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> ThreadUnarchiveResponseDTO {
         try await sendRequest(
             method: AppServerMethods.threadUnarchive,
@@ -341,7 +341,7 @@ public actor AppServerClient {
 
     public func turnStart(
         params: TurnStartParams,
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> TurnStartResponseDTO {
         try await sendRequest(
             method: AppServerMethods.turnStart,
@@ -353,7 +353,7 @@ public actor AppServerClient {
 
     public func turnSteer(
         params: TurnSteerParams,
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> TurnSteerResponseDTO {
         try await sendRequest(
             method: AppServerMethods.turnSteer,
@@ -365,7 +365,7 @@ public actor AppServerClient {
 
     public func audioTranscriptionStart(
         params: AudioTranscriptionStartParams = AudioTranscriptionStartParams(),
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> AudioTranscriptionStartResponseDTO {
         try await sendRequest(
             method: AppServerMethods.audioTranscriptionStart,
@@ -377,7 +377,7 @@ public actor AppServerClient {
 
     public func audioTranscriptionAppend(
         params: AudioTranscriptionAppendParams,
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> AudioTranscriptionAppendResponseDTO {
         try await sendRequest(
             method: AppServerMethods.audioTranscriptionAppend,
@@ -389,7 +389,7 @@ public actor AppServerClient {
 
     public func audioTranscriptionCommit(
         params: AudioTranscriptionCommitParams,
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> AudioTranscriptionCommitResponseDTO {
         try await sendRequest(
             method: AppServerMethods.audioTranscriptionCommit,
@@ -401,7 +401,7 @@ public actor AppServerClient {
 
     public func audioTranscriptionCancel(
         params: AudioTranscriptionCancelParams,
-        timeout: Duration = .seconds(10)
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
     ) async throws -> AudioTranscriptionCancelResponseDTO {
         try await sendRequest(
             method: AppServerMethods.audioTranscriptionCancel,
@@ -684,7 +684,7 @@ public actor AppServerClient {
                 return true
             }
             do {
-                try await Task.sleep(for: .milliseconds(250))
+                try await Task.sleep(for: CodexDockConstants.AppServer.foregroundPollInterval)
             } catch {
                 return false
             }
@@ -876,7 +876,7 @@ private extension AppServerClientError {
 }
 
 public final class URLSessionWebSocketAppServerTransport: AppServerTransport, @unchecked Sendable {
-    public static let defaultMaximumMessageSize = 8 * 1024 * 1024
+    public static let defaultMaximumMessageSize = CodexDockConstants.AppServer.maximumMessageSize
 
     private let url: URL
     private let bearerToken: String?

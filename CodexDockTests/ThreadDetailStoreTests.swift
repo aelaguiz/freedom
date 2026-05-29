@@ -40,7 +40,7 @@ final class ThreadDetailStoreTests: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 100),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
@@ -90,8 +90,8 @@ final class ThreadDetailStoreTests: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 100),
-            ThreadTurnsListParams(threadId: "thread-1", cursor: "page-2", limit: 100),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250),
+            ThreadTurnsListParams(threadId: "thread-1", cursor: "page-2", limit: 250),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
@@ -141,8 +141,8 @@ final class ThreadDetailStoreTests: XCTestCase {
         let turnsListParams = await session.turnsListParamsSnapshot()
         let resumeParams = await session.resumeParamsSnapshot()
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 100),
-            ThreadTurnsListParams(threadId: "thread-1", cursor: "same-page", limit: 100),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250),
+            ThreadTurnsListParams(threadId: "thread-1", cursor: "same-page", limit: 250),
         ])
         XCTAssertEqual(resumeParams, [ThreadResumeParams]())
     }

@@ -3,6 +3,11 @@
 import fs from "node:fs";
 import process from "node:process";
 
+import {
+  DEFAULT_HISTORY_APP_SERVER_WS,
+  DEFAULT_RELAY_WS,
+  THREAD_LIST_MAX_LIMIT,
+} from "./dock-relay-constants.mjs";
 import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
 import { initializeClient } from "./dock-relay-thread-data.mjs";
 
@@ -29,15 +34,15 @@ function topID(response) {
 }
 
 async function main() {
-  const relayUrl = process.env.CODEX_DOCK_RELAY_WS || "ws://127.0.0.1:4510";
-  const historyUrl = process.env.CODEX_DOCK_HISTORY_APP_SERVER_WS || "ws://127.0.0.1:4500";
+  const relayUrl = process.env.CODEX_DOCK_RELAY_WS || DEFAULT_RELAY_WS;
+  const historyUrl = process.env.CODEX_DOCK_HISTORY_APP_SERVER_WS || DEFAULT_HISTORY_APP_SERVER_WS;
   const historyTokenFile = process.env.CODEX_DOCK_HISTORY_TOKEN_FILE;
   const limit = Number(process.env.CODEX_DOCK_PROBE_LIMIT || 20);
   if (!historyTokenFile) {
     throw new Error("CODEX_DOCK_HISTORY_TOKEN_FILE is required");
   }
-  if (!Number.isFinite(limit) || limit <= 0 || limit > 100) {
-    throw new Error("CODEX_DOCK_PROBE_LIMIT must be between 1 and 100");
+  if (!Number.isFinite(limit) || limit <= 0 || limit > THREAD_LIST_MAX_LIMIT) {
+    throw new Error(`CODEX_DOCK_PROBE_LIMIT must be between 1 and ${THREAD_LIST_MAX_LIMIT}`);
   }
 
   const params = {

@@ -1,13 +1,17 @@
 import { execFileSync } from "node:child_process";
 
 import { defaultRelayLogger } from "./dock-relay-logger.mjs";
+import {
+  LIVE_LOADED_LIST_LIMIT,
+  LIVE_STATUS_UPSTREAM_TIMEOUT_MS,
+  RELAY_VERSION,
+  THREAD_LIST_MAX_LIMIT,
+  UPSTREAM_POOL_LIMITS,
+} from "./dock-relay-constants.mjs";
 import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
 import { LiveStatusCache, SessionRouter } from "./dock-relay-live-status-cache.mjs";
 import { ThreadSummaryCache } from "./dock-relay-thread-summary-cache.mjs";
 import { HistoryClient, UpstreamConnectionPool } from "./dock-relay-upstream-pool.mjs";
-
-const RELAY_VERSION = "0.1.0";
-const THREAD_LIST_MAX_LIMIT = 100;
 
 function relayLogger(config) {
   return config?.logger || defaultRelayLogger;
@@ -17,7 +21,7 @@ function upstreamPoolForConfig(config) {
   if (!config.upstreamPool) {
     config.upstreamPool = new UpstreamConnectionPool({
       logger: relayLogger(config),
-      maxOpenByLabel: { history: 1, "live-status": 4 },
+      maxOpenByLabel: UPSTREAM_POOL_LIMITS,
     });
   }
   return config.upstreamPool;
@@ -41,7 +45,6 @@ function liveStatusCacheForConfig(config) {
     config.liveStatusCache = new LiveStatusCache({
       collectLiveRows: () => collectLiveRows({
         logger: relayLogger(config),
-        pool: upstreamPoolForConfig(config),
         excludeURLs: [config.historyUrl],
       }),
       logger: relayLogger(config),
@@ -257,17 +260,24 @@ async function initializeClient(client) {
   client.notify("initialized");
 }
 
-async function clientForEndpoint(endpoint, { logger = defaultRelayLogger, pool = null, label = "live-status" } = {}) {
+async function clientForEndpoint(endpoint, {
+  logger = defaultRelayLogger,
+  pool = null,
+  label = "live-status",
+  timeoutMs = undefined,
+} = {}) {
   if (pool) {
     return pool.clientFor({
       label,
       url: endpoint.url,
       bearerToken: endpoint.bearerToken || null,
+      timeoutMs,
       initializer: initializeClient,
     });
   }
   const client = new JsonRpcWebSocketClient(endpoint.url, {
     bearerToken: endpoint.bearerToken || null,
+    timeoutMs,
     logger,
   });
   await initializeClient(client);
@@ -285,9 +295,13 @@ async function withEndpointClient(endpoint, options, operation) {
   }
 }
 
-async function readLoadedRows(endpoint, { logger = defaultRelayLogger, pool = null } = {}) {
-  return withEndpointClient(endpoint, { logger, pool, label: "live-status" }, async (client) => {
-    const loaded = await client.request("thread/loaded/list", { limit: 500 });
+async function readLoadedRows(endpoint, {
+  logger = defaultRelayLogger,
+  pool = null,
+  timeoutMs = undefined,
+} = {}) {
+  return withEndpointClient(endpoint, { logger, pool, label: "live-status", timeoutMs }, async (client) => {
+    const loaded = await client.request("thread/loaded/list", { limit: LIVE_LOADED_LIST_LIMIT });
     const results = await Promise.allSettled((loaded.data || []).map((threadId) => (
       client.request("thread/read", {
         threadId,
@@ -311,6 +325,15 @@ async function readLoadedRows(endpoint, { logger = defaultRelayLogger, pool = nu
     }
     return rows;
   });
+}
+
+async function allSettledInBatches(values, batchSize, mapper) {
+  const results = [];
+  for (let start = 0; start < values.length; start += batchSize) {
+    const batch = values.slice(start, start + batchSize);
+    results.push(...await Promise.allSettled(batch.map(mapper)));
+  }
+  return results;
 }
 
 async function pendingRequestsForActiveThread(endpoint, threadId, logger = defaultRelayLogger) {
@@ -366,8 +389,15 @@ async function collectLiveRows(options = {}) {
     .map(canonicalURLString));
   const endpoints = discoverLoopbackEndpoints()
     .filter((endpoint) => !excludedURLs.has(canonicalURLString(endpoint.url)));
-  const results = await Promise.allSettled(
-    endpoints.map((endpoint) => readLoadedRows(endpoint, { logger, pool })),
+  const maxConcurrent = pool?.labelLimit?.("live-status") || endpoints.length || 1;
+  const results = await allSettledInBatches(
+    endpoints,
+    maxConcurrent,
+    (endpoint) => readLoadedRows(endpoint, {
+      logger,
+      pool,
+      timeoutMs: LIVE_STATUS_UPSTREAM_TIMEOUT_MS,
+    }),
   );
   const rowsById = new Map();
   let failedEndpoints = 0;

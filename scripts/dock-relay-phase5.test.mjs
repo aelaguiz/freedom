@@ -178,7 +178,7 @@ test("relay thread/list ignores discovered live rows and preserves history curso
       state: "disabled",
       ageMs: null,
     });
-    assert.deepEqual(historyListParams, { limit: 100, sourceKinds: ["exec"] });
+    assert.deepEqual(historyListParams, { limit: 200, sourceKinds: ["exec"] });
     assert.equal(liveConnections, 0);
   } finally {
     ws.close();

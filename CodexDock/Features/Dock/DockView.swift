@@ -146,7 +146,7 @@ public struct CodexDockRootView: View {
     private func runDockRefreshLoop() async {
         while !Task.isCancelled, !lifecycleCoordinator.allowsForegroundWork {
             do {
-                try await Task.sleep(for: .milliseconds(250))
+                try await Task.sleep(for: CodexDockConstants.AppServer.foregroundPollInterval)
             } catch {
                 return
             }

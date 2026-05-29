@@ -1,9 +1,8 @@
 import http from "node:http";
 import https from "node:https";
 
+import { HEALTH_TIMEOUT_MS } from "./dock-relay-constants.mjs";
 import { sanitizeFields } from "./dock-relay-logger.mjs";
-
-const DEFAULT_HEALTH_TIMEOUT_MS = 500;
 
 function sanitizedField(name, value) {
   return sanitizeFields({ [name]: value })[name];
@@ -20,7 +19,7 @@ function rawHealthURLForHistoryURL(historyUrl) {
   return url.toString();
 }
 
-function getJSON(url, timeoutMs = DEFAULT_HEALTH_TIMEOUT_MS) {
+function getJSON(url, timeoutMs = HEALTH_TIMEOUT_MS) {
   const client = url.startsWith("https:") ? https : http;
   return new Promise((resolve, reject) => {
     const request = client.get(url, { timeout: timeoutMs }, (response) => {

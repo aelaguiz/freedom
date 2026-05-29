@@ -140,10 +140,10 @@ test("active attention outranks plain active when deduping live rows", () => {
   assert.equal(preferThread(plain, needsAttention), needsAttention);
 });
 
-test("thread/list params clamp to Codex's 100 row page cap", () => {
-  assert.deepEqual(clampThreadListParams({ limit: 200 }), { limit: 100 });
+test("thread/list params clamp to Codex's 250 row page cap", () => {
+  assert.deepEqual(clampThreadListParams({ limit: 500 }), { limit: 250 });
   assert.deepEqual(clampThreadListParams({ limit: 0, cursor: "abc" }), {
-    limit: 100,
+    limit: 250,
     cursor: "abc",
   });
   assert.deepEqual(clampThreadListParams({ limit: 37, archived: true }), {

@@ -5,6 +5,8 @@ import https from "node:https";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
+import { HEALTH_TIMEOUT_MS } from "./dock-relay-constants.mjs";
+
 const REDACTED = "<redacted>";
 const REDACTED_PAYLOAD = "<redacted-payload>";
 const SENSITIVE_KEY_PATTERN = /(authorization|bearer|token|secret|password|api[_-]?key|apikey|openai[_-]?.*key|cookie|set-cookie|session|sessionid|sid|headers|base64[_-]?audio|audio|transcript|prompt|delta[_-]?text|partial[_-]?text)/i;
@@ -85,7 +87,7 @@ function tailText(text, maxLines = 200) {
   return lines.slice(Math.max(0, lines.length - maxLines)).join("\n");
 }
 
-function getJSON(url, timeoutMs = 500) {
+function getJSON(url, timeoutMs = HEALTH_TIMEOUT_MS) {
   const client = String(url).startsWith("https:") ? https : http;
   return new Promise((resolve, reject) => {
     const request = client.get(url, { timeout: timeoutMs }, (response) => {

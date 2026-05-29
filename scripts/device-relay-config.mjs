@@ -5,6 +5,11 @@ import path from "node:path";
 import process from "node:process";
 
 import { parseEnvText } from "./codex-dock-host-service-env.mjs";
+import {
+  DOCK_RELAY_PORT,
+  MAX_TCP_PORT,
+  RAW_APP_SERVER_PORT,
+} from "./dock-relay-constants.mjs";
 
 const APP_CONFIG_SECRET_KEY_PATTERN = /(OPENAI_API_KEY|TOKEN|SECRET|BEARER|PASSWORD|COOKIE|SESSION)/i;
 const APP_CONFIG_FORBIDDEN_KEYS = new Set([
@@ -39,11 +44,11 @@ function parseHost(text) {
   }
 
   const port = Number(portText);
-  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
-    throw new Error(`relay host port must be an integer from 1 to 65535: ${portText}`);
+  if (!Number.isInteger(port) || port <= 0 || port > MAX_TCP_PORT) {
+    throw new Error(`relay host port must be an integer from 1 to ${MAX_TCP_PORT}: ${portText}`);
   }
-  if (port === 4500) {
-    throw new Error(`relay host must point at the Dock relay on :4510, not the raw Codex app-server on :4500: ${value}`);
+  if (port === RAW_APP_SERVER_PORT) {
+    throw new Error(`relay host must point at the Dock relay on :${DOCK_RELAY_PORT}, not the raw Codex app-server on :${RAW_APP_SERVER_PORT}: ${value}`);
   }
   return { host, port };
 }

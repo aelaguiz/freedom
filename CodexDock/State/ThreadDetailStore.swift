@@ -102,7 +102,7 @@ public final class ThreadDetailStore: ObservableObject {
         let turns: [JSONValue]
     }
 
-    private static let turnPageLimit = 100
+    private static let turnPageLimit = CodexDockConstants.Dock.turnPageLimit
 
     @Published public private(set) var state: ThreadDetailStoreState
     @Published public internal(set) var composer = ComposerState()
@@ -209,7 +209,7 @@ public final class ThreadDetailStore: ObservableObject {
         do {
             _ = try await session.connectAndInitialize(
                 params: .codexDock(version: "0.1.0"),
-                timeout: .seconds(5)
+                timeout: CodexDockConstants.AppServer.connectInitializeTimeout
             )
             latestConnectionState = .connected
             startObservation(session: session)
@@ -313,13 +313,13 @@ public final class ThreadDetailStore: ObservableObject {
                         text: text,
                         expectedTurnId: activeTurnID
                     ),
-                    timeout: .seconds(10)
+                    timeout: CodexDockConstants.AppServer.defaultRequestTimeout
                 )
                 self.activeTurnID = response.turnId
             } else {
                 let response = try await session.turnStart(
                     params: .text(threadId: row.id.threadID, text: text),
-                    timeout: .seconds(10)
+                    timeout: CodexDockConstants.AppServer.defaultRequestTimeout
                 )
                 activeTurnID = turnID(from: response.turn) ?? activeTurnID
             }
@@ -519,7 +519,7 @@ public final class ThreadDetailStore: ObservableObject {
         }
         let readResponse = try await session.threadRead(
             params: ThreadReadParams(threadId: row.id.threadID, includeTurns: false),
-            timeout: .seconds(10)
+            timeout: CodexDockConstants.AppServer.defaultRequestTimeout
         )
         let turns = try await readAllTurns(session: session)
         DockLog.threadDetail.info("thread full read finished thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) turns=\(turns.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
@@ -541,7 +541,7 @@ public final class ThreadDetailStore: ObservableObject {
                     cursor: cursor,
                     limit: Self.turnPageLimit
                 ),
-                timeout: .seconds(10)
+                timeout: CodexDockConstants.AppServer.defaultRequestTimeout
             )
             turns.append(contentsOf: response.data)
 
@@ -569,7 +569,7 @@ public final class ThreadDetailStore: ObservableObject {
         }
         let resumeResponse = try await session.threadResume(
             params: ThreadResumeParams(threadId: row.id.threadID, excludeTurns: true),
-            timeout: .seconds(10)
+            timeout: CodexDockConstants.AppServer.defaultRequestTimeout
         )
         DockLog.threadDetail.info("thread resume finished thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) turns=\(turns.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
         return resumeResponse.thread.replacingTurns(turns)

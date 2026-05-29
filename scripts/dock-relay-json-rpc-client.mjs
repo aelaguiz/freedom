@@ -1,6 +1,11 @@
 import WebSocket from "ws";
 
-const DEFAULT_TIMEOUT_MS = 5_000;
+import {
+  JSON_RPC_MAX_MESSAGE_BYTES,
+  UPSTREAM_CLOSE_TIMEOUT_MS,
+  UPSTREAM_CONNECT_TIMEOUT_MS,
+  UPSTREAM_REQUEST_TIMEOUT_MS,
+} from "./dock-relay-constants.mjs";
 
 class JsonRpcUpstreamError extends Error {
   constructor(method, upstreamError) {
@@ -19,16 +24,19 @@ class JsonRpcWebSocketClient {
     url,
     {
       bearerToken = null,
-      timeoutMs = DEFAULT_TIMEOUT_MS,
+      timeoutMs = undefined,
+      connectTimeoutMs = timeoutMs ?? UPSTREAM_CONNECT_TIMEOUT_MS,
+      requestTimeoutMs = timeoutMs ?? UPSTREAM_REQUEST_TIMEOUT_MS,
       onNotification = null,
       onRequest = null,
       onClose = null,
       logger = null,
     } = {},
-  ) {
+    ) {
     this.url = url;
     this.bearerToken = bearerToken;
-    this.timeoutMs = timeoutMs;
+    this.connectTimeoutMs = connectTimeoutMs;
+    this.requestTimeoutMs = requestTimeoutMs;
     this.onNotification = onNotification;
     this.onRequest = onRequest;
     this.onClose = onClose;
@@ -58,7 +66,10 @@ class JsonRpcWebSocketClient {
     });
     this.unhealthy = false;
     this.connectPromise = new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.url, { headers });
+      const ws = new WebSocket(this.url, {
+        headers,
+        maxPayload: JSON_RPC_MAX_MESSAGE_BYTES,
+      });
       const timer = setTimeout(() => {
         this.logger?.warn("upstream.connect_timeout", {
           url: this.url,
@@ -67,7 +78,7 @@ class JsonRpcWebSocketClient {
         this.unhealthy = true;
         reject(new Error(`timed out connecting to ${this.url}`));
         this.forceCloseWebSocket(ws);
-      }, this.timeoutMs);
+      }, this.connectTimeoutMs);
       ws.on("open", () => {
         clearTimeout(timer);
         this.ws = ws;
@@ -194,7 +205,7 @@ class JsonRpcWebSocketClient {
             error: closeError,
           });
         });
-      }, this.timeoutMs);
+      }, this.requestTimeoutMs);
       this.pending.set(id, { method, resolve, reject, timer, startedAt });
     });
   }
@@ -247,7 +258,7 @@ class JsonRpcWebSocketClient {
     }
   }
 
-  close({ forceAfterMs = 250, reason = "client_close" } = {}) {
+  close({ forceAfterMs = UPSTREAM_CLOSE_TIMEOUT_MS, reason = "client_close" } = {}) {
     const ws = this.ws;
     this.ws = null;
     this.connectPromise = null;

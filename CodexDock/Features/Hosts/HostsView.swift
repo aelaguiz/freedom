@@ -330,7 +330,7 @@ private struct HostTextField: View {
 
 private struct HostDraft: Equatable {
     var host = ""
-    var port = "4510"
+    var port = CodexDockConstants.Ports.dockRelayString
 
     init() {}
 

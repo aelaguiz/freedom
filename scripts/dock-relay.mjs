@@ -14,6 +14,20 @@ import {
   startBonjourAdvertisement,
 } from "./dock-relay-bonjour.mjs";
 import {
+  DEFAULT_HISTORY_APP_SERVER_WS,
+  DEFAULT_PHONE_AUTH,
+  DEFAULT_RELAY_LISTEN_HOST,
+  DOCK_RELAY_PORT,
+  JSON_RPC_MAX_MESSAGE_BYTES,
+  RELAY_SHUTDOWN_PROCESS_TIMEOUT_MS,
+  RELAY_SHUTDOWN_SOCKET_TIMEOUT_MS,
+  RELAY_VERSION,
+  UPSTREAM_POOL_LIMITS,
+  UPSTREAM_RECONNECT_ATTEMPTS,
+  UPSTREAM_RECONNECT_DELAY_MS,
+  UPSTREAM_RECONNECT_JITTER_MS,
+} from "./dock-relay-constants.mjs";
+import {
   defaultRelayLogger,
   installRelayFatalHandlers,
 } from "./dock-relay-logger.mjs";
@@ -51,12 +65,6 @@ import {
 } from "./dock-relay-thread-data.mjs";
 import { threadMatchesSourceKinds } from "./dock-relay-source-filter.mjs";
 import { UpstreamConnectionPool } from "./dock-relay-upstream-pool.mjs";
-
-const RELAY_VERSION = "0.1.0";
-const DEFAULT_PHONE_AUTH = "none";
-const UPSTREAM_RECONNECT_ATTEMPTS = 2;
-const UPSTREAM_RECONNECT_DELAY_MS = 100;
-const UPSTREAM_RECONNECT_JITTER_MS = 25;
 
 function shortHash(value) {
   if (!value) {
@@ -563,7 +571,7 @@ function startServer(config) {
   config.statusTracker = config.statusTracker || createRelayStatusTracker();
   config.upstreamPool = config.upstreamPool || new UpstreamConnectionPool({
     logger,
-    maxOpenByLabel: { history: 1, "live-status": 4 },
+    maxOpenByLabel: UPSTREAM_POOL_LIMITS,
   });
   config.liveStatusCache = liveStatusCacheForConfig(config);
   config.sessionRouter = sessionRouterForConfig(config);
@@ -663,7 +671,10 @@ function startServer(config) {
     response.writeHead(404, { "content-type": "text/plain" });
     response.end("not found\n");
   });
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: JSON_RPC_MAX_MESSAGE_BYTES,
+  });
   let advertisement = null;
 
   server.on("upgrade", (request, socket, head) => {
@@ -869,7 +880,7 @@ function startServer(config) {
         for (const ws of downstreamSockets) {
           ws.terminate();
         }
-      }, 250);
+      }, RELAY_SHUTDOWN_SOCKET_TIMEOUT_MS);
       forceTerminate.unref?.();
       wss.close(() => {
         clearTimeout(forceTerminate);
@@ -901,7 +912,7 @@ function installShutdownHandlers(serverHandle) {
     }
     closing = true;
     serverHandle.logger?.info("relay.shutdown_signal");
-    const forceExit = setTimeout(() => process.exit(0), 1_000);
+    const forceExit = setTimeout(() => process.exit(0), RELAY_SHUTDOWN_PROCESS_TIMEOUT_MS);
     forceExit.unref();
     serverHandle.close()
       .then(() => process.exit(0))
@@ -932,12 +943,12 @@ function main() {
   }
 
   const serverHandle = startServer({
-    listenHost: args["listen-host"] || process.env.CODEX_DOCK_RELAY_LISTEN_HOST || "0.0.0.0",
-    port: parseLimit(args.port || process.env.CODEX_DOCK_RELAY_PORT, 4510),
+    listenHost: args["listen-host"] || process.env.CODEX_DOCK_RELAY_LISTEN_HOST || DEFAULT_RELAY_LISTEN_HOST,
+    port: parseLimit(args.port || process.env.CODEX_DOCK_RELAY_PORT, DOCK_RELAY_PORT),
     phoneAuth,
     relayBearerToken: relayTokenFile ? readToken(relayTokenFile) : null,
     historyBearerToken: readToken(historyTokenFile),
-    historyUrl: args["history-url"] || process.env.CODEX_DOCK_HISTORY_APP_SERVER_WS || "ws://127.0.0.1:4500",
+    historyUrl: args["history-url"] || process.env.CODEX_DOCK_HISTORY_APP_SERVER_WS || DEFAULT_HISTORY_APP_SERVER_WS,
     hostId: args["host-id"] || process.env.CODEX_DOCK_REAL_HOST_ID || os.hostname(),
     hostName: args["host-name"] || process.env.CODEX_DOCK_REAL_HOST_NAME || args["bonjour-name"],
     bonjourName: args["bonjour-name"] || process.env.CODEX_DOCK_BONJOUR_NAME || `Codex Dock ${os.hostname()}`,

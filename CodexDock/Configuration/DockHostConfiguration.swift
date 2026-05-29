@@ -29,7 +29,7 @@ public struct DockRelayEndpoint: Codable, Equatable, Sendable, Identifiable {
 
     public init(host rawHost: String, port: Int) throws {
         let host = try Self.normalizedHost(rawHost)
-        guard (1...65_535).contains(port) else {
+        guard (1...CodexDockConstants.Ports.maximumTCPPort).contains(port) else {
             throw DockHostConfigurationError.invalidPort(String(port))
         }
         self.host = host
@@ -89,7 +89,7 @@ public struct DockRelayEndpoint: Codable, Equatable, Sendable, Identifiable {
     }
 
     public func validateAppFacingRelayEndpoint() throws {
-        if port == 4_500 {
+        if port == CodexDockConstants.Ports.rawAppServer {
             throw DockHostConfigurationError.rawAppServerEndpoint(displayEndpoint)
         }
     }
@@ -146,7 +146,7 @@ public enum DockHostConfigurationError: Error, Equatable, LocalizedError, Sendab
     public var errorDescription: String? {
         switch self {
         case .missingEndpoint:
-            return "Set CODEX_DOCK_HOSTS to one or more relay hosts like 192.168.50.117:4510."
+            return "Set CODEX_DOCK_HOSTS to one or more relay hosts like 192.168.50.117:\(CodexDockConstants.Ports.dockRelay)."
         case let .invalidEndpoint(value):
             return "Codex Dock relay endpoint must be host:port with no scheme, path, query, username, or password: \(value)"
         case let .invalidHost(value):
@@ -158,7 +158,7 @@ public enum DockHostConfigurationError: Error, Equatable, LocalizedError, Sendab
         case let .multipleHostsForSingleConfiguration(value):
             return "Use HostRegistry.fromEnvironment for multiple CODEX_DOCK_HOSTS entries; a single host configuration can only use one host: \(value)"
         case let .rawAppServerEndpoint(value):
-            return "Codex Dock app-facing hosts must point at the Dock relay on :4510, not the raw Codex app-server on :4500: \(value)"
+            return "Codex Dock app-facing hosts must point at the Dock relay on :\(CodexDockConstants.Ports.dockRelay), not the raw Codex app-server on :\(CodexDockConstants.Ports.rawAppServer): \(value)"
         }
     }
 }

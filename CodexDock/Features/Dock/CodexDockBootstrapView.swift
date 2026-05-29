@@ -275,12 +275,12 @@ private struct RelaySetupView: View {
     @ViewBuilder
     private var manualPortField: some View {
         #if os(iOS)
-        TextField("4510", text: $manualPortText)
+        TextField(CodexDockConstants.Ports.dockRelayString, text: $manualPortText)
             .keyboardType(.numberPad)
             .frame(width: 72)
             .codexAutomationID(AutomationID.Bootstrap.manualPortField)
         #else
-        TextField("4510", text: $manualPortText)
+        TextField(CodexDockConstants.Ports.dockRelayString, text: $manualPortText)
             .frame(width: 72)
             .codexAutomationID(AutomationID.Bootstrap.manualPortField)
         #endif

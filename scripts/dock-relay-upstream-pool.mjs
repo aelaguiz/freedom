@@ -1,9 +1,8 @@
 import crypto from "node:crypto";
 
+import { DEFAULT_MAX_OPEN_PER_LABEL } from "./dock-relay-constants.mjs";
 import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
 import { defaultRelayLogger } from "./dock-relay-logger.mjs";
-
-const DEFAULT_MAX_OPEN_PER_LABEL = 4;
 
 function safeUrl(value) {
   try {
@@ -59,6 +58,8 @@ class UpstreamConnectionPool {
     url,
     bearerToken = null,
     timeoutMs = undefined,
+    connectTimeoutMs = undefined,
+    requestTimeoutMs = undefined,
     initializer = null,
   }) {
     const key = this.keyFor({ label, url, bearerToken });
@@ -90,6 +91,8 @@ class UpstreamConnectionPool {
     const client = new JsonRpcWebSocketClient(url, {
       bearerToken,
       timeoutMs,
+      connectTimeoutMs,
+      requestTimeoutMs,
       logger: this.logger,
       onClose: () => {
         if (entry) {
@@ -139,6 +142,8 @@ class UpstreamConnectionPool {
       url: endpoint.url,
       bearerToken: endpoint.bearerToken || null,
       timeoutMs: options.timeoutMs,
+      connectTimeoutMs: options.connectTimeoutMs,
+      requestTimeoutMs: options.requestTimeoutMs,
       initializer: options.initializer || null,
     });
     try {
@@ -199,6 +204,8 @@ class HistoryClient {
     bearerToken,
     logger = defaultRelayLogger,
     timeoutMs = undefined,
+    connectTimeoutMs = undefined,
+    requestTimeoutMs = undefined,
     initializer,
   }) {
     this.pool = pool;
@@ -206,6 +213,8 @@ class HistoryClient {
     this.bearerToken = bearerToken;
     this.logger = logger;
     this.timeoutMs = timeoutMs;
+    this.connectTimeoutMs = connectTimeoutMs;
+    this.requestTimeoutMs = requestTimeoutMs;
     this.initializer = initializer;
   }
 
@@ -221,6 +230,8 @@ class HistoryClient {
       {
         label: "history",
         timeoutMs: this.timeoutMs,
+        connectTimeoutMs: this.connectTimeoutMs,
+        requestTimeoutMs: this.requestTimeoutMs,
         initializer: this.initializer,
       },
     );

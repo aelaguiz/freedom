@@ -17,13 +17,15 @@ import {
   envLineValue,
   writeGeneratedEnvFiles,
 } from "./codex-dock-host-service-env.mjs";
+import {
+  DEFAULT_PHONE_AUTH,
+  DEFAULT_RELAY_LISTEN_HOST,
+  DOCK_RELAY_PORT as DEFAULT_RELAY_PORT,
+  RAW_APP_SERVER_LISTEN as DEFAULT_RAW_APP_SERVER_LISTEN,
+  RAW_APP_SERVER_PORT as DEFAULT_RAW_APP_SERVER_PORT,
+} from "./dock-relay-constants.mjs";
 
 const DEFAULT_RUNTIME_DIR = ".codex-dock";
-const DEFAULT_RAW_APP_SERVER_PORT = 4500;
-const DEFAULT_RELAY_PORT = 4510;
-const DEFAULT_RAW_APP_SERVER_LISTEN = `ws://127.0.0.1:${DEFAULT_RAW_APP_SERVER_PORT}`;
-const DEFAULT_RELAY_LISTEN_HOST = "0.0.0.0";
-const DEFAULT_PHONE_AUTH = "none";
 const DEFAULT_APP_SERVER_LABEL = "com.aelaguiz.codex-dock.app-server";
 const DEFAULT_RELAY_LABEL = "com.aelaguiz.codex-dock.relay";
 const VALUE_OPTIONS = new Set([
@@ -228,7 +230,7 @@ function appEndpointFromWebSocketURL(webSocketURL) {
     throw new Error("relay public URL must include an explicit port");
   }
   if (Number(url.port) === DEFAULT_RAW_APP_SERVER_PORT) {
-    throw new Error("relay public URL must point at the Dock relay on :4510, not the raw Codex app-server on :4500");
+    throw new Error(`relay public URL must point at the Dock relay on :${DEFAULT_RELAY_PORT}, not the raw Codex app-server on :${DEFAULT_RAW_APP_SERVER_PORT}`);
   }
   const host = url.hostname.replace(/^\[(.*)\]$/, "$1");
   const serializedHost = host.includes(":") ? `[${host}]` : host;

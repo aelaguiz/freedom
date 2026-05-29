@@ -208,6 +208,17 @@ instead of direct `console.error`.
 - Protocol method names and DTO shapes must move together across `scripts/dock-relay*.mjs`, `CodexDock/AppServer/**`, `CodexDock/Voice/**`, and `CodexDockTests/**`.
 - The real-host archive round-trip is opt-in only. Do not run it casually; it is gated by `CODEX_DOCK_RUN_ARCHIVE_ROUND_TRIP=1`.
 
+## Constants
+
+Production Swift timing, page-size, port, and audio defaults live in
+`CodexDock/Configuration/CodexDockConstants.swift`. Production relay MJS timing,
+page-size, port, pool, and realtime audio defaults live in
+`scripts/dock-relay-constants.mjs`.
+
+Do not add hard-coded production timeouts, intervals, retry delays, page limits,
+pool caps, ports, or byte caps outside those files unless the value is truly
+local and documented. Test-only waits and fixture values can stay in tests.
+
 ## Context And Scratch Hygiene
 
 Treat `docs/**`, dated plan/audit/worklog files, `.codex-dock/**`, `.build/**`,

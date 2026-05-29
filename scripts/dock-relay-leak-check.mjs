@@ -4,6 +4,7 @@ import http from "node:http";
 import https from "node:https";
 import process from "node:process";
 
+import { DEFAULT_RELAY_WS } from "./dock-relay-constants.mjs";
 import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
 import { initializeClient } from "./dock-relay-thread-data.mjs";
 
@@ -65,7 +66,7 @@ async function waitForHistoryPool(statusUrl, {
 }
 
 async function main() {
-  const relayUrl = process.env.CODEX_DOCK_RELAY_WS || "ws://127.0.0.1:4510";
+  const relayUrl = process.env.CODEX_DOCK_RELAY_WS || DEFAULT_RELAY_WS;
   const iterations = Number(process.env.CODEX_DOCK_LEAK_CHECK_ITERATIONS || 25);
   const drainTimeoutMs = Number(process.env.CODEX_DOCK_LEAK_CHECK_DRAIN_TIMEOUT_MS || 10_000);
   if (!Number.isFinite(iterations) || iterations <= 0) {

@@ -12,7 +12,7 @@ public enum RelayBootstrapState: Equatable, Sendable {
 public final class RelayBootstrapStore: ObservableObject {
     @Published public private(set) var state: RelayBootstrapState = .starting
     @Published public var manualHostText = ""
-    @Published public var manualPortText = "4510"
+    @Published public var manualPortText = CodexDockConstants.Ports.dockRelayString
 
     private let environment: [String: String]
     private let configurationStore: any LocalDockConfigurationStoring

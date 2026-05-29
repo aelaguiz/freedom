@@ -66,12 +66,12 @@ public final class LiveVoiceCaptureController: LiveVoiceCaptureControlling {
             options: [.defaultToSpeaker, .allowBluetoothHFP]
         )
         do {
-            try audioSession.setPreferredSampleRate(24_000)
+            try audioSession.setPreferredSampleRate(CodexDockConstants.Voice.sampleRate)
         } catch {
             DockLog.voice.debug("voice capture preferred sample rate not applied error=\(DockLog.errorSummary(error), privacy: .public)")
         }
         do {
-            try audioSession.setPreferredInputNumberOfChannels(1)
+            try audioSession.setPreferredInputNumberOfChannels(CodexDockConstants.Voice.channelCount)
         } catch {
             DockLog.voice.debug("voice capture preferred input channel count not applied error=\(DockLog.errorSummary(error), privacy: .public)")
         }
@@ -95,7 +95,7 @@ public final class LiveVoiceCaptureController: LiveVoiceCaptureControlling {
 
         inputNode.installTap(
             onBus: 0,
-            bufferSize: 2_048,
+            bufferSize: CodexDockConstants.Voice.tapBufferFrameCount,
             format: inputFormat,
             block: makeVoiceCaptureTapBlock(emitter: emitter)
         )
@@ -408,7 +408,7 @@ private final class PCM16Mono24kChunkEmitter: @unchecked Sendable {
             return Data()
         }
 
-        let outputSampleRate = 24_000.0
+        let outputSampleRate = CodexDockConstants.Voice.sampleRate
         let outputFrameCount = max(
             1,
             Int((Double(inputFrameCount) * outputSampleRate / inputFormat.sampleRate).rounded(.down))

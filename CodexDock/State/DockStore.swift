@@ -279,7 +279,7 @@ public enum DockStoreState: Equatable, Sendable {
 
 @MainActor
 public final class DockStore: ObservableObject {
-    public static let defaultAutoRefreshInterval: Duration = .seconds(5)
+    public static let defaultAutoRefreshInterval: Duration = CodexDockConstants.Dock.autoRefreshInterval
 
     @Published public private(set) var state: DockStoreState
     @Published public private(set) var actionError: String?

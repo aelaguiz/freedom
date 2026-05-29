@@ -35,8 +35,8 @@ public final class RelayRealtimeTranscriptionClient: RealtimeTranscriptionServic
 
     public init(
         host: DockHostConfiguration,
-        completionTimeout: Duration = .seconds(30),
-        maxChunkBytes: Int = 64 * 1024,
+        completionTimeout: Duration = CodexDockConstants.Voice.transcriptionCompletionTimeout,
+        maxChunkBytes: Int = CodexDockConstants.Voice.transcriptionMaxChunkBytes,
         makeClient: @escaping @Sendable (DockRelayEndpoint) -> AppServerClient = {
             AppServerClient(webSocketURL: $0.webSocketURL, bearerToken: nil)
         }
@@ -59,7 +59,7 @@ public final class RelayRealtimeTranscriptionClient: RealtimeTranscriptionServic
                     let startStartedAt = Date()
                     let response = try await connection.client.audioTranscriptionStart(
                         params: AudioTranscriptionStartParams(),
-                        timeout: .seconds(10)
+                        timeout: CodexDockConstants.Voice.transcriptionCommandTimeout
                     )
                     DockLog.transcription.debug("relay transcription start command accepted host_id=\(hostID, privacy: .public) endpoint=\(DockLog.endpoint(connection.endpoint.webSocketURL), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startStartedAt), privacy: .public)")
                     return response
@@ -150,7 +150,7 @@ private final class RelayRealtimeTranscriptionSession: RealtimeTranscriptionSess
                     sequence: sequence,
                     base64Audio: chunk.base64EncodedString()
                 ),
-                timeout: .seconds(10)
+                timeout: CodexDockConstants.Voice.transcriptionCommandTimeout
             )
         } catch {
             DockLog.transcription.error("relay transcription append failed session_id=\(DockLog.publicID(self.id), privacy: .public) sequence=\(sequence, privacy: .public) bytes=\(chunk.count, privacy: .public) last_sequence=\(self.lastSequence, privacy: .public) max_bytes=\(self.maxChunkBytes, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
@@ -178,7 +178,7 @@ private final class RelayRealtimeTranscriptionSession: RealtimeTranscriptionSess
         do {
             response = try await client.audioTranscriptionCommit(
                 params: AudioTranscriptionCommitParams(sessionId: id),
-                timeout: .seconds(10)
+                timeout: CodexDockConstants.Voice.transcriptionCommandTimeout
             )
         } catch {
             DockLog.transcription.error("relay transcription commit failed session_id=\(DockLog.publicID(self.id), privacy: .public) last_sequence=\(self.lastSequence, privacy: .public) appended_chunks=\(self.appendedChunks, privacy: .public) appended_bytes=\(self.appendedBytes, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
@@ -197,7 +197,7 @@ private final class RelayRealtimeTranscriptionSession: RealtimeTranscriptionSess
         DockLog.transcription.notice("relay transcription cancel requested session_id=\(DockLog.publicID(self.id), privacy: .public)")
         _ = try? await client.audioTranscriptionCancel(
             params: AudioTranscriptionCancelParams(sessionId: id),
-            timeout: .seconds(5)
+            timeout: CodexDockConstants.Voice.transcriptionCancelTimeout
         )
         continuation.yield(.canceled(sessionID: id))
         continuation.yield(.closed(sessionID: id))

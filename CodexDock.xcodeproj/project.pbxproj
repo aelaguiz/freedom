@@ -19,6 +19,7 @@
 		24830113F0217C6DEC1EA844 /* ThreadEventNormalizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DC48CE0A2682B2B0F223F12 /* ThreadEventNormalizerTests.swift */; };
 		26596DA66B5E0E175F1F0B36 /* RelayDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B519B818482A64DB1E24B72 /* RelayDiscovery.swift */; };
 		2C45950B4F9D80882CC39CB7 /* RelayRealtimeTranscriptionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CBAEDADA8F53259E8A3C3F9 /* RelayRealtimeTranscriptionClient.swift */; };
+		2D6C12E3188A04C29C5B5E77 /* CodexDockConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66222A9C2D2D0160A6516334 /* CodexDockConstants.swift */; };
 		2F53F8DB6FBC949AA2AF3A96 /* RelayBootstrapStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD386E730F3CFC73F11ED939 /* RelayBootstrapStore.swift */; };
 		3101E586A0F08E291A67103D /* ArchiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54671D3A6F294D5E4280D81E /* ArchiveView.swift */; };
 		36AEAB0D1C020E6383F9FB5A /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB8A0894987E6B3EEDB7A78 /* TranscriptionService.swift */; };
@@ -172,6 +173,7 @@
 		5A88532EFDA6E7D5544BB9EE /* ThreadMessageListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadMessageListView.swift; sourceTree = "<group>"; };
 		5C93AD4A7645A6C045D62908 /* AppServerHostConnector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerHostConnector.swift; sourceTree = "<group>"; };
 		5DC52B300359BB6026278F44 /* LocalThreadMetadataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalThreadMetadataStore.swift; sourceTree = "<group>"; };
+		66222A9C2D2D0160A6516334 /* CodexDockConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexDockConstants.swift; sourceTree = "<group>"; };
 		6A2FB5E493FCFDB443D53EB2 /* AppLifecycleCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLifecycleCoordinatorTests.swift; sourceTree = "<group>"; };
 		6ABFCDF94C9EEDD90AB8BD72 /* Logging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logging.swift; sourceTree = "<group>"; };
 		6CBAEDADA8F53259E8A3C3F9 /* RelayRealtimeTranscriptionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayRealtimeTranscriptionClient.swift; sourceTree = "<group>"; };
@@ -362,6 +364,7 @@
 		8E0D46D336B13F74948B1046 /* Configuration */ = {
 			isa = PBXGroup;
 			children = (
+				66222A9C2D2D0160A6516334 /* CodexDockConstants.swift */,
 				52C72CBCF6924E26CAC9D3AE /* DockHostConfiguration.swift */,
 				26B07B009451AB1728472ADB /* HostRegistry.swift */,
 				CD386E730F3CFC73F11ED939 /* RelayBootstrapStore.swift */,
@@ -643,6 +646,7 @@
 				3101E586A0F08E291A67103D /* ArchiveView.swift in Sources */,
 				9831B949551783839A91AFA5 /* AutomationID.swift in Sources */,
 				7B25578066AF31343072FDB2 /* CodexDockBootstrapView.swift in Sources */,
+				2D6C12E3188A04C29C5B5E77 /* CodexDockConstants.swift in Sources */,
 				D04A2A41E6D1672534665C4A /* ComposerView.swift in Sources */,
 				E8B4F584399DE2B51D9E3B1A /* DockHostConfiguration.swift in Sources */,
 				74C104A7F7207E4AF17272C5 /* DockSessionProjection.swift in Sources */,

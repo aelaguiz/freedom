@@ -906,7 +906,7 @@ final class AppServerClientTests: XCTestCase {
         guard case .object(let firstParams) = try XCTUnwrap(firstRequest.params) else {
             return XCTFail("Expected first thread/list params")
         }
-        XCTAssertEqual(firstParams["limit"], .integer(100))
+        XCTAssertEqual(firstParams["limit"], .integer(250))
         XCTAssertEqual(firstParams["cursor"], nil)
 
         await transport.enqueue(
@@ -932,7 +932,7 @@ final class AppServerClientTests: XCTestCase {
         guard case .object(let secondParams) = try XCTUnwrap(secondRequest.params) else {
             return XCTFail("Expected second thread/list params")
         }
-        XCTAssertEqual(secondParams["limit"], .integer(100))
+        XCTAssertEqual(secondParams["limit"], .integer(250))
         XCTAssertEqual(secondParams["cursor"], .string("cursor-1"))
 
         await transport.enqueue(
@@ -980,7 +980,7 @@ final class AppServerClientTests: XCTestCase {
         guard case .object(let params) = try XCTUnwrap(request.params) else {
             return XCTFail("Expected thread/list params")
         }
-        XCTAssertEqual(params["limit"], .integer(50))
+        XCTAssertEqual(params["limit"], .integer(250))
         XCTAssertEqual(
             params["sourceKinds"],
             .array(
@@ -1120,7 +1120,7 @@ final class AppServerClientTests: XCTestCase {
 
         let turnsListTask = Task {
             try await client.threadTurnsList(
-                params: ThreadTurnsListParams(threadId: "thread-1", cursor: "page-2", limit: 100),
+                params: ThreadTurnsListParams(threadId: "thread-1", cursor: "page-2", limit: 250),
                 timeout: .seconds(1)
             )
         }
@@ -1131,7 +1131,7 @@ final class AppServerClientTests: XCTestCase {
         }
         XCTAssertEqual(turnsListParams["threadId"], .string("thread-1"))
         XCTAssertEqual(turnsListParams["cursor"], .string("page-2"))
-        XCTAssertEqual(turnsListParams["limit"], .integer(100))
+        XCTAssertEqual(turnsListParams["limit"], .integer(250))
 
         await transport.enqueue(
             .response(
@@ -1931,7 +1931,7 @@ final class AppServerClientTests: XCTestCase {
             timeout: .seconds(10)
         )
         let turns = try await client.threadTurnsList(
-            params: ThreadTurnsListParams(threadId: threadID, limit: 100),
+            params: ThreadTurnsListParams(threadId: threadID, limit: 250),
             timeout: .seconds(10)
         )
         let resumed = try await client.threadResume(
@@ -1943,7 +1943,7 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(resumed.thread.id, threadID)
         XCTAssertNotNil(read.thread.turns)
         XCTAssertNotNil(resumed.thread.turns)
-        XCTAssertLessThanOrEqual(turns.data.count, 100)
+        XCTAssertLessThanOrEqual(turns.data.count, 250)
         await client.disconnect()
     }
 
