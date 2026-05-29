@@ -25,20 +25,28 @@ public struct DockLoadResult: Equatable, Sendable {
 public struct DockSessionQuery: Equatable, Sendable {
     public let archived: Bool
     public let sourceKinds: [ThreadSourceKind]?
+    public let maxPages: Int?
 
     public init(
         archived: Bool = false,
-        sourceKinds: [ThreadSourceKind]? = nil
+        sourceKinds: [ThreadSourceKind]? = nil,
+        maxPages: Int? = nil
     ) {
         self.archived = archived
         self.sourceKinds = sourceKinds
+        self.maxPages = maxPages
     }
 
-    public static let activeHuman = DockSessionQuery(archived: false, sourceKinds: nil)
+    public static let activeHuman = DockSessionQuery(
+        archived: false,
+        sourceKinds: nil,
+        maxPages: CodexDockConstants.Dock.activeSessionMaxPages
+    )
     public static let archivedHuman = DockSessionQuery(archived: true, sourceKinds: nil)
     public static let activeAgents = DockSessionQuery(
         archived: false,
-        sourceKinds: ThreadSourceKind.dockAgentScopeKinds
+        sourceKinds: ThreadSourceKind.dockAgentScopeKinds,
+        maxPages: CodexDockConstants.Dock.activeSessionMaxPages
     )
 }
 
@@ -102,6 +110,7 @@ public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
         var backwardsCursor: String?
         var nextCursor: String?
         var liveOverlay: ThreadListLiveOverlayDTO?
+        var pageCount = 0
 
         repeat {
             let response = try await client.threadList(
@@ -122,6 +131,12 @@ public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
             backwardsCursor = backwardsCursor ?? response.backwardsCursor
             nextCursor = response.nextCursor
             liveOverlay = combineLiveOverlay(current: liveOverlay, next: response.liveOverlay)
+            pageCount += 1
+
+            if let maxPages = query.maxPages, pageCount >= maxPages {
+                cursor = nil
+                break
+            }
 
             guard let next = response.nextCursor, !next.isEmpty else {
                 cursor = nil

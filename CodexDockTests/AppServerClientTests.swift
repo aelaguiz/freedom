@@ -897,7 +897,7 @@ final class AppServerClientTests: XCTestCase {
             try await dockClient.loadSessions(
                 using: client,
                 hostID: "Amir-M5",
-                query: .activeHuman
+                query: .archivedHuman
             )
         }
 
@@ -958,6 +958,57 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(result.nextCursor, nil)
         XCTAssertEqual(result.backwardsCursor, "before-1")
         XCTAssertEqual(result.liveOverlay, ThreadListLiveOverlayDTO(ok: true, state: "ready"))
+        await client.disconnect()
+    }
+
+    func testAppServerDockClientBoundsActiveDockQueriesToNewestPage() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let dockClient = AppServerDockClient()
+        let task = Task {
+            try await dockClient.loadSessions(
+                using: client,
+                hostID: "Amir-M5",
+                query: .activeHuman
+            )
+        }
+
+        let request = try await transport.nextSentRequest()
+        XCTAssertEqual(request.method, AppServerMethods.threadList)
+        guard case .object(let params) = try XCTUnwrap(request.params) else {
+            return XCTFail("Expected thread/list params")
+        }
+        XCTAssertEqual(params["limit"], .integer(250))
+        XCTAssertEqual(params["cursor"], nil)
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: request.id,
+                    result: try JSONValue.encoded(
+                        ThreadListResponseDTO(
+                            data: [
+                                threadListRow(id: "thread-1", updatedAt: 1_790_000_001),
+                            ],
+                            nextCursor: "cursor-1",
+                            backwardsCursor: "before-1",
+                            liveOverlay: ThreadListLiveOverlayDTO(ok: true, state: "ready")
+                        )
+                    )
+                )
+            )
+        )
+
+        let result = try await task.value
+        XCTAssertEqual(result.summaries.map(\.id.threadID), ["thread-1"])
+        XCTAssertEqual(result.nextCursor, "cursor-1")
+        XCTAssertEqual(result.backwardsCursor, "before-1")
+        let threadListRequestCount = await transport.sentMethodsSnapshot()
+            .filter { $0 == AppServerMethods.threadList }
+            .count
+        XCTAssertEqual(threadListRequestCount, 1)
         await client.disconnect()
     }
 

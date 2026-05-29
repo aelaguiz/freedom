@@ -16,6 +16,7 @@ public enum CodexDockConstants {
     public enum Dock {
         public static let humanSessionPageLimit = 250
         public static let agentSessionPageLimit = 250
+        public static let activeSessionMaxPages = 1
         public static let turnPageLimit = 250
         public static let autoRefreshInterval: Duration = .seconds(5)
         public static let bonjourResolveTimeout: TimeInterval = 4
