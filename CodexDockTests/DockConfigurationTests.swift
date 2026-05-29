@@ -2,13 +2,26 @@ import XCTest
 @testable import CodexDock
 
 final class DockConfigurationTests: XCTestCase {
+    func testHostDisplayNameResolverDerivesShortNamesWithoutChangingEndpoint() throws {
+        let amirTailnet = try DockHostConfiguration(host: "amir-m5.fairy-salmon.ts.net", port: 4510)
+        let homeTailnet = try DockHostConfiguration(host: "home.fairy-salmon.ts.net", port: 4510)
+        let amirLocal = try DockHostConfiguration(host: "Amir-M5.local", port: 4510)
+        let phoneLAN = try DockHostConfiguration(host: "192.168.50.74", port: 4510)
+
+        XCTAssertEqual(amirTailnet.displayName, "Amir-M5")
+        XCTAssertEqual(homeTailnet.displayName, "Home")
+        XCTAssertEqual(amirLocal.displayName, "Amir-M5")
+        XCTAssertEqual(phoneLAN.displayName, "192.168.50.74")
+        XCTAssertEqual(amirTailnet.endpoint.displayEndpoint, "amir-m5.fairy-salmon.ts.net:4510")
+    }
+
     func testHostConfigurationReadsSingleHostEnvironment() throws {
         let host = try DockHostConfiguration.fromEnvironment([
             "CODEX_DOCK_HOSTS": "192.168.50.117:4510"
         ])
 
         XCTAssertEqual(host.id, "192.168.50.117:4510")
-        XCTAssertEqual(host.displayName, "192.168.50.117:4510")
+        XCTAssertEqual(host.displayName, "192.168.50.117")
         XCTAssertEqual(host.endpoint.host, "192.168.50.117")
         XCTAssertEqual(host.endpoint.port, 4510)
         XCTAssertEqual(host.webSocketURL.absoluteString, "ws://192.168.50.117:4510")
@@ -38,8 +51,8 @@ final class DockConfigurationTests: XCTestCase {
             "home.fairy-salmon.ts.net:4510"
         ])
         XCTAssertEqual(registry.hosts.map(\.displayName), [
-            "amir-m5.fairy-salmon.ts.net:4510",
-            "home.fairy-salmon.ts.net:4510"
+            "Amir-M5",
+            "Home"
         ])
         XCTAssertEqual(registry.hosts.map { $0.webSocketURL.absoluteString }, [
             "ws://amir-m5.fairy-salmon.ts.net:4510",
@@ -237,7 +250,7 @@ final class DockConfigurationTests: XCTestCase {
 
         try await waitForRelayBootstrap {
             if case .ready(let registry) = store.state {
-                return registry.hosts.first?.displayName == "192.168.50.117:4510"
+                return registry.hosts.first?.displayName == "192.168.50.117"
                     && registry.hosts.first?.webSocketURL.absoluteString == "ws://192.168.50.117:4510"
             }
             return false
@@ -504,7 +517,7 @@ final class DockConfigurationTests: XCTestCase {
             try loaded?.hostConfigurations.map { $0.endpoint.displayEndpoint },
             ["Amir-M5.local:4510", "home.fairy-salmon.ts.net:4510"]
         )
-        let savedText = try String(contentsOf: fileURL)
+        let savedText = try String(contentsOf: fileURL, encoding: .utf8)
         XCTAssertTrue(savedText.contains(#""hosts""#))
         XCTAssertFalse(savedText.contains(#""endpoints""#))
         XCTAssertFalse(savedText.contains("relayInstanceID"))

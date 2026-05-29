@@ -92,22 +92,72 @@ public extension AutomationID {
 
     enum Dock {
         public static let root = AutomationID("codexdock.dock.root")
-        public static let filterPicker = AutomationID("codexdock.dock.filter")
         public static let searchField = AutomationID("codexdock.dock.search")
-        public static let sortPicker = AutomationID("codexdock.dock.sort")
-        public static let idleToggle = AutomationID("codexdock.dock.idle-toggle")
-        public static let addHostButton = AutomationID("codexdock.dock.add-host")
+        public static let lensPicker = AutomationID("codexdock.dock.lens")
+        public static let filterButton = AutomationID("codexdock.dock.filters.button")
+        public static let activeFilterSummary = AutomationID("codexdock.dock.filters.summary")
+        public static let clearSearchButton = AutomationID("codexdock.dock.search.clear")
+        public static let clearFiltersButton = AutomationID("codexdock.dock.filters.clear")
+        public static let filterSurface = AutomationID("codexdock.dock.filters.surface")
+        public static let filterResultSummary = AutomationID("codexdock.dock.filters.result-summary")
+        public static let filterHostAny = AutomationID("codexdock.dock.filters.host.any")
+        public static let filterBranchSearch = AutomationID("codexdock.dock.filters.branch.search")
+        public static let filterStatusAny = AutomationID("codexdock.dock.filters.status.any")
+        public static let filterRepoQuery = AutomationID("codexdock.dock.filters.repo.query")
+        public static let filterSourcePicker = AutomationID("codexdock.dock.filters.source")
+        public static let filterIdleToggle = AutomationID("codexdock.dock.filters.idle")
+        public static let notLoadedExplanation = AutomationID("codexdock.dock.filters.not-loaded.explanation")
 
         public static func state(_ kind: StateKind) -> AutomationID {
             AutomationID("codexdock.dock.state.\(kind.rawValue)")
         }
 
-        public static func filterTab(_ tabID: String) -> AutomationID {
-            AutomationID("codexdock.dock.filter.\(safeSegment(tabID))")
+        public static func lensButton(_ lensID: String) -> AutomationID {
+            AutomationID("codexdock.dock.lens.\(safeSegment(lensID))")
         }
 
         public static func hostSummary(hostID: String) -> AutomationID {
             AutomationID("codexdock.dock.host.\(safeSegment(hostID))")
+        }
+
+        public static func hostGroup(_ groupID: String) -> AutomationID {
+            AutomationID("codexdock.dock.group.host.\(safeSegment(groupID))")
+        }
+
+        public static func hostToggle(_ groupID: String) -> AutomationID {
+            AutomationID("codexdock.dock.group.host.\(safeSegment(groupID)).toggle")
+        }
+
+        public static func branchGroup(_ groupID: String) -> AutomationID {
+            AutomationID("codexdock.dock.group.branch.\(safeSegment(groupID))")
+        }
+
+        public static func branchToggle(_ groupID: String) -> AutomationID {
+            AutomationID("codexdock.dock.group.branch.\(safeSegment(groupID)).toggle")
+        }
+
+        public static func hostRetry(hostID: String) -> AutomationID {
+            AutomationID("codexdock.dock.host.\(safeSegment(hostID)).retry")
+        }
+
+        public static func hostRelaySettings(hostID: String) -> AutomationID {
+            AutomationID("codexdock.dock.host.\(safeSegment(hostID)).relay-settings")
+        }
+
+        public static func filterHost(hostID: String) -> AutomationID {
+            AutomationID("codexdock.dock.filters.host.\(safeSegment(hostID))")
+        }
+
+        public static func filterBranch(_ branch: String) -> AutomationID {
+            AutomationID("codexdock.dock.filters.branch.\(safeSegment(branch))")
+        }
+
+        public static func filterStatus(_ status: String) -> AutomationID {
+            AutomationID("codexdock.dock.filters.status.\(safeSegment(status))")
+        }
+
+        public static func filterRepo(_ repo: String) -> AutomationID {
+            AutomationID("codexdock.dock.filters.repo.\(safeSegment(repo))")
         }
 
         public static func section(_ sectionID: String) -> AutomationID {

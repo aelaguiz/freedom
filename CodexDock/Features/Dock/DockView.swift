@@ -85,6 +85,9 @@ public struct CodexDockRootView: View {
                 lifecycleCoordinator: lifecycleCoordinator,
                 connectivityReporter: connectivityStore,
                 connectivityStore: connectivityStore,
+                onOpenRelaySettings: {
+                    selectedRootTab = .relay
+                },
                 onArchiveSucceeded: {
                     await archiveStore.refresh()
                 }
@@ -212,23 +215,28 @@ public struct DockView: View {
     private let lifecycleCoordinator: AppLifecycleCoordinator?
     private let connectivityReporter: (any AppConnectivityReporting)?
     private let connectivityStore: AppConnectivityStore?
+    private let onOpenRelaySettings: @MainActor () -> Void
     private let onArchiveSucceeded: @MainActor () async -> Void
-    @State private var selectedTab: DockTabID = .all
+    @State private var selectedLens: DockLensID = .newest
     @State private var searchText = ""
-    @State private var sortMode: DockSessionSortMode = .branch
-    @State private var showsIdle = false
+    @State private var filterState = DockFilterState.default
+    @State private var isFilterSurfacePresented = false
+    @State private var collapsedHostGroupIDs: Set<String> = []
+    @State private var collapsedBranchGroupIDs: Set<String> = []
 
     public init(
         store: DockStore,
         lifecycleCoordinator: AppLifecycleCoordinator? = nil,
         connectivityReporter: (any AppConnectivityReporting)? = nil,
         connectivityStore: AppConnectivityStore? = nil,
+        onOpenRelaySettings: @escaping @MainActor () -> Void = {},
         onArchiveSucceeded: @escaping @MainActor () async -> Void = {}
     ) {
         self.store = store
         self.lifecycleCoordinator = lifecycleCoordinator
         self.connectivityReporter = connectivityReporter
         self.connectivityStore = connectivityStore
+        self.onOpenRelaySettings = onOpenRelaySettings
         self.onArchiveSucceeded = onArchiveSucceeded
     }
 
@@ -250,71 +258,39 @@ public struct DockView: View {
                 await store.refresh()
             }
         }
-        .accessibilityElement(children: .contain)
-        .codexAutomationID(AutomationID.Dock.root)
-        .accessibilityValue(dockScreenValue)
+        .sheet(isPresented: $isFilterSurfacePresented) {
+            DockFilterSurfaceView(
+                filters: $filterState,
+                projection: currentProjection
+            )
+        }
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Text("Dock")
-                .font(.largeTitle.weight(.semibold))
-                .foregroundStyle(.primary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                Text("Dock")
+                    .font(.largeTitle.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityValue(dockScreenValue)
+                    .codexAutomationID(AutomationID.Dock.root)
 
-            Spacer(minLength: 12)
+                Spacer(minLength: 12)
 
-            if let connectivityStore {
-                GlobalConnectivityIndicatorView(store: connectivityStore)
-                    .fixedSize(horizontal: true, vertical: false)
+                if let connectivityStore {
+                    GlobalConnectivityIndicatorView(store: connectivityStore)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
             }
-
-            Button {
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 18, weight: .semibold))
-                    .frame(width: 44, height: 44)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(true)
-            .accessibilityLabel("Add host")
-            .codexAutomationID(AutomationID.Dock.addHostButton)
         }
     }
 
     private var controls: some View {
-        VStack(spacing: 12) {
-            Picker("Filter", selection: $selectedTab) {
-                ForEach(currentTabs) { tab in
-                    Text(tab.label)
-                        .codexAutomationID(AutomationID.Dock.filterTab(tab.id.rawValue))
-                        .tag(tab.id)
-                }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityValue(selectedTab.rawValue)
-            .codexAutomationID(AutomationID.Dock.filterPicker)
-
-            ViewThatFits(in: .horizontal) {
-                sessionControlsRow
-                VStack(alignment: .leading, spacing: 8) {
-                    searchControl
-                    HStack(spacing: 8) {
-                        sortControl
-                        idleToggle
-                    }
-                }
-            }
-        }
-    }
-
-    private var sessionControlsRow: some View {
-        HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             searchControl
-                .frame(width: 154)
-            sortControl
-                .frame(width: 116)
-            idleToggle
-                .fixedSize(horizontal: true, vertical: false)
+            lensControls
+            activeFilterSummary
         }
     }
 
@@ -324,56 +300,100 @@ public struct DockView: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             searchField
+            if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+                .codexAutomationID(AutomationID.Dock.clearSearchButton)
+            }
         }
         .font(.subheadline)
         .padding(.horizontal, 10)
-        .frame(height: 40)
+        .frame(maxWidth: .infinity, minHeight: 44)
         .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    private var sortControl: some View {
-        Picker("Sort", selection: $sortMode) {
-            ForEach(DockSessionSortMode.allCases) { mode in
-                Text(mode.label).tag(mode)
+    private var lensControls: some View {
+        HStack(spacing: 8) {
+            ForEach(DockLensID.allCases) { lens in
+                Button {
+                    selectedLens = lens
+                } label: {
+                    Text(lens.title)
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(selectedLens == lens ? .white : .primary)
+                .background(
+                    selectedLens == lens ? Color.blue : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.secondary.opacity(0.25), lineWidth: selectedLens == lens ? 0 : 1)
+                }
+                .accessibilityAddTraits(selectedLens == lens ? .isSelected : [])
+                .codexAutomationID(AutomationID.Dock.lensButton(lens.rawValue))
             }
+
+            Button {
+                isFilterSurfacePresented = true
+            } label: {
+                Image(systemName: filterState.isDefault ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                    .frame(width: 42, height: 38)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Filters")
+            .accessibilityValue(filterState.activeFilterCount == 0 ? "No active filters" : "\(filterState.activeFilterCount) active filters")
+            .accessibilityAddTraits(isFilterSurfacePresented ? .isSelected : [])
+            .codexAutomationID(AutomationID.Dock.filterButton)
         }
-        .pickerStyle(.segmented)
-        .accessibilityLabel("Sort sessions")
-        .accessibilityValue(sortMode.rawValue)
-        .codexAutomationID(AutomationID.Dock.sortPicker)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Dock lenses")
+        .accessibilityValue(selectedLens.title)
+        .codexAutomationID(AutomationID.Dock.lensPicker)
     }
 
-    private var idleToggle: some View {
-        Button {
-            showsIdle.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: showsIdle ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 17, weight: .semibold))
-                Text("Idle")
+    private var activeFilterSummary: some View {
+        HStack(spacing: 8) {
+            Text(activeSummaryText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .layoutPriority(1)
+
+            Spacer(minLength: 8)
+
+            if !filterState.isDefault {
+                Button("Clear") {
+                    filterState = .default
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.bordered)
+                .codexAutomationID(AutomationID.Dock.clearFiltersButton)
             }
-            .font(.subheadline.weight(.medium))
-            .frame(height: 40)
-            .padding(.horizontal, 8)
-            .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Show idle threads")
-        .accessibilityValue(showsIdle ? "On" : "Off")
-        .accessibilityHint("Shows idle threads when enabled.")
-        .accessibilityAddTraits(showsIdle ? .isSelected : [])
-        .codexAutomationID(AutomationID.Dock.idleToggle)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(activeSummaryText)
+        .codexAutomationID(AutomationID.Dock.activeFilterSummary)
     }
 
     @ViewBuilder
     private var searchField: some View {
         #if os(iOS)
-        TextField("Search sessions", text: $searchText)
+        TextField("Search sessions, repo, branch, host", text: $searchText)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .codexAutomationID(AutomationID.Dock.searchField)
         #else
-        TextField("Search sessions", text: $searchText)
+        TextField("Search sessions, repo, branch, host", text: $searchText)
             .codexAutomationID(AutomationID.Dock.searchField)
         #endif
     }
@@ -388,11 +408,15 @@ public struct DockView: View {
         #endif
     }
 
-    private var currentTabs: [DockTabViewModel] {
+    private var currentProjection: DockSessionProjection? {
         if case .loaded(let snapshot) = store.state {
-            return snapshot.project(options: projectionOptions).tabs
+            return snapshot.project(options: projectionOptions)
         }
-        return DockTabID.allCases.map { DockTabViewModel(id: $0, count: 0) }
+        return nil
+    }
+
+    private var activeSummaryText: String {
+        currentProjection?.summary.text ?? "0 shown · Hosts: Any · Branches: Any · Status: Any · Repo: Any · Source: Any · Idle hidden"
     }
 
     @ViewBuilder
@@ -405,43 +429,18 @@ public struct DockView: View {
                 message: message,
                 automationID: AutomationID.Dock.state(.configurationError)
             )
-        case let .idle(host):
-            HostSummaryView(
-                host: host,
-                subtitle: "Ready",
-                automationID: AutomationID.Dock.hostSummary(hostID: host.id)
-            )
-        case let .loading(host):
-            HostSummaryView(
-                host: host,
-                subtitle: "Loading",
-                automationID: AutomationID.Dock.hostSummary(hostID: host.id)
-            )
-            ProgressView()
-                .frame(maxWidth: .infinity, minHeight: 120)
-                .codexAutomationID(AutomationID.Dock.state(.loading))
+        case let .idle(hosts):
+            hostStatusList(hosts.map { DockHostStateViewModel(host: $0, status: .empty) }, stateTitle: "Ready")
+        case let .loading(hosts):
+            hostStatusList(hosts.map { DockHostStateViewModel(host: $0, status: .checking) }, stateTitle: "Sessions not loaded yet")
         case let .offline(host, message):
-            HostSummaryView(
-                host: host,
-                subtitle: "Offline",
-                automationID: AutomationID.Dock.hostSummary(hostID: host.id)
-            )
-            DockMessageView(
-                icon: "wifi.exclamationmark",
-                title: "Host offline",
-                message: message,
+            hostFailureRow(
+                DockHostStateViewModel(host: host, status: .offline(message)),
                 automationID: AutomationID.Dock.state(.offline)
             )
         case let .error(host, message):
-            HostSummaryView(
-                host: host,
-                subtitle: "Error",
-                automationID: AutomationID.Dock.hostSummary(hostID: host.id)
-            )
-            DockMessageView(
-                icon: "exclamationmark.octagon",
-                title: "Dock error",
-                message: message,
+            hostFailureRow(
+                DockHostStateViewModel(host: host, status: .error(message)),
                 automationID: AutomationID.Dock.state(.error)
             )
         case let .loaded(snapshot):
@@ -451,16 +450,8 @@ public struct DockView: View {
 
     private func loadedContent(_ snapshot: DockSnapshot) -> some View {
         let projection = snapshot.project(options: projectionOptions)
-        let sections = projection.sections
 
         return VStack(alignment: .leading, spacing: 16) {
-            ForEach(snapshot.hostStates) { hostState in
-                HostSummaryView(
-                    hostState: hostState,
-                    automationID: AutomationID.Dock.hostSummary(hostID: hostState.host.id)
-                )
-            }
-
             if let actionError = store.actionError {
                 ActionErrorBanner(
                     message: actionError,
@@ -495,71 +486,67 @@ public struct DockView: View {
                 )
             }
 
-            if sections.isEmpty {
+            if let emptyReason = projection.emptyReason {
                 DockMessageView(
                     icon: "line.3.horizontal.decrease.circle",
-                    title: emptyStateTitle(hasHiddenIdleMatches: projection.hiddenIdleMatchCount > 0),
-                    message: emptyStateMessage(hasHiddenIdleMatches: projection.hiddenIdleMatchCount > 0),
+                    title: emptyReason.title,
+                    message: emptyReason.message,
                     automationID: AutomationID.Dock.state(.empty)
                 )
+                let hostStates = contextualHostStates(in: snapshot)
+                if !hostStates.isEmpty {
+                    hostStatusList(hostStates, stateTitle: "Host status")
+                }
             } else {
-                ForEach(sections) { section in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(section.title)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .textCase(.uppercase)
-                            .codexAutomationID(AutomationID.Dock.section(section.id))
+                projectedContent(projection, snapshot: snapshot)
+            }
+        }
+    }
 
-                        VStack(spacing: 10) {
-                            ForEach(section.rows) { row in
-                                if let host = store.hostConfiguration(for: row.id.hostID) {
-                                    NavigationLink {
-                                        SessionDetailView(
-                                            store: ThreadDetailStore(
-                                                host: host,
-                                                row: row,
-                                                lifecycleCoordinator: lifecycleCoordinator,
-                                                connectivityReporter: connectivityReporter
-                                            )
-                                        )
-                                    } label: {
-                                        DockRowView(row: row)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .accessibilityElement(children: .combine)
-                                    .codexAutomationID(AutomationID.Dock.row(hostID: row.id.hostID, threadID: row.id.threadID))
-                                    .accessibilityValue(row.automationValue)
-                                    .contextMenu {
-                                        rowContextMenu(row)
-                                    }
-                                } else {
-                                    DockRowView(
-                                        row: row,
-                                        automationID: AutomationID.Dock.row(
-                                            hostID: row.id.hostID,
-                                            threadID: row.id.threadID
-                                        )
-                                    )
-                                    .accessibilityValue(row.automationValue)
-                                    .contextMenu {
-                                        rowContextMenu(row)
-                                    }
-                                }
-                            }
-                        }
-                    }
+    @ViewBuilder
+    private func projectedContent(
+        _ projection: DockSessionProjection,
+        snapshot: DockSnapshot
+    ) -> some View {
+        switch selectedLens {
+        case .newest:
+            LazyVStack(spacing: 10) {
+                ForEach(projection.rows) { row in
+                    dockRow(row)
+                }
+                ForEach(contextualHostStates(in: snapshot)) { hostState in
+                    hostContextRow(
+                        hostState,
+                        automationID: AutomationID.Dock.hostSummary(hostID: hostState.host.id)
+                    )
+                }
+            }
+        case .host:
+            LazyVStack(spacing: 12) {
+                ForEach(projection.groups) { group in
+                    projectionGroup(group, collapsedIDs: $collapsedHostGroupIDs)
+                }
+            }
+        case .branch:
+            LazyVStack(spacing: 12) {
+                ForEach(projection.groups) { group in
+                    projectionGroup(group, collapsedIDs: $collapsedBranchGroupIDs)
+                }
+                ForEach(contextualHostStates(in: snapshot)) { hostState in
+                    hostContextRow(
+                        hostState,
+                        automationID: AutomationID.Dock.hostSummary(hostID: hostState.host.id)
+                    )
                 }
             }
         }
     }
 
-    private var projectionOptions: DockSessionProjectionOptions {
-        DockSessionProjectionOptions(
-            selectedTab: selectedTab,
+    private var projectionOptions: DockProjectionOptions {
+        DockProjectionOptions(
+            lens: selectedLens,
             searchText: searchText,
-            sortMode: sortMode,
-            showsIdle: showsIdle
+            filters: filterState
         )
     }
 
@@ -567,17 +554,166 @@ public struct DockView: View {
         switch store.state {
         case .configurationError:
             return "configuration-error"
-        case .idle(let host):
-            return "idle; host=\(host.id); filter=\(selectedTab.rawValue); sort=\(sortMode.rawValue); idle=\(showsIdle)"
-        case .loading(let host):
-            return "loading; host=\(host.id); filter=\(selectedTab.rawValue); sort=\(sortMode.rawValue); idle=\(showsIdle)"
+        case .idle(let hosts):
+            return "idle; hosts=\(hosts.count); lens=\(selectedLens.rawValue); filters=\(filterState.activeFilterCount)"
+        case .loading(let hosts):
+            return "loading; hosts=\(hosts.count); lens=\(selectedLens.rawValue); filters=\(filterState.activeFilterCount)"
         case .loaded(let snapshot):
-            return "loaded; rows=\(snapshot.rowCount); filter=\(selectedTab.rawValue); sort=\(sortMode.rawValue); idle=\(showsIdle)"
+            return "loaded; rows=\(snapshot.rowCount); lens=\(selectedLens.rawValue); search=\(!searchText.isEmpty); filters=\(filterState.activeFilterCount); \(activeSummaryText)"
         case .offline(let host, _):
-            return "offline; host=\(host.id); filter=\(selectedTab.rawValue); sort=\(sortMode.rawValue); idle=\(showsIdle)"
+            return "offline; host=\(host.id); lens=\(selectedLens.rawValue); filters=\(filterState.activeFilterCount)"
         case .error(let host, _):
-            return "error; host=\(host.id); filter=\(selectedTab.rawValue); sort=\(sortMode.rawValue); idle=\(showsIdle)"
+            return "error; host=\(host.id); lens=\(selectedLens.rawValue); filters=\(filterState.activeFilterCount)"
         }
+    }
+
+    private func dockRow(_ row: DockRowViewModel) -> some View {
+        Group {
+            if let host = store.hostConfiguration(for: row.id.hostID) {
+                NavigationLink {
+                    SessionDetailView(
+                        store: ThreadDetailStore(
+                            host: host,
+                            row: row,
+                            lifecycleCoordinator: lifecycleCoordinator,
+                            connectivityReporter: connectivityReporter
+                        )
+                    )
+                } label: {
+                    DockRowView(row: row)
+                }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .codexAutomationID(AutomationID.Dock.row(hostID: row.id.hostID, threadID: row.id.threadID))
+                .accessibilityValue(row.automationValue)
+                .contextMenu {
+                    rowContextMenu(row)
+                }
+            } else {
+                DockRowView(
+                    row: row,
+                    automationID: AutomationID.Dock.row(hostID: row.id.hostID, threadID: row.id.threadID)
+                )
+                .accessibilityValue(row.automationValue)
+                .contextMenu {
+                    rowContextMenu(row)
+                }
+            }
+        }
+    }
+
+    private func projectionGroup(
+        _ group: DockProjectionGroupViewModel,
+        collapsedIDs: Binding<Set<String>>
+    ) -> some View {
+        let isCollapsed = collapsedIDs.wrappedValue.contains(group.id)
+        let groupAutomationID = group.kind == .host
+            ? AutomationID.Dock.hostGroup(group.id)
+            : AutomationID.Dock.branchGroup(group.id)
+        let toggleAutomationID = group.kind == .host
+            ? AutomationID.Dock.hostToggle(group.id)
+            : AutomationID.Dock.branchToggle(group.id)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Button {
+                if isCollapsed {
+                    collapsedIDs.wrappedValue.remove(group.id)
+                } else {
+                    collapsedIDs.wrappedValue.insert(group.id)
+                }
+            } label: {
+                DockGroupHeaderView(group: group, isCollapsed: isCollapsed)
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
+            .codexAutomationID(toggleAutomationID)
+
+            if group.isUnavailable,
+               let hostID = group.hostIDs.first,
+               let hostState = currentHostState(hostID: hostID) {
+                hostFailureRow(hostState, automationID: groupAutomationID)
+            } else if let hostID = group.hostIDs.first,
+                      let hostState = currentHostState(hostID: hostID),
+                      hostState.status == .checking {
+                HostLoadingRow(hostState: hostState)
+                    .codexAutomationID(groupAutomationID)
+            } else if !isCollapsed {
+                LazyVStack(spacing: 10) {
+                    ForEach(group.rows) { row in
+                        dockRow(row)
+                    }
+                }
+            }
+        }
+        .codexAutomationID(groupAutomationID)
+    }
+
+    private func currentHostState(hostID: String) -> DockHostStateViewModel? {
+        guard case .loaded(let snapshot) = store.state else {
+            return nil
+        }
+        return snapshot.hostStates.first { $0.host.id == hostID }
+    }
+
+    private func contextualHostStates(in snapshot: DockSnapshot) -> [DockHostStateViewModel] {
+        snapshot.hostStates.filter { hostState in
+            hostState.status == .checking || hostState.status.isUnavailable
+        }
+    }
+
+    private func hostStatusList(
+        _ hostStates: [DockHostStateViewModel],
+        stateTitle: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(stateTitle)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            LazyVStack(spacing: 10) {
+                ForEach(hostStates) { hostState in
+                    hostContextRow(
+                        hostState,
+                        automationID: AutomationID.Dock.hostSummary(hostID: hostState.host.id)
+                    )
+                }
+            }
+            if hostStates.contains(where: { $0.status == .checking }) {
+                Text("Waiting for relay response")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .codexAutomationID(AutomationID.Dock.state(.loading))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func hostContextRow(
+        _ hostState: DockHostStateViewModel,
+        automationID: AutomationID? = nil
+    ) -> some View {
+        if hostState.status.isUnavailable {
+            hostFailureRow(hostState, automationID: automationID)
+        } else {
+            HostLoadingRow(hostState: hostState)
+                .codexAutomationID(automationID)
+        }
+    }
+
+    private func hostFailureRow(
+        _ hostState: DockHostStateViewModel,
+        automationID: AutomationID? = nil
+    ) -> some View {
+        HostFailureRow(
+            hostState: hostState,
+            onRetry: {
+                Task {
+                    await store.refresh()
+                }
+            },
+            onOpenRelaySettings: onOpenRelaySettings
+        )
+        .codexAutomationID(automationID)
     }
 
     @ViewBuilder
@@ -678,49 +814,6 @@ public struct DockView: View {
         )
     }
 
-    private func emptyStateTitle(hasHiddenIdleMatches: Bool) -> String {
-        if hasHiddenIdleMatches {
-            return "Idle hidden"
-        }
-
-        let hasSearch = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if hasSearch {
-            return "No matches"
-        }
-
-        switch selectedTab {
-        case .all:
-            return "No sessions"
-        case .needsMe:
-            return "Nothing needs you"
-        case .running:
-            return "Nothing running"
-        case .agents:
-            return "No agent sessions"
-        }
-    }
-
-    private func emptyStateMessage(hasHiddenIdleMatches: Bool) -> String {
-        if hasHiddenIdleMatches {
-            return "Enable Idle to show matching idle threads."
-        }
-
-        let hasSearch = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if hasSearch {
-            return "No sessions match this filter and search."
-        }
-
-        switch selectedTab {
-        case .all:
-            return "No human sessions are loaded on reachable hosts."
-        case .needsMe:
-            return "No sessions are waiting for approval or input."
-        case .running:
-            return "No live sessions are loaded on reachable hosts."
-        case .agents:
-            return "No agent or automation sessions are loaded on reachable hosts."
-        }
-    }
 }
 
 #Preview {
@@ -774,8 +867,8 @@ private struct PreviewDockSessionLoader: DockSessionLoading {
                     origin: .humanInteractive(subtype: .cli)
                 ),
                 SessionSummary(
-                    id: HostScopedThreadID(hostID: host.id, threadID: "preview-needs-me"),
-                    backendSessionID: "preview-session-needs-me",
+                    id: HostScopedThreadID(hostID: host.id, threadID: "preview-review"),
+                    backendSessionID: "preview-session-review",
                     displayTitle: "Review the live-host launch proof",
                     status: .active(activeFlags: [.waitingOnUserInput]),
                     repository: .known("codex"),

@@ -2,28 +2,155 @@ import Combine
 import Foundation
 
 public enum DockRowStatusKind: String, Equatable, Sendable, CaseIterable {
-    case needsMe
     case running
     case idle
     case notLoaded
-    case failed
+    case error
     case unknown
 
     public var label: String {
         switch self {
-        case .needsMe:
-            return "Needs me"
         case .running:
             return "Running"
         case .idle:
             return "Idle"
         case .notLoaded:
             return "Not loaded"
-        case .failed:
+        case .error:
             return "Error"
         case .unknown:
             return "Unknown"
         }
+    }
+}
+
+public enum DockLensID: String, CaseIterable, Identifiable, Equatable, Sendable {
+    case newest
+    case host
+    case branch
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .newest:
+            return "Newest"
+        case .host:
+            return "Host"
+        case .branch:
+            return "Branch"
+        }
+    }
+}
+
+public enum DockSortOrder: String, CaseIterable, Identifiable, Equatable, Sendable {
+    case newestActivity
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .newestActivity:
+            return "Newest activity"
+        }
+    }
+}
+
+public enum DockSourceFilter: String, CaseIterable, Identifiable, Equatable, Sendable {
+    case any
+    case human
+    case agents
+    case unknown
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .any:
+            return "Any"
+        case .human:
+            return "Human"
+        case .agents:
+            return "Agents"
+        case .unknown:
+            return "Unknown"
+        }
+    }
+
+    public func includes(_ origin: SessionOrigin) -> Bool {
+        switch self {
+        case .any:
+            return true
+        case .human:
+            return origin.kind == .humanInteractive
+        case .agents:
+            return origin.kind == .agentOrAutomation
+        case .unknown:
+            return origin.kind == .unknown
+        }
+    }
+}
+
+extension SessionOrigin {
+    var automationKind: String {
+        switch kind {
+        case .humanInteractive:
+            return "human"
+        case .agentOrAutomation:
+            return "automation"
+        case .unknown:
+            return "unknown"
+        }
+    }
+}
+
+public struct DockFilterState: Equatable, Sendable {
+    public var selectedHostIDs: Set<String>
+    public var selectedBranches: Set<String>
+    public var statusKinds: Set<DockRowStatusKind>
+    public var repositoryQuery: String
+    public var selectedRepositories: Set<String>
+    public var source: DockSourceFilter
+    public var showsIdle: Bool
+    public var sortOrder: DockSortOrder
+
+    public init(
+        selectedHostIDs: Set<String> = [],
+        selectedBranches: Set<String> = [],
+        statusKinds: Set<DockRowStatusKind> = Set(DockRowStatusKind.allCases),
+        repositoryQuery: String = "",
+        selectedRepositories: Set<String> = [],
+        source: DockSourceFilter = .any,
+        showsIdle: Bool = false,
+        sortOrder: DockSortOrder = .newestActivity
+    ) {
+        self.selectedHostIDs = selectedHostIDs
+        self.selectedBranches = selectedBranches
+        self.statusKinds = statusKinds
+        self.repositoryQuery = repositoryQuery
+        self.selectedRepositories = selectedRepositories
+        self.source = source
+        self.showsIdle = showsIdle
+        self.sortOrder = sortOrder
+    }
+
+    // Dock V1 deliberately defaults to all loaded source scopes and no archive facet.
+    public static let `default` = DockFilterState()
+
+    public var activeFilterCount: Int {
+        var count = 0
+        if !selectedHostIDs.isEmpty { count += 1 }
+        if !selectedBranches.isEmpty { count += 1 }
+        if statusKinds != Set(DockRowStatusKind.allCases) { count += 1 }
+        if !repositoryQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { count += 1 }
+        if !selectedRepositories.isEmpty { count += 1 }
+        if source != .any { count += 1 }
+        if showsIdle { count += 1 }
+        return count
+    }
+
+    public var isDefault: Bool {
+        self == .default
     }
 }
 
@@ -35,67 +162,12 @@ public enum DockRowRail: String, Codable, Equatable, Sendable, CaseIterable {
     case violet
 }
 
-public enum DockTabID: String, CaseIterable, Identifiable, Equatable, Sendable {
-    case all
-    case needsMe
-    case running
-    case agents
-
-    public var id: String { rawValue }
-
-    public var title: String {
-        switch self {
-        case .all:
-            return "All"
-        case .needsMe:
-            return "Needs me"
-        case .running:
-            return "Running"
-        case .agents:
-            return "Agents"
-        }
-    }
-
-    public func includes(_ row: DockRowViewModel) -> Bool {
-        switch self {
-        case .all:
-            return row.origin.kind == .humanInteractive
-        case .needsMe:
-            return row.origin.kind == .humanInteractive && row.status == .needsMe
-        case .running:
-            return row.origin.kind == .humanInteractive
-                && (
-                    row.status == .needsMe
-                        || row.status == .running
-                        || row.status == .idle
-                        || row.status == .failed
-                )
-        case .agents:
-            return row.origin.kind != .humanInteractive
-        }
-    }
-}
-
-public struct DockTabViewModel: Equatable, Identifiable, Sendable {
-    public let id: DockTabID
-    public let title: String
-    public let count: Int
-
-    public var label: String {
-        "\(title) \(count)"
-    }
-
-    public init(id: DockTabID, count: Int) {
-        self.id = id
-        self.title = id.title
-        self.count = count
-    }
-}
-
 public struct DockRowViewModel: Equatable, Identifiable, Sendable {
     public let id: HostScopedThreadID
     public let backendSessionID: String
     public let title: String
+    public let hostDisplayName: String
+    public let hostEndpoint: String
     public let repository: String
     public let branch: String
     public let status: DockRowStatusKind
@@ -121,6 +193,88 @@ public struct DockSectionViewModel: Equatable, Identifiable, Sendable {
     public let rows: [DockRowViewModel]
 }
 
+public enum DockProjectionGroupKind: String, Equatable, Sendable {
+    case host
+    case branch
+}
+
+public struct DockProjectionGroupViewModel: Equatable, Identifiable, Sendable {
+    public let id: String
+    public let kind: DockProjectionGroupKind
+    public let title: String
+    public let subtitle: String
+    public let rows: [DockRowViewModel]
+    public let hostIDs: [String]
+    public let newestActivityDate: Date?
+    public let runningCount: Int
+    public let hiddenIdleCount: Int
+    public let isUnavailable: Bool
+    public let unavailableMessage: String?
+
+    public var count: Int { rows.count }
+}
+
+public struct DockProjectionHiddenCounts: Equatable, Sendable {
+    public let idle: Int
+}
+
+public struct DockProjectionFacets: Equatable, Sendable {
+    public let hosts: [DockHostViewModel]
+    public let branches: [String]
+    public let statuses: [DockRowStatusKind]
+    public let repositories: [String]
+    public let sources: [DockSourceFilter]
+}
+
+public enum DockProjectionEmptyReason: Equatable, Sendable {
+    case noData
+    case noSearchMatches
+    case noFilterMatches
+    case idleHidden
+    case notLoadedOnly
+    case hostUnavailable
+
+    public var title: String {
+        switch self {
+        case .noData:
+            return "No sessions"
+        case .noSearchMatches:
+            return "No matches"
+        case .noFilterMatches:
+            return "No filtered sessions"
+        case .idleHidden:
+            return "Idle hidden"
+        case .notLoadedOnly:
+            return "No not-loaded sessions"
+        case .hostUnavailable:
+            return "Host unavailable"
+        }
+    }
+
+    public var message: String {
+        switch self {
+        case .noData:
+            return "No sessions are loaded on reachable hosts."
+        case .noSearchMatches:
+            return "No sessions match this search."
+        case .noFilterMatches:
+            return "No sessions match the active filters."
+        case .idleHidden:
+            return "Show idle sessions to include matching idle threads."
+        case .notLoadedOnly:
+            return "These sessions exist in the list, but Dock does not have loaded thread detail for them."
+        case .hostUnavailable:
+            return "The selected host is unavailable."
+        }
+    }
+}
+
+public struct DockProjectionSummary: Equatable, Sendable {
+    public let text: String
+    public let activeFilterCount: Int
+    public let resultCount: Int
+}
+
 public struct DockHostViewModel: Equatable, Identifiable, Sendable {
     public let id: String
     public let displayName: String
@@ -137,30 +291,39 @@ public struct DockSnapshot: Equatable, Sendable {
     public let host: DockHostViewModel
     public let hosts: [DockHostViewModel]
     public let hostStates: [DockHostStateViewModel]
-    public let sections: [DockSectionViewModel]
-    public let tabs: [DockTabViewModel]
+    public let rows: [DockRowViewModel]
     public let scopeLoadFailures: [DockScopeLoadFailureViewModel]
     public let scopeConflicts: [DockScopeConflictViewModel]
     public let mappingFailures: [SessionSummaryMappingFailure]
+    public let isPartial: Bool
 
     public var rowCount: Int {
-        sections.reduce(0) { count, section in
-            count + section.rows.count
-        }
+        rows.count
     }
 
-    public func sections(for tab: DockTabID) -> [DockSectionViewModel] {
-        sections.compactMap { section in
-            let rows = section.rows.filter(tab.includes)
-            guard !rows.isEmpty else {
-                return nil
-            }
-            return DockSectionViewModel(id: section.id, title: section.title, rows: rows)
-        }
+    public init(
+        host: DockHostViewModel,
+        hosts: [DockHostViewModel],
+        hostStates: [DockHostStateViewModel],
+        rows: [DockRowViewModel],
+        scopeLoadFailures: [DockScopeLoadFailureViewModel],
+        scopeConflicts: [DockScopeConflictViewModel],
+        mappingFailures: [SessionSummaryMappingFailure],
+        isPartial: Bool = false
+    ) {
+        self.host = host
+        self.hosts = hosts
+        self.hostStates = hostStates
+        self.rows = rows
+        self.scopeLoadFailures = scopeLoadFailures
+        self.scopeConflicts = scopeConflicts
+        self.mappingFailures = mappingFailures
+        self.isPartial = isPartial
     }
 }
 
 public enum DockHostLoadStatus: Equatable, Sendable {
+    case checking
     case loaded(rowCount: Int)
     case partial(rowCount: Int, message: String)
     case empty
@@ -169,6 +332,8 @@ public enum DockHostLoadStatus: Equatable, Sendable {
 
     public var subtitle: String {
         switch self {
+        case .checking:
+            return "Checking"
         case .loaded(let rowCount):
             return "\(rowCount) sessions"
         case .partial(let rowCount, let message):
@@ -186,7 +351,7 @@ public enum DockHostLoadStatus: Equatable, Sendable {
         switch self {
         case .offline, .error:
             return true
-        case .loaded, .partial, .empty:
+        case .checking, .loaded, .partial, .empty:
             return false
         }
     }
@@ -195,7 +360,7 @@ public enum DockHostLoadStatus: Equatable, Sendable {
         switch self {
         case .offline(let message), .error(let message):
             return message
-        case .loaded, .partial, .empty:
+        case .checking, .loaded, .partial, .empty:
             return nil
         }
     }
@@ -270,8 +435,8 @@ public struct DockScopeConflictViewModel: Equatable, Identifiable, Sendable {
 
 public enum DockStoreState: Equatable, Sendable {
     case configurationError(String)
-    case idle(DockHostViewModel)
-    case loading(DockHostViewModel)
+    case idle([DockHostViewModel])
+    case loading([DockHostViewModel])
     case loaded(DockSnapshot)
     case offline(DockHostViewModel, String)
     case error(DockHostViewModel, String)
@@ -313,7 +478,7 @@ public final class DockStore: ObservableObject {
         self.archiver = archiver
         self.metadataStore = metadataStore
         self.now = now
-        self.state = .idle(DockHostViewModel(host: host))
+        self.state = .idle([DockHostViewModel(host: host)])
     }
 
     public init(
@@ -328,7 +493,7 @@ public final class DockStore: ObservableObject {
         self.archiver = archiver
         self.metadataStore = metadataStore
         self.now = now
-        self.state = .idle(DockHostViewModel(host: registry.hosts[0]))
+        self.state = .idle(registry.hosts.map(DockHostViewModel.init))
     }
 
     public init(
@@ -349,7 +514,7 @@ public final class DockStore: ObservableObject {
     public func updateRegistry(_ registry: HostRegistry) async {
         hosts = registry.hosts
         actionError = nil
-        state = .idle(DockHostViewModel(host: registry.hosts[0]))
+        state = .idle(registry.hosts.map(DockHostViewModel.init))
         connectivityReporter?.reportDockState(state)
         await reload(showLoading: true)
     }
@@ -420,9 +585,10 @@ public final class DockStore: ObservableObject {
             isLoading = false
         }
 
-        let hostViewModel = DockHostViewModel(host: hosts[0])
+        let hostViewModels = hosts.map(DockHostViewModel.init)
+        let primaryHostViewModel = hostViewModels[0]
         if showLoading {
-            state = .loading(hostViewModel)
+            state = .loading(hostViewModels)
             connectivityReporter?.reportDockState(state)
         }
 
@@ -434,16 +600,16 @@ public final class DockStore: ObservableObject {
             DockLog.persistence.warning("dock metadata load failed error=\(DockLog.errorSummary(error), privacy: .public)")
         }
 
-        let results = await loadAllHosts()
+        let results = await loadAllHostsPublishingPartial()
         let snapshot = makeSnapshot(results: results)
 
         if hosts.count == 1, let first = results.first {
             if let failure = first.completeFailure {
                 switch failure {
                 case .offline(let message):
-                    state = .offline(hostViewModel, message)
+                    state = .offline(primaryHostViewModel, message)
                 case .error(let message):
-                    state = .error(hostViewModel, message)
+                    state = .error(primaryHostViewModel, message)
                 }
             } else {
                 state = .loaded(snapshot)
@@ -496,7 +662,7 @@ public final class DockStore: ObservableObject {
         }
     }
 
-    private func loadAllHosts() async -> [HostLoadOutcome] {
+    private func loadAllHostsPublishingPartial() async -> [HostLoadOutcome] {
         await withTaskGroup(of: HostLoadOutcome.self) { group in
             for host in hosts {
                 group.addTask { [loader] in
@@ -506,8 +672,17 @@ public final class DockStore: ObservableObject {
             }
 
             var outcomes: [HostLoadOutcome] = []
+            var checkingHostIDs = Set(hosts.map(\.id))
             for await outcome in group {
                 outcomes.append(outcome)
+                checkingHostIDs.remove(outcome.host.id)
+                outcomes.sort { lhs, rhs in
+                    hostIndex(lhs.host.id) < hostIndex(rhs.host.id)
+                }
+                if !checkingHostIDs.isEmpty {
+                    state = .loaded(makeSnapshot(results: outcomes, checkingHostIDs: checkingHostIDs))
+                    connectivityReporter?.reportDockState(state)
+                }
             }
             return outcomes.sorted { lhs, rhs in
                 hostIndex(lhs.host.id) < hostIndex(rhs.host.id)
@@ -568,10 +743,13 @@ public final class DockStore: ObservableObject {
         return .error(error.localizedDescription)
     }
 
-    private func makeSnapshot(results: [HostLoadOutcome]) -> DockSnapshot {
+    private func makeSnapshot(
+        results: [HostLoadOutcome],
+        checkingHostIDs: Set<String> = []
+    ) -> DockSnapshot {
         var summaries: [SessionSummary] = []
         var mappingFailures: [SessionSummaryMappingFailure] = []
-        var hostStates: [DockHostStateViewModel] = []
+        var hostStatesByID: [String: DockHostStateViewModel] = [:]
         var scopeLoadFailures: [DockScopeLoadFailureViewModel] = []
         var scopeConflicts: [DockScopeConflictViewModel] = []
 
@@ -600,23 +778,22 @@ public final class DockStore: ObservableObject {
             if let failure = outcome.completeFailure {
                 switch failure {
                 case .offline(let message):
-                    hostStates.append(DockHostStateViewModel(host: host, status: .offline(message)))
+                    hostStatesByID[host.id] = DockHostStateViewModel(host: host, status: .offline(message))
                 case .error(let message):
-                    hostStates.append(DockHostStateViewModel(host: host, status: .error(message)))
+                    hostStatesByID[host.id] = DockHostStateViewModel(host: host, status: .error(message))
                 }
             } else if scopeLoadFailures.contains(where: { $0.host.id == host.id }) {
                 var messages = scopeLoadFailures
                     .filter { $0.host.id == host.id }
                     .map { "\($0.scope.label): \($0.message)" }
                 messages.append(contentsOf: overlayMessages)
-                hostStates.append(
+                hostStatesByID[host.id] =
                     DockHostStateViewModel(
                         host: host,
                         status: .partial(rowCount: hostDedupedSummaries.count, message: messages.joined(separator: "; "))
                     )
-                )
             } else if !overlayMessages.isEmpty {
-                hostStates.append(
+                hostStatesByID[host.id] =
                     DockHostStateViewModel(
                         host: host,
                         status: .partial(
@@ -624,37 +801,38 @@ public final class DockStore: ObservableObject {
                             message: overlayMessages.joined(separator: "; ")
                         )
                     )
-                )
             } else {
-                hostStates.append(
+                hostStatesByID[host.id] =
                     DockHostStateViewModel(
                         host: host,
                         status: hostDedupedSummaries.isEmpty
                             ? .empty
                             : .loaded(rowCount: hostDedupedSummaries.count)
                     )
-                )
             }
         }
 
-        let sections = SessionRowProjector(
+        for host in hosts where checkingHostIDs.contains(host.id) {
+            let hostViewModel = DockHostViewModel(host: host)
+            hostStatesByID[host.id] = DockHostStateViewModel(host: hostViewModel, status: .checking)
+        }
+
+        let projector = SessionRowProjector(
             hosts: hosts,
             localMetadata: localMetadata,
             now: now
-        ).sections(from: summaries)
-        let allRows = sections.flatMap(\.rows)
+        )
+        let rows = projector.rows(from: summaries)
 
         return DockSnapshot(
             host: DockHostViewModel(host: hosts[0]),
             hosts: hosts.map(DockHostViewModel.init),
-            hostStates: hostStates,
-            sections: sections,
-            tabs: DockTabID.allCases.map { tab in
-                DockTabViewModel(id: tab, count: allRows.filter(tab.includes).count)
-            },
+            hostStates: hosts.compactMap { hostStatesByID[$0.id] },
+            rows: rows,
             scopeLoadFailures: scopeLoadFailures,
             scopeConflicts: scopeConflicts,
-            mappingFailures: mappingFailures
+            mappingFailures: mappingFailures,
+            isPartial: !checkingHostIDs.isEmpty
         )
     }
 

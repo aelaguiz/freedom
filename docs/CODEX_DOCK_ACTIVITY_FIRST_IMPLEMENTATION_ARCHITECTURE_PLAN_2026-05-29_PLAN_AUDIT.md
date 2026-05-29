@@ -2,8 +2,9 @@
 
 Plan: docs/CODEX_DOCK_ACTIVITY_FIRST_IMPLEMENTATION_ARCHITECTURE_PLAN_2026-05-29.md
 Audit log: docs/CODEX_DOCK_ACTIVITY_FIRST_IMPLEMENTATION_ARCHITECTURE_PLAN_2026-05-29_PLAN_AUDIT.md
-Current plan verdict: ready
-Last reviewed: 2026-05-29T17:41:30Z
+Current plan verdict: complete
+Current implementation code-review verdict: approve
+Last reviewed: 2026-05-29T18:45:41Z
 Scope: whole plan
 
 ## Current Blocking Findings
@@ -13,6 +14,30 @@ None open.
 ## Current Non-Blocking Findings
 
 None open.
+
+## Current Implementation Findings
+
+None open.
+
+## Resolved Implementation Findings
+
+- [x] IMP-001 - Active filter summary hid active constraints behind `N filters`
+  - Problem: The first implementation could tell the user that filters were active without naming which host, branch, status, repo, source, idle, or search constraint was hiding rows.
+  - Repair: `DockSessionProjection.summary(for:)` now names host, branch, status, repo, source, idle visibility, search text, result count, and partial state.
+  - Evidence: `CodexDock/State/DockSessionProjection.swift`, `CodexDockTests/DockStoreTestsProjection.swift`.
+  - Status: resolved in implementation
+
+- [x] IMP-002 - Mixed online-plus-checking connectivity hid loaded-host truth
+  - Problem: When at least one host had loaded and another was still checking, the global rollup could collapse to a generic checking state instead of telling the user that some real rows were already online.
+  - Repair: `AppConnectivityStore` now rolls mixed online/checking hosts up to partial count copy such as `Online 1/2, checking 1`; all-checking still reports `Checking N hosts`.
+  - Evidence: `CodexDock/State/AppConnectivityStore.swift`, `CodexDockTests/AppConnectivityStoreTests.swift`.
+  - Status: resolved in implementation
+
+- [x] THERMO-001 - Shared Dock test helper exposed fake host identity knobs
+  - Problem: The shared test host helper accepted a fake display name and fake host ID path that production host identity does not use.
+  - Repair: `DockStoreTestSupport.makeHost` now derives identity from a real relay endpoint only.
+  - Evidence: `CodexDockTests/DockStoreTestSupport.swift`, `CodexDockTests/DockStoreScopeTests.swift`, `CodexDockTests/DockStoreTests.swift`.
+  - Status: resolved in implementation
 
 ## Resolved Plan-Readiness Findings
 
@@ -188,17 +213,17 @@ Final re-check result:
 
 ## Audit Synthesis
 
-VERDICT: ready
+VERDICT: complete
 Confidence: high
-Scope reviewed: whole plan
+Scope reviewed: whole plan plus activity-first Dock implementation
 
-The plan is ready for implementation. It has a clear product decision, a single projection owner, explicit filter/search ownership, a depth-first loading-state cutover, and phase-local proof commands. The plan also closes the major side doors that could preserve the old Dock IA: legacy primary tabs, old sort picker, status-priority ordering, UI smoke tests that drive old controls, archive grouping through Dock projection, and ambiguous not-loaded filtering.
+The plan is implemented for the simulator-first V1 scope. The shipped code follows the core product decision, keeps one projection owner, keeps explicit filter/search ownership, and removes the major side doors that could preserve the old Dock IA: legacy primary tabs, old sort picker, status-priority ordering, UI smoke tests that drive old controls, archive grouping through Dock projection, and ambiguous not-loaded filtering.
 
-The proof model is now simulator-first. `rtk make app-test SIM='iPhone 17'` is the primary completion gate for user-visible Dock work; unit tests are supporting checks only; `rtk make app SIM='iPhone 17'` is diagnostic only; and missing simulator test hooks are implementation work, not a reason to downgrade proof.
+The proof model stayed simulator-first. `rtk make app-test SIM='BAD95C8E-3E57-4818-9B90-E4ED22593B4B'` passed with `233` total tests, `228` passed, `5` skipped, and `0` failed. Supporting Swift checks also passed for Dock store/projection, connectivity, host configuration, and automation IDs.
 
 The plan package now includes `docs/CODEX_DOCK_ACTIVITY_FIRST_IMPLEMENTATION_REQUIREMENT_DISPOSITION_2026-05-29.md`, which maps all 394 formal source requirement IDs to a V1 disposition, owner/proof path, or explicit out-of-V1/N/A decision.
 
-The plan remains docs-only. No Swift, Node, project, or Makefile source was changed in this planning/audit pass.
+Physical iPhone validation is not claimed in this audit. The implementation work changed Swift app/test files, the generated Xcode project, README, and this plan/audit/worklog package; it did not change the relay protocol, app-server DTOs, secrets, `.env`, Makefile, or Node relay behavior.
 
 ## Pass History
 
@@ -256,6 +281,43 @@ The plan remains docs-only. No Swift, Node, project, or Makefile source was chan
 - Findings carried forward: none
 - Verdict: ready
 
+### Pass 6 - Initial Implementation Audit - 2026-05-29T18:31:35Z
+
+- Mode: implementation audit after first activity-first Dock code cut
+- Scope: Dock projection, Dock UI, filter surface, host/branch grouping, not-loaded vocabulary, simulator hooks, docs, and generated Xcode project
+- Code findings added: none in the first pass
+- Code blockers carried forward: none in the first pass
+- Supporting check: `rtk swift test --filter DockStoreTests`
+  - Result: passed at that point, `32` tests, `0` failures.
+- Primary simulator proof at that point: `rtk make app-test SIM='BAD95C8E-3E57-4818-9B90-E4ED22593B4B'`
+  - Result: passed.
+  - Result bundle: `.codex-dock/DerivedData/Logs/Test/Test-CodexDockApp-2026.05.29_13-30-00--0500.xcresult`
+  - Summary: `230` total tests, `225` passed, `5` skipped, `0` failed.
+- Follow-up: continuation review later tightened active-filter summary, mixed checking/online connectivity, and shared test-helper fidelity, then reran the final simulator proof.
+
+### Pass 7 - Final Implementation Audit And Thermonuclear Review - 2026-05-29T18:45:41Z
+
+- Mode: implementation-audit check plus thermonuclear code-quality review
+- Scope: full activity-first Dock implementation, including plan, audit log, worklog, `DockStore`, `DockSessionProjection`, `SessionRowProjector`, `DockView`, `DockFilterSurfaceView`, `DockGroupRows`, `DockSharedViews`, `AppConnectivityStore`, `DockHostConfiguration`, `ArchiveSessionProjector`, `ArchiveStore`, `AutomationID`, UI smoke tests, DockStore/AppConnectivity/DockConfiguration/AutomationID tests, README, and generated Xcode project wiring
+- Findings added and resolved: `IMP-001`, `IMP-002`, `THERMO-001`
+- Findings carried forward: none
+- Supporting checks:
+  - `rtk swift test --filter DockStoreTests` passed, `33` tests, `0` failures.
+  - `rtk swift test --filter AppConnectivityStoreTests` passed, `13` tests, `0` failures.
+  - `rtk swift test --filter DockConfigurationTests` passed, `29` tests, `0` failures.
+  - `rtk swift test --filter AutomationIDTests` passed, `3` tests, `0` failures.
+  - `rtk git diff --check` passed with no output.
+- Primary simulator proof:
+  - Command: `rtk make app-test SIM='BAD95C8E-3E57-4818-9B90-E4ED22593B4B'`
+  - Result: passed.
+  - Result bundle: `.codex-dock/DerivedData/Logs/Test/Test-CodexDockApp-2026.05.29_13-43-11--0500.xcresult`
+  - Simulator: `feat_anim_1 - iPhone 17`, UDID `BAD95C8E-3E57-4818-9B90-E4ED22593B4B`, iOS Simulator `26.5`, OS build `23F77`.
+  - Summary: `233` total tests, `228` passed, `5` skipped, `0` failed.
+  - Dock UI smoke tests passed: `testDockLensesAndFiltersAreDrivableInSimulator()`, `testDockRowOpensSessionDetailByIdentifierWhenRowsExist()`, `testDockScreenExposesControlsAndConnectivityByIdentifier()`, and `testRelaySettingsFormIsDrivableByIdentifier()`.
+- Environment note: `SIM='iPhone 17'` is ambiguous on this Mac because two simulators match that name, so final proof used the booted iPhone 17 UDID `BAD95C8E-3E57-4818-9B90-E4ED22593B4B`.
+- Operator note: app UI tests foreground and drive Simulator, so they can steal macOS focus. The plan now records that these tests should not be rerun casually after a passing proof.
+- Verdict: approve / complete
+
 ## Commands Run For Audit
 
 - `rtk python3 /Users/aelaguiz/.agents/skills/arch-step/scripts/arch_stage_gate.py ready --doc docs/CODEX_DOCK_ACTIVITY_FIRST_IMPLEMENTATION_ARCHITECTURE_PLAN_2026-05-29.md`
@@ -276,4 +338,21 @@ The plan remains docs-only. No Swift, Node, project, or Makefile source was chan
 - Fresh consult command recorded in `/tmp/fresh-consult/codex-dock-activity-plan-20260529T171134Z-FyTOFT`
 - Final fresh-consult re-check command recorded in `/tmp/fresh-consult/codex-dock-activity-final-recheck-20260529T173150Z-go6rrR`
 
-No build, Swift test, Node test, simulator, or device commands were run because this was a docs-only plan-strengthening task. The plan now requires simulator app-test proof for implementation completion.
+Implementation follow-up commands were run after the docs-only planning pass:
+
+- `rtk swift test --filter DockStoreTests`
+  - Final result: passed, `33` tests, `0` failures.
+- `rtk swift test --filter AppConnectivityStoreTests`
+  - Final result: passed, `13` tests, `0` failures.
+- `rtk swift test --filter DockConfigurationTests`
+  - Final result: passed, `29` tests, `0` failures.
+- `rtk swift test --filter AutomationIDTests`
+  - Final result: passed, `3` tests, `0` failures.
+- `rtk git diff --check`
+  - Final result: passed with no output.
+- Old-Dock-vocabulary scans over `CodexDock`, `CodexDockTests`, `CodexDockUITests`, and `README.md`
+  - Final result: no live `DockTabID`, `DockTabViewModel`, old sort/filter/idle controls, `DockRowStatusKind.failed`, visible `Limited`, or primary `Needs me` path remained. Remaining matches were expected README/product clarification and negative assertions.
+- `rtk make app-test SIM='BAD95C8E-3E57-4818-9B90-E4ED22593B4B'`
+  - Result: passed.
+  - Final result bundle: `.codex-dock/DerivedData/Logs/Test/Test-CodexDockApp-2026.05.29_13-43-11--0500.xcresult`
+  - Final summary: `233` total tests, `228` passed, `5` skipped, `0` failed.

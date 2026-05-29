@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - Activity-First Implementation - Architecture Plan"
 date: 2026-05-29
-status: active
+status: complete
 fallback_policy: forbidden
 owners: [aelaguiz]
 reviewers: [Codex]
@@ -95,6 +95,59 @@ note: This block tracks stage order only. It never overrides readiness blockers 
   ]
 }
 <!-- arch_skill:block:auto_plan_receipts:end -->
+
+<!-- arch_skill:block:implementation_audit:start -->
+# Implementation Audit (authoritative)
+
+Date: 2026-05-29
+Verdict (code): COMPLETE
+Manual QA: n/a (simulator UI proof passed; physical iPhone proof is not claimed)
+
+## Code blockers (why code is not done)
+
+None.
+
+## Reopened phases (false-complete fixes)
+
+None.
+
+## Missing items (code gaps; evidence-anchored; no tables)
+
+None.
+
+## Non-blocking follow-ups (manual QA / screenshots / human verification)
+
+- Physical iPhone validation is not claimed here; the simulator-first gate is complete.
+- `SIM='iPhone 17'` is ambiguous on this Mac because two simulator records match that name. Final proof used the booted iPhone 17 UDID `BAD95C8E-3E57-4818-9B90-E4ED22593B4B`.
+- `rtk make app-test ...` foregrounds and drives Simulator, which can steal macOS focus and change the active workspace. Do not rerun it casually after this passing proof; rerun only after visible UI/test-hook edits, simulator-proof repair work, or an explicit request.
+
+## Evidence
+
+- Implemented the activity-first Dock path: default `Newest` lens, explicit `Host` and `Branch` lenses, one `Filters` surface, full-width search, row-level host/repo/branch identity, compact connectivity, partial host states, and neutral `Not loaded` copy.
+- Removed the visible primary `Needs me` workflow bucket and removed `Limited` from Dock status vocabulary. Active waiting/input states now render as `Running` in Dock until there is a reliable future product signal.
+- Preserved relay/app-server protocol shape. This work changes client projection, display, filtering, local state, tests, and docs only.
+- Split archive grouping into `ArchiveSessionProjector` so Archive does not depend on Dock projection.
+- Added simulator-observable automation hooks for lenses, filters, host/branch groups, host retry, Relay settings actions, status filters, active-filter summary, and not-loaded explanation copy.
+- Code surfaces reviewed: `CodexDock/State/DockSessionProjection.swift`, `CodexDock/State/DockStore.swift`, `CodexDock/State/SessionRowProjector.swift`, `CodexDock/State/ArchiveSessionProjector.swift`, `CodexDock/State/ArchiveStore.swift`, `CodexDock/Features/Dock/DockView.swift`, `CodexDock/Features/Dock/DockFilterSurfaceView.swift`, `CodexDock/Features/Dock/DockGroupRows.swift`, `CodexDock/Features/Dock/DockSharedViews.swift`, `CodexDock/Configuration/DockHostConfiguration.swift`, `CodexDock/State/AppConnectivityStore.swift`, `CodexDock/Features/Status/GlobalConnectivityIndicatorView.swift`, `CodexDock/Automation/AutomationID.swift`, `CodexDockUITests/CodexDockAutomationSmokeTests.swift`, `CodexDockTests/**`, and `README.md`.
+- `rtk python3 /Users/aelaguiz/.agents/skills/arch-step/scripts/arch_stage_gate.py ready --doc docs/CODEX_DOCK_ACTIVITY_FIRST_IMPLEMENTATION_ARCHITECTURE_PLAN_2026-05-29.md` returned `READY next=implement-loop` before implementation.
+- `rtk swift test --filter DockStoreTests` passed: `33` tests, `0` failures.
+- `rtk swift test --filter AppConnectivityStoreTests` passed: `13` tests, `0` failures.
+- `rtk swift test --filter DockConfigurationTests` passed: `29` tests, `0` failures.
+- `rtk swift test --filter AutomationIDTests` passed: `3` tests, `0` failures.
+- `rtk git diff --check` passed with no output.
+- Old-Dock-vocabulary scans passed: no live `DockTabID`, `DockTabViewModel`, old sort/filter/idle controls, `DockRowStatusKind.failed`, visible `Limited`, or primary `Needs me` path remains in `CodexDock`, `CodexDockTests`, `CodexDockUITests`, or `README.md`. Remaining matches are expected negative assertions and the README sentence that `Not loaded` does not mean rate limited.
+- `rtk make app-test SIM='BAD95C8E-3E57-4818-9B90-E4ED22593B4B'` passed.
+- Final simulator result bundle: `.codex-dock/DerivedData/Logs/Test/Test-CodexDockApp-2026.05.29_13-43-11--0500.xcresult`.
+- Final simulator: `feat_anim_1 - iPhone 17`, UDID `BAD95C8E-3E57-4818-9B90-E4ED22593B4B`, iOS Simulator `26.5`, OS build `23F77`.
+- Final simulator summary: `233` total tests, `228` passed, `5` skipped, `0` failed.
+- Dock UI smoke tests passed:
+  - `testDockLensesAndFiltersAreDrivableInSimulator()`
+  - `testDockRowOpensSessionDetailByIdentifierWhenRowsExist()`
+  - `testDockScreenExposesControlsAndConnectivityByIdentifier()`
+  - `testRelaySettingsFormIsDrivableByIdentifier()`
+- Plan-audit implementation check verdict: approve; no open implementation findings.
+- Thermonuclear code-quality review verdict: approve; no open blockers after resolving the misleading test-helper fixture.
+<!-- arch_skill:block:implementation_audit:end -->
 
 # 0) Holistic North Star
 
@@ -1658,6 +1711,7 @@ Required checks by touched area:
   - If app-test cannot assert required UI state because the app lacks hooks, add the missing accessibility IDs, accessibility values, UI-test hooks, or log/accessibility exposure and rerun app-test.
   - If app-test is blocked by external simulator/Xcode/signing/service infrastructure, record the exact command and exact blocker. Do not treat `rtk make app SIM='iPhone 17'`, unit tests, screenshots, or grep as completion proof.
   - `rtk make app SIM='iPhone 17'` is diagnostic only; it may help debug launch, but it does not satisfy installed UI behavior proof.
+  - Operator note: `rtk make app-test ...` can steal macOS focus because Xcode UI tests foreground and drive the Simulator. Once a passing simulator proof exists, do not rerun it casually; rerun only after UI/test-facing code changes, after hook repairs, or when explicitly requested.
 - Physical device behavior:
   - Use `rtk make iphone-17-pro`, `rtk make iphone-14`, or the documented device targets only when the task explicitly requires physical install proof.
   - If physical Mobile MCP reports `WebDriverAgent is not running on device`, stop physical Mobile MCP retries and record that exact blocker.
@@ -1781,3 +1835,4 @@ Rollback and recovery:
 - 2026-05-29: Chose not to render a visible `NEWEST` section header by default because selected lens state and active summary already identify the mode; an accessibility-only or non-wasting label remains allowed if implementation proof requires it.
 - 2026-05-29: Chose stricter deletion for `Needs me`: no debug-only Dock path in V1.
 - 2026-05-29: Strengthened completion proof to simulator-first. `rtk make app-test SIM='iPhone 17'` is mandatory primary proof for user-visible Dock behavior; unit tests are supporting checks only, and missing simulator test hooks must be implemented rather than used as an excuse to downgrade proof.
+- 2026-05-29: Recorded simulator focus-stealing behavior: generated app UI tests can foreground and drive Simulator, so after a passing proof exists they should not be rerun casually unless UI/test-facing code changed, hooks were repaired, or Amir explicitly asks.

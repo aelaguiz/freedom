@@ -1,122 +1,302 @@
 import Foundation
 
-enum DockSessionSortMode: String, CaseIterable, Identifiable, Sendable {
-    case branch
-    case newest
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .branch:
-            return "Branch"
-        case .newest:
-            return "Newest"
-        }
-    }
-}
-
-struct DockSessionProjectionOptions: Equatable, Sendable {
-    let selectedTab: DockTabID
+struct DockProjectionOptions: Equatable, Sendable {
+    let lens: DockLensID
     let searchText: String
-    let sortMode: DockSessionSortMode
-    let showsIdle: Bool
+    let filters: DockFilterState
 
     init(
-        selectedTab: DockTabID,
+        lens: DockLensID = .newest,
         searchText: String = "",
-        sortMode: DockSessionSortMode = .branch,
-        showsIdle: Bool = false
+        filters: DockFilterState = .default
     ) {
-        self.selectedTab = selectedTab
+        self.lens = lens
         self.searchText = searchText
-        self.sortMode = sortMode
-        self.showsIdle = showsIdle
+        self.filters = filters
     }
 }
 
 struct DockSessionProjection: Equatable, Sendable {
-    let tabs: [DockTabViewModel]
-    let sections: [DockSectionViewModel]
-    let hiddenIdleMatchCount: Int
+    let lens: DockLensID
+    let rows: [DockRowViewModel]
+    let groups: [DockProjectionGroupViewModel]
+    let summary: DockProjectionSummary
+    let hiddenCounts: DockProjectionHiddenCounts
+    let availableFacets: DockProjectionFacets
+    let emptyReason: DockProjectionEmptyReason?
+    let isPartial: Bool
+    let checkingHostCount: Int
 }
 
 extension DockSnapshot {
-    func project(options: DockSessionProjectionOptions) -> DockSessionProjection {
-        DockSessionProjectionProjector(
-            baseSections: sections,
-            hostNameByID: Dictionary(uniqueKeysWithValues: hosts.map { ($0.id, $0.displayName) }),
-            options: options
-        ).project()
+    func project(options: DockProjectionOptions) -> DockSessionProjection {
+        DockSessionProjectionProjector(snapshot: self, options: options).project()
     }
 }
 
 private struct DockSessionProjectionProjector {
-    let baseSections: [DockSectionViewModel]
-    let hostNameByID: [String: String]
-    let options: DockSessionProjectionOptions
+    let snapshot: DockSnapshot
+    let options: DockProjectionOptions
 
     func project() -> DockSessionProjection {
-        let allRows = baseSections.flatMap(\.rows)
-        let searchedRows = allRows.filter(matchesSearch)
-        let visibleRowsForCounts = searchedRows.filter(isIdleVisible)
-        let tabRows = visibleRowsForCounts.filter(options.selectedTab.includes)
+        let searchedRows = snapshot.rows.filter(matchesSearch)
+        let filteredIgnoringIdle = searchedRows.filter(matchesNonIdleFilters)
+        let hiddenIdleRows = options.filters.showsIdle
+            ? []
+            : filteredIgnoringIdle.filter { $0.status == .idle }
+        let hiddenIdleCount = hiddenIdleRows.count
+        let visibleRows = filteredIgnoringIdle
+            .filter { options.filters.showsIdle || $0.status != .idle }
+            .sorted(by: rowPrecedesByRecency)
+        let groups = groups(for: visibleRows, hiddenIdleRows: hiddenIdleRows)
+        let emptyReason = visibleRows.isEmpty ? emptyReason(searchedRows: searchedRows, hiddenIdleCount: hiddenIdleCount) : nil
 
         return DockSessionProjection(
-            tabs: DockTabID.allCases.map { tab in
-                DockTabViewModel(id: tab, count: visibleRowsForCounts.filter(tab.includes).count)
-            },
-            sections: sections(for: tabRows),
-            hiddenIdleMatchCount: hiddenIdleMatchCount(in: searchedRows)
+            lens: options.lens,
+            rows: options.lens == .newest ? visibleRows : [],
+            groups: groups,
+            summary: summary(for: visibleRows),
+            hiddenCounts: DockProjectionHiddenCounts(idle: hiddenIdleCount),
+            availableFacets: availableFacets(),
+            emptyReason: emptyReason,
+            isPartial: snapshot.isPartial,
+            checkingHostCount: snapshot.hostStates.filter { $0.status == .checking }.count
         )
     }
 
-    private func sections(for rows: [DockRowViewModel]) -> [DockSectionViewModel] {
-        switch options.sortMode {
-        case .branch:
-            return branchSections(for: rows)
+    private func groups(
+        for rows: [DockRowViewModel],
+        hiddenIdleRows: [DockRowViewModel]
+    ) -> [DockProjectionGroupViewModel] {
+        switch options.lens {
         case .newest:
+            return []
+        case .host:
+            return hostGroups(for: rows, hiddenIdleRows: hiddenIdleRows)
+        case .branch:
+            return branchGroups(for: rows, hiddenIdleRows: hiddenIdleRows)
+        }
+    }
+
+    private func hostGroups(
+        for rows: [DockRowViewModel],
+        hiddenIdleRows: [DockRowViewModel]
+    ) -> [DockProjectionGroupViewModel] {
+        let rowsByHost = Dictionary(grouping: rows, by: \.id.hostID)
+        let hiddenIdleRowsByHost = Dictionary(grouping: hiddenIdleRows, by: \.id.hostID)
+        let stateByHost = Dictionary(uniqueKeysWithValues: snapshot.hostStates.map { ($0.host.id, $0) })
+        return snapshot.hosts.compactMap { host in
+            if !options.filters.selectedHostIDs.isEmpty,
+               !options.filters.selectedHostIDs.contains(host.id) {
+                return nil
+            }
+
+            let hostRows = (rowsByHost[host.id] ?? []).sorted(by: rowPrecedesByRecency)
+            let hiddenIdleCount = hiddenIdleRowsByHost[host.id]?.count ?? 0
+            let hostState = stateByHost[host.id]
+            let isUnavailable = hostState?.status.isUnavailable ?? false
+            guard !hostRows.isEmpty || hiddenIdleCount > 0 || isUnavailable || hostState?.status == .checking else {
+                return nil
+            }
+
+            return DockProjectionGroupViewModel(
+                id: "host::\(host.id)",
+                kind: .host,
+                title: host.displayName,
+                subtitle: hostState?.status.subtitle ?? "\(hostRows.count) sessions",
+                rows: hostRows,
+                hostIDs: [host.id],
+                newestActivityDate: hostRows.map(\.lastActivityDate).max(),
+                runningCount: hostRows.filter { $0.status == .running }.count,
+                hiddenIdleCount: hiddenIdleCount,
+                isUnavailable: isUnavailable,
+                unavailableMessage: hostState?.status.unavailableMessage
+            )
+        }
+        .sorted(by: groupPrecedes)
+    }
+
+    private func branchGroups(
+        for rows: [DockRowViewModel],
+        hiddenIdleRows: [DockRowViewModel]
+    ) -> [DockProjectionGroupViewModel] {
+        let groupedRows = Dictionary(grouping: rows, by: \.branch)
+        let hiddenIdleCountsByBranch = Dictionary(grouping: hiddenIdleRows, by: \.branch)
+            .mapValues(\.count)
+        return groupedRows.map { branch, rows in
             let sortedRows = rows.sorted(by: rowPrecedesByRecency)
-            guard !sortedRows.isEmpty else {
-                return []
-            }
-            return [
-                DockSectionViewModel(id: "newest", title: "Newest", rows: sortedRows)
-            ]
+            let hostNames = Set(sortedRows.map(\.hostDisplayName)).sorted()
+            return DockProjectionGroupViewModel(
+                id: "branch::\(branch)",
+                kind: .branch,
+                title: branch,
+                subtitle: "\(sortedRows.count) sessions · \(hostNames.joined(separator: ", "))",
+                rows: sortedRows,
+                hostIDs: Set(sortedRows.map(\.id.hostID)).sorted(),
+                newestActivityDate: sortedRows.map(\.lastActivityDate).max(),
+                runningCount: sortedRows.filter { $0.status == .running }.count,
+                hiddenIdleCount: hiddenIdleCountsByBranch[branch] ?? 0,
+                isUnavailable: false,
+                unavailableMessage: nil
+            )
         }
+        .sorted(by: groupPrecedes)
     }
 
-    private func branchSections(for rows: [DockRowViewModel]) -> [DockSectionViewModel] {
-        let visibleIDs = Set(rows.map(\.id))
-        return baseSections
-            .compactMap { section in
-                let sectionRows = section.rows
-                    .filter { row in visibleIDs.contains(row.id) }
-                    .sorted(by: rowPrecedesByRecency)
-                guard !sectionRows.isEmpty else {
-                    return nil
-                }
-                return DockSectionViewModel(id: section.id, title: section.title, rows: sectionRows)
-            }
-            .sorted(by: sectionPrecedesByRecency)
-    }
+    private func summary(for rows: [DockRowViewModel]) -> DockProjectionSummary {
+        var parts: [String] = ["\(rows.count.formatted()) shown"]
+        parts.append(hostSummaryText)
+        parts.append(branchSummaryText)
+        parts.append(statusSummaryText)
+        parts.append(repositorySummaryText)
+        parts.append("Source: \(options.filters.source.label)")
+        parts.append(options.filters.showsIdle ? "Idle shown" : "Idle hidden")
 
-    private func hiddenIdleMatchCount(in searchedRows: [DockRowViewModel]) -> Int {
-        guard !options.showsIdle else {
-            return 0
+        let query = normalizedQuery(options.searchText)
+        if !query.isEmpty {
+            parts.append("Search: \(query)")
+        }
+        if snapshot.isPartial {
+            parts.append("Partial")
         }
 
-        return searchedRows.filter { row in
-            options.selectedTab.includes(row) && row.status == .idle
-        }.count
+        return DockProjectionSummary(
+            text: parts.joined(separator: " · "),
+            activeFilterCount: options.filters.activeFilterCount + (query.isEmpty ? 0 : 1),
+            resultCount: rows.count
+        )
     }
 
-    private func isIdleVisible(_ row: DockRowViewModel) -> Bool {
-        options.showsIdle || row.status != .idle
+    private var hostSummaryText: String {
+        guard !options.filters.selectedHostIDs.isEmpty else {
+            return "Hosts: Any"
+        }
+        if options.filters.selectedHostIDs.count == 1,
+           let hostID = options.filters.selectedHostIDs.first {
+            return "Host: \(hostName(for: hostID))"
+        }
+        return "Hosts: \(options.filters.selectedHostIDs.count)"
+    }
+
+    private var branchSummaryText: String {
+        guard !options.filters.selectedBranches.isEmpty else {
+            return "Branches: Any"
+        }
+        if options.filters.selectedBranches.count == 1,
+           let branch = options.filters.selectedBranches.first {
+            return "Branch: \(branch)"
+        }
+        return "Branches: \(options.filters.selectedBranches.count)"
+    }
+
+    private var statusSummaryText: String {
+        let allStatuses = Set(DockRowStatusKind.allCases)
+        guard options.filters.statusKinds != allStatuses else {
+            return "Status: Any"
+        }
+        if options.filters.statusKinds.count == 1,
+           let status = options.filters.statusKinds.first {
+            return "Status: \(status.label)"
+        }
+        return "Statuses: \(options.filters.statusKinds.count)"
+    }
+
+    private var repositorySummaryText: String {
+        let query = normalizedQuery(options.filters.repositoryQuery)
+        let selectedCount = options.filters.selectedRepositories.count
+        if selectedCount == 0, query.isEmpty {
+            return "Repo: Any"
+        }
+        if selectedCount == 1,
+           query.isEmpty,
+           let repository = options.filters.selectedRepositories.first {
+            return "Repo: \(repository)"
+        }
+        if selectedCount == 0 {
+            return "Repo search: \(query)"
+        }
+        if query.isEmpty {
+            return "Repos: \(selectedCount)"
+        }
+        return "Repos: \(selectedCount), search: \(query)"
+    }
+
+    private func availableFacets() -> DockProjectionFacets {
+        DockProjectionFacets(
+            hosts: snapshot.hosts,
+            branches: uniqueSorted(snapshot.rows.map(\.branch)),
+            statuses: DockRowStatusKind.allCases.filter { status in
+                snapshot.rows.contains { $0.status == status }
+            },
+            repositories: uniqueSorted(snapshot.rows.map(\.repository)),
+            sources: DockSourceFilter.allCases.filter { source in
+                source == .any || snapshot.rows.contains { source.includes($0.origin) }
+            }
+        )
+    }
+
+    private func hostName(for hostID: String) -> String {
+        snapshot.hosts.first { $0.id == hostID }?.displayName ?? hostID
+    }
+
+    private func emptyReason(
+        searchedRows: [DockRowViewModel],
+        hiddenIdleCount: Int
+    ) -> DockProjectionEmptyReason {
+        if snapshot.rows.isEmpty {
+            return .noData
+        }
+        if hiddenIdleCount > 0 {
+            return .idleHidden
+        }
+        if !normalizedQuery(options.searchText).isEmpty, searchedRows.isEmpty {
+            return .noSearchMatches
+        }
+        if options.filters.statusKinds == [.notLoaded] {
+            return .notLoadedOnly
+        }
+        if selectedHostsAreUnavailable {
+            return .hostUnavailable
+        }
+        return .noFilterMatches
+    }
+
+    private var selectedHostsAreUnavailable: Bool {
+        guard !options.filters.selectedHostIDs.isEmpty else {
+            return false
+        }
+        let states = snapshot.hostStates.filter { options.filters.selectedHostIDs.contains($0.host.id) }
+        return !states.isEmpty && states.allSatisfy(\.status.isUnavailable)
+    }
+
+    private func matchesNonIdleFilters(_ row: DockRowViewModel) -> Bool {
+        if !options.filters.selectedHostIDs.isEmpty,
+           !options.filters.selectedHostIDs.contains(row.id.hostID) {
+            return false
+        }
+        if !options.filters.selectedBranches.isEmpty,
+           !options.filters.selectedBranches.contains(where: { selected in
+               row.branch.compare(selected, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+           }) {
+            return false
+        }
+        if !options.filters.statusKinds.contains(row.status) {
+            return false
+        }
+        if !options.filters.selectedRepositories.isEmpty,
+           !options.filters.selectedRepositories.contains(row.repository) {
+            return false
+        }
+        let repositoryQuery = normalizedQuery(options.filters.repositoryQuery)
+        if !repositoryQuery.isEmpty,
+           !row.repository.localizedCaseInsensitiveContains(repositoryQuery) {
+            return false
+        }
+        return options.filters.source.includes(row.origin)
     }
 
     private func matchesSearch(_ row: DockRowViewModel) -> Bool {
-        let query = options.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = normalizedQuery(options.searchText)
         guard !query.isEmpty else {
             return true
         }
@@ -129,35 +309,29 @@ private struct DockSessionProjectionProjector {
     private func searchableValues(for row: DockRowViewModel) -> [String] {
         [
             row.title,
+            row.hostDisplayName,
+            row.id.hostID,
             row.repository,
             row.branch,
             row.summary,
             row.status.label,
             row.label,
-            hostNameByID[row.id.hostID],
-            row.id.hostID,
+            row.origin.automationKind,
             row.id.threadID
         ].compactMap { $0 }
     }
 
-    private func sectionPrecedesByRecency(_ lhs: DockSectionViewModel, _ rhs: DockSectionViewModel) -> Bool {
-        let lhsDate = lhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
-        let rhsDate = rhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
+    private func groupPrecedes(_ lhs: DockProjectionGroupViewModel, _ rhs: DockProjectionGroupViewModel) -> Bool {
+        let lhsDate = lhs.newestActivityDate ?? Date.distantPast
+        let rhsDate = rhs.newestActivityDate ?? Date.distantPast
         if lhsDate != rhsDate {
             return lhsDate > rhsDate
-        }
-
-        let lhsPriority = lhs.rows.map { SessionRowProjector.statusPriority($0.status) }.min() ?? Int.max
-        let rhsPriority = rhs.rows.map { SessionRowProjector.statusPriority($0.status) }.min() ?? Int.max
-        if lhsPriority != rhsPriority {
-            return lhsPriority < rhsPriority
         }
 
         let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
         if titleOrder != .orderedSame {
             return titleOrder == .orderedAscending
         }
-
         return lhs.id < rhs.id
     }
 
@@ -166,21 +340,21 @@ private struct DockSessionProjectionProjector {
             return lhs.lastActivityDate > rhs.lastActivityDate
         }
 
-        let lhsPriority = SessionRowProjector.statusPriority(lhs.status)
-        let rhsPriority = SessionRowProjector.statusPriority(rhs.status)
-        if lhsPriority != rhsPriority {
-            return lhsPriority < rhsPriority
-        }
-
         let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
         if titleOrder != .orderedSame {
             return titleOrder == .orderedAscending
         }
 
-        return stableID(lhs) < stableID(rhs)
+        return "\(lhs.id.hostID)::\(lhs.id.threadID)" < "\(rhs.id.hostID)::\(rhs.id.threadID)"
     }
 
-    private func stableID(_ row: DockRowViewModel) -> String {
-        "\(row.id.hostID)::\(row.id.threadID)"
+    private func normalizedQuery(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func uniqueSorted(_ values: [String]) -> [String] {
+        Set(values).sorted { lhs, rhs in
+            lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
     }
 }

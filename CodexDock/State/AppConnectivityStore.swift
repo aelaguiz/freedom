@@ -262,10 +262,14 @@ public final class AppConnectivityStore: ObservableObject, AppConnectivityReport
         switch state {
         case .configurationError(let message):
             recordConfigurationError(message)
-        case .idle(let host):
-            record(host: host, source: .dock, phase: .unknown, checked: false)
-        case .loading(let host):
-            record(host: host, source: .dock, phase: .checking)
+        case .idle(let hosts):
+            for host in hosts {
+                record(host: host, source: .dock, phase: .unknown, checked: false)
+            }
+        case .loading(let hosts):
+            for host in hosts {
+                record(host: host, source: .dock, phase: .checking)
+            }
         case .offline(let host, let message):
             record(host: host, source: .dock, phase: .offline(message))
         case .error(let host, let message):
@@ -347,6 +351,8 @@ public final class AppConnectivityStore: ObservableObject, AppConnectivityReport
         for hostState in hostStates {
             let phase: HostConnectivityPhase
             switch hostState.status {
+            case .checking:
+                phase = .checking
             case .loaded(let rowCount):
                 phase = .online("\(rowCount) sessions")
             case .partial(_, let message):
@@ -507,14 +513,19 @@ public final class AppConnectivityStore: ObservableObject, AppConnectivityReport
         }) {
             return .stale("\(status.displayName): \(status.phase.message)")
         }
-        if let status = firstStatus(hosts, matching: {
-            if case .checking = $0.phase { return true }
-            return false
-        }) {
-            return .checking("\(status.displayName): \(status.phase.message)")
-        }
-
         let onlineLikeCount = hosts.filter { $0.phase.isOnlineLike }.count
+        let checkingCount = hosts.filter { status in
+            if case .checking = status.phase {
+                return true
+            }
+            return false
+        }.count
+        if checkingCount == hosts.count {
+            return .checking(hosts.count == 1 ? hosts[0].phase.message : "Checking \(hosts.count) hosts")
+        }
+        if onlineLikeCount > 0, checkingCount > 0 {
+            return .partial("Online \(onlineLikeCount)/\(hosts.count), checking \(checkingCount)")
+        }
         if onlineLikeCount == hosts.count {
             if let partial = firstStatus(hosts, matching: {
                 if case .partial = $0.phase { return true }

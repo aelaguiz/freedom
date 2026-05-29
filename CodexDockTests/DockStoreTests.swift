@@ -38,14 +38,14 @@ final class DockStoreTests: XCTestCase {
 
         XCTAssertEqual(snapshot.host.displayName, host.displayName)
         XCTAssertEqual(snapshot.rowCount, 2)
-        XCTAssertEqual(snapshot.sections.map(\.title), ["main", "feature/dock"])
-        XCTAssertEqual(snapshot.sections[0].rows[0].status, .needsMe)
-        XCTAssertEqual(snapshot.sections[1].rows[0].status, .running)
-        XCTAssertEqual(snapshot.sections[1].rows[0].lastActivity, "2m ago")
+        XCTAssertEqual(snapshot.rows.map(\.status), [.running, .running])
+        let branchProjection = snapshot.project(options: .init(lens: .branch))
+        XCTAssertEqual(branchProjection.groups.map(\.title), ["feature/dock", "main"])
+        XCTAssertEqual(branchProjection.groups[0].rows[0].lastActivity, "2m ago")
     }
 
     @MainActor
-    func testLoadKeepsLiveRowsAheadOfRecentNotLoadedHistory() async {
+    func testLoadOrdersNotLoadedRowsByNewestActivity() async {
         let host = makeHost()
         let summaries = [
             makeSummary(
@@ -77,9 +77,9 @@ final class DockStoreTests: XCTestCase {
             return XCTFail("Expected loaded state, got \(store.state)")
         }
 
-        XCTAssertEqual(snapshot.sections.map(\.title), ["zzz-live-work", "aaa-old-history"])
-        XCTAssertEqual(snapshot.sections[0].rows[0].status, .running)
-        XCTAssertEqual(snapshot.sections[1].rows[0].status, .notLoaded)
+        let projection = snapshot.project(options: .init(lens: .newest))
+        XCTAssertEqual(projection.rows.map(\.id.threadID), ["old-history", "live-running"])
+        XCTAssertEqual(projection.rows.map(\.status), [.notLoaded, .running])
     }
 
     @MainActor
@@ -125,8 +125,8 @@ final class DockStoreTests: XCTestCase {
             .activeHuman,
             .activeHuman
         ])
-        XCTAssertEqual(snapshot.sections.map(\.title), ["feature/refresh"])
-        XCTAssertEqual(snapshot.sections[0].rows[0].title, "Refreshed row")
+        XCTAssertEqual(snapshot.rows.map(\.branch), ["feature/refresh"])
+        XCTAssertEqual(snapshot.rows[0].title, "Refreshed row")
     }
 
     @MainActor
@@ -144,12 +144,7 @@ final class DockStoreTests: XCTestCase {
         }
         XCTAssertEqual(snapshot.rowCount, 0)
         XCTAssertEqual(snapshot.hostStates.map(\.status), [.empty])
-        XCTAssertEqual(snapshot.tabs.map(\.label), [
-            "All 0",
-            "Needs me 0",
-            "Running 0",
-            "Agents 0"
-        ])
+        XCTAssertEqual(snapshot.rows, [])
     }
 
     @MainActor
@@ -228,11 +223,7 @@ final class DockStoreTests: XCTestCase {
     @MainActor
     func testMultiHostFanOutKeepsLiveHostRowsWhenAnotherHostIsOffline() async throws {
         let amir = makeHost()
-        let home = makeHost(
-            id: "Home",
-            displayName: "Home",
-            url: "ws://100.66.11.7:4510"
-        )
+        let home = makeHost(url: "ws://100.66.11.7:4510")
         let registry = try HostRegistry(hosts: [amir, home])
         let loader = HostRoutedDockSessionLoader(results: [
             amir.id: .success(DockLoadResult(summaries: [
@@ -259,19 +250,80 @@ final class DockStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.hostStates.map(\.id), [amir.id, home.id])
         XCTAssertEqual(snapshot.hostStates[0].status, .loaded(rowCount: 1))
         XCTAssertEqual(snapshot.hostStates[1].status, .offline("Home unreachable"))
-        XCTAssertEqual(snapshot.sections.map(\.title), ["\(amir.displayName) / main"])
-        XCTAssertEqual(snapshot.sections[0].rows[0].status, .running)
+        XCTAssertEqual(snapshot.rows.map(\.hostDisplayName), [amir.displayName])
+        XCTAssertEqual(snapshot.rows[0].status, .running)
         XCTAssertEqual(store.hostConfiguration(for: home.id), home)
+    }
+
+    @MainActor
+    func testLoadPublishesPartialSnapshotWhileAnotherHostIsChecking() async throws {
+        let amir = makeHost()
+        let home = makeHost(url: "ws://100.66.11.7:4510")
+        let registry = try HostRegistry(hosts: [amir, home])
+        let loader = DelayedHostRoutedDockSessionLoader(
+            delayedHostID: home.id,
+            results: [
+                amir.id: .success(DockLoadResult(summaries: [
+                    makeSummary(
+                        hostID: amir.id,
+                        threadID: "amir-loaded",
+                        branch: "main",
+                        status: .active(activeFlags: []),
+                        lastActivity: Date(timeIntervalSince1970: 2_000),
+                        prompt: "Amir loaded first"
+                    )
+                ])),
+                home.id: .success(DockLoadResult(summaries: [
+                    makeSummary(
+                        hostID: home.id,
+                        threadID: "home-delayed",
+                        branch: "main",
+                        status: .active(activeFlags: []),
+                        lastActivity: Date(timeIntervalSince1970: 2_100),
+                        prompt: "Home finishes later"
+                    )
+                ]))
+            ]
+        )
+        let store = DockStore(registry: registry, loader: loader)
+
+        let loadTask = Task { await store.load() }
+        await loader.waitForDelayedRequests(2)
+
+        guard let partial = await waitForLoadedSnapshot(from: store, where: \.isPartial) else {
+            XCTFail("Expected a partial loaded snapshot while \(home.id) was still checking; got \(store.state)")
+            await loader.releaseDelayedHost()
+            await loadTask.value
+            return
+        }
+
+        XCTAssertEqual(partial.rows.map(\.id.threadID), ["amir-loaded"])
+        XCTAssertEqual(partial.hostStates.map(\.status), [
+            .loaded(rowCount: 1),
+            .checking
+        ])
+        let projection = partial.project(options: .init(lens: .newest))
+        XCTAssertEqual(projection.rows.map(\.id.threadID), ["amir-loaded"])
+        XCTAssertTrue(projection.isPartial)
+        XCTAssertEqual(projection.checkingHostCount, 1)
+
+        await loader.releaseDelayedHost()
+        await loadTask.value
+
+        guard case let .loaded(finalSnapshot) = store.state else {
+            return XCTFail("Expected final loaded state, got \(store.state)")
+        }
+        XCTAssertFalse(finalSnapshot.isPartial)
+        XCTAssertEqual(finalSnapshot.hostStates.map(\.status), [
+            .loaded(rowCount: 1),
+            .loaded(rowCount: 1)
+        ])
     }
 
     @MainActor
     func testMultiHostGroupingIncludesHostAndBranch() async throws {
         let amir = makeHost()
-        let home = makeHost(
-            id: "Home",
-            displayName: "Home",
-            url: "ws://100.66.11.7:4510"
-        )
+        let home = makeHost(url: "ws://100.66.11.7:4510")
         let registry = try HostRegistry(hosts: [amir, home])
         let loader = HostRoutedDockSessionLoader(results: [
             amir.id: .success(DockLoadResult(summaries: [
@@ -307,40 +359,24 @@ final class DockStoreTests: XCTestCase {
             .loaded(rowCount: 1),
             .loaded(rowCount: 1)
         ])
-        XCTAssertEqual(snapshot.sections.map(\.title), ["\(amir.displayName) / main", "\(home.displayName) / main"])
-        XCTAssertEqual(snapshot.sections.map(\.rows.count), [1, 1])
-        XCTAssertEqual(snapshot.sections[0].rows[0].status, .idle)
-        XCTAssertEqual(snapshot.sections[1].rows[0].status, .notLoaded)
+        let branchProjection = snapshot.project(options: .init(lens: .branch, filters: DockFilterState(showsIdle: true)))
+        XCTAssertEqual(branchProjection.groups.map(\.title), ["main"])
+        XCTAssertEqual(branchProjection.groups[0].rows.map(\.hostDisplayName), [home.displayName, amir.displayName])
+        XCTAssertEqual(branchProjection.groups[0].rows.map(\.status), [.notLoaded, .idle])
+
+        let hostProjection = snapshot.project(options: .init(lens: .host, filters: DockFilterState(showsIdle: true)))
+        XCTAssertEqual(hostProjection.groups.map(\.title), [home.displayName, amir.displayName])
     }
 
-    func testDockTabsUseNormalizedRowStatusAndOrigin() {
+    func testDockStatusVocabularyAndSourceFiltersUseNormalizedRows() {
         XCTAssertEqual(DockRowStatusKind.notLoaded.label, "Not loaded")
-        XCTAssertEqual(DockTabID.allCases, [.all, .needsMe, .running, .agents])
-        XCTAssertTrue(DockTabID.all.includes(makeRow(status: .idle)))
-        XCTAssertTrue(DockTabID.all.includes(makeRow(status: .notLoaded)))
-        XCTAssertTrue(DockTabID.needsMe.includes(makeRow(status: .needsMe)))
-        XCTAssertTrue(DockTabID.running.includes(makeRow(status: .running)))
-        XCTAssertTrue(DockTabID.running.includes(makeRow(status: .idle)))
-        XCTAssertTrue(DockTabID.running.includes(makeRow(status: .needsMe)))
-        XCTAssertTrue(DockTabID.running.includes(makeRow(status: .failed)))
-        XCTAssertTrue(DockTabID.agents.includes(
-            makeRow(status: .idle, origin: .agentOrAutomation(subtype: .exec))
-        ))
-        XCTAssertTrue(DockTabID.agents.includes(
-            makeRow(status: .notLoaded, origin: .agentOrAutomation(subtype: .exec))
-        ))
-        XCTAssertTrue(DockTabID.agents.includes(
-            makeRow(status: .idle, origin: .unknown())
-        ))
-
-        XCTAssertFalse(DockTabID.needsMe.includes(makeRow(status: .running)))
-        XCTAssertFalse(DockTabID.running.includes(makeRow(status: .notLoaded)))
-        XCTAssertFalse(DockTabID.all.includes(
-            makeRow(status: .idle, origin: .agentOrAutomation(subtype: .exec))
-        ))
-        XCTAssertFalse(DockTabID.running.includes(
-            makeRow(status: .running, origin: .unknown())
-        ))
+        XCTAssertEqual(DockRowStatusKind.allCases, [.running, .idle, .notLoaded, .error, .unknown])
+        XCTAssertEqual(DockLensID.allCases, [.newest, .host, .branch])
+        XCTAssertTrue(DockSourceFilter.any.includes(makeRow(status: .idle).origin))
+        XCTAssertTrue(DockSourceFilter.human.includes(makeRow(status: .running).origin))
+        XCTAssertTrue(DockSourceFilter.agents.includes(makeRow(status: .idle, origin: .agentOrAutomation(subtype: .exec)).origin))
+        XCTAssertTrue(DockSourceFilter.unknown.includes(makeRow(status: .idle, origin: .unknown()).origin))
+        XCTAssertFalse(DockSourceFilter.human.includes(makeRow(status: .idle, origin: .agentOrAutomation(subtype: .exec)).origin))
     }
 
     @MainActor
@@ -364,7 +400,7 @@ final class DockStoreTests: XCTestCase {
             return XCTFail("Expected loaded state, got \(store.state)")
         }
 
-        let row = initialSnapshot.sections[0].rows[0]
+        let row = initialSnapshot.rows[0]
         await store.setLabel("Watch", for: row)
         await store.setRail(.red, for: row)
 
@@ -375,8 +411,8 @@ final class DockStoreTests: XCTestCase {
             return XCTFail("Expected loaded state, got \(reloaded.state)")
         }
 
-        XCTAssertEqual(snapshot.sections[0].rows[0].label, "Watch")
-        XCTAssertEqual(snapshot.sections[0].rows[0].rail, .red)
+        XCTAssertEqual(snapshot.rows[0].label, "Watch")
+        XCTAssertEqual(snapshot.rows[0].rail, .red)
     }
 
     func testLocalMetadataKeyKeepsHostBackendAndThreadIdentity() async throws {
@@ -443,7 +479,7 @@ final class DockStoreTests: XCTestCase {
             return XCTFail("Expected loaded state, got \(store.state)")
         }
 
-        let row = initialSnapshot.sections[0].rows[0]
+        let row = initialSnapshot.rows[0]
         let archived = await store.archive(row)
 
         XCTAssertTrue(archived)
@@ -477,7 +513,7 @@ final class DockStoreTests: XCTestCase {
             return XCTFail("Expected loaded state, got \(store.state)")
         }
 
-        let row = initialSnapshot.sections[0].rows[0]
+        let row = initialSnapshot.rows[0]
         let archived = await store.archive(row)
 
         XCTAssertFalse(archived)
@@ -485,7 +521,7 @@ final class DockStoreTests: XCTestCase {
         guard case let .loaded(snapshot) = store.state else {
             return XCTFail("Expected row to remain loaded, got \(store.state)")
         }
-        XCTAssertEqual(snapshot.sections[0].rows[0].id.threadID, "thread-keep")
+        XCTAssertEqual(snapshot.rows[0].id.threadID, "thread-keep")
     }
 
     @MainActor
@@ -598,7 +634,7 @@ final class DockStoreTests: XCTestCase {
         )
 
         let edited = try XCTUnwrap(store.registry?.hosts.first(where: { $0.id == "100.66.11.7:4520" }))
-        XCTAssertEqual(edited.displayName, "100.66.11.7:4520")
+        XCTAssertEqual(edited.displayName, "100.66.11.7")
         XCTAssertEqual(edited.webSocketURL.absoluteString, "ws://100.66.11.7:4520")
         let savedEditedConfiguration = await configurationStore.savedConfiguration()
         XCTAssertEqual(
@@ -708,347 +744,4 @@ final class DockStoreTests: XCTestCase {
             )
         }
     }
-}
-
-private enum FakeMode: Sendable {
-    case success(DockLoadResult)
-    case failure(DockLoadFailure)
-}
-
-private struct FakeDockSessionLoader: DockSessionLoading {
-    private let results: [String: FakeMode]
-
-    init(mode: FakeMode) {
-        self.results = Self.results(for: mode)
-    }
-
-    func loadSessions(
-        for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult {
-        guard let mode = results[Self.key(query)] else {
-            throw DockLoadFailure.error("Unexpected query \(Self.queryLabel(query))")
-        }
-        switch mode {
-        case let .success(result):
-            return result
-        case let .failure(error):
-            throw error
-        }
-    }
-
-    private static func results(for mode: FakeMode) -> [String: FakeMode] {
-        switch mode {
-        case .success(let result):
-            return [
-                key(.activeHuman): .success(result),
-                key(.activeAgents): .success(DockLoadResult(summaries: [])),
-                key(.archivedHuman): .success(result)
-            ]
-        case .failure(let error):
-            return [
-                key(.activeHuman): .failure(error),
-                key(.activeAgents): .failure(error),
-                key(.archivedHuman): .failure(error)
-            ]
-        }
-    }
-
-    fileprivate static func key(_ query: DockSessionQuery) -> String {
-        queryLabel(query)
-    }
-
-    fileprivate static func queryLabel(_ query: DockSessionQuery) -> String {
-        if query == .activeHuman {
-            return "activeHuman"
-        }
-        if query == .activeAgents {
-            return "activeAgents"
-        }
-        if query == .archivedHuman {
-            return "archivedHuman"
-        }
-        return "\(query.archived)::\(query.sourceKinds?.map(\.rawValue).joined(separator: ",") ?? "nil")"
-    }
-}
-
-private actor SequencedDockSessionLoader: DockSessionLoading {
-    private var resultsByQuery: [String: [FakeMode]]
-    private var queries: [DockSessionQuery] = []
-
-    init(results: [FakeMode]) {
-        self.resultsByQuery = [
-            Self.key(.activeHuman): results,
-            Self.key(.activeAgents): Array(
-                repeating: .success(DockLoadResult(summaries: [])),
-                count: results.count
-            )
-        ]
-    }
-
-    func currentLoadCount() -> Int {
-        queries.count
-    }
-
-    func recordedQueries() -> [DockSessionQuery] {
-        queries
-    }
-
-    func loadSessions(
-        for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult {
-        queries.append(query)
-        let key = Self.key(query)
-        guard var results = resultsByQuery[key] else {
-            throw DockLoadFailure.error("Unexpected query \(Self.queryLabel(query))")
-        }
-        guard !results.isEmpty else {
-            throw DockLoadFailure.error("No result configured for query \(Self.queryLabel(query))")
-        }
-        let result = results.removeFirst()
-        resultsByQuery[key] = results
-
-        switch result {
-        case let .success(result):
-            return result
-        case let .failure(error):
-            throw error
-        }
-    }
-
-    private static func key(_ query: DockSessionQuery) -> String {
-        FakeDockSessionLoader.queryLabel(query)
-    }
-
-    private static func queryLabel(_ query: DockSessionQuery) -> String {
-        FakeDockSessionLoader.queryLabel(query)
-    }
-}
-
-private actor HostRoutedDockSessionLoader: DockSessionLoading {
-    private let results: [String: FakeMode]
-
-    init(results: [String: FakeMode]) {
-        var scopedResults: [String: FakeMode] = [:]
-        for (hostID, mode) in results {
-            switch mode {
-            case .success(let result):
-                scopedResults[Self.key(hostID: hostID, query: .activeHuman)] = .success(result)
-                scopedResults[Self.key(hostID: hostID, query: .activeAgents)] = .success(
-                    DockLoadResult(summaries: [])
-                )
-            case .failure(let error):
-                scopedResults[Self.key(hostID: hostID, query: .activeHuman)] = .failure(error)
-                scopedResults[Self.key(hostID: hostID, query: .activeAgents)] = .failure(error)
-            }
-        }
-        self.results = scopedResults
-    }
-
-    func loadSessions(
-        for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult {
-        switch results[Self.key(hostID: host.id, query: query)] {
-        case let .success(result):
-            return result
-        case let .failure(error):
-            throw error
-        case nil:
-            throw DockLoadFailure.error("Unexpected query \(Self.queryLabel(query)) for host \(host.id)")
-        }
-    }
-
-    private static func key(hostID: String, query: DockSessionQuery) -> String {
-        "\(hostID)::\(queryLabel(query))"
-    }
-
-    private static func queryLabel(_ query: DockSessionQuery) -> String {
-        FakeDockSessionLoader.queryLabel(query)
-    }
-}
-
-private actor RecordingDockSessionLoader: DockSessionLoading {
-    private var results: [FakeMode]
-    private var queries: [DockSessionQuery] = []
-
-    init(results: [FakeMode]) {
-        self.results = results
-    }
-
-    func recordedQueries() -> [DockSessionQuery] {
-        queries
-    }
-
-    func archivedRequests() -> [Bool] {
-        queries.map(\.archived)
-    }
-
-    func loadSessions(
-        for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult {
-        queries.append(query)
-        guard !results.isEmpty else {
-            throw DockLoadFailure.error("No result configured for query \(FakeDockSessionLoader.queryLabel(query))")
-        }
-        let result = results.removeFirst()
-
-        switch result {
-        case let .success(result):
-            return result
-        case let .failure(error):
-            throw error
-        }
-    }
-}
-
-private actor RecordingDockArchiver: DockSessionArchiving {
-    private let mode: FakeMode
-    private var archived: [String] = []
-    private var unarchived: [String] = []
-
-    init(mode: FakeMode = .success(DockLoadResult(summaries: []))) {
-        self.mode = mode
-    }
-
-    func archivedIDs() -> [String] {
-        archived
-    }
-
-    func unarchivedIDs() -> [String] {
-        unarchived
-    }
-
-    func archiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
-        archived.append(threadID)
-        try throwIfNeeded()
-    }
-
-    func unarchiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
-        unarchived.append(threadID)
-        try throwIfNeeded()
-    }
-
-    private func throwIfNeeded() throws {
-        if case let .failure(error) = mode {
-            throw error
-        }
-    }
-}
-
-private actor InMemoryLocalThreadMetadataStore: LocalThreadMetadataStoring {
-    private var values: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
-
-    func load() async throws -> [LocalThreadMetadataKey: LocalThreadMetadata] {
-        values
-    }
-
-    func save(
-        _ metadata: LocalThreadMetadata?,
-        for key: LocalThreadMetadataKey
-    ) async throws -> [LocalThreadMetadataKey: LocalThreadMetadata] {
-        if let metadata, !metadata.isEmpty {
-            values[key] = metadata
-        } else {
-            values.removeValue(forKey: key)
-        }
-        return values
-    }
-}
-
-private actor InMemoryLocalDockConfigurationStore: LocalDockConfigurationStoring {
-    private var saved: LocalRelayHostList?
-
-    init(saved: LocalRelayHostList? = nil) {
-        self.saved = saved
-    }
-
-    func load() async throws -> LocalRelayHostList? {
-        saved
-    }
-
-    func save(_ configuration: LocalRelayHostList) async throws {
-        saved = configuration
-    }
-
-    func savedConfiguration() -> LocalRelayHostList? {
-        saved
-    }
-}
-
-private func sortedQueries(_ queries: [DockSessionQuery]) -> [DockSessionQuery] {
-    queries.sorted { lhs, rhs in
-        querySortKey(lhs) < querySortKey(rhs)
-    }
-}
-
-private func querySortKey(_ query: DockSessionQuery) -> String {
-    if query == .activeAgents {
-        return "0-activeAgents"
-    }
-    if query == .activeHuman {
-        return "1-activeHuman"
-    }
-    if query == .archivedHuman {
-        return "2-archivedHuman"
-    }
-    return "3-\(query.archived)-\(query.sourceKinds?.map(\.rawValue).joined(separator: ",") ?? "nil")"
-}
-
-private func makeHost(
-    id: String = "Amir-M5",
-    displayName: String = "Amir-M5",
-    url: String? = nil
-) -> DockHostConfiguration {
-    let defaultURL = id == "Amir-M5" ? "ws://192.168.50.117:4510" : "ws://\(id):4510"
-    let parsedURL = URL(string: url ?? defaultURL)!
-    return try! DockHostConfiguration(
-        host: parsedURL.host!,
-        port: parsedURL.port!
-    )
-}
-
-private func makeRow(
-    status: DockRowStatusKind,
-    origin: SessionOrigin = .humanInteractive(subtype: .cli)
-) -> DockRowViewModel {
-    DockRowViewModel(
-        id: HostScopedThreadID(hostID: "Amir-M5", threadID: UUID().uuidString),
-        backendSessionID: UUID().uuidString,
-        title: "Row",
-        repository: "codex-client",
-        branch: "main",
-        status: status,
-        lastActivity: "now",
-        lastActivityDate: Date(timeIntervalSince1970: 2_000),
-        summary: "Summary",
-        rail: .blue,
-        label: nil,
-        origin: origin
-    )
-}
-
-private func makeSummary(
-    hostID: String,
-    threadID: String,
-    branch: String,
-    status: SessionStatus,
-    lastActivity: Date,
-    prompt: String,
-    origin: SessionOrigin = .humanInteractive(subtype: .cli)
-) -> SessionSummary {
-    SessionSummary(
-        id: HostScopedThreadID(hostID: hostID, threadID: threadID),
-        backendSessionID: "\(threadID)-session",
-        displayTitle: prompt,
-        status: status,
-        repository: .known("codex-client"),
-        workingDirectory: .known("/Users/aelaguiz/workspace/codex-client"),
-        branch: .known(branch),
-        lastActivity: lastActivity,
-        shortEventSummary: .known("Assistant update for \(prompt)"),
-        origin: origin
-    )
 }

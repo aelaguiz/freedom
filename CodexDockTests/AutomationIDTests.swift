@@ -7,6 +7,10 @@ final class AutomationIDTests: XCTestCase {
         XCTAssertEqual(AutomationID.Bootstrap.root.rawValue, "codexdock.bootstrap.root")
         XCTAssertEqual(AutomationID.Root.tabs.rawValue, "codexdock.root.tabs")
         XCTAssertEqual(AutomationID.Dock.root.rawValue, "codexdock.dock.root")
+        XCTAssertEqual(AutomationID.Dock.lensPicker.rawValue, "codexdock.dock.lens")
+        XCTAssertEqual(AutomationID.Dock.filterButton.rawValue, "codexdock.dock.filters.button")
+        XCTAssertEqual(AutomationID.Dock.activeFilterSummary.rawValue, "codexdock.dock.filters.summary")
+        XCTAssertEqual(AutomationID.Dock.filterSurface.rawValue, "codexdock.dock.filters.surface")
         XCTAssertEqual(AutomationID.Archive.root.rawValue, "codexdock.archive.root")
         XCTAssertEqual(AutomationID.Relay.root.rawValue, "codexdock.relay.root")
     }
@@ -15,6 +19,14 @@ final class AutomationIDTests: XCTestCase {
         XCTAssertEqual(
             AutomationID.Dock.row(hostID: "Amir M5.local:4510", threadID: "thread/one").rawValue,
             "codexdock.dock.row.Amir%20M5.local%3A4510.thread%2Fone"
+        )
+        XCTAssertEqual(
+            AutomationID.Dock.hostGroup("host::Amir M5.local:4510").rawValue,
+            "codexdock.dock.group.host.host%3A%3AAmir%20M5.local%3A4510"
+        )
+        XCTAssertEqual(
+            AutomationID.Dock.filterBranch("feature/dock").rawValue,
+            "codexdock.dock.filters.branch.feature%2Fdock"
         )
         XCTAssertEqual(
             AutomationID.RequestCard.approveButton(cardID: "request:{42}").rawValue,

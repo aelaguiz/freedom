@@ -5,18 +5,8 @@ struct SessionRowProjector {
     let localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata]
     let now: @Sendable () -> Date
 
-    func sections(from summaries: [SessionSummary]) -> [DockSectionViewModel] {
-        let rows = summaries.map(makeRow)
-        let groupedRows = Dictionary(grouping: rows, by: sectionID(for:))
-        return groupedRows
-            .map { sectionID, rows in
-                DockSectionViewModel(
-                    id: sectionID,
-                    title: sectionTitle(for: rows[0]),
-                    rows: rows.sorted(by: rowPrecedes)
-                )
-            }
-            .sorted(by: sectionPrecedes)
+    func rows(from summaries: [SessionSummary]) -> [DockRowViewModel] {
+        summaries.map(makeRow)
     }
 
     func makeRow(summary: SessionSummary) -> DockRowViewModel {
@@ -31,6 +21,8 @@ struct SessionRowProjector {
             id: summary.id,
             backendSessionID: summary.backendSessionID,
             title: title(for: summary),
+            hostDisplayName: hostDisplayName(for: summary.id.hostID),
+            hostEndpoint: hostEndpoint(for: summary.id.hostID),
             repository: repository(for: summary),
             branch: text(summary.branch, fallback: "No branch"),
             status: status(for: summary),
@@ -43,67 +35,8 @@ struct SessionRowProjector {
         )
     }
 
-    private func sectionID(for row: DockRowViewModel) -> String {
-        hosts.count > 1 ? "\(row.id.hostID)::\(row.branch)" : row.branch
-    }
-
-    private func sectionTitle(for row: DockRowViewModel) -> String {
-        guard hosts.count > 1 else {
-            return row.branch
-        }
-        let hostName = hosts.first { $0.id == row.id.hostID }?.displayName ?? row.id.hostID
-        return "\(hostName) / \(row.branch)"
-    }
-
-    private func sectionPrecedes(_ lhs: DockSectionViewModel, _ rhs: DockSectionViewModel) -> Bool {
-        let lhsPriority = lhs.rows.map { Self.statusPriority($0.status) }.min() ?? Int.max
-        let rhsPriority = rhs.rows.map { Self.statusPriority($0.status) }.min() ?? Int.max
-        if lhsPriority != rhsPriority {
-            return lhsPriority < rhsPriority
-        }
-
-        let lhsDate = lhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
-        let rhsDate = rhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
-        if lhsDate != rhsDate {
-            return lhsDate > rhsDate
-        }
-
-        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-    }
-
-    private func rowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
-        let lhsPriority = Self.statusPriority(lhs.status)
-        let rhsPriority = Self.statusPriority(rhs.status)
-        if lhsPriority != rhsPriority {
-            return lhsPriority < rhsPriority
-        }
-
-        if lhs.lastActivityDate != rhs.lastActivityDate {
-            return lhs.lastActivityDate > rhs.lastActivityDate
-        }
-
-        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-    }
-
-    static func statusPriority(_ status: DockRowStatusKind) -> Int {
-        switch status {
-        case .needsMe:
-            return 0
-        case .running:
-            return 1
-        case .failed:
-            return 2
-        case .idle:
-            return 3
-        case .unknown:
-            return 4
-        case .notLoaded:
-            return 5
-        }
-    }
-
     private func title(for summary: SessionSummary) -> String {
-        nonEmpty(summary.displayTitle) ?? summary.id.threadID
+        nonEmpty(summary.displayTitle) ?? "Thread \(shortThreadID(summary.id.threadID))"
     }
 
     private func repository(for summary: SessionSummary) -> String {
@@ -126,14 +59,12 @@ struct SessionRowProjector {
         switch summary.status {
         case .idle:
             return .idle
-        case .active(let activeFlags):
-            return activeFlags.contains(.waitingOnApproval) || activeFlags.contains(.waitingOnUserInput)
-                ? .needsMe
-                : .running
+        case .active:
+            return .running
         case .notLoaded:
             return .notLoaded
         case .systemError:
-            return .failed
+            return .error
         case .unknown:
             return .unknown
         }
@@ -177,5 +108,20 @@ struct SessionRowProjector {
             return trimmed
         }
         return nil
+    }
+
+    private func hostDisplayName(for hostID: String) -> String {
+        hosts.first { $0.id == hostID }?.displayName ?? hostID
+    }
+
+    private func hostEndpoint(for hostID: String) -> String {
+        hosts.first { $0.id == hostID }?.endpoint.displayEndpoint ?? hostID
+    }
+
+    private func shortThreadID(_ threadID: String) -> String {
+        if threadID.count <= 12 {
+            return threadID
+        }
+        return String(threadID.prefix(8))
     }
 }

@@ -15,6 +15,8 @@ struct HostSummaryView: View {
         self.host = hostState.host
         self.automationID = automationID
         switch hostState.status {
+        case .checking:
+            self.subtitle = hostState.status.subtitle
         case .loaded, .partial, .empty:
             self.subtitle = hostState.status.subtitle
         case .offline(let message), .error(let message):
@@ -32,7 +34,7 @@ struct HostSummaryView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(host.displayName)
                     .font(.headline)
-                Text("\(host.endpoint) · \(subtitle)")
+                Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -51,7 +53,7 @@ struct HostSummaryView: View {
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityValue("\(host.id); \(subtitle)")
+        .accessibilityValue("\(host.id); endpoint=\(host.endpoint); \(subtitle)")
         .codexAutomationID(automationID)
     }
 }
@@ -196,7 +198,7 @@ struct DockRowView: View {
                         .background(statusColor.opacity(0.12), in: Capsule())
                 }
 
-                Text("\(row.repository) · \(row.branch)")
+                Text("\(row.hostDisplayName) · \(row.repository) · \(row.branch)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -249,15 +251,13 @@ struct DockRowView: View {
 
     private var statusColor: Color {
         switch row.status {
-        case .needsMe:
-            return .orange
         case .running:
             return .green
         case .idle:
             return .blue
         case .notLoaded:
             return .secondary
-        case .failed:
+        case .error:
             return .red
         case .unknown:
             return .secondary
@@ -301,24 +301,12 @@ extension DockRowViewModel {
     var automationValue: String {
         [
             "host=\(id.hostID)",
+            "hostDisplay=\(hostDisplayName)",
             "thread=\(id.threadID)",
             "status=\(status.rawValue)",
             "origin=\(origin.automationKind)",
             "label=\(label == nil ? "none" : "present")",
         ].joined(separator: "; ")
-    }
-}
-
-extension SessionOrigin {
-    var automationKind: String {
-        switch kind {
-        case .humanInteractive:
-            return "human"
-        case .agentOrAutomation:
-            return "automation"
-        case .unknown:
-            return "unknown"
-        }
     }
 }
 

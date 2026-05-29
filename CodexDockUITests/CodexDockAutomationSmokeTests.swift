@@ -23,14 +23,63 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
             return
         }
 
-        XCTAssertTrue(app.element(id: AutomationID.Dock.root).exists)
-        XCTAssertTrue(app.element(id: AutomationID.Dock.sortPicker).exists)
-        XCTAssertTrue(app.element(id: AutomationID.Dock.idleToggle).exists)
+        app.assertElementExists(
+            id: AutomationID.Dock.root.rawValue,
+            context: "Dock search was visible, but the Dock root hook was missing."
+        )
+        app.assertElementExists(id: AutomationID.Dock.lensButton(DockLensID.newest.rawValue).rawValue)
+        app.assertElementExists(id: AutomationID.Dock.lensButton(DockLensID.host.rawValue).rawValue)
+        app.assertElementExists(id: AutomationID.Dock.lensButton(DockLensID.branch.rawValue).rawValue)
+        app.assertElementExists(id: AutomationID.Dock.lensPicker.rawValue)
+        app.assertElementExists(id: AutomationID.Dock.filterButton.rawValue)
+        app.assertElementExists(id: AutomationID.Dock.activeFilterSummary.rawValue)
+        XCTAssertFalse(app.element(id: "codexdock.dock.sort").exists)
+        XCTAssertFalse(app.element(id: "codexdock.dock.idle-toggle").exists)
+        XCTAssertFalse(app.element(id: "codexdock.dock.filter").exists)
         XCTAssertFalse(app.element(id: AutomationID.Connectivity.globalIndicator).stringValue.isEmpty)
 
-        let idleToggle = app.element(id: AutomationID.Dock.idleToggle)
-        idleToggle.tap()
-        XCTAssertTrue(idleToggle.waitForStringValue(containing: "On", timeout: 3))
+        XCTAssertTrue(app.element(id: AutomationID.Dock.root).waitForStringValue(containing: "lens=newest", timeout: 3))
+        XCTAssertFalse(app.element(id: AutomationID.Dock.root).stringValue.contains("Limited"))
+        XCTAssertFalse(app.element(id: AutomationID.Dock.root).stringValue.contains("Needs me"))
+    }
+
+    func testDockLensesAndFiltersAreDrivableInSimulator() throws {
+        let app = launchRelayBackedApp()
+        XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
+        let root = app.element(id: AutomationID.Dock.root)
+        XCTAssertTrue(root.waitForStringValue(containing: "lens=newest", timeout: 5))
+
+        app.element(id: AutomationID.Dock.lensButton(DockLensID.host.rawValue)).tap()
+        XCTAssertTrue(root.waitForStringValue(containing: "lens=host", timeout: 5))
+        XCTAssertNotNil(
+            app.waitForElement(identifierPrefix: "codexdock.dock.group.host.", timeout: 10),
+            "Host lens did not expose host groups in the iPhone 17 simulator.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+
+        app.element(id: AutomationID.Dock.lensButton(DockLensID.branch.rawValue)).tap()
+        XCTAssertTrue(root.waitForStringValue(containing: "lens=branch", timeout: 5))
+        XCTAssertNotNil(
+            app.waitForElement(identifierPrefix: "codexdock.dock.group.branch.", timeout: 10),
+            "Branch lens did not expose branch groups in the iPhone 17 simulator.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+
+        app.element(id: AutomationID.Dock.filterButton).tap()
+        app.assertElementExists(id: AutomationID.Dock.filterSurface.rawValue, timeout: 10)
+        app.assertElementExists(id: AutomationID.Dock.filterResultSummary.rawValue)
+        app.assertElementExists(id: AutomationID.Dock.filterHostAny.rawValue)
+        app.assertElementExists(id: AutomationID.Dock.filterBranchSearch.rawValue)
+        XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.filterStatusAny, maxSwipes: 3))
+        let notLoadedFilterID = AutomationID.Dock.filterStatus(DockRowStatusKind.notLoaded.rawValue).rawValue
+        XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.filterStatus(DockRowStatusKind.notLoaded.rawValue), maxSwipes: 3))
+        app.element(id: notLoadedFilterID).tap()
+        XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.notLoadedExplanation, maxSwipes: 2))
+        let explanation = app.element(id: AutomationID.Dock.notLoadedExplanation).stringValue
+        XCTAssertFalse(explanation.localizedCaseInsensitiveContains("rate"))
+        XCTAssertFalse(explanation.localizedCaseInsensitiveContains("limit"))
+        XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.filterRepoQuery, maxSwipes: 2))
+        XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.filterSourcePicker, maxSwipes: 2))
+        XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.filterIdleToggle, maxSwipes: 2))
+        app.assertElementExists(id: AutomationID.Dock.clearFiltersButton.rawValue)
     }
 
     func testRelaySettingsFormIsDrivableByIdentifier() throws {
@@ -56,7 +105,6 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
     func testDockRowOpensSessionDetailByIdentifierWhenRowsExist() throws {
         let app = launchRelayBackedApp()
         XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
-        app.tapDockFilterTab(.agents)
 
         guard let row = app.waitForHittableButton(
             identifierPrefix: "codexdock.dock.row.",
@@ -96,6 +144,19 @@ private extension XCUIApplication {
 
     func element(id: String) -> XCUIElement {
         descendants(matching: .any)[id]
+    }
+
+    func assertElementExists(
+        id: String,
+        timeout: TimeInterval = 5,
+        context: String = "Expected simulator UI hook was missing.",
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let element = element(id: id)
+        if !element.waitForExistence(timeout: timeout) {
+            XCTFail("\(context) Missing id=\(id).\n\nAccessibility tree:\n\(debugDescription)", file: file, line: line)
+        }
     }
 
     func waitForFirstIdentifier(_ identifiers: [String], timeout: TimeInterval) -> String? {
@@ -155,21 +216,6 @@ private extension XCUIApplication {
             "SwiftUI did not expose \(AutomationID.Root.tab(tab).rawValue); falling back to the platform tab bar label for \(tab.platformTabLabel)."
         )
         fallbackButton.tap()
-    }
-
-    func tapDockFilterTab(_ tab: DockTabID) {
-        let tabElement = element(id: AutomationID.Dock.filterTab(tab.rawValue))
-        if tabElement.waitForExistence(timeout: 2) {
-            tabElement.tap()
-            return
-        }
-
-        let picker = element(id: AutomationID.Dock.filterPicker)
-        XCTAssertTrue(picker.waitForExistence(timeout: 5))
-        let tabIndex = DockTabID.allCases.firstIndex(of: tab) ?? 0
-        let segment = picker.buttons.element(boundBy: tabIndex)
-        XCTAssertTrue(segment.waitForExistence(timeout: 5))
-        segment.tap()
     }
 
     func scrollUntilElementExists(id: AutomationID, maxSwipes: Int) -> Bool {

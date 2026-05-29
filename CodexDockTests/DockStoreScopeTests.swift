@@ -5,11 +5,7 @@ final class DockStoreScopeTests: XCTestCase {
     @MainActor
     func testDockLoadRequestsHumanAndAgentsScopesPerActiveHost() async throws {
         let amir = makeHost()
-        let home = makeHost(
-            id: "Home",
-            displayName: "Home",
-            url: "ws://100.66.11.7:4510"
-        )
+        let home = makeHost(url: "ws://100.66.11.7:4510")
         let registry = try HostRegistry(hosts: [amir, home])
         let loader = QueryRoutedDockSessionLoader(results: [
             QueryRoutedDockSessionLoader.key(hostID: amir.id, query: .activeHuman): .success(
@@ -55,18 +51,18 @@ final class DockStoreScopeTests: XCTestCase {
     }
 
     @MainActor
-    func testDockSnapshotCountsAndNoLeakRowsByTab() async {
+    func testDockSnapshotSourceFiltersAndNoNeedsMeStatus() async {
         let host = makeHost()
         let loader = QueryRoutedDockSessionLoader(results: [
             QueryRoutedDockSessionLoader.key(hostID: host.id, query: .activeHuman): .success(
                 DockLoadResult(summaries: [
                     makeSummary(
                         hostID: host.id,
-                        threadID: "human-needs-me",
+                        threadID: "human-waiting",
                         branch: "main",
                         status: .active(activeFlags: [.waitingOnUserInput]),
                         lastActivity: Date(timeIntervalSince1970: 1_900),
-                        prompt: "Human needs input"
+                        prompt: "Human waiting"
                     ),
                     makeSummary(
                         hostID: host.id,
@@ -110,39 +106,26 @@ final class DockStoreScopeTests: XCTestCase {
         }
 
         XCTAssertEqual(snapshot.rowCount, 4)
-        XCTAssertEqual(tabCounts(snapshot), [
-            .all: 2,
-            .needsMe: 1,
-            .running: 1,
-            .agents: 2
-        ])
+        XCTAssertFalse(snapshot.rows.contains { $0.status.label == "Needs me" })
+        XCTAssertEqual(snapshot.rows.first { $0.id.threadID == "human-waiting" }?.status, .running)
 
-        XCTAssertEqual(
-            tabCounts(snapshot.project(options: .init(selectedTab: .all, showsIdle: false))),
-            [
-                .all: 2,
-                .needsMe: 1,
-                .running: 1,
-                .agents: 1
-            ]
-        )
-        XCTAssertEqual(
-            tabCounts(snapshot.project(options: .init(selectedTab: .all, showsIdle: true))),
-            [
-                .all: 2,
-                .needsMe: 1,
-                .running: 1,
-                .agents: 2
-            ]
-        )
+        let humanProjection = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .human)))
+        let agentsProjection = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .agents)))
+        let unknownProjection = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .unknown, showsIdle: true)))
+        let defaultProjection = snapshot.project(options: .init(lens: .newest))
+        let idleVisibleProjection = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(showsIdle: true)))
 
-        XCTAssertTrue(rows(in: snapshot.sections(for: .all)).allSatisfy {
+        XCTAssertEqual(humanProjection.rows.map(\.id.threadID), ["human-waiting", "human-not-loaded"])
+        XCTAssertEqual(agentsProjection.rows.map(\.id.threadID), ["agent-running"])
+        XCTAssertEqual(unknownProjection.rows.map(\.id.threadID), ["unknown-origin"])
+        XCTAssertEqual(defaultProjection.rows.count, 3)
+        XCTAssertEqual(defaultProjection.hiddenCounts.idle, 1)
+        XCTAssertEqual(idleVisibleProjection.rows.count, 4)
+
+        XCTAssertTrue(humanProjection.rows.allSatisfy {
             $0.origin.kind == .humanInteractive
         })
-        XCTAssertTrue(rows(in: snapshot.sections(for: .running)).allSatisfy {
-            $0.origin.kind == .humanInteractive
-        })
-        XCTAssertTrue(rows(in: snapshot.sections(for: .agents)).allSatisfy {
+        XCTAssertTrue(agentsProjection.rows.allSatisfy {
             $0.origin.kind != .humanInteractive
         })
     }
@@ -185,7 +168,7 @@ final class DockStoreScopeTests: XCTestCase {
             return XCTFail("Expected loaded state, got \(store.state)")
         }
 
-        let agentRows = rows(in: snapshot.sections(for: .agents))
+        let agentRows = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .agents))).rows
         XCTAssertEqual(snapshot.rowCount, 1)
         XCTAssertEqual(snapshot.mappingFailures, [])
         XCTAssertEqual(snapshot.scopeConflicts, [
@@ -197,7 +180,7 @@ final class DockStoreScopeTests: XCTestCase {
         ])
         XCTAssertEqual(agentRows.map(\.title), ["Agent copy"])
         XCTAssertEqual(agentRows.map(\.origin.kind), [.agentOrAutomation])
-        XCTAssertTrue(snapshot.sections(for: .all).isEmpty)
+        XCTAssertTrue(snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .human))).rows.isEmpty)
     }
 
     @MainActor
@@ -271,8 +254,8 @@ final class DockStoreScopeTests: XCTestCase {
         ])
         XCTAssertEqual(snapshot.scopeLoadFailures.map(\.scope), [.human])
         XCTAssertEqual(snapshot.scopeLoadFailures.map(\.message), ["Dock unreachable"])
-        XCTAssertEqual(tabCounts(snapshot)[.agents], 1)
-        XCTAssertEqual(tabCounts(snapshot)[.all], 0)
+        XCTAssertEqual(snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .agents))).rows.count, 1)
+        XCTAssertEqual(snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .human))).rows.count, 0)
     }
 
     @MainActor
@@ -311,11 +294,6 @@ final class DockStoreScopeTests: XCTestCase {
             .online(rowCount: 1, checkedAt: Date(timeIntervalSince1970: 2_000))
         )
     }
-}
-
-private enum FakeMode: Sendable {
-    case success(DockLoadResult)
-    case failure(DockLoadFailure)
 }
 
 private actor QueryRoutedDockSessionLoader: DockSessionLoading {
@@ -366,71 +344,4 @@ private actor QueryRoutedDockSessionLoader: DockSessionLoading {
         }
         return "\(query.archived)::\(query.sourceKinds?.map(\.rawValue).joined(separator: ",") ?? "nil")"
     }
-}
-
-private func makeHost(
-    id: String = "Amir-M5",
-    displayName: String = "Amir-M5",
-    url: String? = nil
-) -> DockHostConfiguration {
-    let defaultURL = id == "Amir-M5" ? "ws://192.168.50.117:4510" : "ws://\(id):4510"
-    let parsedURL = URL(string: url ?? defaultURL)!
-    return try! DockHostConfiguration(
-        host: parsedURL.host!,
-        port: parsedURL.port!
-    )
-}
-
-private func makeSummary(
-    hostID: String,
-    threadID: String,
-    branch: String,
-    status: SessionStatus,
-    lastActivity: Date,
-    prompt: String,
-    origin: SessionOrigin = .humanInteractive(subtype: .cli)
-) -> SessionSummary {
-    SessionSummary(
-        id: HostScopedThreadID(hostID: hostID, threadID: threadID),
-        backendSessionID: "\(threadID)-session",
-        displayTitle: prompt,
-        status: status,
-        repository: .known("codex-client"),
-        workingDirectory: .known("/Users/aelaguiz/workspace/codex-client"),
-        branch: .known(branch),
-        lastActivity: lastActivity,
-        shortEventSummary: .known("Assistant update for \(prompt)"),
-        origin: origin
-    )
-}
-
-private func sortedQueries(_ queries: [DockSessionQuery]) -> [DockSessionQuery] {
-    queries.sorted { lhs, rhs in
-        querySortKey(lhs) < querySortKey(rhs)
-    }
-}
-
-private func querySortKey(_ query: DockSessionQuery) -> String {
-    if query == .activeAgents {
-        return "0-activeAgents"
-    }
-    if query == .activeHuman {
-        return "1-activeHuman"
-    }
-    if query == .archivedHuman {
-        return "2-archivedHuman"
-    }
-    return "3-\(query.archived)-\(query.sourceKinds?.map(\.rawValue).joined(separator: ",") ?? "nil")"
-}
-
-private func tabCounts(_ snapshot: DockSnapshot) -> [DockTabID: Int] {
-    Dictionary(uniqueKeysWithValues: snapshot.tabs.map { ($0.id, $0.count) })
-}
-
-private func tabCounts(_ projection: DockSessionProjection) -> [DockTabID: Int] {
-    Dictionary(uniqueKeysWithValues: projection.tabs.map { ($0.id, $0.count) })
-}
-
-private func rows(in sections: [DockSectionViewModel]) -> [DockRowViewModel] {
-    sections.flatMap(\.rows)
 }

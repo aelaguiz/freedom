@@ -347,6 +347,8 @@ func makeDetailRow(hostID: String, threadID: String) -> DockRowViewModel {
         id: HostScopedThreadID(hostID: hostID, threadID: threadID),
         backendSessionID: "\(threadID)-session",
         title: "Build live detail",
+        hostDisplayName: "Test host",
+        hostEndpoint: "\(hostID):4510",
         repository: "codex-client",
         branch: "main",
         status: .running,

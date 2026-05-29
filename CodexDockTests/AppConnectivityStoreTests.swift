@@ -26,8 +26,7 @@ final class AppConnectivityStoreTests: XCTestCase {
                     hostStates: [
                         DockHostStateViewModel(host: hostViewModel, status: .loaded(rowCount: 2)),
                     ],
-                    sections: [],
-                    tabs: [],
+                    rows: [],
                     scopeLoadFailures: [],
                     scopeConflicts: [],
                     mappingFailures: []
@@ -37,6 +36,48 @@ final class AppConnectivityStoreTests: XCTestCase {
 
         XCTAssertEqual(store.overallStatus, .online("2 sessions"))
         XCTAssertEqual(store.hosts[0].phase, .online("2 sessions"))
+    }
+
+    @MainActor
+    func testAllHostLoadingRollsUpToCheckingCount() throws {
+        let amir = try DockHostConfiguration(host: "amir-m5.fairy-salmon.ts.net", port: 4510)
+        let home = try DockHostConfiguration(host: "home.fairy-salmon.ts.net", port: 4510)
+        let store = AppConnectivityStore(hosts: [amir, home])
+
+        store.reportDockState(.loading([DockHostViewModel(host: amir), DockHostViewModel(host: home)]))
+
+        XCTAssertEqual(store.overallStatus, .checking("Checking 2 hosts"))
+        XCTAssertEqual(store.hosts.map(\.phase), [.checking, .checking])
+    }
+
+    @MainActor
+    func testLoadedPlusCheckingHostsRollUpToPartialCount() throws {
+        let amir = try DockHostConfiguration(host: "amir-m5.fairy-salmon.ts.net", port: 4510)
+        let home = try DockHostConfiguration(host: "home.fairy-salmon.ts.net", port: 4510)
+        let store = AppConnectivityStore(hosts: [amir, home])
+        let amirViewModel = DockHostViewModel(host: amir)
+        let homeViewModel = DockHostViewModel(host: home)
+
+        store.reportDockState(
+            .loaded(
+                DockSnapshot(
+                    host: amirViewModel,
+                    hosts: [amirViewModel, homeViewModel],
+                    hostStates: [
+                        DockHostStateViewModel(host: amirViewModel, status: .loaded(rowCount: 2)),
+                        DockHostStateViewModel(host: homeViewModel, status: .checking),
+                    ],
+                    rows: [],
+                    scopeLoadFailures: [],
+                    scopeConflicts: [],
+                    mappingFailures: [],
+                    isPartial: true
+                )
+            )
+        )
+
+        XCTAssertEqual(store.overallStatus, .partial("Online 1/2, checking 1"))
+        XCTAssertEqual(store.hosts.map(\.phase), [.online("2 sessions"), .checking])
     }
 
     @MainActor
@@ -56,8 +97,7 @@ final class AppConnectivityStoreTests: XCTestCase {
                             status: .partial(rowCount: 1, message: "Agents: offline")
                         ),
                     ],
-                    sections: [],
-                    tabs: [],
+                    rows: [],
                     scopeLoadFailures: [
                         DockScopeLoadFailureViewModel(
                             host: hostViewModel,
@@ -133,8 +173,7 @@ final class AppConnectivityStoreTests: XCTestCase {
                     hostStates: [
                         DockHostStateViewModel(host: hostViewModel, status: .loaded(rowCount: 2)),
                     ],
-                    sections: [],
-                    tabs: [],
+                    rows: [],
                     scopeLoadFailures: [],
                     scopeConflicts: [],
                     mappingFailures: []
@@ -189,8 +228,7 @@ final class AppConnectivityStoreTests: XCTestCase {
             hostStates: [
                 DockHostStateViewModel(host: hostViewModel, status: .loaded(rowCount: 2)),
             ],
-            sections: [],
-            tabs: [],
+            rows: [],
             scopeLoadFailures: [],
             scopeConflicts: [],
             mappingFailures: []

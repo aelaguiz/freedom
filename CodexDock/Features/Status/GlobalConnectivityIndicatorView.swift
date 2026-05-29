@@ -8,16 +8,51 @@ public struct GlobalConnectivityIndicatorView: View {
     }
 
     public var body: some View {
-        Label(store.overallStatus.label, systemImage: systemImage)
+        Label(displayLabel, systemImage: systemImage)
             .font(.caption.weight(.semibold))
             .lineLimit(1)
             .foregroundStyle(foregroundColor)
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .background(backgroundColor, in: Capsule())
-            .accessibilityLabel(store.overallStatus.label)
-            .accessibilityValue(store.overallStatus.message)
+            .accessibilityLabel(displayLabel)
+            .accessibilityValue("\(store.overallStatus.label): \(store.overallStatus.message)")
             .codexAutomationID(AutomationID.Connectivity.globalIndicator)
+    }
+
+    private var displayLabel: String {
+        switch store.overallStatus {
+        case .checking:
+            return store.hosts.count > 1 ? "Checking \(store.hosts.count) hosts" : "Checking"
+        case .online:
+            return hostCountLabel(prefix: "Online") ?? "Online"
+        case .partial:
+            return hostCountLabel(prefix: "Online") ?? "Partial"
+        case .offline:
+            return "Offline"
+        case .error:
+            return "Error"
+        case .configurationError:
+            return "Config error"
+        case .unconfigured:
+            return "Unconfigured"
+        case .reconnecting:
+            return "Reconnecting"
+        case .backgrounded:
+            return "Backgrounded"
+        case .resuming:
+            return "Resuming"
+        case .stale:
+            return "Stale"
+        }
+    }
+
+    private func hostCountLabel(prefix: String) -> String? {
+        guard store.hosts.count > 1 else {
+            return nil
+        }
+        let onlineCount = store.hosts.filter(\.phase.isOnlineLike).count
+        return "\(prefix) \(onlineCount)/\(store.hosts.count)"
     }
 
     private var systemImage: String {

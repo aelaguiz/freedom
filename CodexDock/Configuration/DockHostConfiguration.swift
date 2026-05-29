@@ -118,11 +118,55 @@ public struct DockRelayEndpoint: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+public enum DockHostDisplayNameResolver {
+    public static func displayName(for endpoint: DockRelayEndpoint) -> String {
+        displayName(forHost: endpoint.host)
+    }
+
+    public static func displayName(forHost rawHost: String) -> String {
+        let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty, !isIPAddress(host) else {
+            return host
+        }
+
+        let stripped = strippingKnownSuffixes(from: host)
+        return stripped
+            .split(separator: "-")
+            .map(capitalizedToken)
+            .joined(separator: "-")
+    }
+
+    private static func strippingKnownSuffixes(from host: String) -> String {
+        var value = host
+        for suffix in [".fairy-salmon.ts.net", ".local"] {
+            if value.lowercased().hasSuffix(suffix) {
+                value.removeLast(suffix.count)
+                break
+            }
+        }
+        return value
+    }
+
+    private static func capitalizedToken(_ token: Substring) -> String {
+        let value = String(token)
+        guard let first = value.first else {
+            return value
+        }
+        return first.uppercased() + value.dropFirst()
+    }
+
+    private static func isIPAddress(_ host: String) -> Bool {
+        host.allSatisfy { character in
+            character.isNumber || character == "." || character == ":"
+        }
+    }
+}
+
 public struct DockHostConfiguration: Equatable, Sendable, Identifiable {
     public let endpoint: DockRelayEndpoint
 
     public var id: String { endpoint.id }
-    public var displayName: String { endpoint.displayEndpoint }
+    public var displayName: String { DockHostDisplayNameResolver.displayName(for: endpoint) }
     public var webSocketURL: URL { endpoint.webSocketURL }
 
     public init(endpoint: DockRelayEndpoint) {

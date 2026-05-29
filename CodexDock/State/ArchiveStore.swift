@@ -236,7 +236,7 @@ public final class ArchiveStore: ObservableObject {
             }
         }
 
-        let sections = SessionRowProjector(
+        let sections = ArchiveSessionProjector(
             hosts: hosts,
             localMetadata: localMetadata,
             now: now

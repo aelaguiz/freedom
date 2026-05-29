@@ -128,13 +128,18 @@ transcription model is `gpt-realtime-whisper`, with optional Mac-side
 `CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL` and
 `CODEX_DOCK_REALTIME_TRANSCRIPTION_DELAY` overrides.
 
-The Dock filters loaded sessions locally. Its controls row includes Search,
-Sort, and `Idle`: Search matches session title, label, repository or working
-directory, branch, summary, status, host, and thread id; Sort switches between
-grouped `Branch` and flat `Newest`; `Idle` is off by default so idle rows stay
-hidden until enabled. `Branch` keeps branch/host grouping but orders visible
-groups and rows by newest activity first. `Newest` shows one flat newest-first
-list.
+The Dock filters loaded sessions locally. It opens to `Newest`: one flat
+newest-first list across configured hosts. Rows carry their own short host
+name, repository or working directory, branch, status, last activity, local
+label, and latest summary. `Host` and `Branch` are Dock lenses, not app-level
+tabs or a separate sort picker; both preserve newest-first ordering inside
+their groups. `Filters` opens one shared filter surface for host, branch,
+status including `Not loaded`, repository or working directory, source, idle
+visibility, and the fixed `Newest activity` sort. Search is full-width and
+matches session title, label, repository or working directory, branch, summary,
+status, host display name, host id, source, and thread id. `Not loaded` means
+Dock has a list row but does not have loaded thread detail for it; it does not
+mean rate limited.
 
 The app has one root connectivity indicator. It appears above Dock, Archive,
 Hosts, and pushed Session detail screens. The labels are `Unconfigured`,
