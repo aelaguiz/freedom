@@ -51,7 +51,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
                 return false
             }
             return message == "Backgrounded"
-                && snapshot.events.map(\.body) == ["make test", "Stored turn"]
+                && snapshot.events.map(\.body) == ["Stored turn", "make test"]
         }
         XCTAssertEqual(store.composer.draft, "Keep this draft")
         XCTAssertEqual(store.requestCards.count, 1)

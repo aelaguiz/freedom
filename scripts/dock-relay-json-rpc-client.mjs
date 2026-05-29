@@ -36,11 +36,16 @@ class JsonRpcWebSocketClient {
     this.nextId = 1;
     this.pending = new Map();
     this.ws = null;
+    this.connectPromise = null;
+    this.unhealthy = false;
   }
 
   connect() {
-    if (this.ws) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
       return Promise.resolve();
+    }
+    if (this.connectPromise) {
+      return this.connectPromise;
     }
     const headers = {};
     if (this.bearerToken) {
@@ -51,15 +56,17 @@ class JsonRpcWebSocketClient {
       url: this.url,
       bearerConfigured: Boolean(this.bearerToken),
     });
-    return new Promise((resolve, reject) => {
+    this.unhealthy = false;
+    this.connectPromise = new Promise((resolve, reject) => {
       const ws = new WebSocket(this.url, { headers });
       const timer = setTimeout(() => {
         this.logger?.warn("upstream.connect_timeout", {
           url: this.url,
           durationMs: Date.now() - startedAt,
         });
+        this.unhealthy = true;
         reject(new Error(`timed out connecting to ${this.url}`));
-        ws.close();
+        this.forceCloseWebSocket(ws);
       }, this.timeoutMs);
       ws.on("open", () => {
         clearTimeout(timer);
@@ -73,6 +80,7 @@ class JsonRpcWebSocketClient {
       ws.on("message", (data) => this.handleMessage(data));
       ws.on("error", (error) => {
         clearTimeout(timer);
+        this.unhealthy = true;
         this.rejectAll(error);
         this.logger?.error("upstream.websocket_error", {
           url: this.url,
@@ -87,12 +95,18 @@ class JsonRpcWebSocketClient {
         if (this.ws === ws) {
           this.ws = null;
         }
+        if (this.connectPromise) {
+          this.connectPromise = null;
+        }
         this.logger?.warn("upstream.websocket_closed", {
           url: this.url,
         });
         this.onClose?.();
       });
+    }).finally(() => {
+      this.connectPromise = null;
     });
+    return this.connectPromise;
   }
 
   handleMessage(data) {
@@ -140,11 +154,11 @@ class JsonRpcWebSocketClient {
   }
 
   request(method, params = undefined) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (this.unhealthy || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.logger?.warn("upstream.request_rejected", {
         url: this.url,
         method,
-        reason: "not_connected",
+        reason: this.unhealthy ? "unhealthy" : "not_connected",
       });
       return Promise.reject(new Error(`not connected: ${this.url}`));
     }
@@ -164,13 +178,22 @@ class JsonRpcWebSocketClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        this.unhealthy = true;
         this.logger?.warn("upstream.request_timeout", {
           url: this.url,
           method,
           id,
           durationMs: Date.now() - startedAt,
         });
-        reject(new Error(`timed out waiting for ${method} from ${this.url}`));
+        const error = new Error(`timed out waiting for ${method} from ${this.url}`);
+        reject(error);
+        this.close({ reason: "request_timeout" }).catch((closeError) => {
+          this.logger?.warn("upstream.timeout_close_failed", {
+            url: this.url,
+            method,
+            error: closeError,
+          });
+        });
       }, this.timeoutMs);
       this.pending.set(id, { method, resolve, reject, timer, startedAt });
     });
@@ -200,14 +223,74 @@ class JsonRpcWebSocketClient {
   }
 
   isOpen() {
-    return this.ws?.readyState === WebSocket.OPEN;
+    return !this.unhealthy && this.ws?.readyState === WebSocket.OPEN;
   }
 
-  close() {
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+  pendingCount() {
+    return this.pending.size;
+  }
+
+  isUnhealthy() {
+    return this.unhealthy;
+  }
+
+  forceCloseWebSocket(ws) {
+    try {
+      if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
+      if (ws?.readyState !== WebSocket.CLOSED) {
+        ws.terminate();
+      }
+    } catch {
+      // Nothing else can safely happen here; callers already receive the original error.
     }
+  }
+
+  close({ forceAfterMs = 250, reason = "client_close" } = {}) {
+    const ws = this.ws;
+    this.ws = null;
+    this.connectPromise = null;
+    if (!ws || ws.readyState === WebSocket.CLOSED) {
+      this.rejectAll(new Error(`websocket closed: ${this.url}`));
+      return Promise.resolve();
+    }
+    this.logger?.debug("upstream.close_start", {
+      url: this.url,
+      reason,
+      pending: this.pending.size,
+    });
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        this.rejectAll(new Error(`websocket closed: ${this.url}`));
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this.logger?.warn("upstream.close_forced", {
+          url: this.url,
+          reason,
+          pending: this.pending.size,
+        });
+        try {
+          ws.terminate();
+        } finally {
+          finish();
+        }
+      }, forceAfterMs);
+      timer.unref?.();
+      ws.once("close", finish);
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      } else {
+        finish();
+      }
+    });
   }
 
   rejectAll(error) {

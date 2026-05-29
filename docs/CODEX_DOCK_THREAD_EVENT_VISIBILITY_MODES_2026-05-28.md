@@ -124,7 +124,7 @@ After this change, a thread opened from the Dock defaults to a quiet Messages ti
 - Thread detail timeline filtering for stored turns, live notifications, and server request events.
 - A compact, elegant visibility control in `SessionDetailView`, placed with the header/status area so it is visible before the timeline.
 - A model-layer classification contract that defines which event kinds are messages, thinking, tool/command/output, request, system, or unknown.
-- Deterministic ordering hardening for stored and live events, including same-turn item order and newest-turn grouping.
+- Deterministic ordering hardening for stored and live events, including same-turn item order and natural conversation flow.
 - Focused Swift tests for visibility filtering, ordering, and request-card preservation.
 - Final simulator/device-oriented verification using the existing Codex Dock relay path when implementation starts.
 
@@ -216,12 +216,12 @@ Thread detail loads stored turns through `thread/read` plus `thread/turns/list`,
 ## 3.2 Internal ground truth (code as spec)
 
 - Authoritative behavior anchors (do not reinvent):
-  - `CodexDock/Models/ThreadEvent.swift` - defines `ThreadEventKind`, normalized `ThreadEvent` fields, stored-turn normalization, live-notification normalization, server-request normalization, and `ThreadEventDisplayOrder.newestFirst`.
+  - `CodexDock/Models/ThreadEvent.swift` - defines `ThreadEventKind`, normalized `ThreadEvent` fields, stored-turn normalization, live-notification normalization, server-request normalization, and `ThreadEventDisplayOrder.naturalFlow`.
   - `CodexDock/State/ThreadDetailStore.swift` - owns thread detail load/resume, live observation, request-card upsert/resolve, event append/merge, and publication of `ThreadDetailSnapshot(events:)`.
   - `CodexDock/Features/Session/SessionDetailView.swift` - owns thread detail layout, `DetailHeaderView`, `EventTimelineView`, and `ThreadEventCard` rendering.
   - `CodexDock/Features/Session/RequestCardView.swift` - renders actionable server requests separately from the event timeline.
   - `CodexDockTests/ThreadEventNormalizerTests.swift` - existing contract tests for stored normalization, same-turn ordering, date/sequence metadata, live delta identity, server request events, and unknown item visibility.
-  - `CodexDockTests/ThreadDetailStoreTests.swift` - existing store-level tests for read/resume, newest-first display, live merge, server request event/card behavior, composer/voice behavior, and thread mismatch failure.
+  - `CodexDockTests/ThreadDetailStoreTests.swift` - existing store-level tests for read/resume, natural-flow display, live merge, server request event/card behavior, composer/voice behavior, and thread mismatch failure.
 - Canonical path / owner to reuse:
   - `CodexDock/Models/ThreadEvent.swift` owns the new visibility classification/filtering contract because it already owns event kinds, event metadata, and display ordering.
   - `CodexDock/State/ThreadDetailStore.swift` should continue to own the canonical complete event list and should not be split into separate message/debug streams.
@@ -266,12 +266,12 @@ Thread detail loads stored turns through `thread/read` plus `thread/turns/list`,
 - `CodexDock/Models/ThreadEvent.swift`
   - `ThreadEventKind` is the only current event-level type signal.
   - `ThreadEvent` carries body/title/date/live identity plus optional `turnID`, `itemID`, `turnSequence`, `itemSequence`, `eventSequence`, and `displayGroupDate`.
-  - `ThreadEventDisplayOrder.newestFirst(_:)` sorts by group date/sequence, then item/event sequence within a turn.
+  - `ThreadEventDisplayOrder.naturalFlow(_:)` sorts by turn/item/event sequence and dates so the detail view reads like a normal conversation.
   - `ThreadEventNormalizer` translates stored turn items, live JSON-RPC notifications, and server JSON-RPC requests into `ThreadEvent`.
 - `CodexDock/State/ThreadDetailStore.swift`
   - Loads thread metadata and turns through `thread/read` and `thread/turns/list`.
   - Resumes live updates through `thread/resume`.
-  - Maintains one private `events` array and publishes `ThreadDetailSnapshot(events: ThreadEventDisplayOrder.newestFirst(events))`.
+  - Maintains one private `events` array and publishes `ThreadDetailSnapshot(events: ThreadEventDisplayOrder.naturalFlow(events))`.
   - Maintains `requestCards` separately from `events`.
 - `CodexDock/Features/Session/SessionDetailView.swift`
   - Owns page composition: header, stale banner, composer, request cards, event timeline.
@@ -290,7 +290,7 @@ Thread detail loads stored turns through `thread/read` plus `thread/turns/list`,
 4. `ThreadDetailStore.load()` initializes the relay-backed `AppServerClient`, reads metadata, reads recent turns with `thread/turns/list(limit: 10)`, publishes stored events, then attempts `thread/resume(excludeTurns: true)`.
 5. Notifications and server requests arrive on separate async streams.
 6. Notifications become optional `ThreadEvent` values; server requests become both `ServerRequestCard` state and request `ThreadEvent` rows.
-7. `publishLoaded()` sorts all events newest-first and the view renders them all.
+7. `publishLoaded()` sorts all events in natural conversation order and the view renders them all.
 
 ## 4.3 Object model + key abstractions
 
@@ -406,7 +406,7 @@ Visibility category matrix:
 - Ordering boundary: sorting stays in `ThreadEventDisplayOrder`, and tests must pin the behavior for mixed stored/live message/thinking/tool rows before or alongside UI work.
 - Ordering precedence must be explicit and stable:
   1. group events by `turnID` when present, then `itemID`, then event id;
-  2. order groups newest-first by `displayGroupDate`/`date`, then `turnSequence`, then stable key;
+  2. order groups in natural conversation flow by `turnSequence`, then `displayGroupDate`/`date`, then stable key;
   3. order rows inside a group oldest-to-newest by `itemSequence`, then `eventSequence`, then original append offset;
   4. each visible mode must sort the projected row set through the same display-order helper, so a hidden request/reasoning/tool row with a newer timestamp cannot move an older visible message group ahead of newer visible messages.
 - UI boundary: `SessionDetailView` owns the selected mode; no new global settings or persistence.
@@ -451,13 +451,13 @@ Displayed button text can be compact while accessibility stays explicit:
 | Model | `CodexDock/Models/ThreadEvent.swift` | `ThreadEventNormalizer.event(from notification:)` | Live agent/reasoning deltas become visible rows; live status rows visible. | Classify live deltas: agent message `.message`, plan/reasoning `.thinking`, output `.tooling`, status `.system`. | Live behavior must match stored behavior. | Same category contract for stored and live. | `ThreadEventNormalizerTests`, `ThreadDetailStoreTests` |
 | Model | `CodexDock/Models/ThreadEvent.swift` | `ThreadEventNormalizer.event(from notification:)` for `item/started` / `item/completed` | Embedded live full items route through `events(fromItem:)` and can produce any stored-item-like row. | Ensure the shared `events(fromItem:)` path classifies live full-item events exactly like stored items. | Prevents live started/completed items from bypassing the category matrix. | Full-item notifications reuse stored item classification. | `ThreadEventNormalizerTests` |
 | Model | `CodexDock/Models/ThreadEvent.swift` | `ThreadEventNormalizer.event(from request:)` | Server requests become `.request` events in the timeline. | Classify request timeline rows as `.request`; they appear only in Everything while `RequestCardsView` remains separate. | Messages mode should stay quiet but pending actions must remain visible. | Timeline request row hidden unless mode is Everything. | `ThreadDetailStoreTests` |
-| Ordering | `CodexDock/Models/ThreadEvent.swift` | `ThreadEventDisplayOrder.newestFirst(_:)` | Sorts newest turn group first, then item/event sequence inside group; group recency currently considers every event in the group. | Add tests and harden projection/order behavior so hidden-category event dates cannot move visible Messages-mode rows. | User suspects out-of-order rows; hidden rows must not cause visible conversation jumps. | Preserve one display-order API; apply it to projected visible rows for each mode. | `ThreadEventNormalizerTests`, `ThreadDetailStoreTests` |
+| Ordering | `CodexDock/Models/ThreadEvent.swift` | `ThreadEventDisplayOrder.naturalFlow(_:)` | Sorts the detail timeline in natural conversation flow, then item/event sequence inside a turn. | Add tests and harden projection/order behavior so hidden-category event dates cannot move visible Messages-mode rows. | User observed newest user messages appearing pinned at the top; hidden rows must not cause visible conversation jumps. | Preserve one display-order API; apply it to projected visible rows for each mode. | `ThreadEventNormalizerTests`, `ThreadDetailStoreTests` |
 | Store | `CodexDock/State/ThreadDetailStore.swift` | `publishLoaded()` | Publishes all sorted events. | Keep publishing the complete sorted event list; do not filter in store. Consider adding a store test that hidden request rows do not affect request cards. | Store remains canonical and UI mode-local. | No new store API unless tests show a need. | `ThreadDetailStoreTests` |
 | UI | `CodexDock/Features/Session/SessionDetailView.swift` | `SessionDetailView` | No selected visibility state; timeline receives all events. | Add local visibility state and pass filtered events to `EventTimelineView`. | Default message-only view with one-tap expansion. | `@State var visibilityMode = .messages`; `snapshot.events.visible(in:)`. | Build/UI verification |
 | UI | `CodexDock/Features/Session/SessionDetailView.swift` | `DetailHeaderView` | Shows host, live-state, and row-status pills only. | Add an optional compact cycle control near the pills/status area, likely trailing within the pill row. | Matches requested placement near running badge without another toolbar. | `VisibilityModeButton(mode:onCycle:)` or equivalent local view. | Build/UI verification |
 | UI | `CodexDock/Features/Session/SessionDetailView.swift` | `EventTimelineView` / empty state | Empty state says no transcript only when full event list empty. | Empty state should reflect the selected mode when events exist but no rows match, e.g. no messages in this view. | Prevents confusing "no transcript" when Everything has rows. | `EventTimelineView(events:mode:hasUnfilteredEvents:)` or equivalent. | Build/UI verification |
 | Tests | `CodexDockTests/ThreadEventNormalizerTests.swift` | Existing normalizer tests | Cover stored normalization and display order, not visibility modes. | Add matrix tests for mode filtering and category assignment. | Protects the main new contract. | Pure model tests. | `rtk swift test --filter ThreadEventNormalizerTests` if supported, otherwise package tests or target tests |
-| Tests | `CodexDockTests/ThreadEventNormalizerTests.swift` | Ordering coverage | Existing tests prove newest-turn grouping and same-turn event order for stored rows. | Add mixed hidden/visible tests proving per-mode projection and ordering preserve visible message order; add a live-delta test if current fallback can reorder same-turn live events. | Directly addresses the suspected out-of-order bug. | Ordering remains centralized in `ThreadEventDisplayOrder`. | `ThreadEventNormalizerTests` |
+| Tests | `CodexDockTests/ThreadEventNormalizerTests.swift` | Ordering coverage | Existing tests prove natural conversation flow and same-turn event order for stored rows. | Add mixed hidden/visible tests proving per-mode projection and ordering preserve visible message order; add a live-delta test if current fallback can reorder same-turn live events. | Directly addresses the suspected out-of-order bug. | Ordering remains centralized in `ThreadEventDisplayOrder`. | `ThreadEventNormalizerTests` |
 | Tests | `CodexDockTests/ThreadDetailStoreTests.swift` | Existing detail store tests | Cover load/order/live/request-card behavior. | Add focused checks for request card independence and ordering with hidden events if needed. | Prevents regressions in the user-facing flow. | Store keeps complete events; UI filters later. | `rtk swift test --filter ThreadDetailStoreTests` |
 | Project config | `project.yml`, `CodexDock.xcodeproj/project.pbxproj` | XcodeGen project wiring | No new files unless implementation splits models/views into new files. | If new Swift files are added under existing target path, verify whether XcodeGen/source glob includes them; update `project.yml` only if needed. | Repo rule: `project.yml` is source of truth for project config. | No config change expected. | XcodeGen/build only if config changes |
 
@@ -516,7 +516,7 @@ Displayed button text can be compact while accessibility stays explicit:
   - Add a focused test proving `item/started` and `item/completed` full-item notifications classify through the same path as stored items.
   - Assign server request timeline events to the `.request` category.
   - Keep unsupported turns/items visible only through the `.unknown` category and Everything mode.
-  - Keep `ThreadEventDisplayOrder.newestFirst(_:)` as the single ordering API.
+  - Keep `ThreadEventDisplayOrder.naturalFlow(_:)` as the single ordering API.
   - Add focused normalizer/model tests proving all three visibility modes include and exclude the expected categories.
   - Add focused ordering tests proving projected visible messages retain the expected conversation order when hidden thinking/tooling rows are present.
   - Add a focused ordering test where an old turn receives a hidden request/reasoning/tool event with a newer timestamp and the Messages projection still keeps newer visible message turns ahead of that old turn.

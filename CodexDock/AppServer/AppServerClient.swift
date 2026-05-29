@@ -876,20 +876,25 @@ private extension AppServerClientError {
 }
 
 public final class URLSessionWebSocketAppServerTransport: AppServerTransport, @unchecked Sendable {
+    public static let defaultMaximumMessageSize = 8 * 1024 * 1024
+
     private let url: URL
     private let bearerToken: String?
     private let session: URLSession
+    let maximumMessageSize: Int
     private let lock = NSLock()
     private var task: URLSessionWebSocketTask?
 
     public init(
         url: URL,
         bearerToken: String? = nil,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        maximumMessageSize: Int = URLSessionWebSocketAppServerTransport.defaultMaximumMessageSize
     ) {
         self.url = url
         self.bearerToken = bearerToken
         self.session = session
+        self.maximumMessageSize = maximumMessageSize
     }
 
     var urlRequest: URLRequest {
@@ -902,6 +907,7 @@ public final class URLSessionWebSocketAppServerTransport: AppServerTransport, @u
 
     public func connect() async throws {
         let task = session.webSocketTask(with: urlRequest)
+        task.maximumMessageSize = maximumMessageSize
         setTask(task)
         task.resume()
     }

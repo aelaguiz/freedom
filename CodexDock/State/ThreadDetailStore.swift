@@ -35,26 +35,6 @@ public extension ThreadDetailSessionMaking {
     }
 }
 
-public struct AppServerThreadDetailSessionFactory: ThreadDetailSessionMaking {
-    public init() {}
-
-    public func makeSession(for host: DockHostConfiguration) -> any ThreadDetailSession {
-        makeSession(for: host, foregroundWorkGate: nil)
-    }
-
-    public func makeSession(
-        for host: DockHostConfiguration,
-        foregroundWorkGate: (any AppForegroundWorkGating)?
-    ) -> any ThreadDetailSession {
-        AppServerClient(
-            webSocketURL: host.webSocketURL,
-            bearerToken: nil,
-            connectionPolicy: .liveDetail,
-            foregroundWorkGate: foregroundWorkGate
-        )
-    }
-}
-
 public enum ThreadDetailLiveState: Equatable, Sendable {
     case connecting
     case reconnecting(String)
@@ -91,7 +71,7 @@ public struct ThreadDetailHeader: Equatable, Sendable {
 
     public init(host: DockHostConfiguration, row: DockRowViewModel) {
         self.hostID = host.id
-        self.hostName = host.endpoint.displayEndpoint
+        self.hostName = host.displayName
         self.threadID = row.id.threadID
         self.title = row.title
         self.repository = row.repository
@@ -717,7 +697,7 @@ public final class ThreadDetailStore: ObservableObject {
             ThreadDetailSnapshot(
                 header: header,
                 liveState: liveState,
-                events: ThreadEventDisplayOrder.newestFirst(events)
+                events: ThreadEventDisplayOrder.naturalFlow(events)
             )
         )
         connectivityReporter?.reportThreadDetail(host: host, liveState: liveState)

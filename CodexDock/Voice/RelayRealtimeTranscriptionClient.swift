@@ -31,13 +31,13 @@ public final class RelayRealtimeTranscriptionClient: RealtimeTranscriptionServic
     private let host: DockHostConfiguration
     private let completionTimeout: Duration
     private let maxChunkBytes: Int
-    private let makeClient: @Sendable (DockHostConfiguration) -> AppServerClient
+    private let makeClient: @Sendable (DockRelayEndpoint) -> AppServerClient
 
     public init(
         host: DockHostConfiguration,
         completionTimeout: Duration = .seconds(30),
         maxChunkBytes: Int = 64 * 1024,
-        makeClient: @escaping @Sendable (DockHostConfiguration) -> AppServerClient = {
+        makeClient: @escaping @Sendable (DockRelayEndpoint) -> AppServerClient = {
             AppServerClient(webSocketURL: $0.webSocketURL, bearerToken: nil)
         }
     ) {
@@ -49,31 +49,32 @@ public final class RelayRealtimeTranscriptionClient: RealtimeTranscriptionServic
 
     public func startSession() async throws -> any RealtimeTranscriptionSession {
         // OpenAI credentials are relay-owned; the phone sends only session and audio controls.
-        let client = makeClient(host)
         let startedAt = Date()
-        DockLog.transcription.notice("relay transcription session start requested host_id=\(self.host.id, privacy: .public) endpoint=\(DockLog.endpoint(self.host.webSocketURL), privacy: .public)")
+        let hostID = host.id
+        let endpointCount = host.endpoints.count
+        DockLog.transcription.notice("relay transcription session start requested host_id=\(hostID, privacy: .public) endpoints=\(endpointCount, privacy: .public)")
         do {
-            let connectStartedAt = Date()
-            _ = try await client.connectAndInitialize(
-                params: .codexDock(version: "0.1.0"),
-                timeout: .seconds(5)
-            )
-            DockLog.transcription.debug("relay transcription client connected host_id=\(self.host.id, privacy: .public) duration_ms=\(DockLog.milliseconds(since: connectStartedAt), privacy: .public)")
-            let startStartedAt = Date()
-            let response = try await client.audioTranscriptionStart(
-                params: AudioTranscriptionStartParams(),
-                timeout: .seconds(10)
-            )
-            DockLog.transcription.notice("relay transcription session started host_id=\(self.host.id, privacy: .public) session_id=\(DockLog.publicID(response.sessionId), privacy: .public) model=\(DockLog.publicID(response.model), privacy: .public) language=\(DockLog.publicID(response.language), privacy: .public) delay=\(DockLog.publicID(response.delay), privacy: .public) start_duration_ms=\(DockLog.milliseconds(since: startStartedAt), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+            let retained = try await AppServerHostConnector(makeClient: makeClient)
+                .retainConnectedClient(for: host) { connection in
+                    let startStartedAt = Date()
+                    let response = try await connection.client.audioTranscriptionStart(
+                        params: AudioTranscriptionStartParams(),
+                        timeout: .seconds(10)
+                    )
+                    DockLog.transcription.debug("relay transcription start command accepted host_id=\(hostID, privacy: .public) endpoint=\(DockLog.endpoint(connection.endpoint.webSocketURL), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startStartedAt), privacy: .public)")
+                    return response
+                }
+            let connection = retained.connection
+            let response = retained.value
+            DockLog.transcription.notice("relay transcription session started host_id=\(hostID, privacy: .public) endpoint=\(DockLog.endpoint(connection.endpoint.webSocketURL), privacy: .public) session_id=\(DockLog.publicID(response.sessionId), privacy: .public) model=\(DockLog.publicID(response.model), privacy: .public) language=\(DockLog.publicID(response.language), privacy: .public) delay=\(DockLog.publicID(response.delay), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
             return RelayRealtimeTranscriptionSession(
-                client: client,
+                client: connection.client,
                 startResponse: response,
                 completionTimeout: completionTimeout,
                 maxChunkBytes: maxChunkBytes
             )
         } catch {
-            await client.disconnect()
-            DockLog.transcription.error("relay transcription session start failed host_id=\(self.host.id, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+            DockLog.transcription.error("relay transcription session start failed host_id=\(hostID, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             throw error
         }
     }

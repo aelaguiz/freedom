@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
+import crypto from "node:crypto";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -35,27 +36,34 @@ import {
   aggregateThreadRead,
   archiveThread,
   attentionFlagsForServerRequest,
-  collectLiveRows,
   endpointForThread,
   initializeClient,
   listThreadTurns,
+  liveStatusCacheForConfig,
   mergeActiveFlags,
-  mergeThreadListRows,
   parseLimit,
   pendingRequestsForActiveThread,
   preferThread,
   sanitizeRelayFields,
-  shouldCollectLiveRowsForThreadList,
+  sessionRouterForConfig,
   statusPriority,
   unarchiveThread,
 } from "./dock-relay-thread-data.mjs";
 import { threadMatchesSourceKinds } from "./dock-relay-source-filter.mjs";
+import { UpstreamConnectionPool } from "./dock-relay-upstream-pool.mjs";
 
 const RELAY_VERSION = "0.1.0";
 const DEFAULT_PHONE_AUTH = "none";
 const UPSTREAM_RECONNECT_ATTEMPTS = 2;
 const UPSTREAM_RECONNECT_DELAY_MS = 100;
 const UPSTREAM_RECONNECT_JITTER_MS = 25;
+
+function shortHash(value) {
+  if (!value) {
+    return null;
+  }
+  return crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 12);
+}
 
 function parseArgs(argv) {
   const result = {};
@@ -148,6 +156,15 @@ function jsonRpcResult(id, result) {
   return { jsonrpc: "2.0", id, result };
 }
 
+function relayError(message, code = -32000, data = undefined) {
+  const error = new Error(message);
+  error.code = code;
+  if (data !== undefined) {
+    error.data = data;
+  }
+  return error;
+}
+
 function sendJson(ws, value) {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(value));
@@ -190,6 +207,45 @@ function liveResumeParams(params) {
   };
 }
 
+function threadIDFromParams(params) {
+  const threadId = params?.threadId;
+  return typeof threadId === "string" && threadId.length > 0 ? threadId : null;
+}
+
+function assertFocusedRequestTargetsBoundThread(session, method, params = {}) {
+  if (!session.upstream?.isOpen()) {
+    throw new Error(`${method} requires thread/resume on this connection first`);
+  }
+  const boundThreadId = session.resumeParams?.threadId || null;
+  const requestedThreadId = threadIDFromParams(params);
+  if (!boundThreadId || !requestedThreadId) {
+    throw relayError(`${method} requires threadId matching the active thread`, -32602, {
+      subsystem: "live-upstream",
+      reason: "missing_thread_id",
+    });
+  }
+  if (requestedThreadId !== boundThreadId) {
+    throw relayError(`${method} threadId does not match the active thread`, -32602, {
+      subsystem: "live-upstream",
+      reason: "thread_mismatch",
+      requestedThreadIDHash: shortHash(requestedThreadId),
+      activeThreadIDHash: shortHash(boundThreadId),
+    });
+  }
+}
+
+function assertResumeResultMatchesRequestedThread(result, requestedThreadId) {
+  const actualThreadId = result?.thread?.id;
+  if (actualThreadId !== requestedThreadId) {
+    throw relayError("thread/resume returned a different thread", -32000, {
+      subsystem: "live-upstream",
+      reason: "resume_thread_mismatch",
+      requestedThreadIDHash: shortHash(requestedThreadId),
+      actualThreadIDHash: shortHash(actualThreadId),
+    });
+  }
+}
+
 function upstreamReconnectDelayMs(attempt) {
   const exponentialDelay = UPSTREAM_RECONNECT_DELAY_MS * (2 ** Math.max(0, attempt - 1));
   const jitter = Math.floor(Math.random() * (UPSTREAM_RECONNECT_JITTER_MS + 1));
@@ -205,17 +261,13 @@ async function resumeThread(config, params = {}, session, downstreamWs) {
   session.generation += 1;
   const generation = session.generation;
   session.retryTask = null;
+  session.pendingServerRequests?.clear();
   session.upstream?.close();
   session.upstream = null;
 
   const logger = relayLogger(config);
-  const live = await collectLiveRows(logger);
+  const endpoint = await sessionRouterForConfig(config).endpointForThread(resumeParams.threadId);
   throwIfSessionInactive(session, downstreamWs, generation);
-  const liveRow = live.rows.find((row) => row.id === resumeParams.threadId);
-  const endpoint = liveRow?.dockRelaySource || {
-    url: config.historyUrl,
-    bearerToken: config.historyBearerToken,
-  };
   const client = makeSessionUpstreamClient(config, endpoint, session, downstreamWs, generation);
 
   try {
@@ -223,6 +275,7 @@ async function resumeThread(config, params = {}, session, downstreamWs) {
     throwIfSessionInactive(session, downstreamWs, generation);
     const result = await client.request("thread/resume", resumeParams);
     throwIfSessionInactive(session, downstreamWs, generation);
+    assertResumeResultMatchesRequestedThread(result, resumeParams.threadId);
     session.upstream = client;
     session.resumeParams = { ...resumeParams };
     session.endpoint = endpoint;
@@ -261,6 +314,11 @@ function makeSessionUpstreamClient(config, endpoint, session, downstreamWs, gene
     },
     onRequest: (message) => {
       if (isSessionActive(session, downstreamWs, generation)) {
+        session.pendingServerRequests.set(String(message.id), {
+          generation,
+          threadId: message?.params?.threadId || session.resumeParams?.threadId || null,
+          method: message.method,
+        });
         sendJson(downstreamWs, message);
       }
     },
@@ -276,6 +334,7 @@ function handleSessionUpstreamClose(config, session, downstreamWs, closedClient)
     return;
   }
   session.upstream = null;
+  session.pendingServerRequests?.clear();
   if (!isWebSocketOpen(downstreamWs)) {
     return;
   }
@@ -314,7 +373,8 @@ async function recoverSessionUpstream(config, session, downstreamWs, generation)
     const client = makeSessionUpstreamClient(config, endpoint, session, downstreamWs, generation);
     try {
       await initializeClient(client);
-      await client.request("thread/resume", resumeParams);
+      const result = await client.request("thread/resume", resumeParams);
+      assertResumeResultMatchesRequestedThread(result, resumeParams.threadId);
       if (!isSessionActive(session, downstreamWs, generation)) {
         client.close();
         session.retryTask = null;
@@ -366,10 +426,16 @@ async function recoverSessionUpstream(config, session, downstreamWs, generation)
   }
 }
 
-async function forwardToActiveUpstream(session, method, params = {}) {
-  if (!session.upstream?.isOpen()) {
-    throw new Error(`${method} requires thread/resume on this connection first`);
-  }
+async function forwardToActiveUpstream(config, session, method, params = {}) {
+  assertFocusedRequestTargetsBoundThread(session, method, params);
+  relayLogger(config).info("focused_request.route_verified", {
+    subsystem: "live-upstream",
+    method,
+    endpointUrl: session.endpoint?.url || null,
+    threadIDHash: shortHash(params.threadId),
+    activeThreadIDHash: shortHash(session.resumeParams?.threadId),
+    generation: session.generation,
+  });
   return session.upstream.request(method, params);
 }
 
@@ -381,11 +447,12 @@ async function handleRequest(config, method, params, session, downstreamWs) {
         codexHome: process.env.CODEX_HOME || `${os.homedir()}/.codex`,
         platformFamily: "unix",
         platformOs: platformOs(),
+        relayInstanceID: config.hostId,
       };
     case "thread/list":
       return aggregateThreadList(config, params || {});
     case "thread/loaded/list":
-      return aggregateLoadedList(params || {}, relayLogger(config));
+      return aggregateLoadedList(config, params || {});
     case "thread/read":
       return aggregateThreadRead(config, params || {});
     case "thread/turns/list":
@@ -407,7 +474,7 @@ async function handleRequest(config, method, params, session, downstreamWs) {
     case "turn/start":
     case "turn/steer":
     case "turn/interrupt":
-      return forwardToActiveUpstream(session, method, params || {});
+      return forwardToActiveUpstream(config, session, method, params || {});
     default:
       throw Object.assign(new Error(`unsupported method: ${method}`), {
         code: -32601,
@@ -427,6 +494,58 @@ function isPhoneRequestAuthorized(request, config) {
   return assertAuthorized(request, config.relayBearerToken);
 }
 
+function isLoopbackRemoteAddress(value) {
+  return value === "127.0.0.1"
+    || value === "::1"
+    || value === "::ffff:127.0.0.1";
+}
+
+function writeLoopbackOnlyResponse(request, response) {
+  if (isLoopbackRemoteAddress(request.socket?.remoteAddress)) {
+    return false;
+  }
+  response.writeHead(403, { "content-type": "application/json" });
+  response.end(JSON.stringify({
+    ok: false,
+    service: "codex-dock-relay",
+    error: "loopback only",
+  }));
+  return true;
+}
+
+function sessionDebugSnapshot(sessions) {
+  return [...sessions].map((session, index) => ({
+    sessionOrdinal: index + 1,
+    closing: session.closing,
+    generation: session.generation,
+    upstreamOpen: Boolean(session.upstream?.isOpen()),
+    retryActive: Boolean(session.retryTask),
+    endpointUrl: session.endpoint?.url || null,
+    threadIDHash: shortHash(session.resumeParams?.threadId),
+    pendingServerRequests: session.pendingServerRequests?.size || 0,
+  }));
+}
+
+function liveRowsDebugSnapshot(liveStatus) {
+  return (liveStatus?.rows || []).map((row) => ({
+    threadIDHash: shortHash(row?.id),
+    endpointUrl: row?.dockRelaySource?.url || null,
+    statusType: row?.status?.type || null,
+  }));
+}
+
+function runtimeSnapshot(config, sessions, downstreamSockets) {
+  const liveStatus = config.liveStatusCache?.snapshot?.() || null;
+  return {
+    downstreamActive: downstreamSockets.size,
+    upstreamActive: [...sessions].filter((session) => session.upstream?.isOpen()).length,
+    upstreamPools: config.upstreamPool?.stats?.() || [],
+    liveStatus,
+    sessions: sessionDebugSnapshot(sessions),
+    liveRows: liveRowsDebugSnapshot(liveStatus),
+  };
+}
+
 function startServer(config) {
   config.logger = relayLogger(config);
   const logger = config.logger;
@@ -442,6 +561,13 @@ function startServer(config) {
   config.realtimeTranscriptionDelay = config.realtimeTranscriptionDelay
     || DEFAULT_REALTIME_TRANSCRIPTION_DELAY;
   config.statusTracker = config.statusTracker || createRelayStatusTracker();
+  config.upstreamPool = config.upstreamPool || new UpstreamConnectionPool({
+    logger,
+    maxOpenByLabel: { history: 1, "live-status": 4 },
+  });
+  config.liveStatusCache = liveStatusCacheForConfig(config);
+  config.sessionRouter = sessionRouterForConfig(config);
+  config.liveStatusCache.start();
   config.phoneAuth = parsePhoneAuthMode(config.phoneAuth || DEFAULT_PHONE_AUTH);
   if (config.phoneAuth === "bearer" && !config.relayBearerToken) {
     throw new Error("relayBearerToken is required when phoneAuth is bearer");
@@ -461,27 +587,33 @@ function startServer(config) {
 
   async function writeStatusResponse(response) {
     await checkRawAppServerHealth(config, config.statusTracker);
-    try {
-      const live = await collectLiveRows(logger);
-      config.statusTracker.recordLiveDiscovery({
-        status: "up",
-        ok: true,
-        endpoints: live.endpoints.length,
-        failedEndpoints: live.failedEndpoints,
-        rows: live.rows.length,
-      });
-    } catch (error) {
-      config.statusTracker.recordLiveDiscovery({
-        status: "down",
-        ok: false,
-        error,
-      });
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(config.statusTracker.snapshot(
+      config,
+      runtimeSnapshot(config, sessions, downstreamSockets),
+    )));
+  }
+
+  function writeMetricsResponse(request, response) {
+    if (writeLoopbackOnlyResponse(request, response)) {
+      return;
     }
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify(config.statusTracker.snapshot(config, {
-      downstreamActive: downstreamSockets.size,
-      upstreamActive: [...sessions].filter((session) => session.upstream?.isOpen()).length,
-    })));
+    response.end(JSON.stringify(config.statusTracker.metricsSnapshot(
+      config,
+      runtimeSnapshot(config, sessions, downstreamSockets),
+    )));
+  }
+
+  function writeDebugSessionsResponse(request, response) {
+    if (writeLoopbackOnlyResponse(request, response)) {
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(config.statusTracker.debugSessionsSnapshot(
+      config,
+      runtimeSnapshot(config, sessions, downstreamSockets),
+    )));
   }
 
   const server = http.createServer((request, response) => {
@@ -520,6 +652,14 @@ function startServer(config) {
       });
       return;
     }
+    if (request.url === "/metricsz") {
+      writeMetricsResponse(request, response);
+      return;
+    }
+    if (request.url === "/debugz/sessions") {
+      writeDebugSessionsResponse(request, response);
+      return;
+    }
     response.writeHead(404, { "content-type": "text/plain" });
     response.end("not found\n");
   });
@@ -554,6 +694,7 @@ function startServer(config) {
       retryTask: null,
       closing: false,
       generation: 0,
+      pendingServerRequests: new Map(),
       realtimeTranscription: null,
     };
     sessions.add(session);
@@ -599,6 +740,16 @@ function startServer(config) {
       }
 
       if (!message.method && message.id !== undefined) {
+        const pendingRequest = session.pendingServerRequests.get(String(message.id));
+        if (!pendingRequest || pendingRequest.generation !== session.generation) {
+          logger.warn("downstream.raw_response_rejected", {
+            id: String(message.id),
+            reason: "unknown_or_stale_server_request",
+          });
+          sendJson(ws, jsonRpcError(message.id, -32000, "no matching active upstream request"));
+          return;
+        }
+        session.pendingServerRequests.delete(String(message.id));
         if (!session.upstream?.sendRaw(message)) {
           logger.warn("downstream.raw_response_rejected", {
             id: String(message.id),
@@ -622,6 +773,11 @@ function startServer(config) {
 
       try {
         const result = await handleRequest(config, message.method, message.params, session, ws);
+        config.statusTracker?.recordRequest?.({
+          method: message.method,
+          ok: true,
+          durationMs: Date.now() - requestStartedAt,
+        });
         sendJson(ws, jsonRpcResult(message.id, result));
         logger.info("downstream.request_succeeded", {
           subsystem: "downstream",
@@ -645,6 +801,12 @@ function startServer(config) {
           method: message.method,
           code: errorCode,
           retryable: errorData?.retryable,
+        });
+        config.statusTracker?.recordRequest?.({
+          method: message.method,
+          ok: false,
+          code: errorCode,
+          durationMs: Date.now() - requestStartedAt,
         });
         logger.warn("downstream.request_failed", {
           subsystem: errorData?.subsystem || "relay",
@@ -699,6 +861,7 @@ function startServer(config) {
         activeConnections: downstreamSockets.size,
       });
       advertisement?.kill();
+      config.liveStatusCache?.stop?.();
       for (const ws of downstreamSockets) {
         ws.close(1001, "relay shutting down");
       }
@@ -710,13 +873,19 @@ function startServer(config) {
       forceTerminate.unref?.();
       wss.close(() => {
         clearTimeout(forceTerminate);
-        server.close((error) => {
+        server.close(async (error) => {
           if (error) {
             logger.error("relay.close_failed", { error });
             reject(error);
           } else {
-            logger.info("relay.closed");
-            resolve();
+            try {
+              await config.upstreamPool?.closeAll?.({ reason: "relay_close" });
+              logger.info("relay.closed");
+              resolve();
+            } catch (closeError) {
+              logger.error("relay.close_failed", { error: closeError });
+              reject(closeError);
+            }
           }
         });
       });
@@ -801,15 +970,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
 export {
   attentionFlagsForServerRequest,
   buildBonjourAdvertisementArgs,
+  isLoopbackRemoteAddress,
   isPhoneRequestAuthorized,
   loadDotEnvFile,
-  mergeThreadListRows,
   mergeActiveFlags,
   pendingRequestsForActiveThread,
   preferThread,
   RealtimeTranscriptionManager,
   sanitizeRelayFields,
-  shouldCollectLiveRowsForThreadList,
   startServer,
   statusPriority,
   threadMatchesSourceKinds,

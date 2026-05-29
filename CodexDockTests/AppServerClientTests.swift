@@ -34,7 +34,8 @@ final class AppServerClientTests: XCTestCase {
                 "userAgent": "codex/1.2.3",
                 "codexHome": "/Users/aelaguiz/.codex",
                 "platformFamily": "unix",
-                "platformOs": "macos"
+                "platformOs": "macos",
+                "relayInstanceID": "Amir-M5"
               },
               "ignored": true
             }
@@ -49,6 +50,7 @@ final class AppServerClientTests: XCTestCase {
         let initializeResponse = try response.result.decoded(as: InitializeResponse.self)
         XCTAssertEqual(initializeResponse.userAgent, "codex/1.2.3")
         XCTAssertEqual(initializeResponse.platformOs, "macos")
+        XCTAssertEqual(initializeResponse.relayInstanceID, "Amir-M5")
     }
 
     func testNotificationDecoding() throws {
@@ -805,6 +807,21 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertNil(transport.urlRequest.value(forHTTPHeaderField: "Authorization"))
     }
 
+    func testWebSocketTransportUsesExplicitReceiveLimit() throws {
+        let url = try XCTUnwrap(URL(string: "ws://192.0.2.1:4500"))
+        let defaultTransport = URLSessionWebSocketAppServerTransport(url: url)
+        let customTransport = URLSessionWebSocketAppServerTransport(
+            url: url,
+            maximumMessageSize: 16 * 1024 * 1024
+        )
+
+        XCTAssertEqual(
+            defaultTransport.maximumMessageSize,
+            URLSessionWebSocketAppServerTransport.defaultMaximumMessageSize
+        )
+        XCTAssertEqual(customTransport.maximumMessageSize, 16 * 1024 * 1024)
+    }
+
     func testThreadListSendsTypedRequestAndDecodesResponse() async throws {
         let transport = ScriptedAppServerTransport()
         let client = AppServerClient(transport: transport)
@@ -851,7 +868,12 @@ final class AppServerClientTests: XCTestCase {
                                 ),
                             ],
                             nextCursor: nil,
-                            backwardsCursor: "before-1"
+                            backwardsCursor: "before-1",
+                            liveOverlay: ThreadListLiveOverlayDTO(
+                                ok: false,
+                                state: "disabled",
+                                ageMs: nil
+                            )
                         )
                     )
                 )
@@ -862,6 +884,122 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(response.data.map(\.id), ["thread-1"])
         XCTAssertEqual(response.data.first?.status, .idle)
         XCTAssertEqual(response.backwardsCursor, "before-1")
+        XCTAssertEqual(response.liveOverlay?.degradedMessage, "Live status disabled")
+    }
+
+    func testAppServerDockClientLoadsCursorContinuationAndLiveOverlay() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let dockClient = AppServerDockClient()
+        let task = Task {
+            try await dockClient.loadSessions(
+                using: client,
+                hostID: "Amir-M5",
+                query: .activeHuman
+            )
+        }
+
+        let firstRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(firstRequest.method, AppServerMethods.threadList)
+        guard case .object(let firstParams) = try XCTUnwrap(firstRequest.params) else {
+            return XCTFail("Expected first thread/list params")
+        }
+        XCTAssertEqual(firstParams["limit"], .integer(100))
+        XCTAssertEqual(firstParams["cursor"], nil)
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: firstRequest.id,
+                    result: try JSONValue.encoded(
+                        ThreadListResponseDTO(
+                            data: [
+                                threadListRow(id: "thread-1", updatedAt: 1_790_000_001),
+                            ],
+                            nextCursor: "cursor-1",
+                            backwardsCursor: "before-1",
+                            liveOverlay: ThreadListLiveOverlayDTO(ok: false, state: "disabled")
+                        )
+                    )
+                )
+            )
+        )
+
+        let secondRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(secondRequest.method, AppServerMethods.threadList)
+        guard case .object(let secondParams) = try XCTUnwrap(secondRequest.params) else {
+            return XCTFail("Expected second thread/list params")
+        }
+        XCTAssertEqual(secondParams["limit"], .integer(100))
+        XCTAssertEqual(secondParams["cursor"], .string("cursor-1"))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: secondRequest.id,
+                    result: try JSONValue.encoded(
+                        ThreadListResponseDTO(
+                            data: [
+                                threadListRow(id: "thread-2", updatedAt: 1_790_000_000),
+                            ],
+                            nextCursor: nil,
+                            backwardsCursor: nil,
+                            liveOverlay: ThreadListLiveOverlayDTO(ok: true, state: "ready")
+                        )
+                    )
+                )
+            )
+        )
+
+        let result = try await task.value
+        XCTAssertEqual(result.summaries.map(\.id.threadID), ["thread-1", "thread-2"])
+        XCTAssertEqual(result.nextCursor, nil)
+        XCTAssertEqual(result.backwardsCursor, "before-1")
+        XCTAssertEqual(result.liveOverlay, ThreadListLiveOverlayDTO(ok: true, state: "ready"))
+        await client.disconnect()
+    }
+
+    func testAppServerDockClientUsesBoundedPageLimitForAgents() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let dockClient = AppServerDockClient()
+        let task = Task {
+            try await dockClient.loadSessions(
+                using: client,
+                hostID: "Amir-M5",
+                query: .activeAgents
+            )
+        }
+
+        let request = try await transport.nextSentRequest()
+        XCTAssertEqual(request.method, AppServerMethods.threadList)
+        guard case .object(let params) = try XCTUnwrap(request.params) else {
+            return XCTFail("Expected thread/list params")
+        }
+        XCTAssertEqual(params["limit"], .integer(50))
+        XCTAssertEqual(
+            params["sourceKinds"],
+            .array(
+                ThreadSourceKind.dockAgentScopeKinds.map { .string($0.rawValue) }
+            )
+        )
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: request.id,
+                    result: try JSONValue.encoded(ThreadListResponseDTO(data: []))
+                )
+            )
+        )
+
+        let result = try await task.value
+        XCTAssertEqual(result.summaries, [])
+        await client.disconnect()
     }
 
     func testThreadListEncodesSourceKinds() async throws {
@@ -1323,6 +1461,118 @@ final class AppServerClientTests: XCTestCase {
     }
 
     @MainActor
+    func testThreadDetailSessionFactoryFallsBackAcrossRelayEndpoints() async throws {
+        let primary = try DockRelayEndpoint(host: "127.0.0.1", port: 4511)
+        let fallback = try DockRelayEndpoint(host: "127.0.0.1", port: 4512)
+        let host = try DockHostConfiguration(
+            endpoints: [primary, fallback],
+            relayInstanceID: "Amir-M5"
+        )
+        let primaryTransport = ScriptedAppServerTransport(connectError: TestTransportError.offline)
+        let fallbackTransport = ScriptedAppServerTransport()
+        let clientFactory = EndpointRecordingClientFactory(clients: [
+            primary.id: AppServerClient(transport: primaryTransport),
+            fallback.id: AppServerClient(transport: fallbackTransport),
+        ])
+        let session = AppServerThreadDetailSessionFactory { endpoint in
+            clientFactory.client(for: endpoint)
+        }.makeSession(for: host)
+
+        let connectTask = Task {
+            try await session.connectAndInitialize(
+                params: .codexDock(version: "0.1.0"),
+                timeout: .seconds(1)
+            )
+        }
+        try await respondToInitialize(transport: fallbackTransport, relayInstanceID: "Amir-M5")
+        let initialize = try await connectTask.value
+
+        XCTAssertEqual(initialize.relayInstanceID, "Amir-M5")
+        XCTAssertEqual(clientFactory.endpointIDsSnapshot(), [primary.id, fallback.id])
+        let primaryConnectCount = await primaryTransport.connectCountSnapshot()
+        let primaryDisconnectCount = await primaryTransport.disconnectCountSnapshot()
+        let fallbackConnectCount = await fallbackTransport.connectCountSnapshot()
+        XCTAssertEqual(primaryConnectCount, 1)
+        XCTAssertEqual(primaryDisconnectCount, 1)
+        XCTAssertEqual(fallbackConnectCount, 1)
+        await session.disconnect()
+        let fallbackDisconnectCount = await fallbackTransport.disconnectCountSnapshot()
+        XCTAssertEqual(fallbackDisconnectCount, 1)
+    }
+
+    @MainActor
+    func testRelayRealtimeTranscriptionClientFallsBackAcrossRelayEndpoints() async throws {
+        let primary = try DockRelayEndpoint(host: "127.0.0.1", port: 4511)
+        let fallback = try DockRelayEndpoint(host: "127.0.0.1", port: 4512)
+        let host = try DockHostConfiguration(
+            endpoints: [primary, fallback],
+            relayInstanceID: "Amir-M5"
+        )
+        let primaryTransport = ScriptedAppServerTransport(connectError: TestTransportError.offline)
+        let fallbackTransport = ScriptedAppServerTransport()
+        let clientFactory = EndpointRecordingClientFactory(clients: [
+            primary.id: AppServerClient(transport: primaryTransport),
+            fallback.id: AppServerClient(transport: fallbackTransport),
+        ])
+        let service = RelayRealtimeTranscriptionClient(host: host) { endpoint in
+            clientFactory.client(for: endpoint)
+        }
+
+        let startTask = Task {
+            try await service.startSession()
+        }
+        try await respondToInitialize(transport: fallbackTransport, relayInstanceID: "Amir-M5")
+        let startRequest = try await fallbackTransport.nextSentRequest()
+        XCTAssertEqual(startRequest.method, AppServerMethods.audioTranscriptionStart)
+        await fallbackTransport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: startRequest.id,
+                    result: try JSONValue.encoded(
+                        AudioTranscriptionStartResponseDTO(
+                            sessionId: "transcription-fallback",
+                            format: "audio/pcm",
+                            sampleRate: 24_000,
+                            model: "gpt-realtime-whisper"
+                        )
+                    )
+                )
+            )
+        )
+        let session = try await startTask.value
+
+        XCTAssertEqual(clientFactory.endpointIDsSnapshot(), [primary.id, fallback.id])
+        let primaryConnectCount = await primaryTransport.connectCountSnapshot()
+        let primaryDisconnectCount = await primaryTransport.disconnectCountSnapshot()
+        let fallbackConnectCount = await fallbackTransport.connectCountSnapshot()
+        XCTAssertEqual(primaryConnectCount, 1)
+        XCTAssertEqual(primaryDisconnectCount, 1)
+        XCTAssertEqual(fallbackConnectCount, 1)
+
+        let cancelTask = Task {
+            await session.cancel()
+        }
+        let cancelRequest = try await fallbackTransport.nextSentRequest()
+        XCTAssertEqual(cancelRequest.method, AppServerMethods.audioTranscriptionCancel)
+        await fallbackTransport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: cancelRequest.id,
+                    result: try JSONValue.encoded(
+                        AudioTranscriptionCancelResponseDTO(
+                            sessionId: "transcription-fallback",
+                            canceled: true
+                        )
+                    )
+                )
+            )
+        )
+        await cancelTask.value
+        let fallbackDisconnectCount = await fallbackTransport.disconnectCountSnapshot()
+        XCTAssertEqual(fallbackDisconnectCount, 1)
+    }
+
+    @MainActor
     func testRelayRealtimeTranscriptionClientMapsRelayNotificationsAndClosesConnection() async throws {
         let transport = ScriptedAppServerTransport()
         let appServerClient = AppServerClient(transport: transport)
@@ -1752,7 +2002,7 @@ final class AppServerClientTests: XCTestCase {
         do {
             let list = try await client.threadList(
                 params: ThreadListParams(
-                    limit: 200,
+                    limit: 100,
                     sortKey: .updatedAt,
                     sortDirection: .desc,
                     archived: false
@@ -1775,7 +2025,7 @@ final class AppServerClientTests: XCTestCase {
 
             let archived = try await client.threadList(
                 params: ThreadListParams(
-                    limit: 200,
+                    limit: 100,
                     sortKey: .updatedAt,
                     sortDirection: .desc,
                     archived: true
@@ -1796,7 +2046,7 @@ final class AppServerClientTests: XCTestCase {
 
             let unarchived = try await client.threadList(
                 params: ThreadListParams(
-                    limit: 200,
+                    limit: 100,
                     sortKey: .updatedAt,
                     sortDirection: .desc,
                     archived: false
@@ -2070,6 +2320,28 @@ private enum TestTransportError: Error, LocalizedError {
     }
 }
 
+private final class EndpointRecordingClientFactory: @unchecked Sendable {
+    private let clients: [String: AppServerClient]
+    private var endpointIDs: [String] = []
+
+    init(clients: [String: AppServerClient]) {
+        self.clients = clients
+    }
+
+    func client(for endpoint: DockRelayEndpoint) -> AppServerClient {
+        endpointIDs.append(endpoint.id)
+        guard let client = clients[endpoint.id] else {
+            XCTFail("No client configured for endpoint \(endpoint.id)")
+            return AppServerClient(transport: ScriptedAppServerTransport(connectError: TestTransportError.offline))
+        }
+        return client
+    }
+
+    func endpointIDsSnapshot() -> [String] {
+        endpointIDs
+    }
+}
+
 private func completeHandshake(
     client: AppServerClient,
     transport: ScriptedAppServerTransport
@@ -2094,19 +2366,37 @@ private func completeHandshake(
     _ = try await handshakeTask.value
 }
 
-private func respondToInitialize(transport: ScriptedAppServerTransport) async throws {
+private func respondToInitialize(
+    transport: ScriptedAppServerTransport,
+    relayInstanceID: String? = nil
+) async throws {
     let initializeRequest = try await transport.nextSentRequest()
     XCTAssertEqual(initializeRequest.method, AppServerMethods.initialize)
     await transport.enqueue(
         .response(
             JSONRPCResponse(
                 id: initializeRequest.id,
-                result: initializeResult()
+                result: initializeResult(relayInstanceID: relayInstanceID)
             )
         )
     )
     let initializedNotification = try await transport.nextSentNotification()
     XCTAssertEqual(initializedNotification.method, AppServerMethods.initialized)
+}
+
+private func threadListRow(id: String, updatedAt: Int64) -> ThreadDTO {
+    ThreadDTO(
+        id: id,
+        sessionId: "session-\(id)",
+        preview: "Preview \(id)",
+        createdAt: updatedAt - 10,
+        updatedAt: updatedAt,
+        status: .idle,
+        cwd: "/Users/aelaguiz/workspace/codex-client",
+        source: .string("cli"),
+        gitInfo: ThreadGitInfoDTO(branch: "main"),
+        turns: []
+    )
 }
 
 @MainActor
@@ -2138,13 +2428,17 @@ private func startRealtimeSession(
     return try await startTask.value
 }
 
-private func initializeResult() -> JSONValue {
-    .object([
+private func initializeResult(relayInstanceID: String? = nil) -> JSONValue {
+    var result: [String: JSONValue] = [
         "userAgent": .string("codex/1.2.3"),
         "codexHome": .string("/Users/aelaguiz/.codex"),
         "platformFamily": .string("unix"),
         "platformOs": .string("macos"),
-    ])
+    ]
+    if let relayInstanceID {
+        result["relayInstanceID"] = .string(relayInstanceID)
+    }
+    return .object(result)
 }
 
 private actor RealtimeEventProbe {

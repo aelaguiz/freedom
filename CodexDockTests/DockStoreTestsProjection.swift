@@ -248,7 +248,7 @@ private func makeHost(
     displayName: String = "Amir-M5"
 ) -> DockHostConfiguration {
     let hostName = id == "Amir-M5" ? "192.168.50.117" : id
-    return try! DockHostConfiguration(host: hostName, port: 4500)
+    return try! DockHostConfiguration(host: hostName, port: 4510)
 }
 
 private func makeRow(

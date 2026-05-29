@@ -70,7 +70,7 @@ public enum ThreadEventVisibilityMode: String, Equatable, Sendable, CaseIterable
     }
 
     public func visibleEvents(from events: [ThreadEvent]) -> [ThreadEvent] {
-        ThreadEventDisplayOrder.newestFirst(events.filter { includes($0) })
+        ThreadEventDisplayOrder.naturalFlow(events.filter { includes($0) })
     }
 }
 
@@ -121,7 +121,7 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
 }
 
 public enum ThreadEventDisplayOrder {
-    public static func newestFirst(_ events: [ThreadEvent]) -> [ThreadEvent] {
+    public static func naturalFlow(_ events: [ThreadEvent]) -> [ThreadEvent] {
         let indexed = events.enumerated().map { offset, event in
             IndexedEvent(offset: offset, event: event)
         }
@@ -129,38 +129,45 @@ public enum ThreadEventDisplayOrder {
             GroupInfo(
                 date: group
                     .compactMap { $0.event.displayGroupDate ?? $0.event.date }
-                    .max() ?? .distantPast,
-                sequence: group.compactMap(\.groupSequence).max()
+                    .min(),
+                sequence: group.compactMap(\.groupSequence).min(),
+                firstOffset: group.map(\.offset).min() ?? 0
             )
         }
 
         return indexed.sorted { left, right in
             if left.groupKey != right.groupKey {
-                let leftInfo = groupInfo[left.groupKey] ?? GroupInfo(date: .distantPast, sequence: left.offset)
-                let rightInfo = groupInfo[right.groupKey] ?? GroupInfo(date: .distantPast, sequence: right.offset)
-                if leftInfo.date != rightInfo.date {
-                    return leftInfo.date > rightInfo.date
+                let leftInfo = groupInfo[left.groupKey] ?? GroupInfo(date: nil, sequence: nil, firstOffset: left.offset)
+                let rightInfo = groupInfo[right.groupKey] ?? GroupInfo(date: nil, sequence: nil, firstOffset: right.offset)
+                let leftSequence = leftInfo.sequence ?? Int.max
+                let rightSequence = rightInfo.sequence ?? Int.max
+                if leftSequence != rightSequence {
+                    return leftSequence < rightSequence
                 }
-                if let leftSequence = leftInfo.sequence,
-                   let rightSequence = rightInfo.sequence,
-                   leftSequence != rightSequence {
-                    return leftSequence > rightSequence
+                if let dateOrder = orderedByDate(leftInfo.date, rightInfo.date) {
+                    return dateOrder
+                }
+                if leftInfo.firstOffset != rightInfo.firstOffset {
+                    return leftInfo.firstOffset < rightInfo.firstOffset
                 }
                 return left.groupKey < right.groupKey
             }
 
-            if let leftItem = left.event.itemSequence,
-               let rightItem = right.event.itemSequence,
-               leftItem != rightItem {
+            let leftItem = left.event.itemSequence ?? Int.max
+            let rightItem = right.event.itemSequence ?? Int.max
+            if leftItem != rightItem {
                 return leftItem < rightItem
+            }
+            if let dateOrder = orderedByDate(left.eventDate, right.eventDate) {
+                return dateOrder
             }
             if left.itemKey != right.itemKey {
                 return left.itemKey < right.itemKey
             }
 
-            if let leftEvent = left.event.eventSequence,
-               let rightEvent = right.event.eventSequence,
-               leftEvent != rightEvent {
+            let leftEvent = left.event.eventSequence ?? Int.max
+            let rightEvent = right.event.eventSequence ?? Int.max
+            if leftEvent != rightEvent {
                 return leftEvent < rightEvent
             }
             if left.event.id != right.event.id {
@@ -169,6 +176,19 @@ public enum ThreadEventDisplayOrder {
 
             return left.offset < right.offset
         }.map(\.event)
+    }
+
+    private static func orderedByDate(_ left: Date?, _ right: Date?) -> Bool? {
+        switch (left, right) {
+        case let (left?, right?) where left != right:
+            return left < right
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        default:
+            return nil
+        }
     }
 
     private struct IndexedEvent {
@@ -195,11 +215,16 @@ public enum ThreadEventDisplayOrder {
             }
             return "event:\(event.id)"
         }
+
+        var eventDate: Date? {
+            event.date ?? event.displayGroupDate
+        }
     }
 
     private struct GroupInfo {
-        let date: Date
+        let date: Date?
         let sequence: Int?
+        let firstOffset: Int
     }
 }
 

@@ -8,6 +8,7 @@ public struct DiscoveredRelay: Equatable, Identifiable, Sendable {
     public let id: String
     public let displayName: String
     public let endpoint: DockRelayEndpoint
+    public let relayInstanceID: String?
     public let txtRecords: [String: String]
 
     public var hostName: String { endpoint.host }
@@ -24,14 +25,19 @@ public struct DiscoveredRelay: Equatable, Identifiable, Sendable {
             return nil
         }
 
-        self.id = endpoint.id
+        let relayInstanceID = Self.normalizedRelayInstanceID(
+            txtRecords["relay-id"] ?? txtRecords["relay_id"] ?? txtRecords["relayInstanceID"]
+        )
+
+        self.id = relayInstanceID ?? endpoint.id
         self.displayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         self.endpoint = endpoint
+        self.relayInstanceID = relayInstanceID
         self.txtRecords = txtRecords
     }
 
     public var hostConfiguration: DockHostConfiguration {
-        DockHostConfiguration(endpoint: endpoint)
+        DockHostConfiguration(endpoint: endpoint, relayInstanceID: relayInstanceID)
     }
 
     private static func normalizedHostName(_ value: String) -> String {
@@ -40,6 +46,11 @@ public struct DiscoveredRelay: Equatable, Identifiable, Sendable {
             host.removeLast()
         }
         return host
+    }
+
+    private static func normalizedRelayInstanceID(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -61,8 +72,9 @@ public struct PersistedRelayEndpoint: Codable, Equatable, Sendable {
 
 public struct LocalRelayEndpointList: Codable, Equatable, Sendable {
     public let endpoints: [PersistedRelayEndpoint]
+    public let relayInstanceID: String?
 
-    public init(endpoints: [DockRelayEndpoint]) {
+    public init(endpoints: [DockRelayEndpoint], relayInstanceID: String? = nil) {
         var seen: Set<String> = []
         self.endpoints = endpoints.compactMap { endpoint in
             guard seen.insert(endpoint.id).inserted else {
@@ -70,18 +82,32 @@ public struct LocalRelayEndpointList: Codable, Equatable, Sendable {
             }
             return PersistedRelayEndpoint(endpoint: endpoint)
         }
+        let trimmedRelayInstanceID = relayInstanceID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.relayInstanceID = trimmedRelayInstanceID.isEmpty ? nil : trimmedRelayInstanceID
     }
 
     public var relayEndpoints: [DockRelayEndpoint] {
         get throws {
-            try endpoints.map { try $0.endpoint }
+            try endpoints.map {
+                let endpoint = try $0.endpoint
+                try endpoint.validateAppFacingRelayEndpoint()
+                return endpoint
+            }
         }
     }
 
     public var hostConfigurations: [DockHostConfiguration] {
         get throws {
-            try relayEndpoints.map(DockHostConfiguration.init(endpoint:))
+            let endpoints = try relayEndpoints
+            return [try DockHostConfiguration(endpoints: endpoints, relayInstanceID: relayInstanceID)]
         }
+    }
+
+    public func validatePersistedConfiguration() throws {
+        guard !endpoints.isEmpty else {
+            return
+        }
+        _ = try hostConfigurations
     }
 }
 
@@ -112,11 +138,13 @@ public actor FileLocalDockConfigurationStore: LocalDockConfigurationStoring {
         } catch {
             configuration = try Self.migrateLegacyConfiguration(from: data)
         }
+        try configuration.validatePersistedConfiguration()
         cache = configuration
         return configuration
     }
 
     public func save(_ configuration: LocalRelayEndpointList) async throws {
+        try configuration.validatePersistedConfiguration()
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -154,7 +182,9 @@ public actor FileLocalDockConfigurationStore: LocalDockConfigurationStoring {
         else {
             throw DockHostConfigurationError.unsupportedLegacyURL(url.absoluteString)
         }
-        return LocalRelayEndpointList(endpoints: [try DockRelayEndpoint(host: host, port: port)])
+        let endpoint = try DockRelayEndpoint(host: host, port: port)
+        try endpoint.validateAppFacingRelayEndpoint()
+        return LocalRelayEndpointList(endpoints: [endpoint])
     }
 }
 

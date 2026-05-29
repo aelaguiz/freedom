@@ -3,8 +3,8 @@
 Plan: `docs/CODEX_DOCK_THREAD_EVENT_VISIBILITY_MODES_2026-05-28.md`
 Audit log: `docs/CODEX_DOCK_THREAD_EVENT_VISIBILITY_MODES_2026-05-28_PLAN_AUDIT.md`
 Current plan verdict: ready
-Current implementation code-review verdict: not-run
-Last reviewed: 2026-05-28T12:44:51Z
+Current implementation code-review verdict: pass
+Last reviewed: 2026-05-29T03:35:00Z
 Scope: whole plan
 
 ## Current Blocking Findings
@@ -17,7 +17,8 @@ None.
 
 ## Current Implementation Findings
 
-Not run. The user asked for planning only.
+No blocking implementation findings remain. The 2026-05-29 follow-up corrected
+thread detail from newest-first display ordering to natural conversation flow.
 
 ## Relevant Code Coverage Ledger
 
@@ -78,6 +79,30 @@ Conditional lenses run:
   - ArcStep cold-read finding: live `item/started` / `item/completed` full-item notifications under-specified. Resolved in Section 5.2, Section 6, and Section 7 Phase 1.
 - Findings carried forward: none.
 - Verdict: ready.
+
+### Pass 2 - 2026-05-29T03:35:00Z
+
+- Mode: implementation-audit follow-up.
+- Scope: thread detail event display ordering after the user observed newest
+  messages pinned at the top.
+- Code areas read:
+  - `CodexDock/Models/ThreadEvent.swift`
+  - `CodexDock/State/ThreadDetailStore.swift`
+  - `CodexDockTests/ThreadEventNormalizerTests.swift`
+  - `CodexDockTests/ThreadDetailStoreTests.swift`
+- Finding:
+  - Thread detail used newest-first display ordering, which made new user
+    messages appear above older messages instead of in normal conversation
+    flow.
+- Resolution:
+  - `ThreadEventDisplayOrder.naturalFlow(_:)` is now the thread detail display
+    ordering contract, including visibility projections.
+- Verification:
+  - `rtk swift test --filter ThreadEventNormalizerTests`: 11 passed.
+  - `rtk swift test --filter ThreadDetailStoreTests`: 51 passed.
+  - `rtk make app-test SIM=BAD95C8E-3E57-4818-9B90-E4ED22593B4B`: passed.
+- Verdict:
+  - pass.
 - Next audit focus: implementation-audit after code exists, if requested.
 
 ## Proper-Audit Checklist Status

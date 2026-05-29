@@ -98,15 +98,52 @@ public struct ThreadListResponseDTO: Codable, Equatable, Sendable {
     public let data: [ThreadDTO]
     public let nextCursor: String?
     public let backwardsCursor: String?
+    public let liveOverlay: ThreadListLiveOverlayDTO?
 
     public init(
         data: [ThreadDTO],
         nextCursor: String? = nil,
-        backwardsCursor: String? = nil
+        backwardsCursor: String? = nil,
+        liveOverlay: ThreadListLiveOverlayDTO? = nil
     ) {
         self.data = data
         self.nextCursor = nextCursor
         self.backwardsCursor = backwardsCursor
+        self.liveOverlay = liveOverlay
+    }
+}
+
+public struct ThreadListLiveOverlayDTO: Codable, Equatable, Sendable {
+    public let ok: Bool
+    public let state: String?
+    public let ageMs: Int?
+
+    public init(
+        ok: Bool,
+        state: String? = nil,
+        ageMs: Int? = nil
+    ) {
+        self.ok = ok
+        self.state = state
+        self.ageMs = ageMs
+    }
+
+    public var degradedMessage: String? {
+        guard ok == false else {
+            return nil
+        }
+        switch state {
+        case "disabled":
+            return "Live status disabled"
+        case "unavailable":
+            return "Live status unavailable"
+        case "stale":
+            return "Live status stale"
+        case let state? where !state.isEmpty:
+            return "Live status \(state)"
+        default:
+            return "Live status degraded"
+        }
     }
 }
 
@@ -131,6 +168,7 @@ public struct ThreadDTO: Codable, Equatable, Sendable {
     public let agentRole: String?
     public let gitInfo: ThreadGitInfoDTO?
     public let name: String?
+    public let latestSummary: String?
     public let turns: [JSONValue]?
 
     public init(
@@ -152,6 +190,7 @@ public struct ThreadDTO: Codable, Equatable, Sendable {
         agentRole: String? = nil,
         gitInfo: ThreadGitInfoDTO? = nil,
         name: String? = nil,
+        latestSummary: String? = nil,
         turns: [JSONValue]? = []
     ) {
         self.id = id
@@ -172,6 +211,7 @@ public struct ThreadDTO: Codable, Equatable, Sendable {
         self.agentRole = agentRole
         self.gitInfo = gitInfo
         self.name = name
+        self.latestSummary = latestSummary
         self.turns = turns
     }
 
@@ -195,6 +235,7 @@ public struct ThreadDTO: Codable, Equatable, Sendable {
             agentRole: agentRole,
             gitInfo: gitInfo,
             name: name,
+            latestSummary: latestSummary,
             turns: turns
         )
     }

@@ -14,9 +14,13 @@ function bonjourServiceName(name = `Codex Dock ${os.hostname()}`) {
 }
 
 function bonjourTxtRecords(config) {
-  return [
+  const records = [
     `version=${config.version}`,
   ];
+  if (config.hostId) {
+    records.push(`relay-id=${String(config.hostId).replace(/[\r\n]/g, " ").trim().slice(0, 255)}`);
+  }
+  return records;
 }
 
 function buildBonjourAdvertisementArgs(config) {

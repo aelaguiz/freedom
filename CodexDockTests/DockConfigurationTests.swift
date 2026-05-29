@@ -14,13 +14,18 @@ final class DockConfigurationTests: XCTestCase {
         XCTAssertEqual(host.webSocketURL.absoluteString, "ws://192.168.50.117:4510")
     }
 
-    func testHostConfigurationUsesFirstEndpointFromList() throws {
+    func testHostConfigurationPreservesEndpointListForFallback() throws {
         let host = try DockHostConfiguration.fromEnvironment([
-            "CODEX_DOCK_HOSTS": "192.168.50.117:4510, home.local:4511"
+            "CODEX_DOCK_HOSTS": "192.168.50.117:4510, home.local:4511",
+            "CODEX_DOCK_RELAY_INSTANCE_ID": "Amir-M5"
         ])
 
-        XCTAssertEqual(host.id, "192.168.50.117:4510")
+        XCTAssertEqual(host.id, "Amir-M5")
         XCTAssertEqual(host.webSocketURL.absoluteString, "ws://192.168.50.117:4510")
+        XCTAssertEqual(host.webSocketURLs.map(\.absoluteString), [
+            "ws://192.168.50.117:4510",
+            "ws://home.local:4511",
+        ])
     }
 
     func testHostConfigurationRejectsMissingEndpoint() {
@@ -46,22 +51,59 @@ final class DockConfigurationTests: XCTestCase {
         }
     }
 
-    func testHostRegistryReadsEndpointOnlyMultiHostEnvironment() throws {
+    func testHostRegistryRejectsEndpointAliasesWithoutRelayInstanceID() {
+        XCTAssertThrowsError(
+            try HostRegistry.fromEnvironment([
+                "CODEX_DOCK_HOSTS": "192.168.50.117:4510, home.local:4511"
+            ])
+        ) { error in
+            XCTAssertEqual(error as? DockHostConfigurationError, .missingRelayInstanceIDForEndpointAliases)
+        }
+    }
+
+    func testHostRegistryGroupsAliasEndpointsWhenRelayInstanceIDIsPresent() throws {
         let registry = try HostRegistry.fromEnvironment([
-            "CODEX_DOCK_HOSTS": "192.168.50.117:4510, home.local:4511"
+            "CODEX_DOCK_HOSTS": "amir-m5.fairy-salmon.ts.net:4510, home.fairy-salmon.ts.net:4510",
+            "CODEX_DOCK_RELAY_INSTANCE_ID": "Amir-M5"
         ])
 
-        XCTAssertEqual(registry.hosts.map(\.id), ["192.168.50.117:4510", "home.local:4511"])
-        XCTAssertEqual(registry.hosts.map(\.displayName), ["192.168.50.117:4510", "home.local:4511"])
-        XCTAssertEqual(registry.hosts.map(\.webSocketURL.absoluteString), [
-            "ws://192.168.50.117:4510",
-            "ws://home.local:4511"
+        XCTAssertEqual(registry.hosts.count, 1)
+        let host = try XCTUnwrap(registry.hosts.first)
+        XCTAssertEqual(host.id, "Amir-M5")
+        XCTAssertEqual(host.displayName, "Amir-M5")
+        XCTAssertEqual(host.displayEndpointList, "amir-m5.fairy-salmon.ts.net:4510, home.fairy-salmon.ts.net:4510")
+        XCTAssertEqual(host.webSocketURL.absoluteString, "ws://amir-m5.fairy-salmon.ts.net:4510")
+        XCTAssertEqual(host.webSocketURLs.map(\.absoluteString), [
+            "ws://amir-m5.fairy-salmon.ts.net:4510",
+            "ws://home.fairy-salmon.ts.net:4510"
         ])
+    }
+
+    func testRelayInstanceValidationFailsLoudlyOnMissingOrMismatchedEcho() throws {
+        let host = DockHostConfiguration(
+            endpoint: try DockRelayEndpoint(host: "amir-m5.fairy-salmon.ts.net", port: 4510),
+            relayInstanceID: "Amir-M5"
+        )
+
+        XCTAssertNoThrow(try host.validateRelayInstanceID("Amir-M5"))
+        XCTAssertThrowsError(try host.validateRelayInstanceID(nil)) { error in
+            XCTAssertEqual(
+                error as? DockHostConfigurationError,
+                .relayInstanceMismatch(expected: "Amir-M5", actual: "<missing>")
+            )
+        }
+        XCTAssertThrowsError(try host.validateRelayInstanceID("Other-Mac")) { error in
+            XCTAssertEqual(
+                error as? DockHostConfigurationError,
+                .relayInstanceMismatch(expected: "Amir-M5", actual: "Other-Mac")
+            )
+        }
     }
 
     func testHostRegistryIgnoresLegacyScopedAppSecrets() throws {
         let registry = try HostRegistry.fromEnvironment([
             "CODEX_DOCK_HOSTS": "192.168.50.117:4510, home.local:4511",
+            "CODEX_DOCK_RELAY_INSTANCE_ID": "Amir-M5",
             "CODEX_DOCK_HOST_AMIR_M5_WS": "ws://192.168.50.117:4510/",
             "CODEX_DOCK_HOST_AMIR_M5_NAME": "Amir-M5",
             "CODEX_DOCK_HOST_AMIR_M5_AUTH_MODE": "none",
@@ -72,7 +114,7 @@ final class DockConfigurationTests: XCTestCase {
             "CODEX_DOCK_HOST_HOME_BEARER_TOKEN": "ignored-home-token"
         ])
 
-        XCTAssertEqual(registry.hosts.map(\.id), ["192.168.50.117:4510", "home.local:4511"])
+        XCTAssertEqual(registry.hosts.map(\.id), ["Amir-M5"])
     }
 
     func testHostRegistryRejectsDuplicateHostIDs() {
@@ -102,6 +144,19 @@ final class DockConfigurationTests: XCTestCase {
             ])
         ) { error in
             XCTAssertEqual(error as? DockHostConfigurationError, .invalidPort("not-a-port"))
+        }
+    }
+
+    func testHostRegistryRejectsRawAppServerPortForAppFacingConfig() {
+        XCTAssertThrowsError(
+            try HostRegistry.fromEnvironment([
+                "CODEX_DOCK_HOSTS": "127.0.0.1:4500"
+            ])
+        ) { error in
+            XCTAssertEqual(
+                error as? DockHostConfigurationError,
+                .rawAppServerEndpoint("127.0.0.1:4500")
+            )
         }
     }
 
@@ -140,6 +195,20 @@ final class DockConfigurationTests: XCTestCase {
                 XCTAssertEqual(error as? DockHostConfigurationError, expectedError)
             }
         }
+    }
+
+    func testDiscoveredRelayUsesBonjourRelayIDAsLogicalHostIdentity() throws {
+        let relay = try XCTUnwrap(DiscoveredRelay(
+            displayName: "Codex Dock Test",
+            hostName: "Amir-M5.local.",
+            port: 4510,
+            txtRecords: ["relay-id": "Amir-M5"]
+        ))
+
+        XCTAssertEqual(relay.id, "Amir-M5")
+        XCTAssertEqual(relay.relayInstanceID, "Amir-M5")
+        XCTAssertEqual(relay.hostConfiguration.id, "Amir-M5")
+        XCTAssertEqual(relay.hostConfiguration.webSocketURL.absoluteString, "ws://Amir-M5.local:4510")
     }
 
     @MainActor
@@ -224,15 +293,21 @@ final class DockConfigurationTests: XCTestCase {
     }
 
     @MainActor
-    func testRelayBootstrapMergesEnvironmentSavedAndDiscoveredEndpoints() async throws {
+    func testRelayBootstrapMergesEnvironmentSavedAndDiscoveredRelayAliases() async throws {
         let discovery = FakeRelayDiscovery()
         let configurationStore = BootstrapLocalDockConfigurationStore(
-            saved: LocalRelayEndpointList(endpoints: [
-                try DockRelayEndpoint(host: "saved.local", port: 4510)
-            ])
+            saved: LocalRelayEndpointList(
+                endpoints: [
+                    try DockRelayEndpoint(host: "saved.local", port: 4510)
+                ],
+                relayInstanceID: "Amir-M5"
+            )
         )
         let store = RelayBootstrapStore(
-            environment: ["CODEX_DOCK_HOSTS": "env.local:4510"],
+            environment: [
+                "CODEX_DOCK_HOSTS": "env.local:4510",
+                "CODEX_DOCK_RELAY_INSTANCE_ID": "Amir-M5"
+            ],
             configurationStore: configurationStore,
             discovery: discovery
         )
@@ -241,7 +316,11 @@ final class DockConfigurationTests: XCTestCase {
 
         try await waitForRelayBootstrap {
             if case .ready(let registry) = store.state {
-                return registry.hosts.map(\.id) == ["env.local:4510", "saved.local:4510"]
+                return registry.hosts.first?.id == "Amir-M5"
+                    && registry.hosts.first?.endpoints.map(\.displayEndpoint) == [
+                        "env.local:4510",
+                        "saved.local:4510",
+                    ]
             }
             return false
         }
@@ -249,21 +328,24 @@ final class DockConfigurationTests: XCTestCase {
         let relay = try XCTUnwrap(DiscoveredRelay(
             displayName: "Codex Dock Test",
             hostName: "discovered.local.",
-            port: 4510
+            port: 4510,
+            txtRecords: ["relay-id": "Amir-M5"]
         ))
         discovery.publish([relay])
 
         try await waitForRelayBootstrap {
             if case .ready(let registry) = store.state {
-                return registry.hosts.map(\.id) == [
-                    "env.local:4510",
-                    "saved.local:4510",
-                    "discovered.local:4510",
+                return registry.hosts.first?.id == "Amir-M5"
+                    && registry.hosts.first?.endpoints.map(\.displayEndpoint) == [
+                        "env.local:4510",
+                        "saved.local:4510",
+                        "discovered.local:4510",
                 ]
             }
             return false
         }
         let saved = await configurationStore.savedConfiguration()
+        XCTAssertEqual(saved?.relayInstanceID, "Amir-M5")
         XCTAssertEqual(
             try saved?.relayEndpoints.map(\.displayEndpoint),
             ["env.local:4510", "saved.local:4510", "discovered.local:4510"]
@@ -431,6 +513,14 @@ final class DockConfigurationTests: XCTestCase {
                 .invalidPort("not-a-port")
             )
         }
+        XCTAssertThrowsError(
+            try RelayBootstrapStore.validatedEndpoint(host: "127.0.0.1", port: "4500")
+        ) { error in
+            XCTAssertEqual(
+                error as? DockHostConfigurationError,
+                .rawAppServerEndpoint("127.0.0.1:4500")
+            )
+        }
     }
 
     func testFileLocalDockConfigurationStorePersistsEndpointListWithoutSecrets() async throws {
@@ -452,6 +542,72 @@ final class DockConfigurationTests: XCTestCase {
         XCTAssertEqual(try loaded?.relayEndpoints.map(\.displayEndpoint), ["Amir-M5.local:4510"])
     }
 
+    func testFileLocalDockConfigurationStorePersistsRelayInstanceIDWithoutSecrets() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = directory.appendingPathComponent("relay-config.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let writer = FileLocalDockConfigurationStore(fileURL: fileURL)
+        try await writer.save(
+            LocalRelayEndpointList(
+                endpoints: [
+                    try DockRelayEndpoint(host: "amir-m5.fairy-salmon.ts.net", port: 4510),
+                    try DockRelayEndpoint(host: "home.fairy-salmon.ts.net", port: 4510)
+                ],
+                relayInstanceID: "Amir-M5"
+            )
+        )
+
+        let reader = FileLocalDockConfigurationStore(fileURL: fileURL)
+        let loaded = try await reader.load()
+
+        XCTAssertEqual(loaded?.relayInstanceID, "Amir-M5")
+        XCTAssertEqual(try loaded?.hostConfigurations.map(\.id), ["Amir-M5"])
+        XCTAssertEqual(
+            try loaded?.hostConfigurations.first?.displayEndpointList,
+            "amir-m5.fairy-salmon.ts.net:4510, home.fairy-salmon.ts.net:4510"
+        )
+        let savedText = try String(contentsOf: fileURL)
+        XCTAssertFalse(savedText.contains("OPENAI_API_KEY"))
+        XCTAssertFalse(savedText.contains("TOKEN"))
+    }
+
+    func testLocalRelayEndpointListRejectsAliasesWithoutRelayInstanceID() throws {
+        let configuration = LocalRelayEndpointList(endpoints: [
+            try DockRelayEndpoint(host: "amir-m5.fairy-salmon.ts.net", port: 4510),
+            try DockRelayEndpoint(host: "home.fairy-salmon.ts.net", port: 4510)
+        ])
+
+        XCTAssertThrowsError(try configuration.hostConfigurations) { error in
+            XCTAssertEqual(error as? DockHostConfigurationError, .missingRelayInstanceIDForEndpointAliases)
+        }
+    }
+
+    func testFileLocalDockConfigurationStoreRejectsEndpointAliasesWithoutRelayInstanceID() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = directory.appendingPathComponent("relay-config.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try #"{"endpoints":[{"host":"amir-m5.fairy-salmon.ts.net","port":4510},{"host":"home.fairy-salmon.ts.net","port":4510}]}"#
+            .write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let reader = FileLocalDockConfigurationStore(fileURL: fileURL)
+
+        do {
+            _ = try await reader.load()
+            XCTFail("Expected endpoint aliases without a relay instance id to fail")
+        } catch DockHostConfigurationError.missingRelayInstanceIDForEndpointAliases {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
+        } catch {
+            XCTFail("Expected missingRelayInstanceIDForEndpointAliases, got \(error)")
+        }
+    }
+
     func testFileLocalDockConfigurationStoreMigratesLegacyWebSocketURL() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -468,6 +624,31 @@ final class DockConfigurationTests: XCTestCase {
         let loaded = try await reader.load()
 
         XCTAssertEqual(try loaded?.relayEndpoints.map(\.displayEndpoint), ["Amir-M5.local:4510"])
+    }
+
+    func testFileLocalDockConfigurationStoreRejectsRawAppServerEndpointWithoutDeletingFile() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = directory.appendingPathComponent("relay-config.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try #"{"endpoints":[{"host":"127.0.0.1","port":4500}]}"#
+            .write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let reader = FileLocalDockConfigurationStore(fileURL: fileURL)
+
+        do {
+            _ = try await reader.load()
+            XCTFail("Expected raw app-server endpoint to fail")
+        } catch DockHostConfigurationError.rawAppServerEndpoint(let value) {
+            XCTAssertEqual(value, "127.0.0.1:4500")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
+        } catch {
+            XCTFail("Expected rawAppServerEndpoint, got \(error)")
+        }
     }
 
     func testFileLocalDockConfigurationStoreRejectsUnsupportedLegacyWebSocketURLsWithoutDeletingFile() async throws {

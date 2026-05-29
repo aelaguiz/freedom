@@ -16,6 +16,8 @@ DOCK_RELAY_PORT ?= 4510
 DOCK_RELAY_LISTEN_HOST ?= 0.0.0.0
 DOCK_RELAY_HISTORY_WS ?= ws://127.0.0.1:$(APP_SERVER_PORT)
 DOCK_RELAY_WS ?= ws://$(APP_SERVER_HOST):$(DOCK_RELAY_PORT)
+DOCK_RELAY_PROBE_WS ?= $(DOCK_RELAY_WS)
+DOCK_RELAY_LEAK_CHECK_ITERATIONS ?= 25
 DOCK_RELAY_LABEL ?= com.aelaguiz.codex-dock.relay
 DOCK_RELAY_PID := $(APP_SERVER_ABS_DIR)/dock-relay.pid
 DOCK_RELAY_LOG := $(APP_SERVER_ABS_DIR)/logs/dock-relay.log
@@ -43,13 +45,17 @@ DEVICE_APP_PATH := $(APP_DERIVED_DATA)/Build/Products/Debug-iphoneos/$(APP_SCHEM
 DEVICE_RELAY_ENDPOINTS ?=
 DEVICE_RELAY_HOST ?=
 DEVICE_RELAY_PORT ?= $(DOCK_RELAY_PORT)
+DEVICE_RELAY_INSTANCE_ID ?=
 DEVICE_CONFIG_PATH ?= Library/Application Support/CodexDock/relay-config.json
 IPHONE_17_PRO_DEVICE ?= CB9FFF0E-89AD-57B5-9C00-6552D814875E
 IPHONE_17_PRO_RELAY_ENDPOINTS ?= amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510
+IPHONE_17_PRO_RELAY_INSTANCE_ID ?= $(CODEX_DOCK_RELAY_INSTANCE_ID)
 IPHONE_14_DEVICE ?= 0A4EFF8B-54D8-58FB-B3FB-63263265B9CC
 IPHONE_14_RELAY_ENDPOINTS ?= Amir-M5.local:4510,192.168.50.74:4510
+IPHONE_14_RELAY_INSTANCE_ID ?= $(CODEX_DOCK_RELAY_INSTANCE_ID)
 CODEX_DOCK_REAL_HOST_ID ?= Amir-M5
 CODEX_DOCK_REAL_HOST_NAME ?= Amir-M5
+CODEX_DOCK_RELAY_INSTANCE_ID ?= $(CODEX_DOCK_REAL_HOST_ID)
 CODEX_DOCK_HOSTS ?= $(APP_SERVER_HOST):$(DOCK_RELAY_PORT)
 CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL ?= gpt-realtime-whisper
 CODEX_DOCK_REALTIME_TRANSCRIPTION_DELAY ?= low
@@ -62,24 +68,31 @@ HOST_SERVICE_ARGS = --platform "$(HOST_SERVICE_PLATFORM)" --runtime-dir "$(APP_S
 
 .DEFAULT_GOAL := help
 
-.PHONY: help app app-test device-install device-install-all device-config device-config-verify device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
+.PHONY: help app app-test sim-config-verify device-install device-install-iphone-17-pro device-install-iphone-14 iphone-17-pro iphone-14 device-install-all device-config device-config-verify device-config-verify-all device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart relay-probe relay-leak-check relay-doctor app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
 
 help:
 	@printf "%s\n" "Codex Dock commands:"
 	@printf "%s\n" "  rtk make app SIM='iPhone 17' Build/install/launch the app in a simulator"
 	@printf "%s\n" "  rtk make app SIM=<UDID>    Build/install/launch the app by simulator ID"
 	@printf "%s\n" "  rtk make app-test SIM='iPhone 17' Run generated-project app tests in a simulator"
+	@printf "%s\n" "  rtk make sim-config-verify SIM='iPhone 17' Verify generated simulator relay config"
 	@printf "%s\n" "  rtk make device-install    Fresh build/install/configure/launch the default physical iPhone"
 	@printf "%s\n" "  rtk make device-install DEVICE=<UDID> Fresh build/install/configure/launch a physical iPhone"
+	@printf "%s\n" "  rtk make iphone-17-pro     Fresh build/install/configure/launch Amir's iPhone 17 Pro"
+	@printf "%s\n" "  rtk make iphone-14         Fresh build/install/configure/launch Amir's iPhone 14"
 	@printf "%s\n" "  rtk make device-install-all Install/configure iPhone 17 Pro and iPhone 14"
 	@printf "%s\n" "  rtk make device-config DEVICE=<UDID> Write saved relay endpoints for one physical iPhone"
 	@printf "%s\n" "  rtk make device-config-verify DEVICE=<UDID> Read back one physical iPhone relay endpoint list"
+	@printf "%s\n" "  rtk make device-config-verify-all Read back iPhone 17 Pro and iPhone 14 relay configs"
 	@printf "%s\n" "  rtk make devices           List physical iPhones known to CoreDevice"
 	@printf "%s\n" "  rtk make services          Install/start/reuse the local host service bundle"
 	@printf "%s\n" "  rtk make app-server        Compatibility alias for the host service bundle"
 	@printf "%s\n" "  rtk make dock-relay        Compatibility alias for the host service bundle"
 	@printf "%s\n" "  rtk make app-server-status Check host service bundle status"
 	@printf "%s\n" "  rtk make dock-relay-status Check host service bundle status"
+	@printf "%s\n" "  rtk make relay-probe      Compare raw history and relay thread/list cursor/top row"
+	@printf "%s\n" "  rtk make relay-leak-check Repeat relay thread/list and verify upstream socket count is flat"
+	@printf "%s\n" "  rtk make relay-doctor     Print relay-focused redacted diagnostics"
 	@printf "%s\n" "  rtk make app-server-env    Print env for raw dev smoke tests"
 	@printf "%s\n" "  rtk make host-service-doctor Print redacted host service diagnostics"
 	@printf "%s\n" "  rtk make sim-logs SIM='iPhone 17' Stream Codex Dock simulator logs"
@@ -92,7 +105,7 @@ help:
 services: host-service-install host-service-start host-service-wait
 
 env-file:
-	@rtk sh -c 'set -eu; case "$(ENV_FILE)" in .env|./.env) echo "refusing to overwrite user-owned .env; set ENV_FILE to a generated path under $(APP_SERVER_DIR)" >&2; exit 2;; esac; openai_key="$${OPENAI_API_KEY:-}"; if [ -z "$$openai_key" ] && [ -f "$(USER_ENV_FILE)" ]; then openai_key="$$(awk -F= '\''$$1=="OPENAI_API_KEY"{sub(/^[^=]*=/,""); print; exit}'\'' "$(USER_ENV_FILE)")"; fi; dir="$$(dirname "$(ENV_FILE)")"; mkdir -p "$$dir"; umask 077; tmp="$$(mktemp "$$dir/.service-env.XXXXXX")"; trap '\''rm -f "$$tmp"'\'' EXIT; { echo "CODEX_DOCK_HOSTS=$(CODEX_DOCK_HOSTS)"; echo "CODEX_DOCK_REAL_HOST_ID=$(CODEX_DOCK_REAL_HOST_ID)"; echo "CODEX_DOCK_REAL_HOST_NAME=$(CODEX_DOCK_REAL_HOST_NAME)"; echo "CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL=$(CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL)"; echo "CODEX_DOCK_REALTIME_TRANSCRIPTION_DELAY=$(CODEX_DOCK_REALTIME_TRANSCRIPTION_DELAY)"; if [ -n "$$openai_key" ]; then echo "OPENAI_API_KEY=$$openai_key"; fi; } > "$$tmp"; mv "$$tmp" "$(ENV_FILE)"; trap - EXIT; echo "wrote generated service env $(ENV_FILE); left $(USER_ENV_FILE) untouched"'
+	@rtk sh -c 'set -eu; case "$(ENV_FILE)" in .env|./.env) echo "refusing to overwrite user-owned .env; set ENV_FILE to a generated path under $(APP_SERVER_DIR)" >&2; exit 2;; esac; openai_key="$${OPENAI_API_KEY:-}"; if [ -z "$$openai_key" ] && [ -f "$(USER_ENV_FILE)" ]; then openai_key="$$(awk -F= '\''$$1=="OPENAI_API_KEY"{sub(/^[^=]*=/,""); print; exit}'\'' "$(USER_ENV_FILE)")"; fi; dir="$$(dirname "$(ENV_FILE)")"; mkdir -p "$$dir"; umask 077; tmp="$$(mktemp "$$dir/.service-env.XXXXXX")"; trap '\''rm -f "$$tmp"'\'' EXIT; { echo "CODEX_DOCK_HOSTS=$(CODEX_DOCK_HOSTS)"; echo "CODEX_DOCK_RELAY_INSTANCE_ID=$(CODEX_DOCK_RELAY_INSTANCE_ID)"; echo "CODEX_DOCK_REAL_HOST_ID=$(CODEX_DOCK_REAL_HOST_ID)"; echo "CODEX_DOCK_REAL_HOST_NAME=$(CODEX_DOCK_REAL_HOST_NAME)"; echo "CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL=$(CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL)"; echo "CODEX_DOCK_REALTIME_TRANSCRIPTION_DELAY=$(CODEX_DOCK_REALTIME_TRANSCRIPTION_DELAY)"; if [ -n "$$openai_key" ]; then echo "OPENAI_API_KEY=$$openai_key"; fi; } > "$$tmp"; mv "$$tmp" "$(ENV_FILE)"; trap - EXIT; echo "wrote generated service env $(ENV_FILE); left $(USER_ENV_FILE) untouched"'
 
 node-deps:
 	@rtk sh -c 'set -eu; if [ ! -d node_modules/ws ]; then npm ci; else echo "node dependencies already installed"; fi'
@@ -142,6 +155,14 @@ app-server-restart: host-service-restart
 
 dock-relay-restart: host-service-restart
 
+relay-probe:
+	@CODEX_DOCK_RELAY_WS="$(DOCK_RELAY_PROBE_WS)" CODEX_DOCK_HISTORY_APP_SERVER_WS="$(DOCK_RELAY_HISTORY_WS)" CODEX_DOCK_HISTORY_TOKEN_FILE="$(APP_SERVER_TOKEN)" rtk node -- scripts/dock-relay-probe.mjs
+
+relay-leak-check:
+	@CODEX_DOCK_RELAY_WS="$(DOCK_RELAY_PROBE_WS)" CODEX_DOCK_LEAK_CHECK_ITERATIONS="$(DOCK_RELAY_LEAK_CHECK_ITERATIONS)" rtk node -- scripts/dock-relay-leak-check.mjs
+
+relay-doctor: host-service-doctor
+
 app-server-logs:
 	@rtk tail -n 200 -f "$(APP_SERVER_LOG)" "$(APP_SERVER_ERR_LOG)"
 
@@ -165,19 +186,36 @@ app-test: services
 	@rtk xcodegen generate --spec project.yml
 	@rtk sh -c 'set -eu; udid="$$(python3 scripts/sim.py resolve "$(SIM)")"; log_dir="$(APP_BUILD_LOG_DIR)"; test_log="$$log_dir/app-test-$(APP_BUILD_NUMBER).log"; mkdir -p "$$log_dir"; echo "testing $(APP_SCHEME) on simulator $$udid build $(APP_BUILD_NUMBER)"; if ! xcodebuild -quiet test -project CodexDock.xcodeproj -scheme "$(APP_SCHEME)" -destination "id=$$udid" -derivedDataPath "$(APP_DERIVED_DATA)" CURRENT_PROJECT_VERSION="$(APP_BUILD_NUMBER)" > "$$test_log" 2>&1; then echo "app test failed; see $$test_log" >&2; tail -n 80 "$$test_log" >&2; exit 1; fi; echo "tested $(APP_SCHEME) on simulator $$udid build $(APP_BUILD_NUMBER)"'
 
+sim-config-verify: services
+	@rtk sh -c 'set -eu; udid="$$(python3 scripts/sim.py resolve "$(SIM)")"; rtk node -- scripts/device-relay-config.mjs verify-env --input "$(HOST_ENV_FILE)" --endpoints "$(CODEX_DOCK_HOSTS)" --relay-instance-id "$(CODEX_DOCK_RELAY_INSTANCE_ID)"; echo "verified simulator $$udid config $(CODEX_DOCK_HOSTS) relayInstanceID=$(CODEX_DOCK_RELAY_INSTANCE_ID)"'
+
 device-install: services
 	@rtk xcodegen generate --spec project.yml
-	@rtk sh -c 'set -eu; device="$(DEVICE)"; if [ -z "$$device" ]; then device="$$(python3 scripts/device.py resolve "$(DEVICE_NAME)")"; fi; if [ -z "$(DEVELOPMENT_TEAM)" ]; then echo "DEVELOPMENT_TEAM=<team-id> is required"; exit 2; fi; relay_endpoints="$(DEVICE_RELAY_ENDPOINTS)"; if [ -z "$$relay_endpoints" ]; then if [ -n "$(DEVICE_RELAY_HOST)" ]; then relay_endpoints="$(DEVICE_RELAY_HOST):$(DEVICE_RELAY_PORT)"; else case "$$device" in "$(IPHONE_17_PRO_DEVICE)") relay_endpoints="$(IPHONE_17_PRO_RELAY_ENDPOINTS)" ;; "$(IPHONE_14_DEVICE)") relay_endpoints="$(IPHONE_14_RELAY_ENDPOINTS)" ;; *) echo "DEVICE_RELAY_ENDPOINTS=<host:port[,host:port...]> or DEVICE_RELAY_HOST=<host> is required for unknown device $$device" >&2; exit 2 ;; esac; fi; fi; log_dir="$(APP_BUILD_LOG_DIR)"; build_log="$$log_dir/app-device-build-$(APP_BUILD_NUMBER)-$$device.log"; install_log="$$log_dir/app-device-install-$(APP_BUILD_NUMBER)-$$device.log"; mkdir -p "$$log_dir"; action="build"; if [ "$(APP_FRESH_BUILD)" = "1" ]; then action="clean build"; fi; echo "building $(APP_SCHEME) for device $$device build $(APP_BUILD_NUMBER)"; if ! xcodebuild -quiet -allowProvisioningUpdates -allowProvisioningDeviceRegistration -project CodexDock.xcodeproj -scheme "$(APP_SCHEME)" -destination "id=$$device" -derivedDataPath "$(APP_DERIVED_DATA)" $$action DEVELOPMENT_TEAM="$(DEVELOPMENT_TEAM)" CODE_SIGN_STYLE=Automatic CURRENT_PROJECT_VERSION="$(APP_BUILD_NUMBER)" > "$$build_log" 2>&1; then echo "device build failed; see $$build_log" >&2; tail -n 80 "$$build_log" >&2; exit 1; fi; echo "installing device build $(APP_BUILD_NUMBER) on $$device"; if ! xcrun devicectl device install app --device "$$device" "$(DEVICE_APP_PATH)" > "$$install_log" 2>&1; then echo "device install failed; see $$install_log" >&2; tail -n 80 "$$install_log" >&2; exit 1; fi; line="$$(xcrun devicectl device info apps --device "$$device" | awk '\''/com\.aelaguiz\.CodexDockApp/ { print; found=1 } END { if (!found) exit 1 }'\'')"; installed_build="$$(printf "%s\n" "$$line" | awk '\''{ print $$NF }'\'')"; if [ "$$installed_build" != "$(APP_BUILD_NUMBER)" ]; then echo "installed device build $$installed_build did not match expected $(APP_BUILD_NUMBER)" >&2; exit 1; fi; rtk make --no-print-directory device-config DEVICE="$$device" DEVICE_RELAY_ENDPOINTS="$$relay_endpoints" APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"; rtk make --no-print-directory device-launch DEVICE="$$device" APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"; echo "installed $(APP_BUNDLE_ID) on $$device build $(APP_BUILD_NUMBER) using $$relay_endpoints"'
+	@rtk sh -c 'set -eu; device="$(DEVICE)"; if [ -z "$$device" ]; then device="$$(python3 scripts/device.py resolve "$(DEVICE_NAME)")"; fi; if [ -z "$(DEVELOPMENT_TEAM)" ]; then echo "DEVELOPMENT_TEAM=<team-id> is required"; exit 2; fi; relay_endpoints="$(DEVICE_RELAY_ENDPOINTS)"; relay_instance_id="$(DEVICE_RELAY_INSTANCE_ID)"; if [ -z "$$relay_endpoints" ]; then if [ -n "$(DEVICE_RELAY_HOST)" ]; then relay_endpoints="$(DEVICE_RELAY_HOST):$(DEVICE_RELAY_PORT)"; else case "$$device" in "$(IPHONE_17_PRO_DEVICE)") relay_endpoints="$(IPHONE_17_PRO_RELAY_ENDPOINTS)"; [ -n "$$relay_instance_id" ] || relay_instance_id="$(IPHONE_17_PRO_RELAY_INSTANCE_ID)" ;; "$(IPHONE_14_DEVICE)") relay_endpoints="$(IPHONE_14_RELAY_ENDPOINTS)"; [ -n "$$relay_instance_id" ] || relay_instance_id="$(IPHONE_14_RELAY_INSTANCE_ID)" ;; *) echo "DEVICE_RELAY_ENDPOINTS=<host:port[,host:port...]> or DEVICE_RELAY_HOST=<host> is required for unknown device $$device" >&2; exit 2 ;; esac; fi; fi; [ -n "$$relay_instance_id" ] || relay_instance_id="$(CODEX_DOCK_RELAY_INSTANCE_ID)"; log_dir="$(APP_BUILD_LOG_DIR)"; build_log="$$log_dir/app-device-build-$(APP_BUILD_NUMBER)-$$device.log"; install_log="$$log_dir/app-device-install-$(APP_BUILD_NUMBER)-$$device.log"; mkdir -p "$$log_dir"; action="build"; if [ "$(APP_FRESH_BUILD)" = "1" ]; then action="clean build"; fi; echo "building $(APP_SCHEME) for device $$device build $(APP_BUILD_NUMBER)"; if ! xcodebuild -quiet -allowProvisioningUpdates -allowProvisioningDeviceRegistration -project CodexDock.xcodeproj -scheme "$(APP_SCHEME)" -destination "id=$$device" -derivedDataPath "$(APP_DERIVED_DATA)" $$action DEVELOPMENT_TEAM="$(DEVELOPMENT_TEAM)" CODE_SIGN_STYLE=Automatic CURRENT_PROJECT_VERSION="$(APP_BUILD_NUMBER)" > "$$build_log" 2>&1; then echo "device build failed; see $$build_log" >&2; tail -n 80 "$$build_log" >&2; exit 1; fi; echo "installing device build $(APP_BUILD_NUMBER) on $$device"; if ! xcrun devicectl device install app --device "$$device" "$(DEVICE_APP_PATH)" > "$$install_log" 2>&1; then echo "device install failed; see $$install_log" >&2; tail -n 80 "$$install_log" >&2; exit 1; fi; line="$$(xcrun devicectl device info apps --device "$$device" | awk '\''/com\.aelaguiz\.CodexDockApp/ { print; found=1 } END { if (!found) exit 1 }'\'')"; installed_build="$$(printf "%s\n" "$$line" | awk '\''{ print $$NF }'\'')"; if [ "$$installed_build" != "$(APP_BUILD_NUMBER)" ]; then echo "installed device build $$installed_build did not match expected $(APP_BUILD_NUMBER)" >&2; exit 1; fi; rtk make --no-print-directory device-config DEVICE="$$device" DEVICE_RELAY_ENDPOINTS="$$relay_endpoints" DEVICE_RELAY_INSTANCE_ID="$$relay_instance_id" APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"; rtk make --no-print-directory device-launch DEVICE="$$device" APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"; echo "installed $(APP_BUNDLE_ID) on $$device build $(APP_BUILD_NUMBER) using $$relay_endpoints relayInstanceID=$$relay_instance_id"'
+
+device-install-iphone-17-pro:
+	@rtk make --no-print-directory device-install DEVICE="$(IPHONE_17_PRO_DEVICE)" DEVICE_RELAY_ENDPOINTS="$(IPHONE_17_PRO_RELAY_ENDPOINTS)" DEVICE_RELAY_INSTANCE_ID="$(IPHONE_17_PRO_RELAY_INSTANCE_ID)" APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"
+
+device-install-iphone-14:
+	@rtk make --no-print-directory device-install DEVICE="$(IPHONE_14_DEVICE)" DEVICE_RELAY_ENDPOINTS="$(IPHONE_14_RELAY_ENDPOINTS)" DEVICE_RELAY_INSTANCE_ID="$(IPHONE_14_RELAY_INSTANCE_ID)" APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"
+
+iphone-17-pro: device-install-iphone-17-pro
+
+iphone-14: device-install-iphone-14
 
 device-install-all:
-	@rtk make --no-print-directory device-install DEVICE="$(IPHONE_17_PRO_DEVICE)" DEVICE_RELAY_ENDPOINTS="$(IPHONE_17_PRO_RELAY_ENDPOINTS)" APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"
-	@rtk make --no-print-directory device-install DEVICE="$(IPHONE_14_DEVICE)" DEVICE_RELAY_ENDPOINTS="$(IPHONE_14_RELAY_ENDPOINTS)" APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"
+	@rtk make --no-print-directory device-install-iphone-17-pro APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"
+	@rtk make --no-print-directory device-install-iphone-14 APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"
 
 device-config:
-	@rtk sh -c 'set -eu; device="$(DEVICE)"; if [ -z "$$device" ]; then device="$$(python3 scripts/device.py resolve "$(DEVICE_NAME)")"; fi; relay_endpoints="$(DEVICE_RELAY_ENDPOINTS)"; if [ -z "$$relay_endpoints" ]; then if [ -n "$(DEVICE_RELAY_HOST)" ]; then relay_endpoints="$(DEVICE_RELAY_HOST):$(DEVICE_RELAY_PORT)"; else case "$$device" in "$(IPHONE_17_PRO_DEVICE)") relay_endpoints="$(IPHONE_17_PRO_RELAY_ENDPOINTS)" ;; "$(IPHONE_14_DEVICE)") relay_endpoints="$(IPHONE_14_RELAY_ENDPOINTS)" ;; *) echo "DEVICE_RELAY_ENDPOINTS=<host:port[,host:port...]> or DEVICE_RELAY_HOST=<host> is required for unknown device $$device" >&2; exit 2 ;; esac; fi; fi; relay_port="$(DEVICE_RELAY_PORT)"; log_dir="$(APP_BUILD_LOG_DIR)"; scratch="/tmp/codex-client/device-config-$(APP_BUILD_NUMBER)-$$device"; payload="$$scratch/CodexDock"; copy_log="$$log_dir/device-config-$(APP_BUILD_NUMBER)-$$device.log"; mkdir -p "$$payload" "$$log_dir"; python3 -c "import json, sys; path, raw, default_port = sys.argv[1], sys.argv[2], int(sys.argv[3]); endpoints = []; [endpoints.append({'\''host'\'': (host[1:-1] if host.startswith('\''['\'') and host.endswith('\'']'\'') else host), '\''port'\'': int(port)}) for item in raw.split('\'','\'') if item.strip() for text in [item.strip()] for host, sep, port in [text.rpartition('\'':'\'')] if sep and host and port]; assert endpoints, '\''no relay endpoints resolved'\''; json.dump({'\''endpoints'\'': endpoints}, open(path, '\''w'\''))" "$$payload/relay-config.json" "$$relay_endpoints" "$$relay_port"; echo "configuring $$device with $$relay_endpoints"; if ! xcrun devicectl device copy to --device "$$device" --domain-type appDataContainer --domain-identifier "$(APP_BUNDLE_ID)" --source "$$payload" --destination "Library/Application Support" > "$$copy_log" 2>&1; then echo "device config copy failed; see $$copy_log" >&2; tail -n 80 "$$copy_log" >&2; exit 1; fi; rtk make --no-print-directory device-config-verify DEVICE="$$device" DEVICE_RELAY_ENDPOINTS="$$relay_endpoints" APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"'
+	@rtk sh -c 'set -eu; device="$(DEVICE)"; if [ -z "$$device" ]; then device="$$(python3 scripts/device.py resolve "$(DEVICE_NAME)")"; fi; relay_endpoints="$(DEVICE_RELAY_ENDPOINTS)"; relay_instance_id="$(DEVICE_RELAY_INSTANCE_ID)"; if [ -z "$$relay_endpoints" ]; then if [ -n "$(DEVICE_RELAY_HOST)" ]; then relay_endpoints="$(DEVICE_RELAY_HOST):$(DEVICE_RELAY_PORT)"; else case "$$device" in "$(IPHONE_17_PRO_DEVICE)") relay_endpoints="$(IPHONE_17_PRO_RELAY_ENDPOINTS)"; [ -n "$$relay_instance_id" ] || relay_instance_id="$(IPHONE_17_PRO_RELAY_INSTANCE_ID)" ;; "$(IPHONE_14_DEVICE)") relay_endpoints="$(IPHONE_14_RELAY_ENDPOINTS)"; [ -n "$$relay_instance_id" ] || relay_instance_id="$(IPHONE_14_RELAY_INSTANCE_ID)" ;; *) echo "DEVICE_RELAY_ENDPOINTS=<host:port[,host:port...]> or DEVICE_RELAY_HOST=<host> is required for unknown device $$device" >&2; exit 2 ;; esac; fi; fi; [ -n "$$relay_instance_id" ] || relay_instance_id="$(CODEX_DOCK_RELAY_INSTANCE_ID)"; log_dir="$(APP_BUILD_LOG_DIR)"; scratch="/tmp/codex-client/device-config-$(APP_BUILD_NUMBER)-$$device"; payload_root="$$scratch/root"; payload="$$payload_root/CodexDock"; source_config="$$payload/relay-config.json"; copy_log="$$log_dir/device-config-$(APP_BUILD_NUMBER)-$$device.log"; mkdir -p "$$payload" "$$log_dir"; rtk node -- scripts/device-relay-config.mjs write --output "$$source_config" --endpoints "$$relay_endpoints" --relay-instance-id "$$relay_instance_id"; echo "configuring $$device with $$relay_endpoints relayInstanceID=$$relay_instance_id"; if ! xcrun devicectl device copy to --device "$$device" --domain-type appDataContainer --domain-identifier "$(APP_BUNDLE_ID)" --source "$$payload_root" --destination "Library/Application Support" > "$$copy_log" 2>&1; then echo "device config copy failed; see $$copy_log" >&2; tail -n 80 "$$copy_log" >&2; exit 1; fi; rtk make --no-print-directory device-config-verify DEVICE="$$device" DEVICE_RELAY_ENDPOINTS="$$relay_endpoints" DEVICE_RELAY_INSTANCE_ID="$$relay_instance_id" APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"'
 
 device-config-verify:
-	@rtk sh -c 'set -eu; device="$(DEVICE)"; if [ -z "$$device" ]; then device="$$(python3 scripts/device.py resolve "$(DEVICE_NAME)")"; fi; relay_endpoints="$(DEVICE_RELAY_ENDPOINTS)"; if [ -z "$$relay_endpoints" ]; then if [ -n "$(DEVICE_RELAY_HOST)" ]; then relay_endpoints="$(DEVICE_RELAY_HOST):$(DEVICE_RELAY_PORT)"; else case "$$device" in "$(IPHONE_17_PRO_DEVICE)") relay_endpoints="$(IPHONE_17_PRO_RELAY_ENDPOINTS)" ;; "$(IPHONE_14_DEVICE)") relay_endpoints="$(IPHONE_14_RELAY_ENDPOINTS)" ;; *) echo "DEVICE_RELAY_ENDPOINTS=<host:port[,host:port...]> or DEVICE_RELAY_HOST=<host> is required for unknown device $$device" >&2; exit 2 ;; esac; fi; fi; relay_port="$(DEVICE_RELAY_PORT)"; log_dir="$(APP_BUILD_LOG_DIR)"; scratch="/tmp/codex-client/device-config-verify-$(APP_BUILD_NUMBER)-$$device"; readback="$$scratch/relay-config.json"; copy_log="$$log_dir/device-config-verify-$(APP_BUILD_NUMBER)-$$device.log"; mkdir -p "$$scratch" "$$log_dir"; if ! xcrun devicectl device copy from --device "$$device" --domain-type appDataContainer --domain-identifier "$(APP_BUNDLE_ID)" --source "$(DEVICE_CONFIG_PATH)" --destination "$$readback" > "$$copy_log" 2>&1; then echo "device config readback failed; see $$copy_log" >&2; tail -n 80 "$$copy_log" >&2; exit 1; fi; python3 -c "import json, sys; data=json.load(open(sys.argv[1])); raw=sys.argv[2]; expected=[]; [expected.append({'\''host'\'': (host[1:-1] if host.startswith('\''['\'') and host.endswith('\'']'\'') else host), '\''port'\'': int(port)}) for item in raw.split('\'','\'') if item.strip() for text in [item.strip()] for host, sep, port in [text.rpartition('\'':'\'')] if sep and host and port]; actual=data.get('\''endpoints'\''); assert actual == expected, '\''expected %r got %r'\'' % (expected, actual)" "$$readback" "$$relay_endpoints"; echo "verified $$device config $$relay_endpoints"'
+	@rtk sh -c 'set -eu; device="$(DEVICE)"; if [ -z "$$device" ]; then device="$$(python3 scripts/device.py resolve "$(DEVICE_NAME)")"; fi; relay_endpoints="$(DEVICE_RELAY_ENDPOINTS)"; relay_instance_id="$(DEVICE_RELAY_INSTANCE_ID)"; if [ -z "$$relay_endpoints" ]; then if [ -n "$(DEVICE_RELAY_HOST)" ]; then relay_endpoints="$(DEVICE_RELAY_HOST):$(DEVICE_RELAY_PORT)"; else case "$$device" in "$(IPHONE_17_PRO_DEVICE)") relay_endpoints="$(IPHONE_17_PRO_RELAY_ENDPOINTS)"; [ -n "$$relay_instance_id" ] || relay_instance_id="$(IPHONE_17_PRO_RELAY_INSTANCE_ID)" ;; "$(IPHONE_14_DEVICE)") relay_endpoints="$(IPHONE_14_RELAY_ENDPOINTS)"; [ -n "$$relay_instance_id" ] || relay_instance_id="$(IPHONE_14_RELAY_INSTANCE_ID)" ;; *) echo "DEVICE_RELAY_ENDPOINTS=<host:port[,host:port...]> or DEVICE_RELAY_HOST=<host> is required for unknown device $$device" >&2; exit 2 ;; esac; fi; fi; [ -n "$$relay_instance_id" ] || relay_instance_id="$(CODEX_DOCK_RELAY_INSTANCE_ID)"; log_dir="$(APP_BUILD_LOG_DIR)"; scratch="/tmp/codex-client/device-config-verify-$(APP_BUILD_NUMBER)-$$device"; readback="$$scratch/relay-config.json"; copy_log="$$log_dir/device-config-verify-$(APP_BUILD_NUMBER)-$$device.log"; mkdir -p "$$scratch" "$$log_dir"; if ! xcrun devicectl device copy from --device "$$device" --domain-type appDataContainer --domain-identifier "$(APP_BUNDLE_ID)" --source "$(DEVICE_CONFIG_PATH)" --destination "$$readback" > "$$copy_log" 2>&1; then echo "device config readback failed; see $$copy_log" >&2; tail -n 80 "$$copy_log" >&2; exit 1; fi; rtk node -- scripts/device-relay-config.mjs verify --input "$$readback" --endpoints "$$relay_endpoints" --relay-instance-id "$$relay_instance_id"; echo "verified $$device config $$relay_endpoints relayInstanceID=$$relay_instance_id"'
+
+device-config-verify-all:
+	@rtk make --no-print-directory device-config-verify DEVICE="$(IPHONE_17_PRO_DEVICE)" DEVICE_RELAY_ENDPOINTS="$(IPHONE_17_PRO_RELAY_ENDPOINTS)" DEVICE_RELAY_INSTANCE_ID="$(IPHONE_17_PRO_RELAY_INSTANCE_ID)" APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"
+	@rtk make --no-print-directory device-config-verify DEVICE="$(IPHONE_14_DEVICE)" DEVICE_RELAY_ENDPOINTS="$(IPHONE_14_RELAY_ENDPOINTS)" DEVICE_RELAY_INSTANCE_ID="$(IPHONE_14_RELAY_INSTANCE_ID)" APP_BUILD_NUMBER="$(APP_BUILD_NUMBER)"
 
 device-launch:
 	@rtk sh -c 'set -eu; device="$(DEVICE)"; if [ -z "$$device" ]; then device="$$(python3 scripts/device.py resolve "$(DEVICE_NAME)")"; fi; log_dir="$(APP_BUILD_LOG_DIR)"; launch_log="$$log_dir/device-launch-$(APP_BUILD_NUMBER)-$$device.log"; mkdir -p "$$log_dir"; if ! xcrun devicectl device process launch --device "$$device" --terminate-existing "$(APP_BUNDLE_ID)" > "$$launch_log" 2>&1; then echo "device launch failed; see $$launch_log" >&2; tail -n 80 "$$launch_log" >&2; exit 1; fi; echo "launched $(APP_BUNDLE_ID) on $$device"'

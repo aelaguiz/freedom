@@ -154,6 +154,32 @@ final class DockStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testLiveOverlayDegradationPublishesPartialHostState() async {
+        let host = makeHost()
+        let store = DockStore(
+            host: host,
+            loader: FakeDockSessionLoader(
+                mode: .success(
+                    DockLoadResult(
+                        summaries: [],
+                        liveOverlay: ThreadListLiveOverlayDTO(ok: false, state: "disabled")
+                    )
+                )
+            )
+        )
+
+        await store.load()
+
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected loaded snapshot, got \(store.state)")
+        }
+        XCTAssertEqual(
+            snapshot.hostStates.map(\.status),
+            [.partial(rowCount: 0, message: "Live status disabled")]
+        )
+    }
+
+    @MainActor
     func testOfflineHostPublishesOfflineState() async {
         let host = makeHost()
         let store = DockStore(
@@ -578,6 +604,59 @@ final class DockStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testHostSettingsAddsAliasesToRelayIdentityHost() async throws {
+        let host = try DockHostConfiguration(
+            endpoints: [
+                try DockRelayEndpoint(host: "amir-m5.fairy-salmon.ts.net", port: 4510),
+            ],
+            relayInstanceID: "Amir-M5"
+        )
+        let registry = try HostRegistry(hosts: [host])
+        let configurationStore = InMemoryLocalDockConfigurationStore()
+        let store = HostSettingsStore(
+            registry: registry,
+            tester: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: []))),
+            configurationStore: configurationStore
+        )
+
+        try await store.saveHost(
+            replacing: nil,
+            host: "home.fairy-salmon.ts.net",
+            port: "4510"
+        )
+
+        XCTAssertEqual(store.registry?.hosts.map(\.id), ["Amir-M5"])
+        XCTAssertEqual(
+            store.registry?.hosts.first?.displayEndpointList,
+            "amir-m5.fairy-salmon.ts.net:4510, home.fairy-salmon.ts.net:4510"
+        )
+        let savedAliasConfiguration = await configurationStore.savedConfiguration()
+        XCTAssertEqual(savedAliasConfiguration?.relayInstanceID, "Amir-M5")
+        XCTAssertEqual(
+            try savedAliasConfiguration?.relayEndpoints.map(\.displayEndpoint),
+            ["amir-m5.fairy-salmon.ts.net:4510", "home.fairy-salmon.ts.net:4510"]
+        )
+
+        try await store.saveHost(
+            replacing: "Amir-M5",
+            host: "backup.fairy-salmon.ts.net",
+            port: "4510"
+        )
+
+        XCTAssertEqual(store.registry?.hosts.map(\.id), ["Amir-M5"])
+        XCTAssertEqual(
+            store.registry?.hosts.first?.displayEndpointList,
+            "backup.fairy-salmon.ts.net:4510, home.fairy-salmon.ts.net:4510"
+        )
+        let savedEditedConfiguration = await configurationStore.savedConfiguration()
+        XCTAssertEqual(savedEditedConfiguration?.relayInstanceID, "Amir-M5")
+        XCTAssertEqual(
+            try savedEditedConfiguration?.relayEndpoints.map(\.displayEndpoint),
+            ["backup.fairy-salmon.ts.net:4510", "home.fairy-salmon.ts.net:4510"]
+        )
+    }
+
+    @MainActor
     func testHostSettingsRejectsCredentialBearingRelayURL() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
@@ -598,6 +677,31 @@ final class DockStoreTests: XCTestCase {
             XCTAssertEqual(
                 error as? HostSettingsError,
                 .invalidEndpoint("token@192.168.50.117:4510")
+            )
+        }
+    }
+
+    @MainActor
+    func testHostSettingsRejectsRawAppServerPort() async throws {
+        let host = makeHost()
+        let registry = try HostRegistry(hosts: [host])
+        let store = HostSettingsStore(
+            registry: registry,
+            tester: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: []))),
+            configurationStore: InMemoryLocalDockConfigurationStore()
+        )
+
+        do {
+            try await store.saveHost(
+                replacing: nil,
+                host: "127.0.0.1",
+                port: "4500"
+            )
+            XCTFail("Expected raw app-server relay port to be rejected")
+        } catch {
+            XCTAssertEqual(
+                error as? HostSettingsError,
+                .invalidEndpoint("127.0.0.1:4500")
             )
         }
     }
@@ -895,7 +999,7 @@ private func makeHost(
     displayName: String = "Amir-M5",
     url: String? = nil
 ) -> DockHostConfiguration {
-    let defaultURL = id == "Amir-M5" ? "ws://192.168.50.117:4500" : "ws://\(id):4500"
+    let defaultURL = id == "Amir-M5" ? "ws://192.168.50.117:4510" : "ws://\(id):4510"
     let parsedURL = URL(string: url ?? defaultURL)!
     return try! DockHostConfiguration(
         host: parsedURL.host!,

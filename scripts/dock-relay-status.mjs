@@ -58,6 +58,21 @@ function safeErrorSummary(error, extra = {}) {
   });
 }
 
+function projectLiveStatus(liveStatus = null) {
+  const overlay = liveStatus?.liveOverlay || null;
+  return sanitizeFields({
+    checkedAt: liveStatus?.checkedAt || null,
+    status: liveStatus?.status || "unknown",
+    ok: liveStatus?.ok ?? null,
+    ageMs: overlay?.ageMs ?? null,
+    overlayState: overlay?.state || null,
+    endpoints: Array.isArray(liveStatus?.endpoints) ? liveStatus.endpoints.length : 0,
+    failedEndpoints: liveStatus?.failedEndpoints || 0,
+    rows: Array.isArray(liveStatus?.rows) ? liveStatus.rows.length : 0,
+    error: liveStatus?.error || null,
+  });
+}
+
 function createRelayStatusTracker({ clock = () => new Date() } = {}) {
   const startedAt = clock();
   let lastRawAppServerHealth = {
@@ -77,6 +92,12 @@ function createRelayStatusTracker({ clock = () => new Date() } = {}) {
     active: false,
     attempts: 0,
     nextRetryAt: null,
+  };
+  const requests = {
+    total: 0,
+    succeeded: 0,
+    failed: 0,
+    byMethod: new Map(),
   };
 
   function timestamp() {
@@ -127,10 +148,62 @@ function createRelayStatusTracker({ clock = () => new Date() } = {}) {
     });
   }
 
-  function snapshot(config, runtime = {}) {
+  function recordRequest({ method, ok, code = null, durationMs = null }) {
+    const key = String(method || "unknown");
+    const existing = requests.byMethod.get(key) || {
+      method: key,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      lastCode: null,
+      lastDurationMs: null,
+      totalDurationMs: 0,
+    };
+    existing.total += 1;
+    existing.lastCode = code;
+    existing.lastDurationMs = Number.isFinite(durationMs) ? Math.max(0, Math.floor(durationMs)) : null;
+    if (existing.lastDurationMs !== null) {
+      existing.totalDurationMs += existing.lastDurationMs;
+    }
+    if (ok) {
+      existing.succeeded += 1;
+      requests.succeeded += 1;
+    } else {
+      existing.failed += 1;
+      requests.failed += 1;
+    }
+    requests.total += 1;
+    requests.byMethod.set(key, existing);
+  }
+
+  function requestMetrics() {
+    const byMethod = [...requests.byMethod.values()]
+      .sort((lhs, rhs) => lhs.method.localeCompare(rhs.method))
+      .map((entry) => ({
+        method: entry.method,
+        total: entry.total,
+        succeeded: entry.succeeded,
+        failed: entry.failed,
+        lastCode: entry.lastCode,
+        lastDurationMs: entry.lastDurationMs,
+        avgDurationMs: entry.total > 0 ? Math.round(entry.totalDurationMs / entry.total) : null,
+      }));
+    return {
+      total: requests.total,
+      succeeded: requests.succeeded,
+      failed: requests.failed,
+      byMethod,
+    };
+  }
+
+  function uptimeSeconds() {
     const now = clock();
     const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
     const startedMs = startedAt instanceof Date ? startedAt.getTime() : new Date(startedAt).getTime();
+    return Math.max(0, Math.floor((nowMs - startedMs) / 1000));
+  }
+
+  function snapshot(config, runtime = {}) {
     const endpointHost = (() => {
       try {
         return new URL(config.openAIRealtimeTranscriptionEndpoint).hostname;
@@ -144,9 +217,10 @@ function createRelayStatusTracker({ clock = () => new Date() } = {}) {
       version: config.version,
       host: {
         id: config.hostId || null,
+        relayInstanceID: config.hostId || null,
         displayName: config.hostName || config.bonjourName || null,
       },
-      uptimeSeconds: Math.max(0, Math.floor((nowMs - startedMs) / 1000)),
+      uptimeSeconds: uptimeSeconds(),
       listen: {
         host: config.listenHost,
         port: config.port,
@@ -168,9 +242,63 @@ function createRelayStatusTracker({ clock = () => new Date() } = {}) {
         lastError: lastTranscriptionError,
       },
       liveDiscovery: lastLiveDiscoveryResult,
+      liveStatus: projectLiveStatus(runtime.liveStatus),
       connections: {
         downstreamActive: runtime.downstreamActive || 0,
         upstreamActive: runtime.upstreamActive || 0,
+        upstreamPools: Array.isArray(runtime.upstreamPools) ? runtime.upstreamPools : [],
+      },
+      errors: {
+        lastUpstreamError,
+        lastClientFacingError,
+      },
+      reconnect,
+    });
+  }
+
+  function metricsSnapshot(config, runtime = {}) {
+    return sanitizeFields({
+      ok: true,
+      service: "codex-dock-relay",
+      version: config.version,
+      host: {
+        id: config.hostId || null,
+        relayInstanceID: config.hostId || null,
+        displayName: config.hostName || config.bonjourName || null,
+      },
+      uptimeSeconds: uptimeSeconds(),
+      history: {
+        lastHealthStatus: lastRawAppServerHealth.status,
+        lastHealthOK: lastRawAppServerHealth.ok,
+      },
+      liveStatus: projectLiveStatus(runtime.liveStatus),
+      connections: {
+        downstreamActive: runtime.downstreamActive || 0,
+        upstreamActive: runtime.upstreamActive || 0,
+        upstreamPools: Array.isArray(runtime.upstreamPools) ? runtime.upstreamPools : [],
+      },
+      requests: requestMetrics(),
+      reconnect,
+    });
+  }
+
+  function debugSessionsSnapshot(config, runtime = {}) {
+    return sanitizeFields({
+      ok: true,
+      service: "codex-dock-relay",
+      version: config.version,
+      host: {
+        id: config.hostId || null,
+        relayInstanceID: config.hostId || null,
+        displayName: config.hostName || config.bonjourName || null,
+      },
+      liveStatus: projectLiveStatus(runtime.liveStatus),
+      liveRows: Array.isArray(runtime.liveRows) ? runtime.liveRows : [],
+      sessions: Array.isArray(runtime.sessions) ? runtime.sessions : [],
+      connections: {
+        downstreamActive: runtime.downstreamActive || 0,
+        upstreamActive: runtime.upstreamActive || 0,
+        upstreamPools: Array.isArray(runtime.upstreamPools) ? runtime.upstreamPools : [],
       },
       errors: {
         lastUpstreamError,
@@ -181,9 +309,12 @@ function createRelayStatusTracker({ clock = () => new Date() } = {}) {
   }
 
   return {
+    debugSessionsSnapshot,
+    metricsSnapshot,
     recordClientFacingError,
     recordLiveDiscovery,
     recordRawHealth,
+    recordRequest,
     recordReconnect,
     recordTranscriptionError,
     recordUpstreamError,
@@ -219,6 +350,12 @@ function classifyRelayRequestError(method, error) {
       overload: true,
     };
   }
+  if (error?.data?.subsystem) {
+    return {
+      ...error.data,
+      retryable: error.data.retryable ?? error.code !== -32602,
+    };
+  }
   if (method === "thread/list" || method === "thread/read" || method === "thread/turns/list"
     || method === "thread/archive" || method === "thread/unarchive") {
     return {
@@ -245,6 +382,7 @@ export {
   checkRawAppServerHealth,
   classifyRelayRequestError,
   createRelayStatusTracker,
+  projectLiveStatus,
   rawHealthURLForHistoryURL,
   sanitizedField,
 };

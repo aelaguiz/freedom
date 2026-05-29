@@ -46,7 +46,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         XCTAssertFalse(events.contains { $0.body.contains("{") || $0.body.contains("}") })
     }
 
-    func testNewestFirstDisplayOrderPreservesSameTurnEventOrder() {
+    func testNaturalFlowDisplayOrderPreservesSameTurnEventOrder() {
         let thread = ThreadDTO(
             id: "thread-1",
             turns: [
@@ -91,10 +91,10 @@ final class ThreadEventNormalizerTests: XCTestCase {
         )
 
         let events = ThreadEventNormalizer.events(from: thread)
-        let displayEvents = ThreadEventDisplayOrder.newestFirst(events)
+        let displayEvents = ThreadEventDisplayOrder.naturalFlow(events)
 
         XCTAssertEqual(events.map(\.body), ["Old request", "New request", "New answer", "swift test", "passed"])
-        XCTAssertEqual(displayEvents.map(\.body), ["New request", "New answer", "swift test", "passed", "Old request"])
+        XCTAssertEqual(displayEvents.map(\.body), ["Old request", "New request", "New answer", "swift test", "passed"])
     }
 
     func testStoredTurnEventsCarryDatesForDisplayOrdering() {
@@ -447,7 +447,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             displayGroupDate: Date(timeIntervalSince1970: 3_000)
         )
 
-        let fullTranscript = ThreadEventDisplayOrder.newestFirst([
+        let fullTranscript = ThreadEventDisplayOrder.naturalFlow([
             oldMessage,
             newerMessage,
             hiddenRequestOnOldTurn,
@@ -455,7 +455,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         let messages = ThreadEventVisibilityMode.messages.visibleEvents(from: fullTranscript)
 
         XCTAssertEqual(fullTranscript.map(\.turnID), ["turn-old", "turn-old", "turn-new"])
-        XCTAssertEqual(messages.map(\.body), ["Newer visible message", "Older visible message"])
+        XCTAssertEqual(messages.map(\.body), ["Older visible message", "Newer visible message"])
     }
 
     func testVisibilityProjectionIsStableWhenInputWasAlreadyDisplayOrdered() {
@@ -481,7 +481,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             displayGroupDate: timestamp
         )
 
-        let once = ThreadEventDisplayOrder.newestFirst([first, second])
+        let once = ThreadEventDisplayOrder.naturalFlow([first, second])
         let twice = ThreadEventVisibilityMode.messages.visibleEvents(from: once)
 
         XCTAssertEqual(twice.map(\.id), once.map(\.id))

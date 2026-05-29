@@ -376,7 +376,7 @@ private func makeHost(
     displayName: String = "Amir-M5",
     url: String? = nil
 ) -> DockHostConfiguration {
-    let defaultURL = id == "Amir-M5" ? "ws://192.168.50.117:4500" : "ws://\(id):4500"
+    let defaultURL = id == "Amir-M5" ? "ws://192.168.50.117:4510" : "ws://\(id):4510"
     let parsedURL = URL(string: url ?? defaultURL)!
     return try! DockHostConfiguration(
         host: parsedURL.host!,

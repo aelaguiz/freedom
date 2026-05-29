@@ -58,11 +58,16 @@ Local services and app launch:
 rtk make services
 rtk make app-server-status
 rtk make dock-relay-status
+rtk make relay-doctor
 rtk make app-server-env
 rtk make app SIM='iPhone 17'
+rtk make sim-config-verify SIM='iPhone 17'
 rtk make device-install DEVICE=<device-udid> DEVELOPMENT_TEAM=<team-id>
+rtk make iphone-17-pro
+rtk make iphone-14
 rtk make device-install-all
 rtk make device-config-verify DEVICE=<device-udid>
+rtk make device-config-verify-all
 ```
 
 Mobile builds and installs are Makefile-owned. Do not run raw `xcodebuild`,
@@ -79,7 +84,7 @@ Use the smallest relevant check first:
 - Dock, host registry, relay bootstrap, archive, local metadata, or host settings changes: start with `rtk swift test --filter DockStoreTests`.
 - Thread detail, live events, composer, voice transcript handling, or request-card responses: start with `rtk swift test --filter ThreadDetailStoreTests`.
 - App target, Info.plist, assets, project config, simulator launch, or installed UI behavior: use `rtk make app SIM='iPhone 17'` or `rtk make app-test SIM='iPhone 17'`. These targets regenerate the Xcode project and write detailed build logs under `.codex-dock/logs/`.
-- Physical installed-app behavior: use `rtk make device-install DEVICE=<device-udid>` or `rtk make device-install-all`. These targets fresh-build with a timestamped `CURRENT_PROJECT_VERSION`, install, write the per-device relay config, verify the installed build number, and launch the app.
+- Physical installed-app behavior: use `rtk make iphone-17-pro`, `rtk make iphone-14`, `rtk make device-install DEVICE=<device-udid>`, or `rtk make device-install-all`. These targets fresh-build with a timestamped `CURRENT_PROJECT_VERSION`, install, write the per-device relay config, verify the installed build number, and launch the app.
 - If only `AGENTS.md` changed, read it back and check `rtk git status --short`; app tests are not needed.
 
 If a check cannot run because Xcode, a simulator, a physical device, signing,
@@ -115,6 +120,9 @@ Physical iPhone endpoint expectations:
   `192.168.50.74:4510`.
 - Keep these as separate per-device saved app configs. Do not collapse them
   into one baked-in or hard-coded host.
+- Both physical device configs should carry `relayInstanceID` /
+  `CODEX_DOCK_RELAY_INSTANCE_ID` as `Amir-M5`. The ID names the logical relay;
+  endpoint lists are just routes to that relay.
 
 Loopback WebSockets such as `ws://127.0.0.1:4500`, Unix sockets, mocks, and
 scripted transports are local development tools. They are not physical-phone
@@ -137,7 +145,7 @@ when the task specifically calls for it.
 
 The app uses Apple unified logging with subsystem
 `com.aelaguiz.CodexDock`. The Dock relay writes structured JSON logs to
-stderr at `.codex-dock/dock-relay.err.log` when launched by `rtk make
+stderr at `.codex-dock/logs/dock-relay.err.log` when launched by `rtk make
 services`.
 
 Capture simulator app logs with:
@@ -176,7 +184,7 @@ rtk make dock-relay-logs
 The raw relay command is:
 
 ```bash
-rtk tail -n 200 -f .codex-dock/dock-relay.err.log
+rtk tail -n 200 -f .codex-dock/logs/dock-relay.err.log
 ```
 
 Never log `OPENAI_API_KEY`, bearer tokens, base64 audio, raw audio bytes,

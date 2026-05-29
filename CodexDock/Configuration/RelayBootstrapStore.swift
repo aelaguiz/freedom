@@ -105,14 +105,16 @@ public final class RelayBootstrapStore: ObservableObject {
 
     public func use(_ relay: DiscoveredRelay) async {
         DockLog.bootstrap.notice("relay discovery selection started relay_id=\(relay.id, privacy: .public) name=\(relay.displayName, privacy: .public)")
-        await useEndpoint(relay.endpoint)
+        await useEndpoints([relay.endpoint], relayInstanceID: relay.relayInstanceID, stopDiscovery: true)
     }
 
     nonisolated public static func validatedEndpoint(host: String, port: String) throws -> DockRelayEndpoint {
         guard let portNumber = Int(port.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             throw DockHostConfigurationError.invalidPort(port)
         }
-        return try DockRelayEndpoint(host: host, port: portNumber)
+        let endpoint = try DockRelayEndpoint(host: host, port: portNumber)
+        try endpoint.validateAppFacingRelayEndpoint()
+        return endpoint
     }
 
     private func handleDiscoveredRelays(_ relays: [DiscoveredRelay]) {
@@ -135,7 +137,13 @@ public final class RelayBootstrapStore: ObservableObject {
 
         if case .ready(let registry) = state {
             Task {
-                await upsert(relays.map(\.endpoint), into: registry)
+                var currentRegistry = registry
+                for relay in relays {
+                    await upsert([relay.endpoint], relayInstanceID: relay.relayInstanceID, into: currentRegistry, stopDiscovery: false)
+                    if case .ready(let updatedRegistry) = self.state {
+                        currentRegistry = updatedRegistry
+                    }
+                }
             }
             return
         }
@@ -218,10 +226,19 @@ public final class RelayBootstrapStore: ObservableObject {
             }
             if case .ready(let registry) = state {
                 isLoadingSavedConfiguration = false
-                await upsert(endpoints, into: registry, stopDiscovery: false)
+                await upsert(
+                    endpoints,
+                    relayInstanceID: configuration.relayInstanceID,
+                    into: registry,
+                    stopDiscovery: false
+                )
             } else if case .discovering = state, !isBackgrounded, shouldUseSaved {
                 isLoadingSavedConfiguration = false
-                await useEndpoints(endpoints, stopDiscovery: true)
+                await useEndpoints(
+                    endpoints,
+                    relayInstanceID: configuration.relayInstanceID,
+                    stopDiscovery: true
+                )
             } else {
                 isLoadingSavedConfiguration = false
             }
@@ -248,10 +265,14 @@ public final class RelayBootstrapStore: ObservableObject {
     }
 
     private func useEndpoint(_ endpoint: DockRelayEndpoint) async {
-        await useEndpoints([endpoint], stopDiscovery: true)
+        await useEndpoints([endpoint], relayInstanceID: nil, stopDiscovery: true)
     }
 
-    private func useEndpoints(_ endpoints: [DockRelayEndpoint], stopDiscovery: Bool) async {
+    private func useEndpoints(
+        _ endpoints: [DockRelayEndpoint],
+        relayInstanceID: String? = nil,
+        stopDiscovery: Bool
+    ) async {
         guard !isUsingConfiguration else {
             return
         }
@@ -261,7 +282,7 @@ public final class RelayBootstrapStore: ObservableObject {
         }
 
         do {
-            let persistence = LocalRelayEndpointList(endpoints: endpoints)
+            let persistence = LocalRelayEndpointList(endpoints: endpoints, relayInstanceID: relayInstanceID)
             try await configurationStore.save(persistence)
             DockLog.bootstrap.notice("relay configuration saved endpoints=\(persistence.endpoints.count, privacy: .public)")
         } catch {
@@ -271,7 +292,7 @@ public final class RelayBootstrapStore: ObservableObject {
         }
 
         do {
-            state = .ready(try HostRegistry(hosts: endpoints.map(DockHostConfiguration.init(endpoint:))))
+            state = .ready(try HostRegistry(hosts: Self.hosts(for: endpoints, relayInstanceID: relayInstanceID)))
             DockLog.bootstrap.notice("relay bootstrap ready hosts=\(endpoints.count, privacy: .public)")
             if stopDiscovery {
                 stopDiscoveryIfNeeded()
@@ -284,20 +305,68 @@ public final class RelayBootstrapStore: ObservableObject {
 
     private func upsert(
         _ endpoints: [DockRelayEndpoint],
+        relayInstanceID: String?,
         into registry: HostRegistry,
         stopDiscovery: Bool = true
     ) async {
-        let existing = registry.hosts.map(\.endpoint)
-        let merged = existing + endpoints.filter { endpoint in
-            !existing.contains { $0.id == endpoint.id }
+        guard let candidate = try? Self.hosts(for: endpoints, relayInstanceID: relayInstanceID).first else {
+            return
         }
-        guard merged.count != existing.count else {
+        var hosts = registry.hosts
+        if let index = hosts.firstIndex(where: { $0.id == candidate.id }) {
+            let existing = hosts[index]
+            let mergedEndpoints = existing.endpoints + candidate.endpoints.filter { endpoint in
+                !existing.endpoints.contains { $0.id == endpoint.id }
+            }
+            guard mergedEndpoints.count != existing.endpoints.count else {
+                if stopDiscovery {
+                    stopDiscoveryIfNeeded()
+                }
+                return
+            }
+            hosts[index] = (try? DockHostConfiguration(
+                endpoints: mergedEndpoints,
+                relayInstanceID: existing.relayInstanceID ?? candidate.relayInstanceID
+            )) ?? existing
+        } else {
+            hosts.append(candidate)
+        }
+
+        let persistedRelayInstanceID = hosts.count == 1 ? hosts[0].relayInstanceID : nil
+        let persistedEndpoints = hosts.flatMap(\.endpoints)
+        guard let updatedRegistry = try? HostRegistry(hosts: hosts),
+              updatedRegistry != registry
+        else {
             if stopDiscovery {
                 stopDiscoveryIfNeeded()
             }
             return
         }
-        await useEndpoints(merged, stopDiscovery: stopDiscovery)
+        guard hosts.count == 1 || persistedRelayInstanceID != nil else {
+            DockLog.bootstrap.warning("relay upsert skipped reason=missing_relay_instance_id_for_endpoint_aliases hosts=\(hosts.count, privacy: .public)")
+            if stopDiscovery {
+                stopDiscoveryIfNeeded()
+            }
+            return
+        }
+        await useEndpoints(
+            persistedEndpoints,
+            relayInstanceID: persistedRelayInstanceID,
+            stopDiscovery: stopDiscovery
+        )
+    }
+
+    private static func hosts(
+        for endpoints: [DockRelayEndpoint],
+        relayInstanceID: String?
+    ) throws -> [DockHostConfiguration] {
+        let trimmedRelayInstanceID = relayInstanceID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return [
+            try DockHostConfiguration(
+                endpoints: endpoints,
+                relayInstanceID: trimmedRelayInstanceID.isEmpty ? nil : trimmedRelayInstanceID
+            )
+        ]
     }
 }
 

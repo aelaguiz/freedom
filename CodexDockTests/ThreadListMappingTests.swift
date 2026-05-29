@@ -37,7 +37,12 @@ final class ThreadListMappingTests: XCTestCase {
                 }
               ],
               "nextCursor": null,
-              "backwardsCursor": "cursor-1"
+              "backwardsCursor": "cursor-1",
+              "liveOverlay": {
+                "ok": false,
+                "state": "disabled",
+                "ageMs": null
+              }
             }
             """
         )
@@ -46,6 +51,7 @@ final class ThreadListMappingTests: XCTestCase {
         XCTAssertEqual(response.data[0].id, "thread-1")
         XCTAssertEqual(response.data[0].status, .active(activeFlags: [.waitingOnUserInput]))
         XCTAssertEqual(response.backwardsCursor, "cursor-1")
+        XCTAssertEqual(response.liveOverlay?.degradedMessage, "Live status disabled")
     }
 
     func testMapsCompleteThreadToHostScopedSummary() {
@@ -153,6 +159,31 @@ final class ThreadListMappingTests: XCTestCase {
         let summary = result.summaries[0]
         XCTAssertEqual(summary.displayTitle, "Stable thread title")
         XCTAssertEqual(summary.shortEventSummary, .known("Latest agent update"))
+    }
+
+    func testMapsRelayLatestSummaryWithoutListTurnsToShortEventSummary() {
+        let response = ThreadListResponseDTO(
+            data: [
+                ThreadDTO(
+                    id: "thread-latest-summary",
+                    sessionId: "session-latest-summary",
+                    preview: "Original opening prompt",
+                    createdAt: 1_790_000_000,
+                    updatedAt: 1_790_000_030,
+                    status: .idle,
+                    cwd: "/Users/aelaguiz/workspace/codex-client",
+                    source: .string("cli"),
+                    name: "Stable thread title",
+                    latestSummary: "Latest useful message from relay",
+                    turns: []
+                ),
+            ]
+        )
+
+        let result = SessionSummaryMapper.map(response: response, hostID: "Amir-M5")
+
+        XCTAssertEqual(result.failures, [])
+        XCTAssertEqual(result.summaries[0].shortEventSummary, .known("Latest useful message from relay"))
     }
 
     func testSparsePayloadMapsUnknownOptionalMetadataWithoutDroppingThread() throws {

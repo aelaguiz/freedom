@@ -77,16 +77,19 @@ public struct InitializeResponse: Codable, Equatable, Sendable {
     public let codexHome: String
     public let platformFamily: String
     public let platformOs: String
+    public let relayInstanceID: String?
 
     public init(
         userAgent: String,
         codexHome: String,
         platformFamily: String,
-        platformOs: String
+        platformOs: String,
+        relayInstanceID: String? = nil
     ) {
         self.userAgent = userAgent
         self.codexHome = codexHome
         self.platformFamily = platformFamily
         self.platformOs = platformOs
+        self.relayInstanceID = relayInstanceID
     }
 }

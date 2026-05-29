@@ -6,16 +6,21 @@ import {
   attentionFlagsForServerRequest,
   buildBonjourAdvertisementArgs,
   isPhoneRequestAuthorized,
-  mergeThreadListRows,
   mergeActiveFlags,
   preferThread,
   sanitizeRelayFields,
-  shouldCollectLiveRowsForThreadList,
   startServer,
   statusPriority,
   threadMatchesSourceKinds,
 } from "./dock-relay.mjs";
 import { createRelayLogger } from "./dock-relay-logger.mjs";
+import { liveOverlayForSnapshot } from "./dock-relay-live-status-cache.mjs";
+import { ThreadSummaryCache } from "./dock-relay-thread-summary-cache.mjs";
+import {
+  clampThreadListParams,
+  disabledLiveOverlay,
+  liveStatusCacheForConfig,
+} from "./dock-relay-thread-data.mjs";
 
 import {
   closeWebSocketServer,
@@ -135,10 +140,71 @@ test("active attention outranks plain active when deduping live rows", () => {
   assert.equal(preferThread(plain, needsAttention), needsAttention);
 });
 
-test("archived thread/list does not merge live loopback rows", () => {
-  assert.equal(shouldCollectLiveRowsForThreadList({ archived: true }), false);
-  assert.equal(shouldCollectLiveRowsForThreadList({ archived: false }), true);
-  assert.equal(shouldCollectLiveRowsForThreadList({}), true);
+test("thread/list params clamp to Codex's 100 row page cap", () => {
+  assert.deepEqual(clampThreadListParams({ limit: 200 }), { limit: 100 });
+  assert.deepEqual(clampThreadListParams({ limit: 0, cursor: "abc" }), {
+    limit: 100,
+    cursor: "abc",
+  });
+  assert.deepEqual(clampThreadListParams({ limit: 37, archived: true }), {
+    limit: 37,
+    archived: true,
+  });
+});
+
+test("thread summary cache keeps the last useful summary while a row version warms", () => {
+  const cache = new ThreadSummaryCache({
+    readThreadTurns: async () => ({ data: [] }),
+  });
+  cache.remember("thread-1", {
+    version: "10",
+    summary: "Latest known useful update",
+    checkedAtMs: 1,
+  });
+
+  const decorated = cache.decorateRows([
+    {
+      id: "thread-1",
+      preview: "Original opening prompt",
+      updatedAt: 20,
+    },
+  ]);
+
+  assert.equal(decorated[0].latestSummary, "Latest known useful update");
+});
+
+test("phase 2 live overlay is explicit degraded metadata", () => {
+  assert.deepEqual(disabledLiveOverlay(), {
+    ok: false,
+    state: "disabled",
+    ageMs: null,
+  });
+});
+
+test("phase 3 live overlay reports partial live discovery failure", () => {
+  const now = Date.now();
+  const overlay = liveOverlayForSnapshot({
+    ok: true,
+    checkedAtMs: now,
+    endpoints: [{ url: "ws://127.0.0.1:4511" }],
+    failedEndpoints: 1,
+    rows: [],
+  });
+
+  assert.equal(overlay.ok, false);
+  assert.equal(overlay.state, "degraded");
+  assert.equal(overlay.endpoints, 1);
+  assert.equal(overlay.failedEndpoints, 1);
+});
+
+test("live status default refresh cadence stays below stale threshold", () => {
+  const cache = liveStatusCacheForConfig({
+    historyUrl: "ws://127.0.0.1:4500",
+  });
+
+  assert.equal(cache.refreshIntervalMs < cache.maxAgeMs, true);
+  assert.equal(cache.refreshIntervalMs, 2_500);
+  assert.equal(cache.maxAgeMs, 5_000);
 });
 
 test("default thread/list sourceKinds keeps only interactive live sources", () => {
@@ -254,153 +320,6 @@ test("subAgent sourceKinds match broad and specific live variants", () => {
   assert.equal(threadMatchesSourceKinds(other, ["subAgentOther"]), true);
 });
 
-test("thread/list live merge applies source filtering before sanitizing results", () => {
-  const historyRows = [
-    { id: "history-human", source: "cli", updatedAt: 10 },
-  ];
-  const liveRows = [
-    {
-      id: "live-human",
-      source: { custom: "chatgpt" },
-      updatedAt: 30,
-      dockRelaySource: { url: "ws://127.0.0.1:4555" },
-    },
-    {
-      id: "live-exec",
-      source: "exec",
-      updatedAt: 40,
-      dockRelaySource: { url: "ws://127.0.0.1:4556" },
-    },
-    {
-      id: "live-subagent",
-      source: { subAgent: "review" },
-      updatedAt: 50,
-      dockRelaySource: { url: "ws://127.0.0.1:4557" },
-    },
-  ];
-
-  const filteredLiveRows = liveRows.filter((row) => threadMatchesSourceKinds(row));
-  const data = mergeThreadListRows(historyRows, filteredLiveRows);
-
-  assert.deepEqual(data.map((row) => row.id), ["live-human", "history-human"]);
-  assert.equal(Object.hasOwn(data[0], "dockRelaySource"), false);
-});
-
-test("thread/list live merge borrows fresher history timestamp for same thread id", () => {
-  const historyRows = [
-    {
-      id: "active-stale-read",
-      updatedAt: 300,
-      status: { type: "notLoaded" },
-    },
-    {
-      id: "other-live",
-      updatedAt: 200,
-      status: { type: "notLoaded" },
-    },
-  ];
-  const liveRows = [
-    {
-      id: "active-stale-read",
-      updatedAt: 10,
-      source: "cli",
-      status: { type: "active", activeFlags: ["waitingOnUserInput"] },
-      dockRelaySource: { url: "ws://127.0.0.1:4555" },
-    },
-    {
-      id: "other-live",
-      updatedAt: 250,
-      source: "cli",
-      status: { type: "active", activeFlags: [] },
-      dockRelaySource: { url: "ws://127.0.0.1:4556" },
-    },
-  ];
-
-  const data = mergeThreadListRows(historyRows, liveRows);
-
-  assert.deepEqual(data.map((row) => row.id), ["active-stale-read", "other-live"]);
-  assert.equal(data[0].updatedAt, 300);
-  assert.deepEqual(data[0].status, {
-    type: "active",
-    activeFlags: ["waitingOnUserInput"],
-  });
-  assert.equal(data[0].source, "cli");
-  assert.equal(Object.hasOwn(data[0], "dockRelaySource"), false);
-});
-
-test("thread/list live merge does not downgrade fresher live timestamp", () => {
-  const historyRows = [
-    {
-      id: "active-fresh-live",
-      updatedAt: 10,
-      status: { type: "notLoaded" },
-    },
-  ];
-  const liveRows = [
-    {
-      id: "active-fresh-live",
-      updatedAt: 300,
-      status: { type: "active", activeFlags: [] },
-      dockRelaySource: { url: "ws://127.0.0.1:4555" },
-    },
-  ];
-
-  const data = mergeThreadListRows(historyRows, liveRows);
-
-  assert.equal(data.length, 1);
-  assert.equal(data[0].updatedAt, 300);
-  assert.equal(data[0].status.type, "active");
-});
-
-test("thread/list duplicate live history row consumes one relay slot under limit", () => {
-  const historyRows = [
-    {
-      id: "duplicate-thread",
-      updatedAt: 300,
-      status: { type: "notLoaded" },
-    },
-    {
-      id: "history-fill",
-      updatedAt: 200,
-      status: { type: "idle" },
-    },
-  ];
-  const liveRows = [
-    {
-      id: "duplicate-thread",
-      updatedAt: 10,
-      status: { type: "active", activeFlags: [] },
-      dockRelaySource: { url: "ws://127.0.0.1:4555" },
-    },
-  ];
-
-  const data = mergeThreadListRows(historyRows, liveRows, { limit: 2 });
-
-  assert.deepEqual(data.map((row) => row.id), ["duplicate-thread", "history-fill"]);
-  assert.equal(data[0].updatedAt, 300);
-  assert.equal(data[0].status.type, "active");
-});
-
-test("thread/list keeps live rows inside relay limit before filling with history", () => {
-  const historyRows = [
-    { id: "history-newest", updatedAt: 100, status: { type: "idle" } },
-    { id: "history-next", updatedAt: 90, status: { type: "idle" } },
-  ];
-  const liveRows = [
-    {
-      id: "live-older",
-      updatedAt: 10,
-      status: { type: "active", activeFlags: [] },
-      dockRelaySource: { url: "ws://127.0.0.1:4555" },
-    },
-  ];
-
-  const data = mergeThreadListRows(historyRows, liveRows, { limit: 2 });
-
-  assert.deepEqual(data.map((row) => row.id), ["live-older", "history-newest"]);
-  assert.equal(Object.hasOwn(data[0], "dockRelaySource"), false);
-});
-
 test("relay source marker is never returned to clients", () => {
   assert.deepEqual(
     sanitizeRelayFields({
@@ -435,6 +354,7 @@ test("phone auth none permits local phone connections without a bearer token", (
 test("Bonjour advertisement contains only non-secret relay metadata", () => {
   const args = buildBonjourAdvertisementArgs({
     bonjourName: "Codex Dock Test",
+    hostId: "Amir-M5",
     phoneAuth: "none",
     port: 4510,
     version: "0.1.0",
@@ -448,6 +368,7 @@ test("Bonjour advertisement contains only non-secret relay metadata", () => {
     "4510",
   ]);
   assert.ok(args.includes("version=0.1.0"));
+  assert.ok(args.includes("relay-id=Amir-M5"));
   assert.equal(args.includes("auth=none"), false);
   assert.equal(args.includes("scheme=ws"), false);
   assert.equal(args.some((value) => /token|secret|key/i.test(value)), false);

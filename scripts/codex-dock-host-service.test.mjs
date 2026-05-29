@@ -165,6 +165,7 @@ test("app-config output is app-facing and non-secret", () => {
 
   assert.deepEqual(json, {
     version: 1,
+    relayInstanceID: "home",
     hosts: [
       {
         host: "home.local",
@@ -173,6 +174,7 @@ test("app-config output is app-facing and non-secret", () => {
     ],
   });
   assert.match(envText, /CODEX_DOCK_HOSTS=home\.local:4510/);
+  assert.match(envText, /CODEX_DOCK_RELAY_INSTANCE_ID=home/);
   assert.equal(envText.includes("CODEX_DOCK_HOST_HOME_WS"), false);
   assert.equal(envText.includes("CODEX_DOCK_HOST_HOME_NAME"), false);
   assert.equal(envText.includes("CODEX_DOCK_HOST_HOME_AUTH_MODE"), false);
@@ -180,6 +182,17 @@ test("app-config output is app-facing and non-secret", () => {
   assert.equal(combined.includes("app-server.token"), false);
   assert.equal(combined.includes("service.env"), false);
   assert.equal(combined.includes("secret"), false);
+});
+
+test("app-config rejects raw app-server port as relay public URL", () => {
+  assert.throws(
+    () => makeConfig({
+      options: {
+        "relay-public-url": "ws://127.0.0.1:4500",
+      },
+    }),
+    /relay public URL must point at the Dock relay on :4510, not the raw Codex app-server on :4500/,
+  );
 });
 
 test("network profiles produce relay URLs without app or relay code depending on Tailscale", () => {
@@ -301,8 +314,10 @@ test("install writes service files creates a token and calls launchd through an 
   assert.equal(output.stdout().includes("app-server.token"), false);
   assert.match(fs.readFileSync(path.join(cwd, ".codex-dock-test", "service.env"), "utf8"), /OPENAI_API_KEY=sk-testtesttesttesttest/);
   assert.match(fs.readFileSync(path.join(cwd, ".codex-dock-test", "service.env"), "utf8"), /CODEX_DOCK_HOSTS=home\.local:4510/);
+  assert.match(fs.readFileSync(path.join(cwd, ".codex-dock-test", "service.env"), "utf8"), /CODEX_DOCK_RELAY_INSTANCE_ID=home/);
   const generatedHostEnv = fs.readFileSync(path.join(cwd, ".codex-dock-test", "host.env"), "utf8");
   assert.match(generatedHostEnv, /CODEX_DOCK_HOSTS=home\.local:4510/);
+  assert.match(generatedHostEnv, /CODEX_DOCK_RELAY_INSTANCE_ID=home/);
   assert.equal(generatedHostEnv.includes("CODEX_DOCK_HOST_HOME_AUTH_MODE"), false);
   assert.equal(generatedHostEnv.includes("CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS"), false);
   assert.equal(generatedHostEnv.includes("OPENAI_API_KEY"), false);
@@ -357,6 +372,7 @@ test("install writes two-host app env from app-safe service env keys only", asyn
 
   const hostEnv = fs.readFileSync(path.join(runtimeDir, "host.env"), "utf8");
   assert.match(hostEnv, /CODEX_DOCK_HOSTS=192\.168\.50\.117:4510,100\.66\.11\.7:4510/);
+  assert.match(hostEnv, /CODEX_DOCK_RELAY_INSTANCE_ID=Amir-M5/);
   assert.equal(hostEnv.includes("CODEX_DOCK_HOST_AMIR_M5_WS"), false);
   assert.equal(hostEnv.includes("CODEX_DOCK_HOST_AMIR_M5_NAME"), false);
   assert.equal(hostEnv.includes("CODEX_DOCK_HOST_AMIR_M5_AUTH_MODE"), false);
@@ -370,6 +386,35 @@ test("install writes two-host app env from app-safe service env keys only", asyn
   assert.equal(hostEnv.includes("PROMPT_TEXT"), false);
   assert.equal(/TOKEN|TOKEN_FILE|BEARER|SECRET|PASSWORD|COOKIE|SESSION/.test(hostEnv), false);
   assertNoForbiddenSecrets(hostEnv);
+});
+
+test("install rejects stale raw app-server endpoint in app-facing host env", async () => {
+  const cwd = tempDir();
+  const runtimeDir = path.join(cwd, ".codex-dock-test");
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(runtimeDir, "service.env"), [
+    "CODEX_DOCK_HOSTS=127.0.0.1:4500",
+    "CODEX_DOCK_RELAY_INSTANCE_ID=Amir-M5",
+    "",
+  ].join("\n"));
+
+  await assert.rejects(
+    () => main([
+      "install",
+      "--platform",
+      "macos",
+      "--runtime-dir",
+      ".codex-dock-test",
+      "--host-id",
+      "Amir-M5",
+      "--host-name",
+      "Amir-M5",
+      "--relay-public-url",
+      "ws://192.168.50.117:4510/",
+    ], captureIO().io, { cwd, platform: "macos", uid: 501, runCommand: fakeRunner().runCommand }),
+    /CODEX_DOCK_HOSTS must point at the Dock relay on :4510, not the raw Codex app-server on :4500: 127\.0\.0\.1:4500/,
+  );
+  assert.equal(fs.existsSync(path.join(runtimeDir, "host.env")), false);
 });
 
 test("install reuses loaded launchd services when they already point at rendered paths", async () => {
@@ -493,7 +538,10 @@ test("macOS start reuses loaded launchd services without kickstarting them", asy
   const cwd = tempDir();
   const runner = fakeRunner((command, args) => {
     if (command === "launchctl" && args[0] === "print") {
-      return { exitCode: 0, stdout: "state = running\n", stderr: "" };
+      const servicePath = args[1].endsWith(".app-server")
+        ? path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.app-server.plist")
+        : path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.relay.plist");
+      return { exitCode: 0, stdout: `path = ${servicePath}\nstate = running\n`, stderr: "" };
     }
     return { exitCode: 0, stdout: "", stderr: "" };
   });
@@ -515,6 +563,44 @@ test("macOS start reuses loaded launchd services without kickstarting them", asy
   assert.deepEqual(runner.calls.map((call) => [call.command, call.args[0], call.args[1]]), [
     ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.app-server"],
     ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.relay"],
+  ]);
+});
+
+test("macOS start re-bootstraps loaded launchd services that are not running", async () => {
+  const cwd = tempDir();
+  const runner = fakeRunner((command, args) => {
+    if (command === "launchctl" && args[0] === "print") {
+      const servicePath = args[1].endsWith(".app-server")
+        ? path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.app-server.plist")
+        : path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.relay.plist");
+      return { exitCode: 0, stdout: `path = ${servicePath}\nstate = waiting\n`, stderr: "" };
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  });
+
+  await main([
+    "start",
+    "--platform",
+    "macos",
+    "--runtime-dir",
+    ".codex-dock-test",
+    "--host-id",
+    "home",
+    "--host-name",
+    "Home",
+    "--public-host",
+    "home.local",
+  ], captureIO().io, { cwd, platform: "macos", uid: 501, runCommand: runner.runCommand });
+
+  assert.deepEqual(runner.calls.map((call) => [call.command, call.args[0], call.args[1]]), [
+    ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.app-server"],
+    ["launchctl", "bootout", "gui/501/com.aelaguiz.codex-dock.app-server"],
+    ["launchctl", "bootstrap", "gui/501"],
+    ["launchctl", "kickstart", "gui/501/com.aelaguiz.codex-dock.app-server"],
+    ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.relay"],
+    ["launchctl", "bootout", "gui/501/com.aelaguiz.codex-dock.relay"],
+    ["launchctl", "bootstrap", "gui/501"],
+    ["launchctl", "kickstart", "gui/501/com.aelaguiz.codex-dock.relay"],
   ]);
 });
 

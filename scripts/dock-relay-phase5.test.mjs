@@ -3,10 +3,12 @@ import test from "node:test";
 import { WebSocketServer } from "ws";
 
 import {
+  isLoopbackRemoteAddress,
   pendingRequestsForActiveThread,
   startServer,
 } from "./dock-relay.mjs";
 import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
+import { UpstreamConnectionPool } from "./dock-relay-upstream-pool.mjs";
 import {
   closeProcess,
   closeWebSocketServer,
@@ -66,15 +68,18 @@ test("attention probing resumes without replaying turns", async () => {
   }
 });
 
-test("relay thread/list filters discovered live rows by sourceKinds", async () => {
+test("relay thread/list ignores discovered live rows and preserves history cursor", async () => {
   const liveServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(liveServer);
   const liveUrl = `ws://127.0.0.1:${liveServer.address().port}`;
   const liveMarker = spawnLoopbackAppServerMarker(liveUrl);
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(historyServer);
+  let liveConnections = 0;
+  let historyListParams = null;
 
   liveServer.on("connection", (ws) => {
+    liveConnections += 1;
     ws.on("message", (data) => {
       const message = JSON.parse(data.toString());
       if (message.method === "initialize") {
@@ -127,9 +132,20 @@ test("relay thread/list filters discovered live rows by sourceKinds", async () =
           },
         }));
       } else if (message.method === "thread/list") {
+        historyListParams = message.params;
         ws.send(JSON.stringify({
           id: message.id,
-          result: { data: [], nextCursor: null, backwardsCursor: null },
+          result: {
+            data: [{
+              id: "history-owned",
+              preview: "History preview",
+              updatedAt: 50,
+              source: { custom: "chatgpt" },
+              status: { type: "idle" },
+            }],
+            nextCursor: "cursor-next",
+            backwardsCursor: "cursor-back",
+          },
         }));
       }
     });
@@ -142,25 +158,28 @@ test("relay thread/list filters discovered live rows by sourceKinds", async () =
     phoneAuth: "none",
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
+    threadSummaryCache: {
+      decorateRows: (rows) => rows,
+      warmRows: () => {},
+    },
     advertiseBonjour: false,
   });
   await relay.listening;
   const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
 
   try {
-    const defaultResponse = await jsonRpcRequest(ws, "thread/list");
-    const defaultIDs = defaultResponse.result.data.map((row) => row.id);
-    assert.equal(defaultIDs.includes("live-human"), true);
-    assert.equal(defaultIDs.includes("live-exec"), false);
-    assert.equal(
-      Object.hasOwn(defaultResponse.result.data.find((row) => row.id === "live-human"), "dockRelaySource"),
-      false,
-    );
-
-    const execResponse = await jsonRpcRequest(ws, "thread/list", { sourceKinds: ["exec"] });
-    const execIDs = execResponse.result.data.map((row) => row.id);
-    assert.equal(execIDs.includes("live-exec"), true);
-    assert.equal(execIDs.includes("live-human"), false);
+    const response = await jsonRpcRequest(ws, "thread/list", { limit: 200, sourceKinds: ["exec"] });
+    assert.deepEqual(response.result.data.map((row) => row.id), ["history-owned"]);
+    assert.equal(response.result.data[0].preview, "History preview");
+    assert.equal(response.result.nextCursor, "cursor-next");
+    assert.equal(response.result.backwardsCursor, "cursor-back");
+    assert.deepEqual(response.result.liveOverlay, {
+      ok: false,
+      state: "disabled",
+      ageMs: null,
+    });
+    assert.deepEqual(historyListParams, { limit: 100, sourceKinds: ["exec"] });
+    assert.equal(liveConnections, 0);
   } finally {
     ws.close();
     await relay.close();
@@ -170,7 +189,7 @@ test("relay thread/list filters discovered live rows by sourceKinds", async () =
   }
 });
 
-test("relay thread/list preserves active status with fresher history timestamp", async () => {
+test("relay thread/list keeps history status while focused detail can still route live", async () => {
   const liveServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(liveServer);
   const liveUrl = `ws://127.0.0.1:${liveServer.address().port}`;
@@ -269,6 +288,10 @@ test("relay thread/list preserves active status with fresher history timestamp",
     phoneAuth: "none",
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
+    threadSummaryCache: {
+      decorateRows: (rows) => rows,
+      warmRows: () => {},
+    },
     advertiseBonjour: false,
   });
   await relay.listening;
@@ -280,10 +303,9 @@ test("relay thread/list preserves active status with fresher history timestamp",
 
     assert.equal(rows.length, 1);
     assert.equal(rows[0].updatedAt, 300);
-    assert.equal(rows[0].status.type, "active");
-    assert.deepEqual(rows[0].status.activeFlags, ["waitingOnUserInput"]);
+    assert.equal(rows[0].status.type, "notLoaded");
     assert.equal(Object.hasOwn(rows[0], "dockRelaySource"), false);
-    assert.equal(liveTurnsRequests, 1);
+    assert.equal(liveTurnsRequests, 0);
     assert.equal(historyTurnsRequests, 0);
 
     const liveTurnsRequestsBeforeDetail = liveTurnsRequests;
@@ -300,15 +322,17 @@ test("relay thread/list preserves active status with fresher history timestamp",
   }
 });
 
-test("relay thread/list returns live rows when history fails", async () => {
+test("relay thread/list fails loudly when history fails instead of live fallback", async () => {
   const liveServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(liveServer);
   const liveUrl = `ws://127.0.0.1:${liveServer.address().port}`;
   const liveMarker = spawnLoopbackAppServerMarker(liveUrl);
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(historyServer);
+  let liveConnections = 0;
 
   liveServer.on("connection", (ws) => {
+    liveConnections += 1;
     ws.on("message", (data) => {
       const message = JSON.parse(data.toString());
       if (message.method === "initialize") {
@@ -378,10 +402,14 @@ test("relay thread/list returns live rows when history fails", async () => {
 
   try {
     const response = await jsonRpcRequest(ws, "thread/list");
-    assert.equal(
-      response.result.data.some((row) => row.id === "live-survives-history-failure"),
-      true,
-    );
+    assert.equal(response.result, undefined);
+    assert.equal(response.error.code, -32000);
+    assert.match(response.error.message, /history unavailable/);
+    assert.deepEqual(response.error.data, {
+      subsystem: "history",
+      retryable: true,
+    });
+    assert.equal(liveConnections, 0);
   } finally {
     ws.close();
     await relay.close();
@@ -398,8 +426,10 @@ test("relay thread/list returns history rows when live endpoint fails", async ()
   const liveMarker = spawnLoopbackAppServerMarker(liveUrl);
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(historyServer);
+  let liveConnections = 0;
 
   liveServer.on("connection", (ws) => {
+    liveConnections += 1;
     ws.on("message", (data) => {
       const message = JSON.parse(data.toString());
       if (message.method === "initialize") {
@@ -470,6 +500,12 @@ test("relay thread/list returns history rows when live endpoint fails", async ()
       response.result.data.some((row) => row.id === "history-survives-live-failure"),
       true,
     );
+    assert.deepEqual(response.result.liveOverlay, {
+      ok: false,
+      state: "disabled",
+      ageMs: null,
+    });
+    assert.equal(liveConnections, 0);
   } finally {
     ws.close();
     await relay.close();
@@ -479,10 +515,62 @@ test("relay thread/list returns history rows when live endpoint fails", async ()
   }
 });
 
-test("relay thread/list enriches row preview from latest meaningful turn text", async () => {
+test("relay thread/list preserves history preview while latest summary warms out of band", async () => {
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(historyServer);
   let turnsParams = null;
+  let turnsRequests = 0;
+  let allowTurnsResponse = false;
+  const pendingTurnsResponses = [];
+
+  function turnsListResult(id) {
+    return {
+      id,
+      result: {
+        data: [
+          {
+            id: "turn-old",
+            startedAt: 10,
+            items: [{
+              id: "old-user",
+              type: "userMessage",
+              content: [{ text: "Original opening prompt" }],
+            }],
+          },
+          {
+            id: "turn-new",
+            startedAt: 20,
+            items: [
+              {
+                id: "new-agent",
+                type: "agentMessage",
+                text: "Latest useful agent update",
+              },
+              {
+                id: "new-command",
+                type: "commandExecution",
+                command: ["rtk", "npm", "run", "test:relay"],
+                aggregatedOutput: "Passed",
+              },
+              {
+                id: "new-reasoning",
+                type: "reasoning",
+                summary: [{ text: "Internal reasoning should stay out of row summaries" }],
+              },
+            ],
+          },
+        ],
+        nextCursor: null,
+      },
+    };
+  }
+
+  function flushPendingTurnsResponses() {
+    while (pendingTurnsResponses.length > 0) {
+      const pending = pendingTurnsResponses.shift();
+      pending.ws.send(JSON.stringify(turnsListResult(pending.id)));
+    }
+  }
 
   historyServer.on("connection", (ws) => {
     ws.on("message", (data) => {
@@ -516,6 +604,94 @@ test("relay thread/list enriches row preview from latest meaningful turn text", 
         }));
       } else if (message.method === "thread/turns/list") {
         turnsParams = message.params;
+        turnsRequests += 1;
+        if (allowTurnsResponse) {
+          ws.send(JSON.stringify(turnsListResult(message.id)));
+        } else {
+          pendingTurnsResponses.push({ ws, id: message.id });
+        }
+      }
+    });
+  });
+
+  const relayConfig = {
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+  };
+  const relay = startServer(relayConfig);
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const firstResponse = await jsonRpcRequest(ws, "thread/list", { archived: true });
+    assert.equal(firstResponse.result.data[0].preview, "Original opening prompt");
+    assert.equal(firstResponse.result.data[0].latestSummary, undefined);
+
+    allowTurnsResponse = true;
+    flushPendingTurnsResponses();
+    await relayConfig.threadSummaryCache.whenIdle();
+
+    const secondResponse = await jsonRpcRequest(ws, "thread/list", { archived: true });
+    assert.equal(secondResponse.result.data[0].preview, "Original opening prompt");
+    assert.equal(secondResponse.result.data[0].latestSummary, "Latest useful agent update");
+    assert.deepEqual(turnsParams, { threadId: "history-latest", limit: 10 });
+    assert.equal(turnsRequests, 1);
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeWebSocketServer(historyServer);
+  }
+});
+
+test("relay thread/list warms latest summary from the live thread owner", async () => {
+  const liveServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(liveServer);
+  const liveUrl = `ws://127.0.0.1:${liveServer.address().port}`;
+  const liveMarker = spawnLoopbackAppServerMarker(liveUrl);
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  let liveTurnsRequests = 0;
+  let historyTurnsRequests = 0;
+
+  liveServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "live-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/loaded/list") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: { data: ["live-latest"], nextCursor: null },
+        }));
+      } else if (message.method === "thread/read") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            thread: {
+              id: "live-latest",
+              sessionId: "session-live-latest",
+              preview: "Original opening prompt",
+              createdAt: 10,
+              updatedAt: 30,
+              source: "cli",
+              status: { type: "active", activeFlags: [] },
+            },
+          },
+        }));
+      } else if (message.method === "thread/turns/list") {
+        liveTurnsRequests += 1;
         ws.send(JSON.stringify({
           id: message.id,
           result: {
@@ -531,25 +707,12 @@ test("relay thread/list enriches row preview from latest meaningful turn text", 
               },
               {
                 id: "turn-new",
-                startedAt: 20,
-                items: [
-                  {
-                    id: "new-agent",
-                    type: "agentMessage",
-                    text: "Latest useful agent update",
-                  },
-                  {
-                    id: "new-command",
-                    type: "commandExecution",
-                    command: ["rtk", "npm", "run", "test:relay"],
-                    aggregatedOutput: "Passed",
-                  },
-                  {
-                    id: "new-reasoning",
-                    type: "reasoning",
-                    summary: [{ text: "Internal reasoning should stay out of row previews" }],
-                  },
-                ],
+                startedAt: 30,
+                items: [{
+                  id: "new-agent",
+                  type: "agentMessage",
+                  text: "Live owner latest agent update",
+                }],
               },
             ],
             nextCursor: null,
@@ -559,24 +722,87 @@ test("relay thread/list enriches row preview from latest meaningful turn text", 
     });
   });
 
-  const relay = startServer({
+  historyServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "history-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/list") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            data: [{
+              id: "live-latest",
+              sessionId: "session-live-latest",
+              preview: "Original opening prompt",
+              createdAt: 10,
+              updatedAt: 30,
+              source: "cli",
+              status: { type: "active", activeFlags: [] },
+            }],
+            nextCursor: null,
+            backwardsCursor: null,
+          },
+        }));
+      } else if (message.method === "thread/turns/list") {
+        historyTurnsRequests += 1;
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            data: [{
+              id: "history-turn",
+              startedAt: 30,
+              items: [{
+                id: "history-agent",
+                type: "agentMessage",
+                text: "Stale history update",
+              }],
+            }],
+            nextCursor: null,
+          },
+        }));
+      }
+    });
+  });
+
+  await sleepMs(20);
+  const relayConfig = {
     listenHost: "127.0.0.1",
     port: 0,
     phoneAuth: "none",
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
     advertiseBonjour: false,
-  });
+  };
+  const relay = startServer(relayConfig);
   await relay.listening;
   const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
 
   try {
-    const response = await jsonRpcRequest(ws, "thread/list", { archived: true });
-    assert.equal(response.result.data[0].preview, "Latest useful agent update");
-    assert.deepEqual(turnsParams, { threadId: "history-latest", limit: 5 });
+    const firstResponse = await jsonRpcRequest(ws, "thread/list");
+    assert.equal(firstResponse.result.data[0].preview, "Original opening prompt");
+    assert.equal(firstResponse.result.data[0].latestSummary, undefined);
+
+    await relayConfig.threadSummaryCache.whenIdle();
+
+    const secondResponse = await jsonRpcRequest(ws, "thread/list");
+    assert.equal(secondResponse.result.data[0].preview, "Original opening prompt");
+    assert.equal(secondResponse.result.data[0].latestSummary, "Live owner latest agent update");
+    assert.equal(liveTurnsRequests, 1);
+    assert.equal(historyTurnsRequests, 0);
   } finally {
     ws.close();
     await relay.close();
+    await closeProcess(liveMarker);
+    await closeWebSocketServer(liveServer);
     await closeWebSocketServer(historyServer);
   }
 });
@@ -767,6 +993,312 @@ test("thread/resume forwards upstream notifications requests and phone responses
   }
 });
 
+test("turn/start rejects requests for a thread different from the resumed session", async () => {
+  const resumedThreadId = "thread-bound-phase6";
+  let turnStartCalls = 0;
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  historyServer.on("connection", (upstreamWs) => {
+    upstreamWs.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        upstreamWs.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "history-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/resume") {
+        upstreamWs.send(JSON.stringify({
+          id: message.id,
+          result: { thread: { id: message.params.threadId } },
+        }));
+      } else if (message.method === "turn/start") {
+        turnStartCalls += 1;
+        upstreamWs.send(JSON.stringify({
+          id: message.id,
+          result: { turn: { id: "wrong-turn" } },
+        }));
+      }
+    });
+  });
+
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const resume = await jsonRpcRequest(ws, "thread/resume", { threadId: resumedThreadId });
+    assert.equal(resume.result.thread.id, resumedThreadId);
+
+    const response = await jsonRpcRequest(ws, "turn/start", {
+      threadId: "thread-other-phase6",
+      input: [{ type: "text", text: "redacted", text_elements: [] }],
+    });
+
+    assert.equal(response.error.code, -32602);
+    assert.equal(response.error.data.reason, "thread_mismatch");
+    assert.equal(response.error.data.requestedThreadIDHash.length, 12);
+    assert.equal(response.error.data.activeThreadIDHash.length, 12);
+    await sleepMs(25);
+    assert.equal(turnStartCalls, 0);
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeWebSocketServer(historyServer);
+  }
+});
+
+test("thread/resume refuses to bind an upstream that returns the wrong thread", async () => {
+  const requestedThreadId = "thread-requested-phase6";
+  let turnStartCalls = 0;
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  historyServer.on("connection", (upstreamWs) => {
+    upstreamWs.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        upstreamWs.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "history-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/resume") {
+        upstreamWs.send(JSON.stringify({
+          id: message.id,
+          result: { thread: { id: "thread-actual-wrong-phase6" } },
+        }));
+      } else if (message.method === "turn/start") {
+        turnStartCalls += 1;
+      }
+    });
+  });
+
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const resume = await jsonRpcRequest(ws, "thread/resume", { threadId: requestedThreadId });
+    assert.equal(resume.error.code, -32000);
+    assert.equal(resume.error.data.reason, "resume_thread_mismatch");
+
+    const turn = await jsonRpcRequest(ws, "turn/start", {
+      threadId: requestedThreadId,
+      input: [{ type: "text", text: "redacted", text_elements: [] }],
+    });
+    assert.match(turn.error.message, /requires thread\/resume/);
+    await sleepMs(25);
+    assert.equal(turnStartCalls, 0);
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeWebSocketServer(historyServer);
+  }
+});
+
+test("phone responses are rejected after their upstream request is made stale by a newer resume", async () => {
+  const oldThreadId = "thread-old-request-phase6";
+  const newThreadId = "thread-new-request-phase6";
+  let forwardedResponses = 0;
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  historyServer.on("connection", (upstreamWs) => {
+    upstreamWs.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        upstreamWs.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "history-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/resume") {
+        upstreamWs.send(JSON.stringify({
+          id: message.id,
+          result: { thread: { id: message.params.threadId } },
+        }));
+        if (message.params.threadId === oldThreadId) {
+          setTimeout(() => {
+            upstreamWs.send(JSON.stringify({
+              id: "approval-stale-phase6",
+              method: "item/commandExecution/requestApproval",
+              params: { threadId: oldThreadId },
+            }));
+          }, 10);
+        }
+      } else if (!message.method && message.id === "approval-stale-phase6") {
+        forwardedResponses += 1;
+      }
+    });
+  });
+
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const oldRequestPromise = waitForRelayMessage(
+      ws,
+      (message) => message.method === "item/commandExecution/requestApproval"
+        && message.id === "approval-stale-phase6",
+    );
+    const oldResume = await jsonRpcRequest(ws, "thread/resume", { threadId: oldThreadId });
+    assert.equal(oldResume.result.thread.id, oldThreadId);
+    await oldRequestPromise;
+
+    const newResume = await jsonRpcRequest(ws, "thread/resume", { threadId: newThreadId });
+    assert.equal(newResume.result.thread.id, newThreadId);
+
+    const rejectedResponsePromise = waitForRelayMessage(
+      ws,
+      (message) => message.id === "approval-stale-phase6" && message.error,
+    );
+    ws.send(JSON.stringify({
+      id: "approval-stale-phase6",
+      result: { decision: "approved" },
+    }));
+    const rejected = await rejectedResponsePromise;
+
+    assert.equal(rejected.error.message, "no matching active upstream request");
+    await sleepMs(25);
+    assert.equal(forwardedResponses, 0);
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeWebSocketServer(historyServer);
+  }
+});
+
+test("phone responses are rejected after their upstream request is made stale by recovery", async () => {
+  const threadId = "thread-recovered-request-phase6";
+  let connectionCount = 0;
+  let forwardedResponses = 0;
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  historyServer.on("connection", (upstreamWs) => {
+    connectionCount += 1;
+    const connectionNumber = connectionCount;
+    upstreamWs.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        upstreamWs.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "history-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/resume") {
+        upstreamWs.send(JSON.stringify({
+          id: message.id,
+          result: { thread: { id: message.params.threadId } },
+        }));
+        if (connectionNumber === 1) {
+          setTimeout(() => {
+            upstreamWs.send(JSON.stringify({
+              id: "approval-recovery-phase6",
+              method: "item/commandExecution/requestApproval",
+              params: { threadId },
+            }));
+          }, 10);
+          setTimeout(() => upstreamWs.close(), 25);
+        } else {
+          setTimeout(() => {
+            upstreamWs.send(JSON.stringify({
+              method: "thread/status/changed",
+              params: { threadId },
+            }));
+          }, 10);
+        }
+      } else if (!message.method && message.id === "approval-recovery-phase6") {
+        forwardedResponses += 1;
+      }
+    });
+  });
+
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const oldRequestPromise = waitForRelayMessage(
+      ws,
+      (message) => message.method === "item/commandExecution/requestApproval"
+        && message.id === "approval-recovery-phase6",
+    );
+    const recoveredNotificationPromise = waitForRelayMessage(
+      ws,
+      (message) => message.method === "thread/status/changed"
+        && message.params.threadId === threadId,
+    );
+
+    const resume = await jsonRpcRequest(ws, "thread/resume", { threadId });
+    assert.equal(resume.result.thread.id, threadId);
+    await oldRequestPromise;
+    await recoveredNotificationPromise;
+
+    const rejectedResponsePromise = waitForRelayMessage(
+      ws,
+      (message) => message.id === "approval-recovery-phase6" && message.error,
+    );
+    ws.send(JSON.stringify({
+      id: "approval-recovery-phase6",
+      result: { decision: "approved" },
+    }));
+    const rejected = await rejectedResponsePromise;
+
+    assert.equal(rejected.error.message, "no matching active upstream request");
+    await sleepMs(25);
+    assert.equal(forwardedResponses, 0);
+    assert.equal(connectionCount, 2);
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeWebSocketServer(historyServer);
+  }
+});
+
 test("thread/resume abandons initial upstream if downstream closes before resume completes", async () => {
   const threadId = "thread-initial-resume-close";
   let activeUpstream = null;
@@ -908,6 +1440,65 @@ test("relay recovers upstream close by re-resuming and forwarding live updates",
       { threadId, excludeTurns: true },
       { threadId, excludeTurns: true },
     ]);
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeWebSocketServer(historyServer);
+  }
+});
+
+test("relay recovery refuses to bind an upstream that resumes the wrong thread", async () => {
+  const threadId = "thread-recovery-requested-phase6";
+  let connectionCount = 0;
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  historyServer.on("connection", (upstreamWs) => {
+    connectionCount += 1;
+    const connectionNumber = connectionCount;
+    upstreamWs.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        upstreamWs.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "history-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/resume" && connectionNumber === 1) {
+        upstreamWs.send(JSON.stringify({
+          id: message.id,
+          result: { thread: { id: threadId } },
+        }));
+        setTimeout(() => upstreamWs.close(), 10);
+      } else if (message.method === "thread/resume") {
+        upstreamWs.send(JSON.stringify({
+          id: message.id,
+          result: { thread: { id: "thread-recovery-wrong-phase6" } },
+        }));
+      }
+    });
+  });
+
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const resume = await jsonRpcRequest(ws, "thread/resume", { threadId, excludeTurns: true });
+    assert.equal(resume.result.thread.id, threadId);
+    const close = await waitForWebSocketClose(ws);
+    assert.equal(close.code, 1011);
+    assert.equal(connectionCount, 3);
   } finally {
     ws.close();
     await relay.close();
@@ -1199,6 +1790,86 @@ test("upstream client rejects pending requests promptly when socket closes", asy
   }
 });
 
+test("upstream pool reuses one multiplexed history socket", async () => {
+  const upstreamServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(upstreamServer);
+  let connections = 0;
+  upstreamServer.on("connection", (upstreamWs) => {
+    connections += 1;
+    upstreamWs.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      upstreamWs.send(JSON.stringify({
+        id: message.id,
+        result: { method: message.method },
+      }));
+    });
+  });
+
+  const pool = new UpstreamConnectionPool({ maxOpenByLabel: { history: 1 } });
+  const endpoint = {
+    label: "history",
+    url: `ws://127.0.0.1:${upstreamServer.address().port}`,
+  };
+
+  try {
+    assert.deepEqual(await pool.request(endpoint, "first"), { method: "first" });
+    assert.deepEqual(await pool.request(endpoint, "second"), { method: "second" });
+    assert.equal(connections, 1);
+    assert.equal(pool.stats()[0].open, 1);
+  } finally {
+    await pool.closeAll();
+    await closeWebSocketServer(upstreamServer);
+  }
+});
+
+test("upstream pool enforces max-open per label", async () => {
+  const firstServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  const secondServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(firstServer);
+  await onceListening(secondServer);
+  const pool = new UpstreamConnectionPool({ maxOpenByLabel: { history: 1 } });
+
+  try {
+    await pool.clientFor({
+      label: "history",
+      url: `ws://127.0.0.1:${firstServer.address().port}`,
+    });
+    await assert.rejects(
+      () => pool.clientFor({
+        label: "history",
+        url: `ws://127.0.0.1:${secondServer.address().port}`,
+      }),
+      /upstream pool history exhausted: 1\/1/,
+    );
+  } finally {
+    await pool.closeAll();
+    await closeWebSocketServer(firstServer);
+    await closeWebSocketServer(secondServer);
+  }
+});
+
+test("upstream pool removes timed-out sockets", async () => {
+  const upstreamServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(upstreamServer);
+  upstreamServer.on("connection", () => {});
+  const pool = new UpstreamConnectionPool({ maxOpenByLabel: { history: 1 } });
+  const endpoint = {
+    label: "history",
+    url: `ws://127.0.0.1:${upstreamServer.address().port}`,
+  };
+
+  try {
+    await assert.rejects(
+      () => pool.request(endpoint, "slow", {}, { timeoutMs: 20 }),
+      /timed out waiting for slow/,
+    );
+    assert.deepEqual(pool.stats(), []);
+  } finally {
+    await pool.closeAll();
+    await closeWebSocketServer(upstreamServer);
+  }
+});
+
 test("relay statusz reports redacted service state and realtime config", async () => {
   const relay = startServer({
     listenHost: "127.0.0.1",
@@ -1224,6 +1895,7 @@ test("relay statusz reports redacted service state and realtime config", async (
     assert.equal(status.ok, true);
     assert.equal(status.service, "codex-dock-relay");
     assert.equal(status.host.id, "home");
+    assert.equal(status.host.relayInstanceID, "home");
     assert.equal(status.host.displayName, "Home");
     assert.equal(status.auth.phoneAuth, "bearer");
     assert.equal(status.auth.relayCredentialConfigured, true);
@@ -1246,6 +1918,56 @@ test("relay statusz reports redacted service state and realtime config", async (
   } finally {
     await relay.close();
   }
+});
+
+test("relay metricsz and debugz sessions expose loopback-safe diagnostics", async () => {
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    hostId: "home",
+    hostName: "Home",
+    phoneAuth: "none",
+    historyUrl: "ws://127.0.0.1:1",
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+  });
+  await relay.listening;
+  const baseURL = `http://127.0.0.1:${relay.server.address().port}`;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const status = await httpGetJson(`${baseURL}/statusz`);
+    const metrics = await httpGetJson(`${baseURL}/metricsz`);
+    const debug = await httpGetJson(`${baseURL}/debugz/sessions`);
+    const combined = JSON.stringify({ status, metrics, debug });
+
+    assert.equal(status.liveStatus.status, "unknown");
+    assert.equal(status.liveStatus.overlayState, "disabled");
+    assert.equal(metrics.ok, true);
+    assert.equal(metrics.host.relayInstanceID, "home");
+    assert.equal(debug.host.relayInstanceID, "home");
+    assert.equal(metrics.connections.downstreamActive, 1);
+    assert.equal(Array.isArray(metrics.connections.upstreamPools), true);
+    assert.equal(Array.isArray(metrics.requests.byMethod), true);
+    assert.equal(debug.ok, true);
+    assert.equal(debug.sessions.length, 1);
+    assert.equal("threadId" in debug.sessions[0], false);
+    assert.equal("threadIDHash" in debug.sessions[0], true);
+    assert.equal(Array.isArray(debug.liveRows), true);
+    assert.equal(combined.includes("history-token"), false);
+    assert.equal(combined.includes("Bearer"), false);
+  } finally {
+    ws.close();
+    await relay.close();
+  }
+});
+
+test("relay rich diagnostics are loopback-only by address classifier", () => {
+  assert.equal(isLoopbackRemoteAddress("127.0.0.1"), true);
+  assert.equal(isLoopbackRemoteAddress("::1"), true);
+  assert.equal(isLoopbackRemoteAddress("::ffff:127.0.0.1"), true);
+  assert.equal(isLoopbackRemoteAddress("192.168.50.74"), false);
+  assert.equal(isLoopbackRemoteAddress("100.64.0.2"), false);
 });
 
 test("relay raw history failure returns subsystem error data and records status", async () => {

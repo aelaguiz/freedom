@@ -1,166 +1,6 @@
 import Combine
 import Foundation
 
-public struct DockLoadResult: Equatable, Sendable {
-    public let summaries: [SessionSummary]
-    public let mappingFailures: [SessionSummaryMappingFailure]
-
-    public init(
-        summaries: [SessionSummary],
-        mappingFailures: [SessionSummaryMappingFailure] = []
-    ) {
-        self.summaries = summaries
-        self.mappingFailures = mappingFailures
-    }
-}
-
-public struct DockSessionQuery: Equatable, Sendable {
-    public let archived: Bool
-    public let sourceKinds: [ThreadSourceKind]?
-
-    public init(
-        archived: Bool = false,
-        sourceKinds: [ThreadSourceKind]? = nil
-    ) {
-        self.archived = archived
-        self.sourceKinds = sourceKinds
-    }
-
-    public static let activeHuman = DockSessionQuery(archived: false, sourceKinds: nil)
-    public static let archivedHuman = DockSessionQuery(archived: true, sourceKinds: nil)
-    public static let activeAgents = DockSessionQuery(
-        archived: false,
-        sourceKinds: ThreadSourceKind.dockAgentScopeKinds
-    )
-}
-
-public protocol DockSessionLoading: Sendable {
-    func loadSessions(
-        for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult
-}
-
-public protocol DockSessionArchiving: Sendable {
-    func archiveThread(_ threadID: String, on host: DockHostConfiguration) async throws
-    func unarchiveThread(_ threadID: String, on host: DockHostConfiguration) async throws
-}
-
-public enum DockLoadFailure: Error, Equatable, LocalizedError, Sendable {
-    case offline(String)
-    case error(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case let .offline(message), let .error(message):
-            return message
-        }
-    }
-}
-
-public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
-    private let sessionPageLimit = 200
-
-    public init() {}
-
-    public func loadSessions(
-        for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult {
-        let startedAt = Date()
-        let sourceKinds = query.sourceKinds?.map(\.rawValue).joined(separator: ",")
-        DockLog.dock.info("dock client load started host_id=\(host.id, privacy: .public) endpoint=\(DockLog.endpoint(host.webSocketURL), privacy: .public) archived=\(query.archived, privacy: .public) source_kinds=\(DockLog.publicID(sourceKinds), privacy: .public)")
-        return try await withClient(for: host) { client in
-            let response = try await client.threadList(
-                params: ThreadListParams(
-                    limit: sessionPageLimit,
-                    sortKey: .updatedAt,
-                    sortDirection: .desc,
-                    modelProviders: [],
-                    sourceKinds: query.sourceKinds,
-                    archived: query.archived
-                ),
-                timeout: .seconds(10)
-            )
-            let mapped = SessionSummaryMapper.map(response: response, hostID: host.id)
-            DockLog.dock.info("dock client load finished host_id=\(host.id, privacy: .public) archived=\(query.archived, privacy: .public) rows=\(mapped.summaries.count, privacy: .public) mapping_failures=\(mapped.failures.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
-
-            return DockLoadResult(
-                summaries: mapped.summaries,
-                mappingFailures: mapped.failures
-            )
-        }
-    }
-
-    public func archiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
-        DockLog.dock.notice("dock archive started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")
-        _ = try await withClient(for: host) { client in
-            try await client.threadArchive(
-                params: ThreadArchiveParams(threadId: threadID),
-                timeout: .seconds(10)
-            )
-        }
-        DockLog.dock.notice("dock archive finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")
-    }
-
-    public func unarchiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
-        DockLog.archive.notice("archive restore started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")
-        _ = try await withClient(for: host) { client in
-            try await client.threadUnarchive(
-                params: ThreadUnarchiveParams(threadId: threadID),
-                timeout: .seconds(10)
-            )
-        }
-        DockLog.archive.notice("archive restore finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")
-    }
-
-    private func withClient<Value>(
-        for host: DockHostConfiguration,
-        operation: (AppServerClient) async throws -> Value
-    ) async throws -> Value {
-        let client = AppServerClient(
-            webSocketURL: host.webSocketURL,
-            bearerToken: nil
-        )
-
-        do {
-            _ = try await client.connectAndInitialize(
-                params: .codexDock(version: "0.1.0"),
-                timeout: .seconds(5)
-            )
-            let value = try await operation(client)
-            await client.disconnect()
-            return value
-        } catch {
-            await client.disconnect()
-            throw mapLoadFailure(error)
-        }
-    }
-
-    private func mapLoadFailure(_ error: Error) -> DockLoadFailure {
-        if let failure = error as? DockLoadFailure {
-            return failure
-        }
-
-        if let clientError = error as? AppServerClientError {
-            switch clientError {
-            case .disconnected, .notConnected, .requestTimedOut, .transport:
-                return .offline(clientError.localizedDescription)
-            case .duplicateRequestID,
-                 .malformedMessage,
-                 .requestCancelled,
-                 .responseDecoding,
-                 .server,
-                 .unexpectedServerRequest,
-                 .unmatchedResponse:
-                return .error(clientError.localizedDescription)
-            }
-        }
-
-        return .error(error.localizedDescription)
-    }
-}
-
 public enum DockRowStatusKind: String, Equatable, Sendable, CaseIterable {
     case needsMe
     case running
@@ -294,7 +134,7 @@ public struct DockHostViewModel: Equatable, Identifiable, Sendable {
     public init(host: DockHostConfiguration) {
         self.id = host.id
         self.displayName = host.displayName
-        self.endpoint = host.endpoint.displayEndpoint
+        self.endpoint = host.displayEndpointList
     }
 }
 
@@ -745,6 +585,7 @@ public final class DockStore: ObservableObject {
             let hostSummaries = successfulScopedSummaries(from: outcome)
             let deduplicated = deduplicated(hostSummaries)
             let hostDedupedSummaries = deduplicated.summaries
+            let overlayMessages = successfulLiveOverlayMessages(from: outcome)
             summaries.append(contentsOf: hostDedupedSummaries)
             scopeConflicts.append(contentsOf: deduplicated.conflicts)
             mappingFailures.append(contentsOf: successfulMappingFailures(from: outcome))
@@ -769,14 +610,24 @@ public final class DockStore: ObservableObject {
                     hostStates.append(DockHostStateViewModel(host: host, status: .error(message)))
                 }
             } else if scopeLoadFailures.contains(where: { $0.host.id == host.id }) {
-                let message = scopeLoadFailures
+                var messages = scopeLoadFailures
                     .filter { $0.host.id == host.id }
                     .map { "\($0.scope.label): \($0.message)" }
-                    .joined(separator: "; ")
+                messages.append(contentsOf: overlayMessages)
                 hostStates.append(
                     DockHostStateViewModel(
                         host: host,
-                        status: .partial(rowCount: hostDedupedSummaries.count, message: message)
+                        status: .partial(rowCount: hostDedupedSummaries.count, message: messages.joined(separator: "; "))
+                    )
+                )
+            } else if !overlayMessages.isEmpty {
+                hostStates.append(
+                    DockHostStateViewModel(
+                        host: host,
+                        status: .partial(
+                            rowCount: hostDedupedSummaries.count,
+                            message: overlayMessages.joined(separator: "; ")
+                        )
                     )
                 )
             } else {
@@ -824,6 +675,19 @@ public final class DockStore: ObservableObject {
             }
         }
         return summaries
+    }
+
+    private func successfulLiveOverlayMessages(from outcome: HostLoadOutcome) -> [String] {
+        var messages: [String] = []
+        for scopedOutcome in outcome.scopedResults {
+            guard case .success(let result) = scopedOutcome.result,
+                  let message = result.liveOverlay?.degradedMessage,
+                  !messages.contains(message) else {
+                continue
+            }
+            messages.append(message)
+        }
+        return messages
     }
 
     private func successfulMappingFailures(from outcome: HostLoadOutcome) -> [SessionSummaryMappingFailure] {

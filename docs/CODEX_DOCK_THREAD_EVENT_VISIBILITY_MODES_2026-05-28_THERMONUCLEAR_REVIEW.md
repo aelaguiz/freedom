@@ -8,8 +8,8 @@ Approved after one structural fix.
 
 ## Finding Fixed
 
-- `ThreadEventDisplayOrder.newestFirst(_:)` used the current array offset as a fallback group and row ordering key. That made the new visibility projection fragile because `SessionDetailView` receives an already display-ordered snapshot and then asks `ThreadEventVisibilityMode.visibleEvents(from:)` to sort the projected rows again. For equal-date rows without explicit turn/item/event sequence metadata, sorting a previously sorted array could flip the order on the second pass.
-  - Fix: `ThreadEventDisplayOrder` now falls back to stable group/item/event keys instead of using array offset as semantic order.
+- `ThreadEventDisplayOrder.naturalFlow(_:)` superseded the old newest-first timeline order and uses stable group/item/event keys instead of treating array offset as semantic order. That keeps the visibility projection stable when `SessionDetailView` receives an already display-ordered snapshot and then asks `ThreadEventVisibilityMode.visibleEvents(from:)` to sort the projected rows again.
+  - Fix: `ThreadEventDisplayOrder` now keeps thread detail rows in natural conversation flow and falls back to stable group/item/event keys.
   - Regression test: `ThreadEventNormalizerTests.testVisibilityProjectionIsStableWhenInputWasAlreadyDisplayOrdered`.
 
 ## Structural Review

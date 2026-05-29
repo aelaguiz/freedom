@@ -79,7 +79,9 @@ public enum SessionSummaryMapper {
         }
 
         let preview = nonEmpty(thread.preview)
-        let shortEventSummary = latestMeaningfulSummary(from: thread) ?? preview
+        let shortEventSummary = nonEmpty(thread.latestSummary)
+            ?? latestMeaningfulSummary(from: thread)
+            ?? preview
         let displayTitle = displayTitle(
             name: thread.name,
             preview: preview,

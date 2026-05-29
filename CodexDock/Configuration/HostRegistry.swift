@@ -25,7 +25,11 @@ public extension HostRegistry {
         _ environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> HostRegistry {
         let endpoints = try DockRelayEndpoint.parseList(environment["CODEX_DOCK_HOSTS"])
-        let registry = try HostRegistry(hosts: endpoints.map(DockHostConfiguration.init(endpoint:)))
+        try endpoints.forEach { try $0.validateAppFacingRelayEndpoint() }
+        let relayInstanceID = environment["CODEX_DOCK_RELAY_INSTANCE_ID"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let hosts = [try DockHostConfiguration(endpoints: endpoints, relayInstanceID: relayInstanceID)]
+        let registry = try HostRegistry(hosts: hosts)
         DockLog.hostConfiguration.notice("host registry loaded from environment hosts=\(registry.hosts.count, privacy: .public)")
         return registry
     }

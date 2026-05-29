@@ -227,6 +227,9 @@ function appEndpointFromWebSocketURL(webSocketURL) {
   if (!url.port) {
     throw new Error("relay public URL must include an explicit port");
   }
+  if (Number(url.port) === DEFAULT_RAW_APP_SERVER_PORT) {
+    throw new Error("relay public URL must point at the Dock relay on :4510, not the raw Codex app-server on :4500");
+  }
   const host = url.hostname.replace(/^\[(.*)\]$/, "$1");
   const serializedHost = host.includes(":") ? `[${host}]` : host;
   return {
@@ -558,6 +561,7 @@ function serviceEntries(config) {
 function appConfigJSON(config) {
   return {
     version: 1,
+    relayInstanceID: config.host.id,
     hosts: [
       {
         host: config.relay.appEndpoint.host,
@@ -570,6 +574,7 @@ function appConfigJSON(config) {
 function appConfigEnv(config) {
   return [
     `CODEX_DOCK_HOSTS=${envLineValue(config.relay.appEndpoint.serialized, "relay endpoint")}`,
+    `CODEX_DOCK_RELAY_INSTANCE_ID=${envLineValue(config.host.id, "relay instance ID")}`,
     "",
   ].join("\n");
 }
@@ -712,6 +717,11 @@ async function runServiceManagerAction(config, action, runtime = {}) {
         const current = await inspectLaunchdService(config, runtime, service);
         commands.push({ command: "launchctl", args: ["print", serviceTarget(config, service, runtime)], exitCode: current.exitCode });
         if (current.exitCode !== 0) {
+          commands.push(...await bootstrapLaunchdService(config, runtime, domain, service.path));
+          commands.push(await runServiceCommand(config, runtime, "launchctl", ["kickstart", serviceTarget(config, service, runtime)]));
+        } else if (!launchdPrintShowsReusablePath(current, service.path)) {
+          commands.push(await runServiceCommand(config, runtime, "launchctl", ["bootout", serviceTarget(config, service, runtime)], { allowFailure: true }));
+          await delay(runtime);
           commands.push(...await bootstrapLaunchdService(config, runtime, domain, service.path));
           commands.push(await runServiceCommand(config, runtime, "launchctl", ["kickstart", serviceTarget(config, service, runtime)]));
         }

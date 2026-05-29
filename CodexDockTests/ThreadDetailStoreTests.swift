@@ -48,7 +48,7 @@ final class ThreadDetailStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testLoadPublishesPagedTurnsNewestFirstForDisplay() async throws {
+    func testLoadPublishesPagedTurnsInNaturalFlowForDisplay() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
@@ -73,7 +73,7 @@ final class ThreadDetailStoreTests: XCTestCase {
             return XCTFail("Expected loaded state, got \(store.state)")
         }
 
-        XCTAssertEqual(snapshot.events.map(\.body), ["New paged turn", "Old paged turn"])
+        XCTAssertEqual(snapshot.events.map(\.body), ["Old paged turn", "New paged turn"])
         let readParams = await session.readParamsSnapshot()
         let turnsListParams = await session.turnsListParamsSnapshot()
         let resumeParams = await session.resumeParamsSnapshot()
@@ -298,7 +298,7 @@ final class ThreadDetailStoreTests: XCTestCase {
                 return false
             }
             return message == "transport closed"
-                && snapshot.events.map(\.body) == ["make test", "Stored turn"]
+                && snapshot.events.map(\.body) == ["Stored turn", "make test"]
         }
         XCTAssertEqual(store.composer.draft, "Keep this draft")
         XCTAssertEqual(store.requestCards.count, 1)
@@ -372,7 +372,7 @@ final class ThreadDetailStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testLiveDeltaAppearsBeforePagedHistoryAndMergesInPlace() async throws {
+    func testLiveDeltaAppearsAfterPagedHistoryAndMergesInPlace() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
@@ -419,7 +419,7 @@ final class ThreadDetailStoreTests: XCTestCase {
             guard case let .loaded(snapshot) = store.state else {
                 return false
             }
-            return snapshot.events.map(\.body) == ["hello world", "Older stored"]
+            return snapshot.events.map(\.body) == ["Older stored", "hello world"]
         }
     }
 
@@ -464,7 +464,7 @@ final class ThreadDetailStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testServerRequestEventAppearsNewestWithoutBreakingRequestCardResponse() async throws {
+    func testServerRequestEventAppearsInNaturalFlowWithoutBreakingRequestCardResponse() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
@@ -501,7 +501,7 @@ final class ThreadDetailStoreTests: XCTestCase {
             guard case let .loaded(snapshot) = store.state else {
                 return false
             }
-            return snapshot.events.map(\.body) == ["make test", "Older stored"]
+            return snapshot.events.map(\.body) == ["Older stored", "make test"]
                 && store.requestCards.count == 1
         }
 

@@ -10,6 +10,7 @@
 		030B4800DCC13C10C117D54D /* ThreadDetailStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9C3D49CF36AB4945916A749 /* ThreadDetailStoreTests.swift */; };
 		08757DA9CF90EECF74468A35 /* AppLifecycleCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0ED12D9B6DD8F64B1253A01 /* AppLifecycleCoordinator.swift */; };
 		08C32D79593965966136996A /* DockStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A42B2061F9E45C1B6935F08 /* DockStore.swift */; };
+		0B0323F75A5305EB84D9B0AB /* AppServerThreadDetailSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F035F07B0BBC9BE740ED620 /* AppServerThreadDetailSession.swift */; };
 		0F359E7574542DEBD9781C15 /* TurnDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0549BF0ED081727D34323CBA /* TurnDTO.swift */; };
 		1463EC33BFEF2CA641D47CAE /* ArchiveStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA032FF8D4142A8D3461B7DE /* ArchiveStore.swift */; };
 		1BFBBBFFA3E7C5115F4B9897 /* AppServerMethods.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACA75584AA40FC172ED36E9D /* AppServerMethods.swift */; };
@@ -35,6 +36,7 @@
 		6B62194AAF786F06DEAB123A /* DockStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E8613594609B20254A5CA44 /* DockStoreTests.swift */; };
 		6D5E2B1582C73AADFE209E1D /* VoiceCaptureControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCC83E79154B50CD8B568FB4 /* VoiceCaptureControllerTests.swift */; };
 		707028C4833C4EDF781F645F /* AppLifecycleCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2FB5E493FCFDB443D53EB2 /* AppLifecycleCoordinatorTests.swift */; };
+		7430376B939E3611D67885F0 /* AppServerDockClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D76ACB118C0AE566FE1705F5 /* AppServerDockClient.swift */; };
 		74C104A7F7207E4AF17272C5 /* DockSessionProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C81305AA09AC5FF83868663 /* DockSessionProjection.swift */; };
 		7620B7A25D86E81210477475 /* AppServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABDB5847612728C391956985 /* AppServerClient.swift */; };
 		763F61037E061541DFDC5EC7 /* ThreadDetailStoreTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AEFC520C4BAC0B3AE2B1174 /* ThreadDetailStoreTestSupport.swift */; };
@@ -61,6 +63,7 @@
 		D87C88DC31B028EAA0DF9B92 /* SessionRowProjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14D8A7B3E30C284A3103344B /* SessionRowProjector.swift */; };
 		DDB0A03F1EBE149E4FD5FB06 /* DockStoreTestsProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE68995BF09EC103770E8F3 /* DockStoreTestsProjection.swift */; };
 		E259E29A4592D3BF153F087F /* ServerRequestCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6FC9B9483DB6F49A90F5EC0 /* ServerRequestCardTests.swift */; };
+		E5FFD254DE0F4973C405B626 /* AppServerHostConnector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C93AD4A7645A6C045D62908 /* AppServerHostConnector.swift */; };
 		E88D5BF2DC414497611228C9 /* GlobalConnectivityIndicatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0200A7C5EC37FC0A7ABCDA6 /* GlobalConnectivityIndicatorView.swift */; };
 		E8B4F584399DE2B51D9E3B1A /* DockHostConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C72CBCF6924E26CAC9D3AE /* DockHostConfiguration.swift */; };
 		F11E5071EA0DA1EA4CC4A2D1 /* DiagnosticsLoggingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E31AB3877106E108F7A6ECE7 /* DiagnosticsLoggingTests.swift */; };
@@ -128,11 +131,13 @@
 		3AC280DBF1FD9245AD8CD686 /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
 		3C5D41B7D2FF05EE75C975E6 /* CodexDockBootstrapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexDockBootstrapView.swift; sourceTree = "<group>"; };
 		3DC48CE0A2682B2B0F223F12 /* ThreadEventNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadEventNormalizerTests.swift; sourceTree = "<group>"; };
+		3F035F07B0BBC9BE740ED620 /* AppServerThreadDetailSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerThreadDetailSession.swift; sourceTree = "<group>"; };
 		4487067DBDCABE61793B26B5 /* ThreadListMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadListMappingTests.swift; sourceTree = "<group>"; };
 		4A92948E4571E0CEE65CAE35 /* DockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockView.swift; sourceTree = "<group>"; };
 		52C72CBCF6924E26CAC9D3AE /* DockHostConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockHostConfiguration.swift; sourceTree = "<group>"; };
 		54671D3A6F294D5E4280D81E /* ArchiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveView.swift; sourceTree = "<group>"; };
 		5A268CB6FC21DA9B184409A9 /* RequestCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestCardView.swift; sourceTree = "<group>"; };
+		5C93AD4A7645A6C045D62908 /* AppServerHostConnector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerHostConnector.swift; sourceTree = "<group>"; };
 		5DC52B300359BB6026278F44 /* LocalThreadMetadataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalThreadMetadataStore.swift; sourceTree = "<group>"; };
 		6A2FB5E493FCFDB443D53EB2 /* AppLifecycleCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLifecycleCoordinatorTests.swift; sourceTree = "<group>"; };
 		6ABFCDF94C9EEDD90AB8BD72 /* Logging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logging.swift; sourceTree = "<group>"; };
@@ -163,6 +168,7 @@
 		D5070CB2076B611D53150818 /* ThreadListDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadListDTO.swift; sourceTree = "<group>"; };
 		D6F98E6722B55832F8AB7E27 /* ServerRequestCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerRequestCard.swift; sourceTree = "<group>"; };
 		D6FC9B9483DB6F49A90F5EC0 /* ServerRequestCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerRequestCardTests.swift; sourceTree = "<group>"; };
+		D76ACB118C0AE566FE1705F5 /* AppServerDockClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerDockClient.swift; sourceTree = "<group>"; };
 		D8389C4E022FA4A849D599C5 /* DockStoreScopeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockStoreScopeTests.swift; sourceTree = "<group>"; };
 		E31AB3877106E108F7A6ECE7 /* DiagnosticsLoggingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsLoggingTests.swift; sourceTree = "<group>"; };
 		ECA148D7F9C96BD5EDF6D709 /* ThreadDetailDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailDTO.swift; sourceTree = "<group>"; };
@@ -280,6 +286,7 @@
 			isa = PBXGroup;
 			children = (
 				ABDB5847612728C391956985 /* AppServerClient.swift */,
+				5C93AD4A7645A6C045D62908 /* AppServerHostConnector.swift */,
 				ACA75584AA40FC172ED36E9D /* AppServerMethods.swift */,
 				F9C4FD936A8FB869F14F7F61 /* JSONRPC.swift */,
 				D2906879671992EF2A2FF563 /* RealtimeTranscriptionDTO.swift */,
@@ -306,6 +313,8 @@
 			children = (
 				0AC49015E8B9106FA9F6FBD7 /* AppConnectivityStore.swift */,
 				D0ED12D9B6DD8F64B1253A01 /* AppLifecycleCoordinator.swift */,
+				D76ACB118C0AE566FE1705F5 /* AppServerDockClient.swift */,
+				3F035F07B0BBC9BE740ED620 /* AppServerThreadDetailSession.swift */,
 				FA032FF8D4142A8D3461B7DE /* ArchiveStore.swift */,
 				9C81305AA09AC5FF83868663 /* DockSessionProjection.swift */,
 				7A42B2061F9E45C1B6935F08 /* DockStore.swift */,
@@ -527,7 +536,10 @@
 				804101052873E16E35EA46C3 /* AppConnectivityStore.swift in Sources */,
 				08757DA9CF90EECF74468A35 /* AppLifecycleCoordinator.swift in Sources */,
 				7620B7A25D86E81210477475 /* AppServerClient.swift in Sources */,
+				7430376B939E3611D67885F0 /* AppServerDockClient.swift in Sources */,
+				E5FFD254DE0F4973C405B626 /* AppServerHostConnector.swift in Sources */,
 				1BFBBBFFA3E7C5115F4B9897 /* AppServerMethods.swift in Sources */,
+				0B0323F75A5305EB84D9B0AB /* AppServerThreadDetailSession.swift in Sources */,
 				1463EC33BFEF2CA641D47CAE /* ArchiveStore.swift in Sources */,
 				3101E586A0F08E291A67103D /* ArchiveView.swift in Sources */,
 				7B25578066AF31343072FDB2 /* CodexDockBootstrapView.swift in Sources */,

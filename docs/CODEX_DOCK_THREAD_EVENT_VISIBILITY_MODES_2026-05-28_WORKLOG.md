@@ -19,8 +19,8 @@
 - Added `ThreadEventVisibilityCategory` and `ThreadEventVisibilityMode` in `CodexDock/Models/ThreadEvent.swift`.
 - Added `ThreadEvent.visibilityCategory` with a defensive `.unknown` initializer default.
 - Classified stored items, live deltas, live `item/started` / `item/completed` embedded items, server requests, system rows, and malformed/unknown shapes through the model-owned event normalization path.
-- Added `ThreadEventVisibilityMode.visibleEvents(from:)`, which filters first and then calls `ThreadEventDisplayOrder.newestFirst(_:)`; this prevents hidden rows with newer timestamps from moving visible Messages-mode rows.
-- Kept `ThreadDetailStore.publishLoaded()` publishing the complete event stream through `ThreadEventDisplayOrder.newestFirst(_:)`.
+- Added `ThreadEventVisibilityMode.visibleEvents(from:)`, which filters first and then calls `ThreadEventDisplayOrder.naturalFlow(_:)`; this prevents hidden rows with newer timestamps from moving visible Messages-mode rows while keeping thread detail in normal conversation order.
+- Kept `ThreadDetailStore.publishLoaded()` publishing the complete event stream through `ThreadEventDisplayOrder.naturalFlow(_:)`.
 - Added local `@State private var visibilityMode: ThreadEventVisibilityMode = .messages` in `SessionDetailView`.
 - Kept `RequestCardsView(store:)` outside the timeline filter.
 - Added a compact header control that cycles `Messages -> Thinking -> Everything -> Messages`; the accessibility labels remain explicit as `Timeline visibility: Messages`, `Timeline visibility: Messages and Thinking`, and `Timeline visibility: Everything`.
@@ -81,3 +81,14 @@
 
 - Implementation audit verdict: code complete.
 - Thermonuclear review verdict: approved after fixing the stable projection ordering issue.
+
+## 2026-05-29 Follow-Up
+
+- User observation: the latest user message was pinned at the top of thread
+  detail instead of sitting naturally in the message flow.
+- Fix: thread detail display ordering now uses `ThreadEventDisplayOrder.naturalFlow(_:)`
+  instead of newest-first ordering.
+- Verification:
+  - `rtk swift test --filter ThreadEventNormalizerTests`: 11 tests passed.
+  - `rtk swift test --filter ThreadDetailStoreTests`: 51 tests passed.
+  - `rtk make app-test SIM=BAD95C8E-3E57-4818-9B90-E4ED22593B4B`: passed.
