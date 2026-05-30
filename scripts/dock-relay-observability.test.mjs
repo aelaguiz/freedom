@@ -95,6 +95,42 @@ test("relay observability route transitions include status reasons and trace loo
   assert.equal(trace.statusReasons[0].actual, "history");
 });
 
+test("relay observability marks stuck in-flight app routes as failed", () => {
+  let now = new Date("2026-05-30T12:00:00.000Z");
+  const observability = createRelayObservability({
+    hostId: "home",
+    configuredHostID: "home.fairy-salmon.ts.net:4510",
+    persistenceDir: false,
+    activeRouteTimeoutMs: 1_000,
+    clock: () => now,
+  });
+
+  const operation = observability.beginOperation({
+    route: ROUTE_NAMES.dockSubscribe,
+  });
+  let route = observability.routeHealth().find((entry) => entry.route === ROUTE_NAMES.dockSubscribe);
+
+  assert.equal(route.routeStatus, "partial");
+  assert.equal(route.lastAttempt.outcome, "started");
+
+  now = new Date("2026-05-30T12:00:02.000Z");
+  route = observability.routeHealth().find((entry) => entry.route === ROUTE_NAMES.dockSubscribe);
+  const trace = observability.trace(operation.operationID);
+
+  assert.equal(route.routeStatus, "failed");
+  assert.equal(route.statusReasons[0].code, "failed:in-flight-timeout");
+  assert.equal(route.statusReasons[0].threshold, 1_000);
+  assert.equal(route.statusReasons[0].actual, 2_000);
+  assert.equal(route.lastFailure.failureCategory, "timeout");
+  assert.equal(route.counters.failed, 1);
+  assert.equal(trace.outcome, "timed_out");
+  assert.equal(trace.failureCategory, "timeout");
+  assert.equal(observability.appCriticalFailures().some((entry) => entry.route === ROUTE_NAMES.dockSubscribe), true);
+
+  route = observability.routeHealth().find((entry) => entry.route === ROUTE_NAMES.dockSubscribe);
+  assert.equal(route.counters.failed, 1);
+});
+
 test("payload measurement summarizes rows without storing raw payload content", () => {
   const summary = measurementSummaryForResult("thread/list", {
     sessions: [

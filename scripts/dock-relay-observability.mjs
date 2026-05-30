@@ -2,6 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import {
+  OBSERVABILITY_ACTIVE_ROUTE_TIMEOUT_MS,
+} from "./dock-relay-constants.mjs";
 import { sanitizeFields } from "./dock-relay-logger.mjs";
 import {
   FAILURE_CATEGORY,
@@ -123,6 +126,31 @@ function statusReasonForFailure({ evidenceID, errorCode, failureCategory, phase,
   });
 }
 
+function statusReasonForStarted({ evidenceID }) {
+  return sanitizeFields({
+    code: "active:in-flight",
+    message: "route operation is currently in flight",
+    threshold: null,
+    actual: "started",
+    evidenceIDs: [evidenceID],
+    errorCode: null,
+    phase: "dispatch",
+  });
+}
+
+function statusReasonForTimeout({ evidenceID, timeoutMs, durationMs }) {
+  return sanitizeFields({
+    code: "failed:in-flight-timeout",
+    message: "route operation exceeded the active-operation timeout",
+    threshold: timeoutMs,
+    actual: durationMs,
+    evidenceIDs: [evidenceID],
+    errorCode: null,
+    phase: "in-flight",
+    error: `timed out after ${timeoutMs}ms`,
+  });
+}
+
 function measurementSummaryForResult(routeName, result) {
   const summary = {
     route: routeName,
@@ -220,6 +248,7 @@ class RelayObservability {
     maxEvents = DEFAULT_MAX_EVENTS,
     maxTraces = DEFAULT_MAX_TRACES,
     persistenceDir = null,
+    activeRouteTimeoutMs = OBSERVABILITY_ACTIVE_ROUTE_TIMEOUT_MS,
   } = {}) {
     this.host = {
       id: hostId,
@@ -230,8 +259,10 @@ class RelayObservability {
     this.maxEvents = maxEvents;
     this.maxTraces = maxTraces;
     this.persistenceDir = persistenceDir;
+    this.activeRouteTimeoutMs = activeRouteTimeoutMs;
     this.events = [];
     this.traces = new Map();
+    this.activeOperations = new Map();
     this.routes = new Map();
     for (const config of allRouteConfigs()) {
       this.routes.set(config.name, routeRecordFromConfig(config, this.host));
@@ -285,6 +316,7 @@ class RelayObservability {
       at: startedAt,
       outcome: "started",
     });
+    this.activeOperations.set(operationID, operation);
     this.traces.set(operationID, {
       schema: "codexdock.trace.v1",
       operationID,
@@ -304,7 +336,22 @@ class RelayObservability {
       events: [event],
       measurements: [],
     });
+    this.updateRoute(routeName, {
+      configuredHostID: operation.configuredHostID,
+      relayHostID: operation.relayHostID,
+      routeStatus: ROUTE_STATUS.PARTIAL,
+      statusReasons: [statusReasonForStarted({ evidenceID: event.evidenceID })],
+      lastAttempt: {
+        operationID,
+        at: startedAt,
+        durationMs: null,
+        outcome: "started",
+        failureCategory: null,
+        phase: "dispatch",
+      },
+    });
     this.trimTraces();
+    this.persist();
     return operation;
   }
 
@@ -321,6 +368,7 @@ class RelayObservability {
     if (!operation) {
       return null;
     }
+    this.activeOperations.delete(operation.operationID);
     const finishedAt = nowISO(this.clock);
     const durationMs = Math.max(0, nowMs(this.clock) - operation.startedAtMs);
     const routeName = operation.route;
@@ -455,12 +503,83 @@ class RelayObservability {
     return this.routes.get(routeName);
   }
 
-  routeHealth() {
+  routeHealth({ persistTimeouts = true } = {}) {
+    const changed = this.applyActiveTimeouts();
+    if (changed && persistTimeouts) {
+      this.persist();
+    }
     return [...this.routes.values()].sort((lhs, rhs) => lhs.route.localeCompare(rhs.route));
   }
 
   appCriticalFailures() {
     return this.routeHealth().filter((route) => route.appCritical && route.routeStatus === ROUTE_STATUS.FAILED);
+  }
+
+  applyActiveTimeouts() {
+    const timeoutMs = this.activeRouteTimeoutMs;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return false;
+    }
+    let changed = false;
+    const now = nowMs(this.clock);
+    const at = nowISO(this.clock);
+    for (const operation of this.activeOperations.values()) {
+      const durationMs = Math.max(0, now - operation.startedAtMs);
+      if (durationMs < timeoutMs) {
+        continue;
+      }
+      let evidenceID = operation.timeoutEvidenceID || null;
+      if (!evidenceID) {
+        const event = this.recordEvent({
+          operationID: operation.operationID,
+          traceID: operation.traceID,
+          route: operation.route,
+          type: "route.failed",
+          at,
+          durationMs,
+          outcome: "timed_out",
+          failureCategory: FAILURE_CATEGORY.TIMEOUT,
+          phase: "in-flight",
+        });
+        evidenceID = event.evidenceID;
+        operation.timeoutEvidenceID = evidenceID;
+        operation.timeoutCounted = false;
+        const trace = this.traces.get(operation.operationID);
+        if (trace) {
+          trace.outcome = "timed_out";
+          trace.durationMs = durationMs;
+          trace.failureCategory = FAILURE_CATEGORY.TIMEOUT;
+          trace.statusReasons = [statusReasonForTimeout({ evidenceID, timeoutMs, durationMs })];
+          trace.events.push(event);
+        }
+      }
+      this.updateRoute(operation.route, {
+        configuredHostID: operation.configuredHostID,
+        relayHostID: operation.relayHostID,
+        routeStatus: ROUTE_STATUS.FAILED,
+        statusReasons: [statusReasonForTimeout({ evidenceID, timeoutMs, durationMs })],
+        lastAttempt: {
+          operationID: operation.operationID,
+          at,
+          durationMs,
+          outcome: "timed_out",
+          failureCategory: FAILURE_CATEGORY.TIMEOUT,
+          phase: "in-flight",
+        },
+        lastFailure: {
+          operationID: operation.operationID,
+          at,
+          durationMs,
+          outcome: "timed_out",
+          failureCategory: FAILURE_CATEGORY.TIMEOUT,
+          phase: "in-flight",
+        },
+        incrementFailure: operation.timeoutCounted !== true,
+      });
+      operation.timeoutCounted = true;
+      changed = true;
+    }
+    return changed;
   }
 
   statusSnapshot() {
@@ -560,7 +679,7 @@ class RelayObservability {
     }
     try {
       fs.mkdirSync(this.persistenceDir, { recursive: true });
-      writeJSONAtomic(path.join(this.persistenceDir, "route-health.json"), this.routeHealth());
+      writeJSONAtomic(path.join(this.persistenceDir, "route-health.json"), this.routeHealth({ persistTimeouts: false }));
       writeJSONAtomic(path.join(this.persistenceDir, "recent-traces.json"), this.recentTraces({ limit: this.maxTraces }));
       writeJSONAtomic(path.join(this.persistenceDir, "events.json"), this.events);
     } catch {

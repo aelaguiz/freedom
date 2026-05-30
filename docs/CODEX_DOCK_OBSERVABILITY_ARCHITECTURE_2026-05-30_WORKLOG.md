@@ -21,13 +21,16 @@
   complete route-health arrays.
 - Fixed a discovered `/selftestz` hang where the Dock session snapshot had no
   timeout. Self-test route probes now use `SELFTEST_ROUTE_TIMEOUT_MS`.
+- Fixed a discovered route-health blind spot where a hung in-flight operation
+  could stay `unknown`. Active app routes now fail after
+  `OBSERVABILITY_ACTIVE_ROUTE_TIMEOUT_MS`.
 - Updated `README.md` to make `/readyz` process-only and route health the app
   path truth. Marked the 2026-05-28 logging plan as superseded for route-health
   diagnostics.
 
 ## Verification
 
-- `rtk npm run test:relay`: passed, 112 tests.
+- `rtk npm run test:relay`: passed, 113 tests.
 - `rtk swift test --filter AppServerClientTests`: passed, 55 tests, 5 skipped.
 - `rtk swift test --filter DockStoreTests`: passed, 48 tests.
 - `rtk swift test --filter ThreadDetailStoreTests`: passed, 52 tests.

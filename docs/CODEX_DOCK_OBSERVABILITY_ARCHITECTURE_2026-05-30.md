@@ -50,6 +50,9 @@ Manual QA: pending (non-blocking)
   `scripts/codex-dock-host-service.mjs`.
 - Relay self-test route probes are bounded by `SELFTEST_ROUTE_TIMEOUT_MS`, so a
   stuck Dock aggregation path cannot hang `/selftestz`.
+- In-flight app route operations are bounded by
+  `OBSERVABILITY_ACTIVE_ROUTE_TIMEOUT_MS`, so a hung route becomes a route
+  failure instead of staying `unknown`.
 - Relay bundle/status route arrays stay complete; the generic log sanitizer no
   longer caps the diagnostic route list.
 - Swift route vocabulary, operation store, relay diagnostics client, app request
@@ -67,7 +70,7 @@ Manual QA: pending (non-blocking)
   as app-path truth. The 2026-05-28 logging plan is marked superseded for
   route-health diagnostics.
 - Verification run:
-  - `rtk npm run test:relay` passed, 112 tests.
+  - `rtk npm run test:relay` passed, 113 tests.
   - `rtk swift test --filter AppServerClientTests` passed, 55 tests, 5 skipped.
   - `rtk swift test --filter DockStoreTests` passed, 48 tests.
   - `rtk swift test --filter ThreadDetailStoreTests` passed, 52 tests.
