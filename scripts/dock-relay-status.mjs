@@ -243,6 +243,7 @@ function createRelayStatusTracker({ clock = () => new Date() } = {}) {
       },
       liveDiscovery: lastLiveDiscoveryResult,
       liveStatus: projectLiveStatus(runtime.liveStatus),
+      state: runtime.relayState || null,
       connections: {
         downstreamActive: runtime.downstreamActive || 0,
         upstreamActive: runtime.upstreamActive || 0,
@@ -276,6 +277,7 @@ function createRelayStatusTracker({ clock = () => new Date() } = {}) {
         lastHealthOK: lastRawAppServerHealth.ok,
       },
       liveStatus: projectLiveStatus(runtime.liveStatus),
+      state: runtime.relayState?.counts || null,
       connections: {
         downstreamActive: runtime.downstreamActive || 0,
         upstreamActive: runtime.upstreamActive || 0,
@@ -300,6 +302,7 @@ function createRelayStatusTracker({ clock = () => new Date() } = {}) {
         displayName: config.hostName || config.bonjourName || null,
       },
       liveStatus: projectLiveStatus(runtime.liveStatus),
+      state: runtime.relayState || null,
       liveRows: Array.isArray(runtime.liveRows) ? runtime.liveRows : [],
       sessions: Array.isArray(runtime.sessions) ? runtime.sessions : [],
       connections: {

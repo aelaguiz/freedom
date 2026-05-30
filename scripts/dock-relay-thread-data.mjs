@@ -1,5 +1,3 @@
-import { execFileSync } from "node:child_process";
-
 import { defaultRelayLogger } from "./dock-relay-logger.mjs";
 import {
   LIVE_LOADED_LIST_LIMIT,
@@ -45,7 +43,9 @@ function liveStatusCacheForConfig(config) {
     config.liveStatusCache = new LiveStatusCache({
       collectLiveRows: () => collectLiveRows({
         logger: relayLogger(config),
-        excludeURLs: [config.historyUrl],
+        endpoints: configuredLiveEndpointsForConfig(config, { includeHistory: false }),
+        excludeURLs: [],
+        pool: upstreamPoolForConfig(config),
       }),
       logger: relayLogger(config),
       statusTracker: config.statusTracker || null,
@@ -77,6 +77,36 @@ function threadSummaryCacheForConfig(config) {
     });
   }
   return config.threadSummaryCache;
+}
+
+function configuredLiveEndpointsForConfig(config, { includeHistory = false } = {}) {
+  const endpoints = [];
+  if (includeHistory && config.historyUrl) {
+    endpoints.push({
+      label: "history",
+      url: config.historyUrl,
+      bearerToken: config.historyBearerToken || null,
+    });
+  }
+  for (const endpoint of config.liveEndpoints || []) {
+    if (!endpoint?.url) {
+      continue;
+    }
+    endpoints.push({
+      label: endpoint.label || endpoint.url,
+      url: endpoint.url,
+      bearerToken: endpoint.bearerToken || config.historyBearerToken || null,
+    });
+  }
+  const seen = new Set();
+  return endpoints.filter((endpoint) => {
+    const key = canonicalURLString(endpoint.url);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function isHistoryEndpoint(config, endpoint) {
@@ -206,24 +236,6 @@ function paginateStrings(values, params = {}) {
     data: page,
     nextCursor: end < sorted.length ? page[page.length - 1] : null,
   };
-}
-
-function discoverLoopbackEndpoints() {
-  const ps = execFileSync("ps", ["-axo", "pid,command"], { encoding: "utf8" });
-  const endpoints = [];
-  for (const line of ps.split("\n")) {
-    const match = line.match(/^\s*(\d+)\s+.*codex app-server --listen (ws:\/\/127\.0\.0\.1:\d+)/);
-    if (match) {
-      endpoints.push({ pid: Number(match[1]), url: match[2] });
-    }
-  }
-  const byUrl = new Map();
-  for (const endpoint of endpoints) {
-    if (!byUrl.has(endpoint.url) || endpoint.pid < byUrl.get(endpoint.url).pid) {
-      byUrl.set(endpoint.url, endpoint);
-    }
-  }
-  return [...byUrl.values()].sort((lhs, rhs) => lhs.pid - rhs.pid);
 }
 
 function canonicalURLString(value) {
@@ -387,7 +399,7 @@ async function collectLiveRows(options = {}) {
   const pool = typeof options?.warn === "function" ? null : options.pool || null;
   const excludedURLs = new Set((typeof options?.warn === "function" ? [] : options.excludeURLs || [])
     .map(canonicalURLString));
-  const endpoints = discoverLoopbackEndpoints()
+  const endpoints = (typeof options?.warn === "function" ? [] : options.endpoints || [])
     .filter((endpoint) => !excludedURLs.has(canonicalURLString(endpoint.url)));
   const maxConcurrent = pool?.labelLimit?.("live-status") || endpoints.length || 1;
   const results = await allSettledInBatches(
@@ -491,20 +503,17 @@ async function aggregateThreadList(config, params = {}) {
   const historyParams = clampThreadListParams(params);
   const history = await readHistoryThreadList(config, historyParams);
   const data = Array.isArray(history.data) ? history.data : [];
-  const summaryCache = threadSummaryCacheForConfig(config);
-  const dataWithSummaries = summaryCache.decorateRows(data);
-  summaryCache.warmRows(data);
   const liveOverlay = history.liveOverlay || liveStatusCacheForConfig(config).liveOverlay();
   logger.info("thread_list.loaded", {
     historyRows: data.length,
     requestedLimit: params.limit,
     effectiveLimit: historyParams.limit,
-    returnedRows: dataWithSummaries.length,
+    returnedRows: data.length,
     liveOverlayState: liveOverlay?.state || (liveOverlay?.ok ? "healthy" : "unknown"),
   });
   return {
     ...history,
-    data: dataWithSummaries,
+    data,
     liveOverlay,
   };
 }
@@ -611,6 +620,7 @@ export {
   archiveThread,
   attentionFlagsForServerRequest,
   collectLiveRows,
+  configuredLiveEndpointsForConfig,
   endpointForThread,
   initializeClient,
   listThreadTurns,

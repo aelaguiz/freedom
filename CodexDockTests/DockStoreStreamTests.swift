@@ -32,6 +32,7 @@ final class DockStoreStreamTests: XCTestCase {
             DockStreamUpdateDTO(
                 kind: .delta,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                view: "dock",
                 epoch: "epoch-1",
                 baseSeq: 99,
                 seq: 100,
@@ -80,6 +81,7 @@ final class DockStoreStreamTests: XCTestCase {
             DockStreamUpdateDTO(
                 kind: .delta,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion + 1,
+                view: "dock",
                 epoch: "epoch-1",
                 baseSeq: 1,
                 seq: 2,
@@ -128,6 +130,7 @@ final class DockStoreStreamTests: XCTestCase {
         await connection.send(
             DockStreamUpdateDTO(
                 kind: .delta,
+                view: "dock",
                 epoch: "epoch-1",
                 baseSeq: 1,
                 seq: 2,
@@ -189,6 +192,7 @@ final class DockStoreStreamTests: XCTestCase {
             DockStreamUpdateDTO(
                 kind: .delta,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion + 1,
+                view: "dock",
                 epoch: "amir-epoch",
                 baseSeq: 1,
                 seq: 2,
@@ -231,6 +235,7 @@ final class DockStoreStreamTests: XCTestCase {
             DockStreamUpdateDTO(
                 kind: .heartbeat,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                view: "dock",
                 epoch: "epoch-1",
                 seq: 1,
                 freshness: DockStreamFreshnessDTO(status: .stale, lastError: "refresh failed")
@@ -245,6 +250,151 @@ final class DockStoreStreamTests: XCTestCase {
         }
         XCTAssertTrue(snapshot.isPartial)
         XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["thread-a"])
+    }
+
+    @MainActor
+    func testWindowedSnapshotIsExplicitlyPartial() async throws {
+        let host = makeHost()
+        let connection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: host, threadID: "thread-a", title: "Window row", updatedAt: 1_000)
+                ],
+                complete: false,
+                totalRows: 3,
+                window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1, nextOffset: 1)
+            )
+        )
+        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+
+        await store.load()
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.hostStates.map(\.status) == [.partial(rowCount: 1, message: "Showing 1 of 3")] }
+        ) else {
+            return XCTFail("Expected windowed snapshot to be partial, got \(store.state)")
+        }
+        XCTAssertTrue(snapshot.isPartial)
+        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["thread-a"])
+    }
+
+    @MainActor
+    func testWindowedSnapshotCompletesWithStreamedCatchupDeltas() async throws {
+        let host = makeHost()
+        let connection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: host, threadID: "thread-a", title: "Window row A", updatedAt: 1_000)
+                ],
+                complete: false,
+                totalRows: 3,
+                window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1, nextOffset: 1)
+            )
+        )
+        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+
+        await store.load()
+        await connection.send(
+            DockStreamUpdateDTO(
+                kind: .delta,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                view: "dock",
+                complete: false,
+                totalRows: 3,
+                window: DockStreamWindowDTO(offset: 1, limit: 1, rowCount: 1, nextOffset: 2),
+                stateGeneration: 1,
+                epoch: "epoch-1",
+                baseSeq: 1,
+                seq: 1,
+                upsertSessions: [
+                    dockStreamSession(host: host, threadID: "thread-b", title: "Window row B", updatedAt: 900)
+                ],
+                deleteSessionIDs: []
+            )
+        )
+        await connection.send(
+            DockStreamUpdateDTO(
+                kind: .delta,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                view: "dock",
+                complete: true,
+                totalRows: 3,
+                window: DockStreamWindowDTO(offset: 2, limit: 1, rowCount: 1),
+                stateGeneration: 1,
+                epoch: "epoch-1",
+                baseSeq: 1,
+                seq: 1,
+                upsertSessions: [
+                    dockStreamSession(host: host, threadID: "thread-c", title: "Window row C", updatedAt: 800)
+                ],
+                deleteSessionIDs: []
+            )
+        )
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.hostStates.map(\.status) == [.loaded(rowCount: 3)] }
+        ) else {
+            return XCTFail("Expected streamed catch-up windows to complete the host, got \(store.state)")
+        }
+        XCTAssertFalse(snapshot.isPartial)
+        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["thread-a", "thread-b", "thread-c"])
+    }
+
+    @MainActor
+    func testSnapshotMissingWindowContractRequestsResync() async throws {
+        let host = makeHost()
+        let connection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
+                ]
+            ),
+            resyncSnapshots: [
+                dockStreamSnapshot(
+                    host: host,
+                    epoch: "epoch-2",
+                    seq: 1,
+                    sessions: [
+                        dockStreamSession(host: host, threadID: "thread-resynced", title: "Contract row", updatedAt: 1_200)
+                    ]
+                )
+            ]
+        )
+        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+
+        await store.load()
+        await connection.send(
+            DockStreamUpdateDTO(
+                kind: .snapshot,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                epoch: "legacy-epoch",
+                seq: 2,
+                freshness: DockStreamFreshnessDTO(status: .fresh),
+                hosts: [DockStreamHostDTO(id: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
+                sessions: [
+                    dockStreamSession(host: host, threadID: "legacy-row", title: "Legacy row", updatedAt: 1_100)
+                ]
+            )
+        )
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.id.threadID) == ["thread-resynced"] }
+        ) else {
+            return XCTFail("Expected legacy snapshot to trigger resync, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.hostStates.map(\.status), [.loaded(rowCount: 1)])
     }
 
     @MainActor

@@ -193,6 +193,11 @@ actor LoaderBackedDockStreamConnection: DockStreamConnection {
         return DockStreamUpdateDTO(
             kind: .snapshot,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            view: "dock",
+            complete: true,
+            totalRows: sessions.count,
+            window: DockStreamWindowDTO(offset: 0, limit: sessions.count, rowCount: sessions.count),
+            stateGeneration: seq,
             epoch: host.id,
             seq: seq,
             freshness: freshness,
@@ -787,11 +792,24 @@ func dockStreamSnapshot(
     seq: Int64,
     sessions: [DockStreamSessionDTO],
     schemaVersion: Int? = CodexDockConstants.Dock.streamSchemaVersion,
-    freshness: DockStreamFreshnessDTO = DockStreamFreshnessDTO(status: .fresh)
+    freshness: DockStreamFreshnessDTO = DockStreamFreshnessDTO(status: .fresh),
+    complete: Bool = true,
+    totalRows: Int? = nil,
+    window: DockStreamWindowDTO? = nil
 ) -> DockStreamUpdateDTO {
     DockStreamUpdateDTO(
         kind: .snapshot,
         schemaVersion: schemaVersion,
+        view: "dock",
+        complete: complete,
+        totalRows: totalRows ?? sessions.count,
+        window: window ?? DockStreamWindowDTO(
+            offset: 0,
+            limit: sessions.count,
+            rowCount: sessions.count,
+            nextOffset: nil
+        ),
+        stateGeneration: seq,
         epoch: epoch,
         seq: seq,
         freshness: freshness,

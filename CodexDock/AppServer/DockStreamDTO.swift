@@ -274,9 +274,33 @@ public struct DockStreamSessionDTO: Codable, Equatable, Sendable {
     }
 }
 
+public struct DockStreamWindowDTO: Codable, Equatable, Sendable {
+    public let offset: Int
+    public let limit: Int
+    public let rowCount: Int
+    public let nextOffset: Int?
+
+    public init(
+        offset: Int,
+        limit: Int,
+        rowCount: Int,
+        nextOffset: Int? = nil
+    ) {
+        self.offset = offset
+        self.limit = limit
+        self.rowCount = rowCount
+        self.nextOffset = nextOffset
+    }
+}
+
 public struct DockStreamUpdateDTO: Codable, Equatable, Sendable {
     public let kind: DockStreamKind
     public let schemaVersion: Int?
+    public let view: String?
+    public let complete: Bool?
+    public let totalRows: Int?
+    public let window: DockStreamWindowDTO?
+    public let stateGeneration: Int64?
     public let epoch: String
     public let baseSeq: Int64?
     public let seq: Int64
@@ -291,6 +315,11 @@ public struct DockStreamUpdateDTO: Codable, Equatable, Sendable {
     public init(
         kind: DockStreamKind,
         schemaVersion: Int? = nil,
+        view: String? = nil,
+        complete: Bool? = nil,
+        totalRows: Int? = nil,
+        window: DockStreamWindowDTO? = nil,
+        stateGeneration: Int64? = nil,
         epoch: String,
         baseSeq: Int64? = nil,
         seq: Int64,
@@ -304,6 +333,11 @@ public struct DockStreamUpdateDTO: Codable, Equatable, Sendable {
     ) {
         self.kind = kind
         self.schemaVersion = schemaVersion
+        self.view = view
+        self.complete = complete
+        self.totalRows = totalRows
+        self.window = window
+        self.stateGeneration = stateGeneration
         self.epoch = epoch
         self.baseSeq = baseSeq
         self.seq = seq

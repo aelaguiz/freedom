@@ -2,6 +2,7 @@ import Foundation
 
 enum DockSessionTableResyncReason: String, Equatable, Sendable {
     case schemaMismatch
+    case streamContract
     case epochMismatch
     case sequenceGap
 }
@@ -17,6 +18,9 @@ struct DockSessionTable: Equatable, Sendable {
         var seq: Int64
         var status: DockHostLoadStatus
         var freshness: DockStreamFreshnessDTO?
+        var complete: Bool
+        var totalRows: Int?
+        var window: DockStreamWindowDTO?
         var sessionsByID: [String: DockStreamSessionDTO]
 
         init(status: DockHostLoadStatus = .checking) {
@@ -24,6 +28,9 @@ struct DockSessionTable: Equatable, Sendable {
             self.seq = 0
             self.status = status
             self.freshness = nil
+            self.complete = false
+            self.totalRows = nil
+            self.window = nil
             self.sessionsByID = [:]
         }
     }
@@ -74,11 +81,17 @@ struct DockSessionTable: Equatable, Sendable {
         guard acceptsSchemaVersion(update.schemaVersion) else {
             return .needsResync(.schemaMismatch)
         }
+        guard acceptsStreamContract(update) else {
+            return .needsResync(.streamContract)
+        }
 
         var state = statesByHostID[host.id] ?? HostStreamState()
         state.epoch = update.epoch
         state.seq = update.seq
         state.freshness = update.freshness
+        state.complete = update.complete ?? false
+        state.totalRows = update.totalRows
+        state.window = update.window
         state.sessionsByID = Dictionary(
             uniqueKeysWithValues: (update.sessions ?? []).map { session in
                 (session.id, session)
@@ -86,7 +99,10 @@ struct DockSessionTable: Equatable, Sendable {
         )
         state.status = hostStatus(
             freshness: update.freshness,
-            rowCount: state.sessionsByID.count
+            rowCount: state.sessionsByID.count,
+            complete: state.complete,
+            totalRows: state.totalRows,
+            window: state.window
         )
         statesByHostID[host.id] = state
         return .applied
@@ -99,6 +115,9 @@ struct DockSessionTable: Equatable, Sendable {
 
         guard acceptsSchemaVersion(update.schemaVersion) else {
             return .needsResync(.schemaMismatch)
+        }
+        guard acceptsStreamContract(update) else {
+            return .needsResync(.streamContract)
         }
 
         guard var state = statesByHostID[host.id],
@@ -127,9 +146,15 @@ struct DockSessionTable: Equatable, Sendable {
         }
 
         state.freshness = update.freshness ?? state.freshness
+        state.complete = update.complete ?? state.complete
+        state.totalRows = update.totalRows ?? state.totalRows
+        state.window = update.window ?? state.window
         state.status = hostStatus(
             freshness: state.freshness,
-            rowCount: state.sessionsByID.count
+            rowCount: state.sessionsByID.count,
+            complete: state.complete,
+            totalRows: state.totalRows,
+            window: state.window
         )
         statesByHostID[host.id] = state
         return .applied
@@ -140,6 +165,60 @@ struct DockSessionTable: Equatable, Sendable {
             return false
         }
         return schemaVersion == CodexDockConstants.Dock.streamSchemaVersion
+    }
+
+    private func acceptsStreamContract(_ update: DockStreamUpdateDTO) -> Bool {
+        guard update.view == "dock" else {
+            return false
+        }
+        switch update.kind {
+        case .snapshot:
+            guard let complete = update.complete,
+                  let totalRows = update.totalRows,
+                  let window = update.window else {
+                return false
+            }
+            return acceptsWindowContract(
+                complete: complete,
+                totalRows: totalRows,
+                window: window,
+                sessionCount: update.sessions?.count ?? 0
+            )
+        case .delta, .heartbeat:
+            if update.complete == false {
+                guard let totalRows = update.totalRows,
+                      let window = update.window else {
+                    return false
+                }
+                return acceptsWindowContract(
+                    complete: false,
+                    totalRows: totalRows,
+                    window: window,
+                    sessionCount: update.upsertSessions?.count ?? 0
+                )
+            }
+            return true
+        }
+    }
+
+    private func acceptsWindowContract(
+        complete: Bool,
+        totalRows: Int,
+        window: DockStreamWindowDTO,
+        sessionCount: Int
+    ) -> Bool {
+        guard totalRows >= 0,
+              window.offset >= 0,
+              window.limit >= 0,
+              window.rowCount >= 0,
+              window.rowCount == sessionCount || !complete else {
+            return false
+        }
+        if let nextOffset = window.nextOffset,
+           nextOffset <= window.offset {
+            return false
+        }
+        return complete || window.rowCount <= totalRows
     }
 
     func snapshot(
@@ -223,8 +302,19 @@ struct DockSessionTable: Equatable, Sendable {
 
     private func hostStatus(
         freshness: DockStreamFreshnessDTO?,
-        rowCount: Int
+        rowCount: Int,
+        complete: Bool,
+        totalRows: Int?,
+        window: DockStreamWindowDTO?
     ) -> DockHostLoadStatus {
+        if !complete {
+            let visibleRows = window?.rowCount ?? rowCount
+            let knownTotal = totalRows ?? visibleRows
+            let message = knownTotal > visibleRows
+                ? "Showing \(visibleRows) of \(knownTotal)"
+                : "Partial window"
+            return .partial(rowCount: visibleRows, message: message)
+        }
         guard let freshness else {
             return rowCount == 0 ? .checking : .loaded(rowCount: rowCount)
         }

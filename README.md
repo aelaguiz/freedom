@@ -112,16 +112,17 @@ The raw app-server provides stored history. The relay is the app endpoint. Dock
 Home subscribes to relay-owned `dock/*` methods: `dock/subscribe` returns the
 first normalized snapshot, `dock/update` pushes deltas and heartbeats, and
 `dock/resync` returns a replacement snapshot if the client detects a sequence
-gap. The relay keeps the current session table warm, persists the last good
-table under `.codex-dock/`, and keeps stale rows visible when a refresh fails.
-Raw `thread/list` remains available for archive, detail support, and host
-settings diagnostics; it is no longer the Dock Home list contract.
+gap. The relay materializes app-server thread projections in SQLite at
+`.codex-dock/relay-state.sqlite`, serves Dock Home from that state store, and
+keeps stale rows visible when a source refresh fails. Raw `thread/list` remains
+available for archive, detail support, and host settings diagnostics; it is no
+longer the Dock Home list contract.
 
 Row text has two separate meanings. Raw history `preview` is preserved as the
 app-server's stored preview and may be the opening message. Dock overview rows
-prefer relay-owned `latestSummary` when the relay summary cache has warmed; that
-summary is derived from recent human/agent messages and is not allowed to block
-or reorder the dashboard `thread/list` response.
+use bounded relay state fields from the app-server projection; row summary
+work is not allowed to read turns, block subscribe/list, or reorder the
+dashboard response.
 
 The relay also owns OpenAI Realtime transcription. Keep `OPENAI_API_KEY` in the
 Mac environment or repo `.env`; the app never receives it. The default Realtime
@@ -249,14 +250,14 @@ rtk make relay-doctor
 Linux `home` service over Tailscale:
 
 ```sh
-rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make services HOST_SERVICE_PLATFORM=linux CODEX_BIN=/home/aelaguiz/.local/bin/codex NODE_BIN=/usr/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510 APP_SERVER_LISTEN=ws://127.0.0.1:4500 DOCK_RELAY_HISTORY_WS=ws://127.0.0.1:4500'
+rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make services HOST_SERVICE_PLATFORM=linux CODEX_BIN=/home/aelaguiz/.local/bin/codex NODE_BIN=/home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510 APP_SERVER_LISTEN=ws://127.0.0.1:4500 DOCK_RELAY_HISTORY_WS=ws://127.0.0.1:4500'
 ```
 
 Check `home` after start with the same overrides:
 
 ```sh
-rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-status HOST_SERVICE_PLATFORM=linux CODEX_BIN=/home/aelaguiz/.local/bin/codex NODE_BIN=/usr/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510 APP_SERVER_LISTEN=ws://127.0.0.1:4500 DOCK_RELAY_HISTORY_WS=ws://127.0.0.1:4500'
-rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-doctor HOST_SERVICE_PLATFORM=linux CODEX_BIN=/home/aelaguiz/.local/bin/codex NODE_BIN=/usr/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510 APP_SERVER_LISTEN=ws://127.0.0.1:4500 DOCK_RELAY_HISTORY_WS=ws://127.0.0.1:4500'
+rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-status HOST_SERVICE_PLATFORM=linux CODEX_BIN=/home/aelaguiz/.local/bin/codex NODE_BIN=/home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510 APP_SERVER_LISTEN=ws://127.0.0.1:4500 DOCK_RELAY_HISTORY_WS=ws://127.0.0.1:4500'
+rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-doctor HOST_SERVICE_PLATFORM=linux CODEX_BIN=/home/aelaguiz/.local/bin/codex NODE_BIN=/home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510 APP_SERVER_LISTEN=ws://127.0.0.1:4500 DOCK_RELAY_HISTORY_WS=ws://127.0.0.1:4500'
 ```
 
 From the Mac, the app-facing `home` relay should answer:

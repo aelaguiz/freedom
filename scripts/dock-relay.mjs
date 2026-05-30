@@ -56,9 +56,8 @@ import {
 import {
   DOCK_RESYNC_METHOD,
   DOCK_SUBSCRIBE_METHOD,
-  dockSessionAggregatorForConfig,
-  handleDockSubscribe,
-} from "./dock-relay-session-table.mjs";
+} from "./dock-relay-state-subscriptions.mjs";
+import { relayStateEngineForConfig } from "./dock-relay-state-engine.mjs";
 import { buildRelayStateSnapshot } from "./dock-relay-state-snapshot.mjs";
 import {
   loadDotEnvFile,
@@ -112,6 +111,30 @@ function parseArgs(argv) {
     index += 1;
   }
   return result;
+}
+
+function parseLiveEndpoints(value) {
+  if (!value) {
+    return [];
+  }
+  return String(value)
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const separator = entry.indexOf("=");
+      if (separator > 0) {
+        return {
+          label: entry.slice(0, separator).trim(),
+          url: entry.slice(separator + 1).trim(),
+        };
+      }
+      return {
+        label: entry,
+        url: entry,
+      };
+    })
+    .filter((endpoint) => endpoint.url);
 }
 
 function relayLogger(config) {
@@ -437,9 +460,9 @@ async function handleRequest(config, method, params, session, downstreamWs) {
     case "thread/goal/get":
       return aggregateThreadGoalGet(config, params || {});
     case DOCK_SUBSCRIBE_METHOD:
-      return handleDockSubscribe({ config, session, downstreamWs, sendJson });
+      return relayStateEngineForConfig(config).subscribeDock({ session, downstreamWs, sendJson });
     case DOCK_RESYNC_METHOD:
-      return dockSessionAggregatorForConfig(config).resync();
+      return relayStateEngineForConfig(config).resyncDock({ downstreamWs, sendJson });
     case "relay/state/snapshot":
       return buildRelayStateSnapshot(config, params || {});
     case "thread/loaded/list":
@@ -451,9 +474,25 @@ async function handleRequest(config, method, params, session, downstreamWs) {
     case "thread/resume":
       return resumeThread(config, params || {}, session, downstreamWs);
     case "thread/archive":
-      return archiveThread(config, params || {});
+    {
+      const result = await archiveThread(config, params || {});
+      await relayStateEngineForConfig(config).handleArchiveMutation({
+        threadId: params?.threadId,
+        archived: true,
+      });
+      return result;
+    }
     case "thread/unarchive":
-      return unarchiveThread(config, params || {});
+    {
+      const result = await unarchiveThread(config, params || {});
+      await relayStateEngineForConfig(config).handleArchiveMutation({
+        threadId: params?.threadId,
+        archived: false,
+      });
+      return result;
+    }
+    case "state/query":
+      return relayStateEngineForConfig(config).snapshotForView(params?.view || "dock", params || {});
     case "audio/transcription/start":
       return session.realtimeTranscription.start(params || {});
     case "audio/transcription/append":
@@ -532,6 +571,7 @@ function runtimeSnapshot(config, sessions, downstreamSockets) {
     upstreamActive: [...sessions].filter((session) => session.upstream?.isOpen()).length,
     upstreamPools: config.upstreamPool?.stats?.() || [],
     liveStatus,
+    relayState: config.relayStateEngine?.stateSnapshot?.() || null,
     sessions: sessionDebugSnapshot(sessions),
     liveRows: liveRowsDebugSnapshot(liveStatus),
   };
@@ -579,20 +619,6 @@ function traceOperationIDFromPath(pathname) {
 }
 
 function semanticRouteOutcome(method, result) {
-  if ((method === DOCK_SUBSCRIBE_METHOD || method === DOCK_RESYNC_METHOD)
-    && result?.freshness?.status === "stale") {
-    return {
-      ok: false,
-      error: new Error(result.freshness.lastError || "dock session refresh failed"),
-      errorData: {
-        subsystem: "history",
-        retryable: true,
-      },
-      errorCode: -32000,
-      phase: "refresh",
-      outcome: "failed",
-    };
-  }
   return {
     ok: true,
     error: null,
@@ -626,31 +652,18 @@ async function runSelfTest(config) {
   const safeRoutes = [];
   for (const route of autoProbeSafeRoutes()) {
     if (route.name === ROUTE_NAMES.dockSubscribe) {
-      try {
-        const snapshot = await withSelfTestTimeout(
-          dockSessionAggregatorForConfig(config).snapshot(),
-          route.name,
-          routeTimeoutMs,
-        );
-        safeRoutes.push({
-          route: route.name,
-          probeSafety: route.probeSafety,
-          ok: snapshot?.freshness?.status !== "stale",
-          freshness: snapshot?.freshness?.status || null,
-          rows: Array.isArray(snapshot?.sessions) ? snapshot.sessions.length : null,
-        });
-      } catch (error) {
-        safeRoutes.push({
-          route: route.name,
-          probeSafety: route.probeSafety,
-          ok: false,
-          error: error?.message || String(error),
-          failureCategory: error?.code === "SELFTEST_ROUTE_TIMEOUT"
-            ? FAILURE_CATEGORY.TIMEOUT
-            : FAILURE_CATEGORY.RELAY,
-          timeoutMs: error?.timeoutMs || null,
-        });
-      }
+      const state = await withSelfTestTimeout(
+        Promise.resolve(config.relayStateEngine?.stateSnapshot?.() || null),
+        route.name,
+        routeTimeoutMs,
+      );
+      safeRoutes.push({
+        route: route.name,
+        probeSafety: route.probeSafety,
+        ok: Boolean(state?.ok),
+        note: "passive state health read; dock/subscribe not called",
+        rows: state?.counts?.active ?? null,
+      });
       continue;
     }
     if (route.kind === "http" || route.name === ROUTE_NAMES.statusz) {
@@ -677,6 +690,9 @@ function startServer(config) {
   config.version = config.version || RELAY_VERSION;
   config.hostId = config.hostId || process.env.CODEX_DOCK_REAL_HOST_ID || os.hostname();
   config.hostName = config.hostName || process.env.CODEX_DOCK_REAL_HOST_NAME || config.hostId;
+  if (!config.relayStateDatabasePath && process.env.NODE_TEST_CONTEXT) {
+    config.relayStateDatabasePath = ":memory:";
+  }
   config.openAIRealtimeTranscriptionModel = config.openAIRealtimeTranscriptionModel
     || DEFAULT_REALTIME_TRANSCRIPTION_MODEL;
   config.openAIRealtimeTranscriptionEndpoint = config.openAIRealtimeTranscriptionEndpoint
@@ -704,6 +720,10 @@ function startServer(config) {
   config.liveStatusCache = liveStatusCacheForConfig(config);
   config.sessionRouter = sessionRouterForConfig(config);
   config.liveStatusCache.start();
+  config.relayStateEngine = relayStateEngineForConfig(config);
+  if (config.relayStateAutoStart === true) {
+    config.relayStateEngine.start();
+  }
   config.phoneAuth = parsePhoneAuthMode(config.phoneAuth || DEFAULT_PHONE_AUTH);
   if (config.phoneAuth === "bearer" && !config.relayBearerToken) {
     throw new Error("relayBearerToken is required when phoneAuth is bearer");
@@ -851,6 +871,47 @@ function startServer(config) {
     }
     if (requestURL.pathname === "/routesz") {
       writeRoutesResponse(request, response);
+      return;
+    }
+    if (requestURL.pathname === "/statez") {
+      writeJSONResponse(response, config.relayStateEngine.stateSnapshot());
+      return;
+    }
+    if (requestURL.pathname === "/syncz") {
+      writeJSONResponse(response, {
+        ok: true,
+        service: "codex-dock-relay",
+        schema: "codexdock.syncz.v1",
+        syncScopes: config.relayStateEngine.stateSnapshot().syncScopes,
+      });
+      return;
+    }
+    if (requestURL.pathname === "/subscriptionsz") {
+      writeJSONResponse(response, {
+        ok: true,
+        service: "codex-dock-relay",
+        schema: "codexdock.subscriptionsz.v1",
+        subscribers: config.relayStateEngine.subscriptions.subscribers.size,
+      });
+      return;
+    }
+    if (requestURL.pathname === "/dbz") {
+      writeJSONResponse(response, {
+        ok: true,
+        service: "codex-dock-relay",
+        schema: "codexdock.dbz.v1",
+        db: config.relayStateEngine.stateSnapshot().db,
+      });
+      return;
+    }
+    if (requestURL.pathname.startsWith("/explainz/thread/")) {
+      const threadID = decodeURIComponent(requestURL.pathname.slice("/explainz/thread/".length));
+      writeJSONResponse(response, {
+        ok: true,
+        service: "codex-dock-relay",
+        schema: "codexdock.explainz.thread.v1",
+        explanation: config.relayStateEngine.explainThread(threadID),
+      });
       return;
     }
     if (requestURL.pathname === "/tracesz/recent" || requestURL.pathname.startsWith("/tracesz/")) {
@@ -1106,7 +1167,6 @@ function startServer(config) {
         activeConnections: downstreamSockets.size,
       });
       advertisement?.kill();
-      config.dockSessionAggregator?.stop?.();
       config.liveStatusCache?.stop?.();
       for (const ws of downstreamSockets) {
         ws.close(1001, "relay shutting down");
@@ -1126,6 +1186,7 @@ function startServer(config) {
           } else {
             try {
               await config.upstreamPool?.closeAll?.({ reason: "relay_close" });
+              await config.relayStateEngine?.close?.();
               logger.info("relay.closed");
               resolve();
             } catch (closeError) {
@@ -1184,6 +1245,7 @@ function main() {
     relayBearerToken: relayTokenFile ? readToken(relayTokenFile) : null,
     historyBearerToken: readToken(historyTokenFile),
     historyUrl: args["history-url"] || process.env.CODEX_DOCK_HISTORY_APP_SERVER_WS || DEFAULT_HISTORY_APP_SERVER_WS,
+    liveEndpoints: parseLiveEndpoints(args["live-endpoints"] || process.env.CODEX_DOCK_LIVE_APP_SERVER_WS || process.env.CODEX_DOCK_LIVE_ENDPOINTS),
     hostId: args["host-id"] || process.env.CODEX_DOCK_REAL_HOST_ID || os.hostname(),
     hostName: args["host-name"] || process.env.CODEX_DOCK_REAL_HOST_NAME || args["bonjour-name"],
     bonjourName: args["bonjour-name"] || process.env.CODEX_DOCK_BONJOUR_NAME || `Codex Dock ${os.hostname()}`,
@@ -1204,6 +1266,7 @@ function main() {
     realtimeTranscriptionMaxDurationMs: process.env.CODEX_DOCK_REALTIME_TRANSCRIPTION_MAX_DURATION_MS,
     openAISafetyIdentifier: process.env.CODEX_DOCK_OPENAI_SAFETY_IDENTIFIER,
     logger: defaultRelayLogger,
+    relayStateAutoStart: true,
   });
   serverHandle.logger = defaultRelayLogger;
   installShutdownHandlers(serverHandle);

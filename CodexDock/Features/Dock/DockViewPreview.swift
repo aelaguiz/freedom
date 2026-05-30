@@ -35,6 +35,12 @@ private struct PreviewDockStreamConnection: DockStreamConnection {
     private func snapshot() -> DockStreamUpdateDTO {
         DockStreamUpdateDTO(
             kind: .snapshot,
+            schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            view: "dock",
+            complete: true,
+            totalRows: 3,
+            window: DockStreamWindowDTO(offset: 0, limit: 3, rowCount: 3),
+            stateGeneration: 1,
             epoch: "preview",
             seq: 1,
             freshness: DockStreamFreshnessDTO(status: .fresh),

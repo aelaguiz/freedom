@@ -323,6 +323,11 @@ final class AppServerClientTests: XCTestCase {
         let snapshot = DockStreamUpdateDTO(
             kind: .snapshot,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            view: "dock",
+            complete: true,
+            totalRows: 1,
+            window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1),
+            stateGeneration: 1,
             epoch: "epoch-1",
             seq: 1,
             freshness: DockStreamFreshnessDTO(status: .fresh),
@@ -357,6 +362,11 @@ final class AppServerClientTests: XCTestCase {
         let delta = DockStreamUpdateDTO(
             kind: .delta,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            view: "dock",
+            complete: true,
+            totalRows: 1,
+            window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1),
+            stateGeneration: 2,
             epoch: "epoch-1",
             baseSeq: 1,
             seq: 2,

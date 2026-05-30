@@ -1,0 +1,651 @@
+import {
+  RELAY_STATE_DOCK_WINDOW_SIZE,
+  RELAY_STATE_RECONCILE_DEBOUNCE_MS,
+  RELAY_STATE_RECONCILE_INTERVAL_MS,
+  RELAY_STATE_SNAPSHOT_SOFT_LIMIT_BYTES,
+  RELAY_STATE_UPDATE_SOFT_LIMIT_BYTES,
+  THREAD_LIST_MAX_LIMIT,
+} from "./dock-relay-constants.mjs";
+import { NotificationIngestor } from "./dock-relay-state-ingest.mjs";
+import { relayStateStoreForConfig } from "./dock-relay-state-store.mjs";
+import { StateSubscriptionHub } from "./dock-relay-state-subscriptions.mjs";
+import {
+  DOCK_VIEW,
+  ARCHIVE_VIEW,
+  buildWindow,
+  estimateJSONBytes,
+  normalizeThread,
+  normalizedStatus,
+  orderedDockRows,
+  publicHostFromConfig,
+} from "./dock-relay-state-views.mjs";
+import {
+  EXPLICIT_SOURCE_KINDS,
+  drainThreadListScope,
+} from "./dock-relay-state-snapshot.mjs";
+import {
+  collectLiveRows,
+  configuredLiveEndpointsForConfig,
+} from "./dock-relay-thread-data.mjs";
+
+function nowISOString() {
+  return new Date().toISOString();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+const ACTIVE_DEFAULT_SCOPE = {
+  name: "interactiveDefault",
+  sourceKinds: null,
+  meaning: "app-server default interactive source scope",
+};
+
+const ACTIVE_ALL_SOURCE_SCOPE = {
+  name: "allSourceKinds",
+  sourceKinds: [...EXPLICIT_SOURCE_KINDS],
+  meaning: "app-server explicit sourceKinds union preserving combined Codex order",
+};
+
+const ACTIVE_ARCHIVE_SCOPE = {
+  name: "active",
+  archived: false,
+};
+
+function liveLeaseFromRow(row, endpoint, maxAgeMs) {
+  const threadID = row?.id;
+  if (!threadID) {
+    return null;
+  }
+  const status = normalizedStatus(row);
+  const validationAtMs = Date.now();
+  return {
+    threadID,
+    endpointLabel: endpoint?.label || endpoint?.url || null,
+    endpointUrl: endpoint?.url || null,
+    backendSessionID: row?.sessionId || threadID,
+    status,
+    waitingState: status === "needsApproval" || status === "needsInput" ? status : null,
+    commandCapability: false,
+    validationAtMs,
+    expiresAtMs: validationAtMs + maxAgeMs,
+  };
+}
+
+class StateReconciler {
+  constructor({
+    engine,
+    intervalMs = RELAY_STATE_RECONCILE_INTERVAL_MS,
+    debounceMs = RELAY_STATE_RECONCILE_DEBOUNCE_MS,
+  }) {
+    this.engine = engine;
+    this.intervalMs = intervalMs;
+    this.debounceMs = debounceMs;
+    this.timer = null;
+    this.debounceTimer = null;
+    this.inFlight = null;
+  }
+
+  start() {
+    if (this.timer) {
+      return;
+    }
+    this.schedule({ reason: "boot", immediate: false });
+    this.timer = setInterval(() => {
+      this.schedule({ reason: "periodic", immediate: false });
+    }, this.intervalMs);
+    this.timer.unref?.();
+  }
+
+  async stop() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+    if (this.inFlight) {
+      await this.inFlight.catch(() => null);
+    }
+  }
+
+  schedule({ reason, immediate = false } = {}) {
+    if (immediate) {
+      if (this.debounceTimer) {
+        clearTimeout(this.debounceTimer);
+        this.debounceTimer = null;
+      }
+      return this.run(reason || "manual");
+    }
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+    }
+    this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = null;
+      this.run(reason || "debounced").catch((error) => {
+        this.engine.logger?.warn?.("state.reconcile_failed", { reason, error });
+      });
+    }, this.debounceMs);
+    this.debounceTimer.unref?.();
+    return Promise.resolve(null);
+  }
+
+  async run(reason = "manual") {
+    if (this.inFlight) {
+      return this.inFlight;
+    }
+    this.inFlight = this.engine.reconcileDock({ reason }).finally(() => {
+      this.inFlight = null;
+    });
+    return this.inFlight;
+  }
+}
+
+class RelayStateEngine {
+  constructor(config, options = {}) {
+    this.config = config;
+    this.logger = config.logger;
+    this.store = options.store || relayStateStoreForConfig(config);
+    this.reconciler = new StateReconciler({
+      engine: this,
+      intervalMs: config.relayStateReconcileIntervalMs || RELAY_STATE_RECONCILE_INTERVAL_MS,
+      debounceMs: config.relayStateReconcileDebounceMs || RELAY_STATE_RECONCILE_DEBOUNCE_MS,
+    });
+    this.subscriptions = new StateSubscriptionHub({
+      store: this.store,
+      snapshotForView: (view, params) => this.snapshotForView(view, params),
+      logger: this.logger,
+      snapshotSoftLimitBytes: config.relayStateSnapshotSoftLimitBytes
+        || RELAY_STATE_SNAPSHOT_SOFT_LIMIT_BYTES,
+    });
+    this.ingestor = new NotificationIngestor({
+      store: this.store,
+      hostId: config.hostId,
+      scheduleReconciliation: (request) => this.scheduleReconciliation(request),
+      logger: this.logger,
+    });
+    this.started = false;
+  }
+
+  start() {
+    if (this.started) {
+      return;
+    }
+    this.started = true;
+    this.reconciler.start();
+  }
+
+  async close() {
+    await this.reconciler.stop();
+    this.store.close();
+  }
+
+  scheduleReconciliation(request = {}) {
+    return this.reconciler.schedule(request);
+  }
+
+  shouldReconcileAfterResponse() {
+    const host = publicHostFromConfig(this.config);
+    const counts = this.store.stateCounts();
+    const freshness = this.store.freshnessForHost(host.id);
+    const totalRows = this.store.listDockSessions({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
+    return Number(totalRows || 0) === 0
+      || Number(counts.incomplete || 0) > 0
+      || freshness.status !== "fresh";
+  }
+
+  scheduleReconciliationAfterResponse(reason, { force = false } = {}) {
+    if (!force && !this.shouldReconcileAfterResponse()) {
+      this.logger?.debug?.("state.reconcile_skipped", {
+        reason,
+        freshness: "fresh",
+      });
+      return;
+    }
+    const timer = setImmediate(() => {
+      this.reconciler.schedule({ reason, immediate: true }).catch((error) => {
+        this.logger?.warn?.("state.reconcile_failed", { reason, error });
+      });
+    });
+    timer.unref?.();
+  }
+
+  async reconcileDock({ reason = "manual" } = {}) {
+    const host = publicHostFromConfig(this.config);
+    try {
+      const baseParams = {
+        archived: false,
+        limit: THREAD_LIST_MAX_LIMIT,
+        sortKey: "updated_at",
+        sortDirection: "desc",
+        modelProviders: [],
+      };
+      const [liveRows, primaryScope, defaultScope] = await Promise.all([
+        this.refreshLiveLeases(),
+        drainThreadListScope(this.config, baseParams, ACTIVE_ARCHIVE_SCOPE, ACTIVE_ALL_SOURCE_SCOPE),
+        drainThreadListScope(this.config, baseParams, ACTIVE_ARCHIVE_SCOPE, ACTIVE_DEFAULT_SCOPE),
+      ]);
+      const primaryRows = primaryScope.rows.map((row) => row.thread).filter(Boolean);
+      const interactiveRows = defaultScope.rows.map((row) => row.thread).filter(Boolean);
+      const orderedRows = orderedDockRows(primaryRows, interactiveRows, liveRows);
+      const sessions = orderedRows
+        .map(({ row, lane }) => normalizeThread(row, host, lane))
+        .filter(Boolean);
+      const complete = primaryScope.complete && defaultScope.complete;
+      const result = this.store.applyDockReconciliation({
+        host,
+        sessions,
+        scopes: [primaryScope, defaultScope],
+        complete,
+        error: primaryScope.error || defaultScope.error || null,
+      });
+      const freshness = this.store.freshnessForHost(host.id);
+      const totalRows = this.store.listDockSessions({ hostID: host.id }).totalRows;
+      const deltaCarriesEveryRow = complete
+        && Number(result.deleteSessionIDs?.length || 0) === 0
+        && Number(result.upsertSessions?.length || 0) === Number(totalRows || 0);
+      await this.subscriptions.publishDockDelta(this.subscriptions.dockDelta({
+        baseSeq: Math.max(0, Number(result.seq) - 1),
+        seq: result.seq,
+        freshness,
+        upsertHosts: [host],
+        upsertSessions: result.upsertSessions,
+        deleteSessionIDs: result.deleteSessionIDs,
+        totalRows,
+        complete: deltaCarriesEveryRow ? true : undefined,
+      }));
+      if (complete) {
+        this.logger?.info?.("state.reconcile_succeeded", {
+          reason,
+          hostId: host.id,
+          rows: sessions.length,
+          seq: result.seq,
+        });
+      } else {
+        this.logger?.warn?.("state.reconcile_incomplete", {
+          reason,
+          hostId: host.id,
+          rows: sessions.length,
+          seq: result.seq,
+          error: primaryScope.error || defaultScope.error || error,
+        });
+      }
+      return result;
+    } catch (error) {
+      this.store.upsertHost(host);
+      this.store.markScopeStale(host.id, "active:allSourceKinds", error);
+      this.store.markScopeStale(host.id, "active:interactiveDefault", error);
+      const seq = this.store.currentSeq();
+      const totalRows = this.store.listDockSessions({ hostID: host.id }).totalRows;
+      await this.subscriptions.publishDockDelta(this.subscriptions.dockDelta({
+        baseSeq: Math.max(0, seq - 1),
+        seq,
+        freshness: this.store.freshnessForHost(host.id),
+        totalRows,
+        complete: false,
+      }));
+      this.logger?.warn?.("state.reconcile_failed", {
+        reason,
+        hostId: host.id,
+        error,
+      });
+      return { seq, upsertSessions: [], deleteSessionIDs: [], error };
+    }
+  }
+
+  async refreshLiveLeases() {
+    const host = publicHostFromConfig(this.config);
+    const endpoints = configuredLiveEndpointsForConfig(this.config, { includeHistory: true });
+    const live = await collectLiveRows({
+      logger: this.logger,
+      pool: this.config.upstreamPool || null,
+      endpoints,
+      excludeURLs: [],
+    });
+    const endpointsByUrl = new Map(endpoints.map((endpoint) => [endpoint.url, endpoint]));
+    for (const row of live.rows || []) {
+      const endpoint = endpointsByUrl.get(row?.dockRelaySource?.url) || row?.dockRelaySource || null;
+      const lease = liveLeaseFromRow(
+        row,
+        endpoint,
+        this.config.liveStatusMaxAgeMs || 5_000,
+      );
+      if (lease) {
+        this.store.upsertLiveLease(host.id, lease);
+      }
+    }
+    return live.rows || [];
+  }
+
+  snapshotForView(view, {
+    epoch,
+    offset = 0,
+    limit = RELAY_STATE_DOCK_WINDOW_SIZE,
+    softLimitBytes = RELAY_STATE_SNAPSHOT_SOFT_LIMIT_BYTES,
+  } = {}) {
+    if (view === ARCHIVE_VIEW) {
+      return this.snapshotArchive({ epoch, offset, limit, softLimitBytes });
+    }
+    return this.snapshotDock({ epoch, offset, limit, softLimitBytes });
+  }
+
+  snapshotDock({
+    epoch = this.subscriptions.epoch,
+    offset = 0,
+    limit = RELAY_STATE_DOCK_WINDOW_SIZE,
+    softLimitBytes = RELAY_STATE_SNAPSHOT_SOFT_LIMIT_BYTES,
+  } = {}) {
+    const host = publicHostFromConfig(this.config);
+    const totalRows = this.store.listDockSessions({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
+    if (totalRows === 0) {
+      return this.makeSnapshot({
+        view: DOCK_VIEW,
+        epoch,
+        complete: true,
+        totalRows: 0,
+        window: buildWindow({ offset: 0, limit: 0, rowCount: 0, totalRows: 0 }),
+        sessions: [],
+        freshness: this.store.freshnessForHost(host.id),
+      });
+    }
+
+    let windowLimit = Math.max(1, Math.min(Number(limit || 1), totalRows));
+    let bounded = this.store.listDockSessions({ hostID: host.id, offset, limit: windowLimit });
+    let window = buildWindow({
+      offset,
+      limit: windowLimit,
+      rowCount: bounded.sessions.length,
+      totalRows: bounded.totalRows,
+    });
+    let snapshot = this.makeSnapshot({
+      view: DOCK_VIEW,
+      epoch,
+      complete: offset + bounded.sessions.length >= bounded.totalRows,
+      totalRows: bounded.totalRows,
+      window,
+      sessions: bounded.sessions,
+      freshness: this.store.freshnessForHost(host.id),
+    });
+
+    while (estimateJSONBytes(snapshot) > softLimitBytes && windowLimit > 1) {
+      windowLimit = Math.max(1, Math.floor(windowLimit / 2));
+      bounded = this.store.listDockSessions({ hostID: host.id, offset, limit: windowLimit });
+      window = buildWindow({
+        offset,
+        limit: windowLimit,
+        rowCount: bounded.sessions.length,
+        totalRows: bounded.totalRows,
+      });
+      snapshot = this.makeSnapshot({
+        view: DOCK_VIEW,
+        epoch,
+        complete: offset + bounded.sessions.length >= bounded.totalRows,
+        totalRows: bounded.totalRows,
+        window,
+        sessions: bounded.sessions,
+        freshness: this.store.freshnessForHost(host.id),
+      });
+    }
+
+    return this.makeSnapshot({
+      view: DOCK_VIEW,
+      epoch,
+      complete: offset + bounded.sessions.length >= bounded.totalRows,
+      totalRows: bounded.totalRows,
+      window,
+      sessions: bounded.sessions,
+      freshness: this.store.freshnessForHost(host.id),
+    });
+  }
+
+  snapshotArchive({
+    epoch = this.subscriptions.epoch,
+    offset = 0,
+    limit = RELAY_STATE_DOCK_WINDOW_SIZE,
+  } = {}) {
+    const host = publicHostFromConfig(this.config);
+    const result = this.store.listArchiveSessions({ hostID: host.id, offset, limit });
+    return this.makeSnapshot({
+      view: ARCHIVE_VIEW,
+      epoch,
+      complete: offset + result.sessions.length >= result.totalRows,
+      totalRows: result.totalRows,
+      window: buildWindow({
+        offset,
+        limit,
+        rowCount: result.sessions.length,
+        totalRows: result.totalRows,
+      }),
+      sessions: result.sessions,
+      freshness: this.store.freshnessForHost(host.id),
+    });
+  }
+
+  makeSnapshot({
+    view,
+    epoch,
+    complete,
+    totalRows,
+    window,
+    sessions,
+    freshness,
+  }) {
+    return {
+      kind: "snapshot",
+      schemaVersion: 1,
+      epoch,
+      baseSeq: null,
+      seq: this.store.currentSeq(),
+      stateGeneration: this.store.currentSeq(),
+      view,
+      complete,
+      totalRows,
+      window,
+      asOf: nowISOString(),
+      freshness,
+      hosts: this.store.hostRows(),
+      sessions,
+    };
+  }
+
+  async subscribeDock({ session, downstreamWs, sendJson }) {
+    session.dockUnsubscribe?.();
+    session.dockUnsubscribe = null;
+    let subscriptionReady = false;
+    const bufferedUpdates = [];
+    const sendDockUpdate = (update) => {
+      sendJson(downstreamWs, {
+        jsonrpc: "2.0",
+        method: "dock/update",
+        params: update,
+      });
+      this.scheduleDockWindowCatchupAfterResponse(update, sendDockUpdate, "dock/update");
+    };
+    session.dockUnsubscribe = this.subscriptions.subscribe((update) => {
+      if (!subscriptionReady) {
+        bufferedUpdates.push(update);
+        return;
+      }
+      sendDockUpdate(update);
+    });
+
+    const snapshot = await this.subscriptions.snapshot(DOCK_VIEW);
+    subscriptionReady = true;
+    let catchupTarget = snapshot;
+    for (const update of bufferedUpdates) {
+      if (update.epoch === snapshot.epoch && Number(update.seq || 0) > Number(snapshot.seq || 0)) {
+        sendDockUpdate(update);
+        catchupTarget = update.kind === "snapshot" ? update : null;
+      }
+    }
+    bufferedUpdates.length = 0;
+    this.scheduleDockWindowCatchupAfterResponse(catchupTarget, sendDockUpdate, "dock/subscribe", {
+      after: () => this.scheduleReconciliationAfterResponse("dock/subscribe"),
+    });
+    return snapshot;
+  }
+
+  async resyncDock({ downstreamWs = null, sendJson = null } = {}) {
+    const snapshot = await this.subscriptions.snapshot(DOCK_VIEW);
+    if (downstreamWs && sendJson) {
+      const sendDockUpdate = (update) => {
+        sendJson(downstreamWs, {
+          jsonrpc: "2.0",
+          method: "dock/update",
+          params: update,
+        });
+        this.scheduleDockWindowCatchupAfterResponse(update, sendDockUpdate, "dock/update");
+      };
+      this.scheduleDockWindowCatchupAfterResponse(snapshot, sendDockUpdate, "dock/resync", {
+        after: () => this.scheduleReconciliationAfterResponse("dock/resync"),
+      });
+    } else {
+      this.scheduleReconciliationAfterResponse("dock/resync");
+    }
+    return snapshot;
+  }
+
+  scheduleDockWindowCatchupAfterResponse(snapshot, sendDockUpdate, reason, { after = null } = {}) {
+    if (!this.needsDockWindowCatchup(snapshot)) {
+      after?.();
+      return;
+    }
+    const timer = setImmediate(() => {
+      this.sendDockWindowCatchup({ snapshot, sendDockUpdate, reason })
+        .catch((error) => {
+          this.logger?.warn?.("state.catchup_failed", { reason, error });
+        })
+        .finally(() => {
+          after?.();
+        });
+    });
+    timer.unref?.();
+  }
+
+  needsDockWindowCatchup(snapshot) {
+    return snapshot?.kind === "snapshot"
+      && snapshot.view === DOCK_VIEW
+      && snapshot.complete === false
+      && Number.isInteger(snapshot.window?.nextOffset);
+  }
+
+  async sendDockWindowCatchup({ snapshot, sendDockUpdate, reason }) {
+    const host = publicHostFromConfig(this.config);
+    const baseSeq = Number(snapshot.seq || 0);
+    let nextOffset = Number(snapshot.window?.nextOffset || 0);
+    const preferredLimit = Math.max(1, Number(snapshot.window?.limit || RELAY_STATE_DOCK_WINDOW_SIZE));
+    while (Number.isInteger(nextOffset)) {
+      if (this.store.currentSeq() !== baseSeq) {
+        this.logger?.info?.("state.catchup_abandoned", {
+          reason,
+          hostId: host.id,
+          baseSeq,
+          currentSeq: this.store.currentSeq(),
+        });
+        return;
+      }
+      let limit = preferredLimit;
+      let delta = this.makeDockWindowDelta({
+        host,
+        snapshot,
+        offset: nextOffset,
+        limit,
+      });
+      while (estimateJSONBytes(delta) > RELAY_STATE_UPDATE_SOFT_LIMIT_BYTES && limit > 1) {
+        limit = Math.max(1, Math.floor(limit / 2));
+        delta = this.makeDockWindowDelta({
+          host,
+          snapshot,
+          offset: nextOffset,
+          limit,
+        });
+      }
+      sendDockUpdate(delta);
+      if (delta.complete === true || !Number.isInteger(delta.window?.nextOffset)) {
+        return;
+      }
+      if (Number(delta.window.rowCount || 0) <= 0) {
+        this.logger?.warn?.("state.catchup_empty_window", {
+          reason,
+          hostId: host.id,
+          offset: nextOffset,
+          totalRows: delta.totalRows,
+        });
+        return;
+      }
+      nextOffset = delta.window.nextOffset;
+      await sleep(0);
+    }
+  }
+
+  makeDockWindowDelta({ host, snapshot, offset, limit }) {
+    const bounded = this.store.listDockSessions({ hostID: host.id, offset, limit });
+    const complete = offset + bounded.sessions.length >= bounded.totalRows;
+    return this.subscriptions.dockDelta({
+      baseSeq: snapshot.seq,
+      seq: snapshot.seq,
+      freshness: snapshot.freshness || this.store.freshnessForHost(host.id),
+      upsertSessions: bounded.sessions,
+      deleteSessionIDs: [],
+      totalRows: bounded.totalRows,
+      complete,
+      window: buildWindow({
+        offset,
+        limit,
+        rowCount: bounded.sessions.length,
+        totalRows: bounded.totalRows,
+      }),
+    });
+  }
+
+  async handleArchiveMutation({ threadId, archived }) {
+    const result = this.ingestor.ingestArchiveMutation({ threadId, archived });
+    if (!result) {
+      return;
+    }
+    const host = publicHostFromConfig(this.config);
+    const totalRows = this.store.listDockSessions({ hostID: host.id }).totalRows;
+    await this.subscriptions.publishDockDelta(this.subscriptions.dockDelta({
+      baseSeq: Math.max(0, Number(result.seq) - 1),
+      seq: result.seq,
+      freshness: this.store.freshnessForHost(host.id),
+      deleteSessionIDs: result.deleteSessionIDs || [],
+      totalRows,
+      complete: true,
+    }));
+  }
+
+  stateSnapshot() {
+    return {
+      ok: true,
+      schema: "codexdock.relayState.v1",
+      db: this.store.dbHealth(),
+      counts: this.store.stateCounts(),
+      syncScopes: this.store.syncScopes(),
+    };
+  }
+
+  explainThread(threadID) {
+    const host = publicHostFromConfig(this.config);
+    return this.store.explainThread({ hostID: host.id, threadID });
+  }
+}
+
+function relayStateEngineForConfig(config) {
+  if (!config.relayStateEngine) {
+    config.relayStateEngine = new RelayStateEngine(config);
+  }
+  return config.relayStateEngine;
+}
+
+export {
+  RelayStateEngine,
+  StateReconciler,
+  relayStateEngineForConfig,
+  sleep,
+};

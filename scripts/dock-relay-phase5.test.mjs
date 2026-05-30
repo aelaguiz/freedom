@@ -288,6 +288,7 @@ test("relay thread/list keeps history status while focused detail can still rout
     phoneAuth: "none",
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
+    liveEndpoints: [{ label: "live-test", url: liveUrl }],
     threadSummaryCache: {
       decorateRows: (rows) => rows,
       warmRows: () => {},
@@ -515,7 +516,7 @@ test("relay thread/list returns history rows when live endpoint fails", async ()
   }
 });
 
-test("relay thread/list preserves history preview while latest summary warms out of band", async () => {
+test("relay thread/list preserves history preview without warming turns", async () => {
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(historyServer);
   let turnsParams = null;
@@ -631,15 +632,12 @@ test("relay thread/list preserves history preview while latest summary warms out
     assert.equal(firstResponse.result.data[0].preview, "Original opening prompt");
     assert.equal(firstResponse.result.data[0].latestSummary, undefined);
 
-    allowTurnsResponse = true;
-    flushPendingTurnsResponses();
-    await relayConfig.threadSummaryCache.whenIdle();
-
     const secondResponse = await jsonRpcRequest(ws, "thread/list", { archived: true });
     assert.equal(secondResponse.result.data[0].preview, "Original opening prompt");
-    assert.equal(secondResponse.result.data[0].latestSummary, "Latest useful agent update");
-    assert.deepEqual(turnsParams, { threadId: "history-latest", limit: 10 });
-    assert.equal(turnsRequests, 1);
+    assert.equal(secondResponse.result.data[0].latestSummary, undefined);
+    assert.equal(turnsParams, null);
+    assert.equal(turnsRequests, 0);
+    assert.equal(pendingTurnsResponses.length, 0);
   } finally {
     ws.close();
     await relay.close();
@@ -647,7 +645,7 @@ test("relay thread/list preserves history preview while latest summary warms out
   }
 });
 
-test("relay thread/list warms latest summary from the live thread owner", async () => {
+test("relay thread/list preserves history preview without warming live owner turns", async () => {
   const liveServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(liveServer);
   const liveUrl = `ws://127.0.0.1:${liveServer.address().port}`;
@@ -780,6 +778,7 @@ test("relay thread/list warms latest summary from the live thread owner", async 
     phoneAuth: "none",
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
+    liveEndpoints: [{ label: "live-test", url: liveUrl }],
     advertiseBonjour: false,
   };
   const relay = startServer(relayConfig);
@@ -791,12 +790,10 @@ test("relay thread/list warms latest summary from the live thread owner", async 
     assert.equal(firstResponse.result.data[0].preview, "Original opening prompt");
     assert.equal(firstResponse.result.data[0].latestSummary, undefined);
 
-    await relayConfig.threadSummaryCache.whenIdle();
-
     const secondResponse = await jsonRpcRequest(ws, "thread/list");
     assert.equal(secondResponse.result.data[0].preview, "Original opening prompt");
-    assert.equal(secondResponse.result.data[0].latestSummary, "Live owner latest agent update");
-    assert.equal(liveTurnsRequests, 1);
+    assert.equal(secondResponse.result.data[0].latestSummary, undefined);
+    assert.equal(liveTurnsRequests, 0);
     assert.equal(historyTurnsRequests, 0);
   } finally {
     ws.close();
@@ -887,6 +884,7 @@ test("thread/turns/list routes to the thread owning upstream", async () => {
     phoneAuth: "none",
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
+    liveEndpoints: [{ label: "live-test", url: liveUrl }],
     advertiseBonjour: false,
   });
   await relay.listening;
@@ -1010,6 +1008,7 @@ test("thread/goal/get routes to the thread owning upstream", async () => {
     phoneAuth: "none",
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
+    liveEndpoints: [{ label: "live-test", url: liveUrl }],
     advertiseBonjour: false,
   });
   await relay.listening;

@@ -13,10 +13,12 @@ import {
   createRelayObservability,
   measurementSummaryForResult,
 } from "./dock-relay-observability.mjs";
+import { normalizeThread } from "./dock-relay-state-views.mjs";
 import {
   httpGetJson,
   jsonRpcRequest,
   openWebSocket,
+  waitForRelayMessage,
 } from "./dock-relay-test-helpers.mjs";
 
 test("observability contract covers relay app routes and keeps passive routes out of auto probes", () => {
@@ -182,7 +184,7 @@ test("relay diagnostic bundle carries route evidence and content omission manife
   assert.equal(bundle.traces.some((trace) => trace.operationID === "op-thread-list"), true);
 });
 
-test("readyz can pass while dock subscribe route health fails in statusz and routesz", async () => {
+test("readyz can pass while dock state freshness is stale after upstream failure", async () => {
   const relay = startServer({
     listenHost: "127.0.0.1",
     port: 0,
@@ -206,23 +208,133 @@ test("readyz can pass while dock subscribe route health fails in statusz and rou
   try {
     const response = await jsonRpcRequest(ws, "dock/subscribe");
     assert.equal(response.error, undefined);
-    assert.equal(response.result.freshness.status, "stale");
+    await waitForRelayMessage(ws, (message) => message.method === "dock/update");
 
     const ready = await httpGetJson(`${baseURL}/readyz`);
     const status = await httpGetJson(`${baseURL}/statusz`);
-    const routes = await httpGetJson(`${baseURL}/routesz`);
-    const traces = await httpGetJson(`${baseURL}/tracesz/recent`);
+    const state = await httpGetJson(`${baseURL}/statez`);
     const route = status.routes.find((entry) => entry.route === "dock/subscribe");
 
     assert.equal(ready.ok, true);
     assert.equal(status.routes.length, Object.keys(OBSERVABILITY_CONTRACT.routes).length);
-    assert.equal(route.routeStatus, "failed");
-    assert.equal(route.statusReasons[0].actual, "history");
-    assert.equal(status.appCriticalFailures.some((entry) => entry.route === "dock/subscribe"), true);
-    assert.equal(routes.routes.some((entry) => entry.route === "dock/subscribe" && entry.routeStatus === "failed"), true);
-    assert.equal(traces.traces.some((trace) => trace.route === "dock/subscribe" && trace.outcome === "failed"), true);
+    assert.equal(route.routeStatus, "healthy");
+    assert.equal(status.appCriticalFailures.some((entry) => entry.route === "dock/subscribe"), false);
+    assert.equal(state.counts.incomplete, 2);
+    assert.deepEqual(
+      state.syncScopes.map((scope) => [scope.scope, scope.complete, Boolean(scope.lastError)]),
+      [
+        ["active:allSourceKinds", 0, true],
+        ["active:interactiveDefault", 0, true],
+      ],
+    );
   } finally {
     ws.close();
+    await relay.close();
+  }
+});
+
+test("dock/subscribe route health stays healthy when serving stale cached state", async () => {
+  const config = {
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    hostId: "home",
+    hostName: "Home",
+    historyUrl: "ws://127.0.0.1:1",
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+    observabilityDir: false,
+    relayStateDatabasePath: ":memory:",
+  };
+  const relay = startServer(config);
+  await relay.listening;
+  const baseURL = `http://127.0.0.1:${relay.server.address().port}`;
+  const host = { id: "home", displayName: "Home", endpoint: null };
+  const cachedRow = normalizeThread({
+    id: "cached-thread",
+    preview: "Cached row",
+    updatedAt: 100,
+    source: "cli",
+    status: { type: "notLoaded" },
+  }, host, "human");
+  const store = config.relayStateEngine.store;
+  store.applyDockReconciliation({
+    host,
+    sessions: [cachedRow],
+    scopes: [
+      { name: "active:allSourceKinds", archived: false, sourceScope: "allSourceKinds", complete: true },
+      { name: "active:interactiveDefault", archived: false, sourceScope: "interactiveDefault", complete: true },
+    ],
+    complete: true,
+  });
+  store.markScopeStale("home", "active:allSourceKinds", new Error("history refresh failed"));
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const response = await jsonRpcRequest(ws, "dock/subscribe");
+    assert.equal(response.error, undefined);
+    assert.equal(response.result.freshness.status, "stale");
+    assert.equal(response.result.sessions.length, 1);
+
+    const status = await httpGetJson(`${baseURL}/statusz`);
+    const state = await httpGetJson(`${baseURL}/statez`);
+    const route = status.routes.find((entry) => entry.route === "dock/subscribe");
+    assert.equal(route.routeStatus, "healthy");
+    assert.equal(status.appCriticalFailures.some((entry) => entry.route === "dock/subscribe"), false);
+    assert.ok(state.counts.incomplete >= 1);
+  } finally {
+    ws.close();
+    await relay.close();
+  }
+});
+
+test("explainz/thread returns one row explanation without source refresh", async () => {
+  const config = {
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    hostId: "home",
+    hostName: "Home",
+    historyUrl: "ws://127.0.0.1:1",
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+    observabilityDir: false,
+    relayStateDatabasePath: ":memory:",
+  };
+  const relay = startServer(config);
+  await relay.listening;
+  const baseURL = `http://127.0.0.1:${relay.server.address().port}`;
+  const host = { id: "home", displayName: "Home", endpoint: null };
+  const cachedRow = normalizeThread({
+    id: "cached-thread",
+    preview: "Cached row",
+    updatedAt: 100,
+    source: "cli",
+    status: { type: "notLoaded" },
+  }, host, "human");
+  config.relayStateEngine.store.applyDockReconciliation({
+    host,
+    sessions: [cachedRow],
+    scopes: [
+      { name: "active:allSourceKinds", archived: false, sourceScope: "allSourceKinds", complete: true },
+      { name: "active:interactiveDefault", archived: false, sourceScope: "interactiveDefault", complete: true },
+    ],
+    complete: true,
+  });
+
+  try {
+    const explain = await httpGetJson(`${baseURL}/explainz/thread/cached-thread`);
+    assert.equal(explain.ok, true);
+    assert.equal(explain.explanation.found, true);
+    assert.equal(explain.explanation.threadID, "cached-thread");
+    assert.equal(explain.explanation.visibleInDock, true);
+    assert.equal(explain.explanation.archiveState, "active");
+    assert.equal(explain.explanation.syncScopes.length, 2);
+
+    const missing = await httpGetJson(`${baseURL}/explainz/thread/missing-thread`);
+    assert.equal(missing.explanation.found, false);
+    assert.equal(missing.explanation.visibleInDock, false);
+  } finally {
     await relay.close();
   }
 });
@@ -259,7 +371,8 @@ test("selftest lists only safe diagnostics and never includes passive mutating r
   }
 });
 
-test("selftest reports dock subscribe timeout instead of hanging", async () => {
+test("selftest reads passive dock state instead of calling dock subscribe", async () => {
+  let dockSessionProviderCalled = false;
   const relay = startServer({
     listenHost: "127.0.0.1",
     port: 0,
@@ -271,6 +384,7 @@ test("selftest reports dock subscribe timeout instead of hanging", async () => {
     selftestRouteTimeoutMs: 20,
     dockSessionProvider: {
       async listSessions() {
+        dockSessionProviderCalled = true;
         await new Promise(() => {});
       },
     },
@@ -285,11 +399,12 @@ test("selftest reports dock subscribe timeout instead of hanging", async () => {
     ]);
     const dockSubscribe = selftest.routes.find((route) => route.route === ROUTE_NAMES.dockSubscribe);
 
-    assert.equal(selftest.ok, false);
-    assert.equal(dockSubscribe.ok, false);
-    assert.equal(dockSubscribe.failureCategory, "timeout");
-    assert.equal(dockSubscribe.timeoutMs, 20);
-    assert.match(dockSubscribe.error, /dock\/subscribe self-test timed out after 20ms/);
+    assert.equal(selftest.ok, true);
+    assert.equal(dockSubscribe.ok, true);
+    assert.equal(dockSubscribe.note, "passive state health read; dock/subscribe not called");
+    assert.equal(dockSubscribe.failureCategory, undefined);
+    assert.equal(dockSubscribe.timeoutMs, undefined);
+    assert.equal(dockSessionProviderCalled, false);
   } finally {
     await relay.close();
   }

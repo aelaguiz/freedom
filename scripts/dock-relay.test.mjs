@@ -6,6 +6,10 @@ import test from "node:test";
 import { WebSocketServer } from "ws";
 
 import {
+  RELAY_STATE_TEXT_FIELD_MAX_CHARS,
+  RELAY_STATE_TITLE_MAX_CHARS,
+} from "./dock-relay-constants.mjs";
+import {
   attentionFlagsForServerRequest,
   buildBonjourAdvertisementArgs,
   isPhoneRequestAuthorized,
@@ -18,13 +22,13 @@ import {
 } from "./dock-relay.mjs";
 import { createRelayLogger } from "./dock-relay-logger.mjs";
 import { liveOverlayForSnapshot } from "./dock-relay-live-status-cache.mjs";
+import { RelayStateEngine } from "./dock-relay-state-engine.mjs";
+import { RelayStateStore } from "./dock-relay-state-store.mjs";
 import {
-  bufferedDockUpdateIsAfterSnapshot,
-  DockSessionAggregator,
-  DockSessionTable,
-  dockUpdateForSubscriber,
+  estimateJSONBytes,
+  normalizeThread,
   normalizedStatus,
-} from "./dock-relay-session-table.mjs";
+} from "./dock-relay-state-views.mjs";
 import { ThreadSummaryCache } from "./dock-relay-thread-summary-cache.mjs";
 import {
   clampThreadListParams,
@@ -33,15 +37,13 @@ import {
 } from "./dock-relay-thread-data.mjs";
 
 import {
-  closeProcess,
   closeWebSocketServer,
   jsonRpcRequest,
   onceListening,
   openWebSocket,
   sleepMs,
-  spawnLoopbackAppServerMarker,
+  waitForRelayMessage,
 } from "./dock-relay-test-helpers.mjs";
-import { DOCK_SESSION_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
 
 test("relay logger redacts credentials and payload fields", () => {
   const lines = [];
@@ -179,194 +181,229 @@ test("dock stream status normalization has product-facing names", () => {
   );
 });
 
-test("dock session table emits deltas and keeps last-good rows on refresh failure", () => {
-  const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
-  const table = new DockSessionTable({ hostId: host.id, hostName: host.displayName });
-  const session = {
-    id: "Amir-M5::thread-1",
-    hostID: "Amir-M5",
-    threadID: "thread-1",
-    backendSessionID: "session-1",
-    title: "Build Dock",
-    status: "running",
-    repository: "codex-client",
-    workingDirectory: "/Users/aelaguiz/workspace/codex-client",
-    branch: "main",
+test("relay state projection bounds oversized thread list text fields", () => {
+  const host = { id: "home", displayName: "Home", endpoint: "home.fairy-salmon.ts.net:4510" };
+  const session = normalizeThread({
+    id: "thread-large-preview",
+    preview: "p".repeat(RELAY_STATE_TEXT_FIELD_MAX_CHARS + 1_000),
+    latestSummary: "s".repeat(RELAY_STATE_TEXT_FIELD_MAX_CHARS + 1_000),
+    messageSummary: "m".repeat(RELAY_STATE_TEXT_FIELD_MAX_CHARS + 1_000),
     updatedAt: 10,
-    summary: "Working",
-    source: { kind: "human" },
-  };
+    source: "cli",
+    status: { type: "notLoaded" },
+  }, host, "human");
 
-  const firstUpdate = table.applySuccessfulRefresh({
-    host,
-    sessions: [session],
-    asOf: "2026-05-29T10:00:00.000Z",
-  });
-  assert.equal(firstUpdate.kind, "delta");
-  assert.equal(firstUpdate.baseSeq, 0);
-  assert.equal(firstUpdate.seq, 1);
-  assert.deepEqual(firstUpdate.upsertSessions.map((row) => row.threadID), ["thread-1"]);
-
-  const heartbeat = table.applySuccessfulRefresh({
-    host,
-    sessions: [session],
-    asOf: "2026-05-29T10:00:01.000Z",
-  });
-  assert.equal(heartbeat.kind, "heartbeat");
-  assert.equal(heartbeat.seq, 1);
-
-  const failed = table.applyFailedRefresh(new Error("upstream unavailable"));
-  assert.equal(failed.kind, "heartbeat");
-  assert.equal(failed.seq, 1);
-  assert.equal(failed.freshness.status, "stale");
-  assert.match(failed.freshness.lastError, /upstream unavailable/);
-  assert.deepEqual(table.snapshot().sessions.map((row) => row.threadID), ["thread-1"]);
+  assert.equal(session.title.length, RELAY_STATE_TITLE_MAX_CHARS);
+  assert.equal(session.summary.length, RELAY_STATE_TEXT_FIELD_MAX_CHARS);
+  assert.equal(session.messageSummary.length, RELAY_STATE_TEXT_FIELD_MAX_CHARS);
 });
 
-test("dock session aggregator uses provider boundary and loads persisted rows stale-on-boot", async () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-session-table-"));
-  const persistedPath = path.join(tempDir, "session-table.json");
+test("relay state store emits Dock changes and keeps rows when a scope goes stale", () => {
   const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
-  const session = {
-    id: "Amir-M5::thread-1",
-    hostID: "Amir-M5",
-    threadID: "thread-1",
-    backendSessionID: "session-1",
-    title: "Build Dock",
-    status: "running",
-    lane: "human",
-    kindLabel: "Human",
-    repository: "codex-client",
-    workingDirectory: "/Users/aelaguiz/workspace/codex-client",
-    branch: "main",
+  const store = new RelayStateStore({ relayStateDatabasePath: ":memory:" });
+  const session = normalizeThread({
+    id: "thread-1",
+    sessionId: "session-1",
+    preview: "Build Dock",
     updatedAt: 10,
-    summary: "Working",
-    source: { kind: "human" },
-  };
-  const provider = {
-    async listSessions() {
-      return { host, sessions: [session] };
-    },
-  };
-
+    source: "cli",
+    status: { type: "active", activeFlags: [] },
+  }, host, "human");
   try {
-    const aggregator = new DockSessionAggregator(
-      { hostId: host.id, hostName: host.displayName },
-      { provider, persistencePath: persistedPath, refreshIntervalMs: 60_000 },
-    );
-    await aggregator.refreshNow({ notify: false });
-    aggregator.stop();
+    const update = store.applyDockReconciliation({
+      host,
+      sessions: [session],
+      scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
+      complete: true,
+    });
+    assert.equal(update.seq, 1);
+    assert.deepEqual(update.upsertSessions.map((row) => row.threadID), ["thread-1"]);
+    assert.deepEqual(store.listDockSessions({ hostID: host.id }).sessions.map((row) => row.threadID), ["thread-1"]);
+    const change = store.db.prepare("SELECT payload_json FROM changes WHERE seq = ?").get(update.seq);
+    assert.deepEqual(JSON.parse(change.payload_json), {
+      upsertCount: 1,
+      deleteCount: 0,
+      complete: true,
+    });
 
-    const persisted = JSON.parse(fs.readFileSync(persistedPath, "utf8"));
-    assert.equal(persisted.schemaVersion, DOCK_SESSION_SCHEMA_VERSION);
-    assert.deepEqual(persisted.sessions.map((row) => row.threadID), ["thread-1"]);
-
-    const restarted = new DockSessionAggregator(
-      { hostId: host.id, hostName: host.displayName },
-      {
-        provider: {
-          async listSessions() {
-            throw new Error("provider offline");
-          },
-        },
-        persistencePath: persistedPath,
-        refreshIntervalMs: 60_000,
-      },
-    );
-    assert.equal(restarted.currentSnapshot().freshness.status, "stale");
-    assert.deepEqual(restarted.currentSnapshot().sessions.map((row) => row.threadID), ["thread-1"]);
-
-    const snapshot = await restarted.snapshot();
-    assert.equal(snapshot.freshness.status, "stale");
-    assert.match(snapshot.freshness.lastError, /provider offline/);
-    assert.deepEqual(snapshot.sessions.map((row) => row.threadID), ["thread-1"]);
-    restarted.stop();
+    store.markScopeStale(host.id, "active:dock", new Error("upstream unavailable"));
+    assert.equal(store.freshnessForHost(host.id).status, "stale");
+    assert.match(store.freshnessForHost(host.id).lastError, /upstream unavailable/);
+    assert.deepEqual(store.listDockSessions({ hostID: host.id }).sessions.map((row) => row.threadID), ["thread-1"]);
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    store.close();
   }
 });
 
-test("dock session aggregator ignores persisted rows with incompatible schema", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-session-schema-"));
-  const persistedPath = path.join(tempDir, "session-table.json");
+test("relay state store removes archived Dock rows through state mutation", () => {
+  const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
+  const store = new RelayStateStore({ relayStateDatabasePath: ":memory:" });
+  const session = normalizeThread({
+    id: "thread-1",
+    preview: "Build Dock",
+    updatedAt: 10,
+    source: "cli",
+    status: { type: "notLoaded" },
+  }, host, "human");
   try {
-    fs.writeFileSync(
-      persistedPath,
-      JSON.stringify({
-        schemaVersion: DOCK_SESSION_SCHEMA_VERSION + 1,
-        hosts: [{ id: "old-host" }],
-        sessions: [{ id: "old-host::thread-1", threadID: "thread-1" }],
-      }),
-    );
-    const aggregator = new DockSessionAggregator(
-      { hostId: "Amir-M5", hostName: "Amir M5" },
-      {
-        provider: {
-          async listSessions() {
-            throw new Error("provider offline");
-          },
-        },
-        persistencePath: persistedPath,
-        refreshIntervalMs: 60_000,
-      },
-    );
-
-    const snapshot = aggregator.currentSnapshot();
-    assert.equal(snapshot.schemaVersion, DOCK_SESSION_SCHEMA_VERSION);
-    assert.equal(snapshot.freshness.status, "unknown");
-    assert.deepEqual(snapshot.sessions, []);
-    assert.deepEqual(snapshot.hosts.map((host) => host.id), ["Amir-M5"]);
-    aggregator.stop();
+    store.applyDockReconciliation({
+      host,
+      sessions: [session],
+      scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
+      complete: true,
+    });
+    store.applyArchiveMutation({ hostID: host.id, threadID: "thread-1", archived: true });
+    assert.deepEqual(store.listDockSessions({ hostID: host.id }).sessions, []);
+    assert.deepEqual(store.listArchiveSessions({ hostID: host.id }).sessions.map((row) => row.threadID), ["thread-1"]);
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    store.close();
   }
 });
 
-test("dock stream coalesces slow subscriber deltas to snapshots", () => {
-  const delta = { kind: "delta", seq: 2 };
-  const snapshot = { kind: "snapshot", seq: 3 };
-  const aggregator = {
-    currentSnapshot() {
-      return snapshot;
-    },
-  };
+test("relay state snapshot windows oversized Dock results explicitly", async () => {
+  const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
+  const engine = new RelayStateEngine({
+    hostId: host.id,
+    hostName: host.displayName,
+    hostEndpoint: host.endpoint,
+    relayStateDatabasePath: ":memory:",
+  });
+  try {
+    const sessions = Array.from({ length: 4 }, (_, index) => normalizeThread({
+      id: `thread-${index + 1}`,
+      preview: `Window row ${index + 1}`,
+      latestSummary: "x".repeat(400),
+      updatedAt: 100 - index,
+      source: "cli",
+      status: { type: "notLoaded" },
+    }, host, "human"));
+    engine.store.applyDockReconciliation({
+      host,
+      sessions,
+      scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
+      complete: true,
+    });
 
-  assert.equal(dockUpdateForSubscriber(aggregator, { bufferedAmount: 0 }, delta), delta);
-  assert.equal(
-    dockUpdateForSubscriber(aggregator, { bufferedAmount: 2 * 1024 * 1024 }, delta),
-    snapshot
-  );
+    const snapshot = engine.snapshotDock({ softLimitBytes: 1_200 });
+
+    assert.equal(snapshot.kind, "snapshot");
+    assert.equal(snapshot.view, "dock");
+    assert.equal(snapshot.complete, false);
+    assert.equal(snapshot.totalRows, 4);
+    assert.ok(snapshot.window.rowCount < snapshot.totalRows);
+    assert.equal(snapshot.window.nextOffset, snapshot.window.rowCount);
+    assert.equal(snapshot.sessions.length, snapshot.window.rowCount);
+  } finally {
+    await engine.close();
+  }
 });
 
-test("dock subscribe drops buffered updates already covered by snapshot", () => {
-  const snapshot = {
-    epoch: "epoch-1",
-    seq: 10,
-  };
+test("relay state streams remaining Dock windows after a partial snapshot", async () => {
+  const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
+  const engine = new RelayStateEngine({
+    hostId: host.id,
+    hostName: host.displayName,
+    hostEndpoint: host.endpoint,
+    relayStateDatabasePath: ":memory:",
+    relayStateSnapshotSoftLimitBytes: 1_200,
+  });
+  try {
+    const sessions = Array.from({ length: 4 }, (_, index) => normalizeThread({
+      id: `thread-${index + 1}`,
+      preview: `Window row ${index + 1}`,
+      latestSummary: "x".repeat(400),
+      updatedAt: 100 - index,
+      source: "cli",
+      status: { type: "notLoaded" },
+    }, host, "human"));
+    engine.store.applyDockReconciliation({
+      host,
+      sessions,
+      scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
+      complete: true,
+    });
 
-  assert.equal(bufferedDockUpdateIsAfterSnapshot(snapshot, {
-    kind: "delta",
-    epoch: "epoch-1",
-    baseSeq: 9,
-    seq: 10,
-  }), false);
-  assert.equal(bufferedDockUpdateIsAfterSnapshot(snapshot, {
-    kind: "heartbeat",
-    epoch: "epoch-1",
-    seq: 10,
-  }), false);
-  assert.equal(bufferedDockUpdateIsAfterSnapshot(snapshot, {
-    kind: "delta",
-    epoch: "epoch-1",
-    baseSeq: 10,
-    seq: 11,
-  }), true);
-  assert.equal(bufferedDockUpdateIsAfterSnapshot(snapshot, {
-    kind: "delta",
-    epoch: "older-epoch",
-    baseSeq: 10,
-    seq: 11,
-  }), false);
+    const notifications = [];
+    const response = await engine.subscribeDock({
+      session: {},
+      downstreamWs: {},
+      sendJson: (_ws, message) => notifications.push(message),
+    });
+    await sleepMs(50);
+
+    assert.equal(response.kind, "snapshot");
+    assert.equal(response.complete, false);
+    assert.ok(response.window.nextOffset > 0);
+    const updates = notifications
+      .filter((message) => message.method === "dock/update")
+      .map((message) => message.params);
+    const catchupUpdates = updates.filter((update) => (
+      update.baseSeq === response.seq
+      && update.seq === response.seq
+      && Number(update.window?.offset || 0) > 0
+    ));
+    assert.ok(catchupUpdates.length >= 1);
+    assert.equal(catchupUpdates.at(-1).complete, true);
+    const receivedThreadIDs = new Set([
+      ...response.sessions.map((row) => row.threadID),
+      ...catchupUpdates.flatMap((update) => update.upsertSessions.map((row) => row.threadID)),
+    ]);
+    assert.deepEqual([...receivedThreadIDs].sort(), ["thread-1", "thread-2", "thread-3", "thread-4"]);
+  } finally {
+    await engine.close();
+  }
+});
+
+test("dock/subscribe does not refresh already fresh relay state just to serve cached rows", async () => {
+  const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
+  const engine = new RelayStateEngine({
+    hostId: host.id,
+    hostName: host.displayName,
+    hostEndpoint: host.endpoint,
+    relayStateDatabasePath: ":memory:",
+  });
+  let scheduledReconciliations = 0;
+  engine.reconciler.schedule = () => {
+    scheduledReconciliations += 1;
+    return Promise.resolve(null);
+  };
+  try {
+    const session = normalizeThread({
+      id: "thread-1",
+      preview: "Fresh cached row",
+      updatedAt: 100,
+      source: "cli",
+      status: { type: "notLoaded" },
+    }, host, "human");
+    engine.store.applyDockReconciliation({
+      host,
+      sessions: [session],
+      scopes: [
+        { name: "active:allSourceKinds", archived: false, sourceScope: "allSourceKinds", complete: true },
+        { name: "active:interactiveDefault", archived: false, sourceScope: "interactiveDefault", complete: true },
+      ],
+      complete: true,
+    });
+
+    const response = await engine.subscribeDock({
+      session: {},
+      downstreamWs: {},
+      sendJson: () => {},
+    });
+    await sleepMs(20);
+
+    assert.equal(response.complete, true);
+    assert.equal(response.sessions.length, 1);
+    assert.equal(scheduledReconciliations, 0);
+  } finally {
+    await engine.close();
+  }
+});
+
+test("relay state JSON size estimator fails closed for unserializable payloads", () => {
+  const circular = {};
+  circular.self = circular;
+  assert.equal(estimateJSONBytes(circular), Number.POSITIVE_INFINITY);
 });
 
 test("thread/list params clamp to Codex's 250 row page cap", () => {
@@ -924,6 +961,11 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
             backwardsCursor: null,
           },
         }));
+      } else if (message.method === "thread/loaded/list") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: { data: [], nextCursor: null },
+        }));
       }
     });
   });
@@ -937,8 +979,7 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
     hostId: "Amir-M5",
     hostName: "Amir M5",
     advertiseBonjour: false,
-    dockSessionPersistencePath: path.join(tempDir, "session-table.json"),
-    dockSessionRefreshIntervalMs: 60_000,
+    relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
   });
   await relay.listening;
   const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
@@ -946,26 +987,43 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
   try {
     const response = await jsonRpcRequest(ws, "dock/subscribe");
 
+    assert.equal(response.error, undefined);
+    assert.equal(response.result.kind, "snapshot");
+    assert.equal(response.result.view, "dock");
+    assert.deepEqual(response.result.sessions, []);
+    assert.equal(observedThreadListParams.length, 0);
+
+    const update = await waitForRelayMessage(ws, (message) => message.method === "dock/update");
+    const params = update.params;
     assert.equal(observedAuthorization, "Bearer history-token");
     assert.equal(observedThreadListParams.length, 2);
     assert.deepEqual(observedThreadListParams.map((params) => params.archived), [false, false]);
     assert.ok(observedThreadListParams.every((params) => params.includePreviewless === undefined));
-    assert.equal(response.error, undefined);
-    assert.equal(response.result.kind, "snapshot");
-    assert.equal(response.result.hosts[0].id, "Amir-M5");
+    assert.equal(params.kind, "delta");
+    assert.equal(params.view, "dock");
+    assert.equal(params.complete, true);
+    assert.equal(params.totalRows, 2);
+    assert.deepEqual(params.window, {
+      offset: 0,
+      limit: 2,
+      rowCount: 2,
+      nextOffset: null,
+    });
+    assert.equal(typeof params.stateGeneration, "number");
+    assert.equal(params.upsertHosts[0].id, "Amir-M5");
     assert.deepEqual(
-      response.result.sessions.map((row) => [row.threadID, row.status, row.lane, row.kindLabel, row.source.kind]),
+      params.upsertSessions.map((row) => [row.threadID, row.status, row.lane, row.kindLabel, row.source.kind]),
       [
         ["agent-thread", "needsApproval", "agent", "exec", "automation"],
         ["history-thread", "dormant", "human", "cli", "human"],
       ],
     );
-    const historySession = response.result.sessions.find((row) => row.threadID === "history-thread");
+    const historySession = params.upsertSessions.find((row) => row.threadID === "history-thread");
     assert.equal(historySession.summary, "Stored history row");
     assert.equal(historySession.messageSummary, "Stored history message");
     assert.equal(historySession.messageUpdatedAt, 1_780_000_090);
-    assert.equal(JSON.stringify(response.result).includes("notLoaded"), false);
-    assert.equal(JSON.stringify(response.result).includes("must-not-leak"), false);
+    assert.equal(JSON.stringify(params).includes("notLoaded"), false);
+    assert.equal(JSON.stringify(params).includes("must-not-leak"), false);
   } finally {
     ws.close();
     await relay.close();
@@ -979,7 +1037,6 @@ test("dock/subscribe overlays live status without changing stored Codex order", 
   const liveServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(liveServer);
   const liveUrl = `ws://127.0.0.1:${liveServer.address().port}`;
-  const liveMarker = spawnLoopbackAppServerMarker(liveUrl);
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(historyServer);
 
@@ -1064,6 +1121,11 @@ test("dock/subscribe overlays live status without changing stored Codex order", 
             backwardsCursor: null,
           },
         }));
+      } else if (message.method === "thread/loaded/list") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: { data: [], nextCursor: null },
+        }));
       }
     });
   });
@@ -1075,10 +1137,10 @@ test("dock/subscribe overlays live status without changing stored Codex order", 
     phoneAuth: "none",
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
+    liveEndpoints: [{ label: "live-test", url: liveUrl }],
     hostId: "Amir-M5",
     advertiseBonjour: false,
-    dockSessionPersistencePath: path.join(tempDir, "session-table.json"),
-    dockSessionRefreshIntervalMs: 60_000,
+    relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
     threadSummaryCache: {
       decorateRows: (rows) => rows,
       warmRows: () => {},
@@ -1090,22 +1152,24 @@ test("dock/subscribe overlays live status without changing stored Codex order", 
   try {
     const response = await jsonRpcRequest(ws, "dock/subscribe");
     assert.equal(response.error, undefined);
-    assert.deepEqual(response.result.sessions.map((session) => session.threadID), [
+    assert.deepEqual(response.result.sessions, []);
+    const update = await waitForRelayMessage(ws, (message) => message.method === "dock/update");
+    const sessions = update.params.upsertSessions;
+    assert.deepEqual(sessions.map((session) => session.threadID), [
       "live-thread",
       "stored-thread",
     ]);
-    const liveSession = response.result.sessions.find((session) => session.threadID === "live-thread");
+    const liveSession = sessions.find((session) => session.threadID === "live-thread");
     assert.equal(liveSession.status, "needsInput");
     assert.equal(liveSession.backendSessionID, "live-session");
     assert.equal(liveSession.updatedAt, 300);
     assert.equal(liveSession.summary, "Stored summary");
     assert.equal(liveSession.messageSummary, "Stored message");
     assert.equal(liveSession.messageUpdatedAt, 250);
-    assert.equal(response.result.sessions.find((session) => session.threadID === "stored-thread").status, "dormant");
+    assert.equal(sessions.find((session) => session.threadID === "stored-thread").status, "dormant");
   } finally {
     ws.close();
     await relay.close();
-    await closeProcess(liveMarker);
     await closeWebSocketServer(liveServer);
     await closeWebSocketServer(historyServer);
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -1156,6 +1220,11 @@ test("dock/subscribe drains combined source pages before default interactive ext
             backwardsCursor: null,
           },
         }));
+      } else if (message.method === "thread/loaded/list") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: { data: [], nextCursor: null },
+        }));
       }
     });
   });
@@ -1168,8 +1237,7 @@ test("dock/subscribe drains combined source pages before default interactive ext
     historyBearerToken: "history-token",
     hostId: "Amir-M5",
     advertiseBonjour: false,
-    dockSessionPersistencePath: path.join(tempDir, "session-table.json"),
-    dockSessionRefreshIntervalMs: 60_000,
+    relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
   });
   await relay.listening;
   const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
@@ -1178,8 +1246,10 @@ test("dock/subscribe drains combined source pages before default interactive ext
     const response = await jsonRpcRequest(ws, "dock/subscribe");
 
     assert.equal(response.error, undefined);
+    assert.deepEqual(response.result.sessions, []);
+    const update = await waitForRelayMessage(ws, (message) => message.method === "dock/update");
     assert.deepEqual(
-      response.result.sessions.map((row) => row.threadID),
+      update.params.upsertSessions.map((row) => row.threadID),
       ["agent-page-1", "agent-page-2", "human-page-1", "human-page-2"],
     );
     assert.equal(observedThreadListParams.length, 4);

@@ -157,6 +157,11 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         DockStreamUpdateDTO(
             kind: .snapshot,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            view: "dock",
+            complete: true,
+            totalRows: sessions.count,
+            window: DockStreamWindowDTO(offset: 0, limit: sessions.count, rowCount: sessions.count),
+            stateGeneration: seq,
             epoch: host.id,
             seq: seq,
             asOf: iso8601(seq: seq),
@@ -183,6 +188,11 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         DockStreamUpdateDTO(
             kind: .delta,
             schemaVersion: schemaVersion,
+            view: "dock",
+            complete: true,
+            totalRows: upsertSessions.count,
+            window: DockStreamWindowDTO(offset: 0, limit: upsertSessions.count, rowCount: upsertSessions.count),
+            stateGeneration: seq,
             epoch: host.id,
             baseSeq: baseSeq,
             seq: seq,
@@ -201,6 +211,9 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         DockStreamUpdateDTO(
             kind: .heartbeat,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            view: "dock",
+            complete: true,
+            stateGeneration: seq,
             epoch: host.id,
             seq: seq,
             asOf: iso8601(seq: seq),
