@@ -63,12 +63,17 @@ LOG_PREDICATE ?= subsystem == "com.aelaguiz.CodexDock"
 LOG_LAST ?= 10m
 DEVICE_LOG_OUTPUT ?= /tmp/codex-client/codex-dock-device-$(shell date -u +%Y%m%dT%H%M%SZ).logarchive
 THREAD_FIDELITY_REPORT ?= /tmp/codex-client/relay-thread-fidelity-$(shell date -u +%Y%m%dT%H%M%SZ).json
+RELAY_DEBUG_BUNDLE ?= /tmp/codex-client/relay-debug-bundle-$(shell date -u +%Y%m%dT%H%M%SZ).json
+RELAY_HOST_COMPARE_REPORT ?= /tmp/codex-client/relay-host-compare-$(shell date -u +%Y%m%dT%H%M%SZ).json
+HOSTS ?= $(CODEX_DOCK_HOSTS)
+SIM_DEBUG_BUNDLE_DIR ?= /tmp/codex-client/sim-debug-bundle-$(shell date -u +%Y%m%dT%H%M%SZ)
+DEVICE_DEBUG_BUNDLE_DIR ?= /tmp/codex-client/device-debug-bundle-$(shell date -u +%Y%m%dT%H%M%SZ)
 APP_BUILD_LOG_DIR := $(APP_SERVER_ABS_DIR)/logs
 HOST_SERVICE_ARGS = --platform "$(HOST_SERVICE_PLATFORM)" --runtime-dir "$(APP_SERVER_DIR)" --host-id "$(CODEX_DOCK_REAL_HOST_ID)" --host-name "$(CODEX_DOCK_REAL_HOST_NAME)" --network-profile "$(HOST_SERVICE_NETWORK_PROFILE)" --public-host "$(APP_SERVER_HOST)" --raw-app-server-listen "$(APP_SERVER_LISTEN)" --relay-history-url "$(DOCK_RELAY_HISTORY_WS)" --relay-public-url "$(DOCK_RELAY_WS)" --relay-listen-host "$(DOCK_RELAY_LISTEN_HOST)" --relay-port "$(DOCK_RELAY_PORT)" --phone-auth "none" --service-env-file "$(CURDIR)/$(ENV_FILE)" --host-env-file "$(CURDIR)/$(HOST_ENV_FILE)" --raw-token-file "$(APP_SERVER_TOKEN)" --codex-bin "$(CODEX_BIN)" --node-bin "$(NODE_BIN)" --app-server-label "$(APP_SERVER_LABEL)" --relay-label "$(DOCK_RELAY_LABEL)" --relay-script "$(CURDIR)/scripts/dock-relay.mjs"
 
 .DEFAULT_GOAL := help
 
-.PHONY: help app app-test sim-config-verify device-install device-install-iphone-17-pro device-install-iphone-14 iphone-17-pro iphone-14 device-install-all device-config device-config-verify device-config-verify-all device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart relay-probe relay-thread-fidelity relay-leak-check relay-doctor app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
+.PHONY: help app app-test sim-config-verify device-install device-install-iphone-17-pro device-install-iphone-14 iphone-17-pro iphone-14 device-install-all device-config device-config-verify device-config-verify-all device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart relay-probe relay-thread-fidelity relay-leak-check relay-doctor relay-debug-bundle relay-host-compare sim-debug-bundle device-debug-bundle app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
 
 help:
 	@printf "%s\n" "Codex Dock commands:"
@@ -94,6 +99,10 @@ help:
 	@printf "%s\n" "  rtk make relay-thread-fidelity Cross-check relay sessions against Codex disk/SQLite"
 	@printf "%s\n" "  rtk make relay-leak-check Repeat relay thread/list and verify upstream socket count is flat"
 	@printf "%s\n" "  rtk make relay-doctor     Print relay-focused redacted diagnostics"
+	@printf "%s\n" "  rtk make relay-debug-bundle Fetch the relay route-health debug bundle"
+	@printf "%s\n" "  rtk make relay-host-compare HOSTS=host:port,host:port Compare route health across relays"
+	@printf "%s\n" "  rtk make sim-debug-bundle SIM='iPhone 14' Copy app-owned diagnostics from simulator"
+	@printf "%s\n" "  rtk make device-debug-bundle DEVICE=<UDID> Copy app-owned diagnostics from a physical iPhone"
 	@printf "%s\n" "  rtk make app-server-env    Print env for raw dev smoke tests"
 	@printf "%s\n" "  rtk make host-service-doctor Print redacted host service diagnostics"
 	@printf "%s\n" "  rtk make sim-logs SIM='iPhone 17' Stream Codex Dock simulator logs"
@@ -166,6 +175,18 @@ relay-leak-check:
 	@CODEX_DOCK_RELAY_WS="$(DOCK_RELAY_PROBE_WS)" CODEX_DOCK_LEAK_CHECK_ITERATIONS="$(DOCK_RELAY_LEAK_CHECK_ITERATIONS)" rtk node -- scripts/dock-relay-leak-check.mjs
 
 relay-doctor: host-service-doctor
+
+relay-debug-bundle: services
+	@rtk node -- scripts/dock-relay-diagnostics.mjs relay-debug-bundle --host "$(APP_SERVER_HOST):$(DOCK_RELAY_PORT)" --output "$(RELAY_DEBUG_BUNDLE)"
+
+relay-host-compare:
+	@rtk node -- scripts/dock-relay-diagnostics.mjs relay-host-compare --hosts "$(HOSTS)" --output "$(RELAY_HOST_COMPARE_REPORT)"
+
+sim-debug-bundle:
+	@rtk sh -c 'set -eu; udid="$$(python3 scripts/sim.py resolve "$(SIM)")"; if ! data="$$(xcrun simctl get_app_container "$$udid" "$(APP_BUNDLE_ID)" data 2>/dev/null)"; then echo "missing simulator app data container for $(SIM) ($(APP_BUNDLE_ID)); install the app first with: rtk make app SIM='\''$(SIM)'\''" >&2; exit 2; fi; source="$$data/Library/Application Support/CodexDock/Diagnostics"; output="$(SIM_DEBUG_BUNDLE_DIR)"; mkdir -p "$$output"; if [ ! -d "$$source" ]; then echo "missing simulator diagnostics directory $$source" >&2; exit 2; fi; cp -R "$$source" "$$output/CodexDock-Diagnostics"; echo "wrote $$output"'
+
+device-debug-bundle:
+	@rtk sh -c 'set -eu; device="$(DEVICE)"; if [ -z "$$device" ]; then device="$$(python3 scripts/device.py resolve "$(DEVICE_NAME)")"; fi; output="$(DEVICE_DEBUG_BUNDLE_DIR)"; mkdir -p "$$output"; log_dir="$(APP_BUILD_LOG_DIR)"; copy_log="$$log_dir/device-debug-bundle-$(APP_BUILD_NUMBER)-$$device.log"; mkdir -p "$$log_dir"; if ! xcrun devicectl device copy from --device "$$device" --domain-type appDataContainer --domain-identifier "$(APP_BUNDLE_ID)" --source "Library/Application Support/CodexDock/Diagnostics" --destination "$$output" > "$$copy_log" 2>&1; then echo "device debug bundle copy failed; see $$copy_log" >&2; tail -n 80 "$$copy_log" >&2; exit 1; fi; echo "wrote $$output"'
 
 app-server-logs:
 	@rtk tail -n 200 -f "$(APP_SERVER_LOG)" "$(APP_SERVER_ERR_LOG)"

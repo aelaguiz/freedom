@@ -30,6 +30,14 @@ import {
   defaultRelayLogger,
   installRelayFatalHandlers,
 } from "./dock-relay-logger.mjs";
+import {
+  ROUTE_NAMES,
+  autoProbeSafeRoutes,
+} from "./dock-relay-observability-contract.mjs";
+import {
+  createRelayObservability,
+  extractTraceContextFromParams,
+} from "./dock-relay-observability.mjs";
 import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
 import {
   DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
@@ -527,6 +535,113 @@ function runtimeSnapshot(config, sessions, downstreamSockets) {
   };
 }
 
+function observabilityDirForConfig(config) {
+  if (config.observabilityDir === false) {
+    return null;
+  }
+  if (config.observabilityDir) {
+    return config.observabilityDir;
+  }
+  return path.resolve(process.cwd(), ".codex-dock", "observability");
+}
+
+function configuredHostIDFromConfig(config) {
+  if (config.configuredHostID) {
+    return config.configuredHostID;
+  }
+  if (config.hostEndpoint) {
+    return config.hostEndpoint;
+  }
+  return null;
+}
+
+function writeJSONResponse(response, value, statusCode = 200) {
+  response.writeHead(statusCode, { "content-type": "application/json" });
+  response.end(JSON.stringify(value));
+}
+
+function traceOperationIDFromPath(pathname) {
+  const prefix = "/tracesz/";
+  if (!pathname.startsWith(prefix)) {
+    return null;
+  }
+  const encoded = pathname.slice(prefix.length);
+  if (!encoded || encoded === "recent") {
+    return null;
+  }
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return encoded;
+  }
+}
+
+function semanticRouteOutcome(method, result) {
+  if ((method === DOCK_SUBSCRIBE_METHOD || method === DOCK_RESYNC_METHOD)
+    && result?.freshness?.status === "stale") {
+    return {
+      ok: false,
+      error: new Error(result.freshness.lastError || "dock session refresh failed"),
+      errorData: {
+        subsystem: "history",
+        retryable: true,
+      },
+      errorCode: -32000,
+      phase: "refresh",
+      outcome: "failed",
+    };
+  }
+  return {
+    ok: true,
+    error: null,
+    errorData: null,
+    errorCode: null,
+    phase: "response",
+    outcome: "succeeded",
+  };
+}
+
+async function runSelfTest(config) {
+  const safeRoutes = [];
+  for (const route of autoProbeSafeRoutes()) {
+    if (route.name === ROUTE_NAMES.dockSubscribe) {
+      try {
+        const snapshot = await dockSessionAggregatorForConfig(config).snapshot();
+        safeRoutes.push({
+          route: route.name,
+          probeSafety: route.probeSafety,
+          ok: snapshot?.freshness?.status !== "stale",
+          freshness: snapshot?.freshness?.status || null,
+          rows: Array.isArray(snapshot?.sessions) ? snapshot.sessions.length : null,
+        });
+      } catch (error) {
+        safeRoutes.push({
+          route: route.name,
+          probeSafety: route.probeSafety,
+          ok: false,
+          error: error?.message || String(error),
+        });
+      }
+      continue;
+    }
+    if (route.kind === "http" || route.name === ROUTE_NAMES.statusz) {
+      safeRoutes.push({
+        route: route.name,
+        probeSafety: route.probeSafety,
+        ok: true,
+        note: "registered auto-probe-safe route; mutating/passive routes skipped",
+      });
+    }
+  }
+  return {
+    ok: safeRoutes.every((route) => route.ok),
+    service: "codex-dock-relay",
+    schema: "codexdock.selftest.v1",
+    checkedAt: new Date().toISOString(),
+    routes: safeRoutes,
+  };
+}
+
 function startServer(config) {
   config.logger = relayLogger(config);
   const logger = config.logger;
@@ -542,6 +657,17 @@ function startServer(config) {
   config.realtimeTranscriptionDelay = config.realtimeTranscriptionDelay
     || DEFAULT_REALTIME_TRANSCRIPTION_DELAY;
   config.statusTracker = config.statusTracker || createRelayStatusTracker();
+  config.observability = config.observability || createRelayObservability({
+    hostId: config.hostId,
+    hostName: config.hostName,
+    configuredHostID: configuredHostIDFromConfig(config),
+    persistenceDir: observabilityDirForConfig(config),
+  });
+  config.observability.updateHost?.({
+    hostId: config.hostId,
+    hostName: config.hostName,
+    configuredHostID: configuredHostIDFromConfig(config),
+  });
   config.upstreamPool = config.upstreamPool || new UpstreamConnectionPool({
     logger,
     maxOpenByLabel: UPSTREAM_POOL_LIMITS,
@@ -568,77 +694,153 @@ function startServer(config) {
 
   async function writeStatusResponse(response) {
     await checkRawAppServerHealth(config, config.statusTracker);
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify(config.statusTracker.snapshot(
-      config,
-      runtimeSnapshot(config, sessions, downstreamSockets),
-    )));
+    const runtime = runtimeSnapshot(config, sessions, downstreamSockets);
+    writeJSONResponse(response, config.statusTracker.snapshot(config, runtime));
   }
 
   function writeMetricsResponse(request, response) {
-    if (writeLoopbackOnlyResponse(request, response)) {
-      return;
-    }
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify(config.statusTracker.metricsSnapshot(
+    writeJSONResponse(response, config.statusTracker.metricsSnapshot(
       config,
       runtimeSnapshot(config, sessions, downstreamSockets),
-    )));
+    ));
   }
 
   function writeDebugSessionsResponse(request, response) {
-    if (writeLoopbackOnlyResponse(request, response)) {
-      return;
-    }
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify(config.statusTracker.debugSessionsSnapshot(
+    writeJSONResponse(response, config.statusTracker.debugSessionsSnapshot(
       config,
       runtimeSnapshot(config, sessions, downstreamSockets),
-    )));
+    ));
+  }
+
+  function writeRoutesResponse(request, response) {
+    writeJSONResponse(response, {
+      ok: true,
+      service: "codex-dock-relay",
+      schema: "codexdock.routesz.v1",
+      host: {
+        id: config.hostId || null,
+        relayInstanceID: config.hostId || null,
+        displayName: config.hostName || config.bonjourName || null,
+      },
+      routes: config.observability.routeHealth(),
+    });
+  }
+
+  function writeTraceResponse(request, response) {
+    const requestURL = new URL(request.url, "http://127.0.0.1");
+    if (requestURL.pathname === "/tracesz/recent") {
+      writeJSONResponse(response, {
+        ok: true,
+        service: "codex-dock-relay",
+        schema: "codexdock.tracesz.recent.v1",
+        traces: config.observability.recentTraces({ limit: 50 }),
+      });
+      return;
+    }
+    const operationID = traceOperationIDFromPath(requestURL.pathname);
+    const trace = config.observability.trace(operationID);
+    if (!trace) {
+      writeJSONResponse(response, {
+        ok: false,
+        service: "codex-dock-relay",
+        error: "trace not found",
+        operationID,
+      }, 404);
+      return;
+    }
+    writeJSONResponse(response, {
+      ok: true,
+      service: "codex-dock-relay",
+      schema: "codexdock.tracesz.operation.v1",
+      trace,
+    });
+  }
+
+  function writeSelfTestResponse(request, response) {
+    runSelfTest(config)
+      .then((result) => writeJSONResponse(response, result))
+      .catch((error) => {
+        logger.error("selftestz.failed", { error });
+        writeJSONResponse(response, {
+          ok: false,
+          service: "codex-dock-relay",
+          error: "selftest unavailable",
+        }, 500);
+      });
+  }
+
+  async function writeBundleResponse(request, response) {
+    await checkRawAppServerHealth(config, config.statusTracker);
+    const runtime = runtimeSnapshot(config, sessions, downstreamSockets);
+    const status = config.statusTracker.snapshot(config, runtime);
+    const metrics = config.statusTracker.metricsSnapshot(config, runtime);
+    writeJSONResponse(response, config.observability.bundle({ status, metrics, runtime }));
   }
 
   const server = http.createServer((request, response) => {
-    if (request.url === "/readyz") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({
+    const requestURL = new URL(request.url, "http://127.0.0.1");
+    if (requestURL.pathname === "/readyz") {
+      writeJSONResponse(response, {
         ok: true,
         service: "codex-dock-relay",
         auth: config.phoneAuth,
-      }));
+      });
       return;
     }
-    if (request.url === "/healthz") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({
+    if (requestURL.pathname === "/healthz") {
+      writeJSONResponse(response, {
         ok: true,
         service: "codex-dock-relay",
         auth: config.phoneAuth,
+        routeHealth: false,
         staticConfig: {
           ok: true,
           historyConfigured: Boolean(config.historyUrl),
           transcriptionConfigured: Boolean(config.openAIRealtimeTranscriptionModel),
         },
-      }));
-      return;
-    }
-    if (request.url === "/statusz") {
-      writeStatusResponse(response).catch((error) => {
-        logger.error("statusz.failed", { error });
-        response.writeHead(500, { "content-type": "application/json" });
-        response.end(JSON.stringify({
-          ok: false,
-          service: "codex-dock-relay",
-          error: "status unavailable",
-        }));
       });
       return;
     }
-    if (request.url === "/metricsz") {
+    if (requestURL.pathname === "/statusz") {
+      writeStatusResponse(response).catch((error) => {
+        logger.error("statusz.failed", { error });
+        writeJSONResponse(response, {
+          ok: false,
+          service: "codex-dock-relay",
+          error: "status unavailable",
+        }, 500);
+      });
+      return;
+    }
+    if (requestURL.pathname === "/metricsz") {
       writeMetricsResponse(request, response);
       return;
     }
-    if (request.url === "/debugz/sessions") {
+    if (requestURL.pathname === "/debugz/sessions") {
       writeDebugSessionsResponse(request, response);
+      return;
+    }
+    if (requestURL.pathname === "/routesz") {
+      writeRoutesResponse(request, response);
+      return;
+    }
+    if (requestURL.pathname === "/tracesz/recent" || requestURL.pathname.startsWith("/tracesz/")) {
+      writeTraceResponse(request, response);
+      return;
+    }
+    if (requestURL.pathname === "/selftestz") {
+      writeSelfTestResponse(request, response);
+      return;
+    }
+    if (requestURL.pathname === "/bundlez") {
+      writeBundleResponse(request, response).catch((error) => {
+        logger.error("bundlez.failed", { error });
+        writeJSONResponse(response, {
+          ok: false,
+          service: "codex-dock-relay",
+          error: "bundle unavailable",
+        }, 500);
+      });
       return;
     }
     response.writeHead(404, { "content-type": "text/plain" });
@@ -685,6 +887,7 @@ function startServer(config) {
     sessions.add(session);
     session.realtimeTranscription = new RealtimeTranscriptionManager(config, {
       sendNotification: (method, params) => {
+        config.observability?.recordNotification?.(method);
         sendJson(ws, { jsonrpc: "2.0", method, params });
       },
       logger,
@@ -758,12 +961,31 @@ function startServer(config) {
         return;
       }
 
+      let operation = null;
+      let params = message.params;
       try {
-        const result = await handleRequest(config, message.method, message.params, session, ws);
+        const extracted = extractTraceContextFromParams(message.params);
+        params = extracted.params;
+        operation = config.observability?.beginOperation?.({
+          route: message.method,
+          method: message.method,
+          traceContext: extracted.traceContext,
+        });
+        const result = await handleRequest(config, message.method, params, session, ws);
         config.statusTracker?.recordRequest?.({
           method: message.method,
           ok: true,
           durationMs: Date.now() - requestStartedAt,
+        });
+        const routeOutcome = semanticRouteOutcome(message.method, result);
+        config.observability?.finishOperation?.(operation, {
+          ok: routeOutcome.ok,
+          result,
+          error: routeOutcome.error,
+          errorCode: routeOutcome.errorCode,
+          errorData: routeOutcome.errorData,
+          phase: routeOutcome.phase,
+          outcome: routeOutcome.outcome,
         });
         sendJson(ws, jsonRpcResult(message.id, result));
         logger.info("downstream.request_succeeded", {
@@ -794,6 +1016,13 @@ function startServer(config) {
           ok: false,
           code: errorCode,
           durationMs: Date.now() - requestStartedAt,
+        });
+        config.observability?.finishOperation?.(operation, {
+          ok: false,
+          error,
+          errorCode,
+          errorData,
+          phase: errorData?.subsystem || "handler",
         });
         logger.warn("downstream.request_failed", {
           subsystem: errorData?.subsystem || "relay",

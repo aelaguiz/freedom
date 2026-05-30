@@ -10,6 +10,7 @@ import {
   DOCK_SESSION_SCHEMA_VERSION,
   THREAD_LIST_MAX_LIMIT,
 } from "./dock-relay-constants.mjs";
+import { ROUTE_NAMES } from "./dock-relay-observability-contract.mjs";
 import {
   aggregateThreadList,
   liveStatusCacheForConfig,
@@ -115,6 +116,10 @@ function writeLastGoodAtomic(pathname, snapshot) {
   const tempPath = `${pathname}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tempPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
   fs.renameSync(tempPath, pathname);
+}
+
+function lastGoodAvailable(pathname) {
+  return Boolean(pathname && fs.existsSync(pathname));
 }
 
 function laneForScope(scope) {
@@ -559,6 +564,13 @@ class DockSessionAggregator {
 
   async resync() {
     await this.refreshNow({ notify: false });
+    this.config.observability?.recordMeasurement?.(ROUTE_NAMES.dockResync, {
+      phase: "refresh",
+      outcome: "succeeded",
+      rows: this.table.snapshot().sessions.length,
+      lastGoodAvailable: lastGoodAvailable(this.persistencePath),
+      subscriberCount: this.subscribers.size,
+    });
     return this.table.snapshot();
   }
 
@@ -588,11 +600,28 @@ class DockSessionAggregator {
         updateKind: update.kind,
         seq: update.seq,
       });
+      this.config.observability?.recordMeasurement?.(ROUTE_NAMES.dockSubscribe, {
+        phase: "refresh",
+        outcome: "succeeded",
+        rows: sessions.length,
+        updateKind: update.kind,
+        seq: update.seq,
+        lastGoodAvailable: lastGoodAvailable(this.persistencePath),
+        subscriberCount: this.subscribers.size,
+      });
     } catch (error) {
       update = this.table.applyFailedRefresh(error);
       this.logger?.warn?.("dock.session_refresh_failed", {
         error,
         seq: update.seq,
+      });
+      this.config.observability?.recordMeasurement?.(ROUTE_NAMES.dockSubscribe, {
+        phase: "refresh",
+        outcome: "failed",
+        seq: update.seq,
+        lastGoodAvailable: lastGoodAvailable(this.persistencePath),
+        subscriberCount: this.subscribers.size,
+        failureCategory: "history",
       });
     }
 
@@ -634,9 +663,21 @@ async function handleDockSubscribe({ config, session, downstreamWs, sendJson }) 
   session.dockUnsubscribe?.();
   session.dockUnsubscribe = null;
   const aggregator = dockSessionAggregatorForConfig(config);
+  config.observability?.recordMeasurement?.(DOCK_SUBSCRIBE_METHOD, {
+    phase: "subscribe",
+    subscriberCount: aggregator.subscribers?.size || 0,
+  });
   let subscriptionReady = false;
   const bufferedUpdates = [];
   const sendDockUpdate = (update) => {
+    config.observability?.recordNotification?.(DOCK_UPDATE_METHOD, {
+      measurements: {
+        phase: "notify",
+        updateKind: update?.kind || null,
+        seq: update?.seq ?? null,
+        subscriberCount: aggregator.subscribers?.size || 0,
+      },
+    });
     sendJson(downstreamWs, {
       jsonrpc: "2.0",
       method: DOCK_UPDATE_METHOD,

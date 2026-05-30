@@ -172,6 +172,88 @@ final class AppConnectivityStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testAppCriticalRouteFailureIsHostEvidenceEvenWhenProcessLooksOnline() throws {
+        let host = makeConnectivityHost()
+        let store = AppConnectivityStore(hosts: [host])
+        let checkedAt = Date(timeIntervalSince1970: 4_000)
+
+        store.reportHostTest(host: host, status: .online(rowCount: 2, checkedAt: checkedAt))
+        store.reportRouteDiagnostic(
+            host: host,
+            diagnostic: RouteDiagnosticSnapshot(
+                configuredHostID: host.id,
+                relayHostID: "home",
+                route: AppServerMethods.dockSubscribe,
+                operationID: "op-dock-subscribe",
+                routeStatus: .failed,
+                statusReasons: [
+                    RouteStatusReason(
+                        code: "failed:last-attempt",
+                        message: "dock provider offline",
+                        actual: ObservabilityFailureCategory.history.rawValue,
+                        evidenceIDs: ["op-dock-subscribe"]
+                    ),
+                ],
+                lastAttemptAt: Date(timeIntervalSince1970: 4_100),
+                lastSuccessAt: nil,
+                lastFailureAt: Date(timeIntervalSince1970: 4_100),
+                appCritical: true
+            )
+        )
+
+        XCTAssertEqual(store.hosts[0].phase, .partial("\(AppServerMethods.dockSubscribe) failed"))
+        XCTAssertEqual(store.hosts[0].lastSuccessAt, checkedAt)
+        XCTAssertEqual(store.hosts[0].routeDiagnostics.map(\.route), [AppServerMethods.dockSubscribe])
+        XCTAssertEqual(store.overallStatus, .partial("\(host.displayName): \(AppServerMethods.dockSubscribe) failed"))
+    }
+
+    @MainActor
+    func testDiagnosticsFetchFailureDoesNotReplaceOriginalRouteFailure() throws {
+        let host = makeConnectivityHost()
+        let store = AppConnectivityStore(hosts: [host])
+
+        store.reportRouteDiagnostic(
+            host: host,
+            diagnostic: RouteDiagnosticSnapshot(
+                configuredHostID: host.id,
+                route: AppServerMethods.dockSubscribe,
+                operationID: "op-dock-subscribe",
+                routeStatus: .failed,
+                statusReasons: [
+                    RouteStatusReason(
+                        code: "failed:last-attempt",
+                        message: "dock provider offline",
+                        actual: ObservabilityFailureCategory.history.rawValue,
+                        evidenceIDs: ["op-dock-subscribe"]
+                    ),
+                ],
+                appCritical: true
+            )
+        )
+        store.reportRouteDiagnostic(
+            host: host,
+            diagnostic: RouteDiagnosticSnapshot(
+                configuredHostID: host.id,
+                route: "routesz",
+                operationID: nil,
+                routeStatus: .failed,
+                statusReasons: [
+                    RouteStatusReason(
+                        code: "failed:diagnostics-fetch",
+                        message: "connection refused",
+                        actual: ObservabilityFailureCategory.downstream.rawValue
+                    ),
+                ],
+                appCritical: false,
+                appImpact: "diagnostic-fetch"
+            )
+        )
+
+        XCTAssertEqual(store.hosts[0].phase, .partial("\(AppServerMethods.dockSubscribe) failed"))
+        XCTAssertEqual(store.hosts[0].routeDiagnostics.map(\.route), [AppServerMethods.dockSubscribe, "routesz"])
+    }
+
+    @MainActor
     func testConfigurationErrorWins() {
         let error = DockHostConfigurationError.missingEndpoint
         let store = AppConnectivityStore(configurationError: error)

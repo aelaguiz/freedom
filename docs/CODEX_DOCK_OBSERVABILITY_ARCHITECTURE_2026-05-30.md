@@ -9,6 +9,7 @@ doc_type: architectural_change
 related:
   - README.md
   - Makefile
+  - docs/CODEX_DOCK_OBSERVABILITY_ARCHITECTURE_2026-05-30_WORKLOG.md
   - scripts/dock-relay.mjs
   - scripts/dock-relay-status.mjs
   - scripts/dock-relay-logger.mjs
@@ -22,6 +23,69 @@ related:
 ---
 
 # TL;DR
+
+<!-- arch_skill:block:implementation_audit:start -->
+# Implementation Audit (authoritative)
+Date: 2026-05-30
+Verdict (code): COMPLETE
+Manual QA: pending (non-blocking)
+
+## Code blockers (why code is not done)
+- None.
+
+## Reopened phases (false-complete fixes)
+- None.
+
+## Missing items (code gaps; evidence-anchored; no tables)
+- None.
+
+## Evidence checked
+- Relay contract and route-health owner landed in
+  `scripts/dock-relay-observability-contract.mjs` and
+  `scripts/dock-relay-observability.mjs`.
+- Relay dispatch, status, metrics, debug, traces, self-test, bundle, host doctor,
+  and Dock aggregation now read from the route-health spine in
+  `scripts/dock-relay.mjs`, `scripts/dock-relay-status.mjs`,
+  `scripts/dock-relay-session-table.mjs`, and
+  `scripts/codex-dock-host-service.mjs`.
+- Relay bundle/status route arrays stay complete; the generic log sanitizer no
+  longer caps the diagnostic route list.
+- Swift route vocabulary, operation store, relay diagnostics client, app request
+  tracing, Dock stream tracing, thread detail tracing, archive tracing,
+  realtime transcription tracing, and connectivity route diagnostics landed in
+  `CodexDock/Diagnostics/**`, `CodexDock/AppServer/AppServerClient.swift`,
+  `CodexDock/State/**`, `CodexDock/Voice/RelayRealtimeTranscriptionClient.swift`,
+  and `CodexDock/Features/Status/**`.
+- App-owned diagnostics persist under
+  `Library/Application Support/CodexDock/Diagnostics/`; relay diagnostics persist
+  under `.codex-dock/observability/`.
+- Operator bundle and multi-host comparison commands landed in `Makefile` and
+  `scripts/dock-relay-diagnostics.mjs`.
+- README now teaches `/readyz` as process-only and `/statusz`/`/routesz`/bundles
+  as app-path truth. The 2026-05-28 logging plan is marked superseded for
+  route-health diagnostics.
+- Verification run:
+  - `rtk npm run test:relay` passed, 111 tests.
+  - `rtk swift test --filter AppServerClientTests` passed, 55 tests, 5 skipped.
+  - `rtk swift test --filter DockStoreTests` passed, 48 tests.
+  - `rtk swift test --filter ThreadDetailStoreTests` passed, 52 tests.
+  - `rtk swift test --filter AppConnectivityStoreTests` passed, 15 tests.
+  - `rtk swift test --filter DiagnosticsLoggingTests` passed, 7 tests.
+- Fresh Cursor Agent Composer 2.5 Fast consult returned
+  `VERDICT: pass-with-notes` with blocking findings: none. Run directory:
+  `/tmp/fresh-consult/codex-dock-observability-20260530T142328Z-dx3gWc`.
+
+## Non-blocking follow-ups (manual QA / screenshots / human verification)
+- `rtk make sim-debug-bundle SIM='iPhone 14'` is blocked until the app is
+  installed on that simulator. Exact failure:
+  `missing simulator app data container for iPhone 14 (com.aelaguiz.CodexDockApp); install the app first with: rtk make app SIM='iPhone 14'`.
+- `rtk make app-test SIM='iPhone 17'` built and ran generated-project tests but
+  failed one unrelated existing swipe/pinned UI smoke:
+  `CodexDockAutomationSmokeTests.testScriptedDockSwipePinPersistsAcrossLensesRefreshRelaunchAndUnpin()`
+  at `CodexDockUITests/CodexDockAutomationSmokeTests.swift:188`, assertion
+  `Inline pinned row did not unpin after swipe.`
+- Physical iPhone debug-bundle proof was not run in this pass.
+<!-- arch_skill:block:implementation_audit:end -->
 
 Outcome: Codex Dock will have one observability spine for its single-user,
 multi-host app path. A host can be process-reachable and still fail an

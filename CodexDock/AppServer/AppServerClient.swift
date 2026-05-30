@@ -131,6 +131,7 @@ public actor AppServerClient {
     private struct PendingRequest {
         let method: String
         let startedAt: Date
+        let observabilityContext: AppServerRequestObservabilityContext?
         let continuation: CheckedContinuation<JSONValue, Error>
         let timeoutTask: Task<Void, Never>
     }
@@ -237,14 +238,16 @@ public actor AppServerClient {
     public func sendRequest(
         method: String,
         params: JSONValue? = nil,
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
     ) async throws -> JSONValue {
         try await sendRequest(
             id: allocateRequestID(),
             method: method,
             params: params,
             timeout: timeout,
-            allowsConnecting: false
+            allowsConnecting: false,
+            observabilityContext: observabilityContext
         )
     }
 
@@ -252,9 +255,15 @@ public actor AppServerClient {
         method: String,
         params: JSONValue? = nil,
         timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil,
         as responseType: Response.Type
     ) async throws -> Response {
-        let result = try await sendRequest(method: method, params: params, timeout: timeout)
+        let result = try await sendRequest(
+            method: method,
+            params: params,
+            timeout: timeout,
+            observabilityContext: observabilityContext
+        )
         return try decodeResponse(result, as: responseType)
     }
 
@@ -269,144 +278,168 @@ public actor AppServerClient {
 
     public func threadList(
         params: ThreadListParams = ThreadListParams(),
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
     ) async throws -> ThreadListResponseDTO {
         try await sendRequest(
             method: AppServerMethods.threadList,
             params: try JSONValue.encoded(params),
             timeout: timeout,
+            observabilityContext: observabilityContext,
             as: ThreadListResponseDTO.self
         )
     }
 
     public func threadRead(
         params: ThreadReadParams,
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
     ) async throws -> ThreadReadResponseDTO {
         try await sendRequest(
             method: AppServerMethods.threadRead,
             params: try JSONValue.encoded(params),
             timeout: timeout,
+            observabilityContext: observabilityContext,
             as: ThreadReadResponseDTO.self
         )
     }
 
     public func threadTurnsList(
         params: ThreadTurnsListParams,
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
     ) async throws -> ThreadTurnsListResponseDTO {
         try await sendRequest(
             method: AppServerMethods.threadTurnsList,
             params: try JSONValue.encoded(params),
             timeout: timeout,
+            observabilityContext: observabilityContext,
             as: ThreadTurnsListResponseDTO.self
         )
     }
 
     public func threadResume(
         params: ThreadResumeParams,
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
     ) async throws -> ThreadResumeResponseDTO {
         try await sendRequest(
             method: AppServerMethods.threadResume,
             params: try JSONValue.encoded(params),
             timeout: timeout,
+            observabilityContext: observabilityContext,
             as: ThreadResumeResponseDTO.self
         )
     }
 
     public func threadArchive(
         params: ThreadArchiveParams,
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
     ) async throws -> ThreadArchiveResponseDTO {
         try await sendRequest(
             method: AppServerMethods.threadArchive,
             params: try JSONValue.encoded(params),
             timeout: timeout,
+            observabilityContext: observabilityContext,
             as: ThreadArchiveResponseDTO.self
         )
     }
 
     public func threadUnarchive(
         params: ThreadUnarchiveParams,
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
     ) async throws -> ThreadUnarchiveResponseDTO {
         try await sendRequest(
             method: AppServerMethods.threadUnarchive,
             params: try JSONValue.encoded(params),
             timeout: timeout,
+            observabilityContext: observabilityContext,
             as: ThreadUnarchiveResponseDTO.self
         )
     }
 
     public func turnStart(
         params: TurnStartParams,
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
     ) async throws -> TurnStartResponseDTO {
         try await sendRequest(
             method: AppServerMethods.turnStart,
             params: try JSONValue.encoded(params),
             timeout: timeout,
+            observabilityContext: observabilityContext,
             as: TurnStartResponseDTO.self
         )
     }
 
     public func turnSteer(
         params: TurnSteerParams,
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
     ) async throws -> TurnSteerResponseDTO {
         try await sendRequest(
             method: AppServerMethods.turnSteer,
             params: try JSONValue.encoded(params),
             timeout: timeout,
+            observabilityContext: observabilityContext,
             as: TurnSteerResponseDTO.self
         )
     }
 
     public func audioTranscriptionStart(
         params: AudioTranscriptionStartParams = AudioTranscriptionStartParams(),
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
     ) async throws -> AudioTranscriptionStartResponseDTO {
         try await sendRequest(
             method: AppServerMethods.audioTranscriptionStart,
             params: try JSONValue.encoded(params),
             timeout: timeout,
+            observabilityContext: observabilityContext,
             as: AudioTranscriptionStartResponseDTO.self
         )
     }
 
     public func audioTranscriptionAppend(
         params: AudioTranscriptionAppendParams,
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
     ) async throws -> AudioTranscriptionAppendResponseDTO {
         try await sendRequest(
             method: AppServerMethods.audioTranscriptionAppend,
             params: try JSONValue.encoded(params),
             timeout: timeout,
+            observabilityContext: observabilityContext,
             as: AudioTranscriptionAppendResponseDTO.self
         )
     }
 
     public func audioTranscriptionCommit(
         params: AudioTranscriptionCommitParams,
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
     ) async throws -> AudioTranscriptionCommitResponseDTO {
         try await sendRequest(
             method: AppServerMethods.audioTranscriptionCommit,
             params: try JSONValue.encoded(params),
             timeout: timeout,
+            observabilityContext: observabilityContext,
             as: AudioTranscriptionCommitResponseDTO.self
         )
     }
 
     public func audioTranscriptionCancel(
         params: AudioTranscriptionCancelParams,
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
     ) async throws -> AudioTranscriptionCancelResponseDTO {
         try await sendRequest(
             method: AppServerMethods.audioTranscriptionCancel,
             params: try JSONValue.encoded(params),
             timeout: timeout,
+            observabilityContext: observabilityContext,
             as: AudioTranscriptionCancelResponseDTO.self
         )
     }
@@ -479,7 +512,8 @@ public actor AppServerClient {
             method: AppServerMethods.initialize,
             params: paramsValue,
             timeout: timeout,
-            allowsConnecting: true
+            allowsConnecting: true,
+            observabilityContext: nil
         )
         return try decodeResponse(result, as: InitializeResponse.self)
     }
@@ -489,7 +523,8 @@ public actor AppServerClient {
         method: String,
         params: JSONValue?,
         timeout: Duration,
-        allowsConnecting: Bool
+        allowsConnecting: Bool,
+        observabilityContext: AppServerRequestObservabilityContext?
     ) async throws -> JSONValue {
         try ensureCanSend(allowsConnecting: allowsConnecting)
 
@@ -498,7 +533,14 @@ public actor AppServerClient {
             throw AppServerClientError.duplicateRequestID(id)
         }
 
-        let request = JSONRPCRequest(id: id, method: method, params: params)
+        if let observabilityContext {
+            await observabilityContext.store?.start(observabilityContext)
+        }
+        let request = JSONRPCRequest(
+            id: id,
+            method: method,
+            params: paramsWithTraceMetadata(params, context: observabilityContext)
+        )
         let text = try JSONRPCMessage.request(request).jsonString()
         DockLog.appServer.info("app-server request started method=\(method, privacy: .public) request_id=\(DockLog.publicID(id), privacy: .public)")
 
@@ -519,6 +561,7 @@ public actor AppServerClient {
                 pendingRequests[id] = PendingRequest(
                     method: method,
                     startedAt: Date(),
+                    observabilityContext: observabilityContext,
                     continuation: continuation,
                     timeoutTask: timeoutTask
                 )
@@ -549,6 +592,25 @@ public actor AppServerClient {
         let id = JSONRPCRequestID.integer(nextRequestNumber)
         nextRequestNumber += 1
         return id
+    }
+
+    private func paramsWithTraceMetadata(
+        _ params: JSONValue?,
+        context: AppServerRequestObservabilityContext?
+    ) -> JSONValue? {
+        guard let context else {
+            return params
+        }
+        switch params {
+        case .object(let object):
+            var next = object
+            next[ObservabilityContract.traceParamKey] = context.traceJSONValue
+            return .object(next)
+        case nil:
+            return .object([ObservabilityContract.traceParamKey: context.traceJSONValue])
+        case .array, .bool, .double, .integer, .null, .string:
+            return params
+        }
     }
 
     private func send(_ message: JSONRPCMessage) async throws {
@@ -739,11 +801,21 @@ public actor AppServerClient {
         switch result {
         case .success(let value):
             DockLog.appServer.info("app-server request finished method=\(pending.method, privacy: .public) request_id=\(DockLog.publicID(id), privacy: .public) duration_ms=\(duration, privacy: .public)")
+            if let context = pending.observabilityContext {
+                Task {
+                    await context.store?.finish(context, result: .success(()))
+                }
+            }
             pending.continuation.resume(returning: value)
         case .failure(let error):
             DockLog.appServer.warning("app-server request failed method=\(pending.method, privacy: .public) request_id=\(DockLog.publicID(id), privacy: .public) duration_ms=\(duration, privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             if shouldRetireRequestID(for: error) {
                 retiredRequestIDs.insert(id)
+            }
+            if let context = pending.observabilityContext {
+                Task {
+                    await context.store?.finish(context, result: .failure(error))
+                }
             }
             pending.continuation.resume(throwing: error)
         }
@@ -768,6 +840,11 @@ public actor AppServerClient {
 
         for (_, request) in pending {
             request.timeoutTask.cancel()
+            if let context = request.observabilityContext {
+                Task {
+                    await context.store?.finish(context, result: .failure(error))
+                }
+            }
             request.continuation.resume(throwing: error)
         }
     }
@@ -961,5 +1038,42 @@ public final class URLSessionWebSocketAppServerTransport: AppServerTransport, @u
         let task = self.task
         self.task = nil
         return task
+    }
+}
+
+public extension AppServerClient {
+    func threadRead(
+        params: ThreadReadParams,
+        timeout: Duration
+    ) async throws -> ThreadReadResponseDTO {
+        try await threadRead(params: params, timeout: timeout, observabilityContext: nil)
+    }
+
+    func threadTurnsList(
+        params: ThreadTurnsListParams,
+        timeout: Duration
+    ) async throws -> ThreadTurnsListResponseDTO {
+        try await threadTurnsList(params: params, timeout: timeout, observabilityContext: nil)
+    }
+
+    func threadResume(
+        params: ThreadResumeParams,
+        timeout: Duration
+    ) async throws -> ThreadResumeResponseDTO {
+        try await threadResume(params: params, timeout: timeout, observabilityContext: nil)
+    }
+
+    func turnStart(
+        params: TurnStartParams,
+        timeout: Duration
+    ) async throws -> TurnStartResponseDTO {
+        try await turnStart(params: params, timeout: timeout, observabilityContext: nil)
+    }
+
+    func turnSteer(
+        params: TurnSteerParams,
+        timeout: Duration
+    ) async throws -> TurnSteerResponseDTO {
+        try await turnSteer(params: params, timeout: timeout, observabilityContext: nil)
     }
 }

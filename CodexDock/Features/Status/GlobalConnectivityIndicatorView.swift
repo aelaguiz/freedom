@@ -2,22 +2,34 @@ import SwiftUI
 
 public struct GlobalConnectivityIndicatorView: View {
     @ObservedObject private var store: AppConnectivityStore
+    @State private var showsDiagnostics = false
 
     public init(store: AppConnectivityStore) {
         self.store = store
     }
 
     public var body: some View {
-        Label(displayLabel, systemImage: systemImage)
-            .font(.caption.weight(.semibold))
-            .lineLimit(1)
-            .foregroundStyle(foregroundColor)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(backgroundColor, in: Capsule())
-            .accessibilityLabel(displayLabel)
-            .accessibilityValue("\(store.overallStatus.label): \(store.overallStatus.message)")
-            .codexAutomationID(AutomationID.Connectivity.globalIndicator)
+        Button {
+            showsDiagnostics = true
+        } label: {
+            Label(displayLabel, systemImage: systemImage)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .foregroundStyle(foregroundColor)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(backgroundColor, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(displayLabel)
+        .accessibilityValue("\(store.overallStatus.label): \(store.overallStatus.message)")
+        .codexAutomationID(AutomationID.Connectivity.globalIndicator)
+        .sheet(isPresented: $showsDiagnostics) {
+            ConnectivityDiagnosticsSheet(hosts: store.hosts)
+                .task {
+                    await store.refreshRelayDiagnostics()
+                }
+        }
     }
 
     private var displayLabel: String {

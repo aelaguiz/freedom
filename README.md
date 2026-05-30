@@ -195,6 +195,23 @@ rtk make app-server-status
 rtk make dock-relay-status
 ```
 
+Process health and app-path health are separate. `/readyz` only means the relay
+process can answer HTTP. The app path is healthy only when the relevant route
+is healthy in `/statusz`, `/routesz`, or the debug bundle.
+
+Route-health diagnostics:
+
+```sh
+rtk make relay-doctor
+rtk make relay-host-compare HOSTS=amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510
+rtk make relay-debug-bundle
+```
+
+The relay stores bounded route evidence under `.codex-dock/observability/` and
+serves `/routesz`, `/tracesz/recent`, `/tracesz/<operationID>`, `/selftestz`,
+and `/bundlez`. Automatic probes only use auto-probe-safe routes; archive,
+turn, and transcription routes are passive evidence from real app traffic.
+
 Print the app-safe host config plus raw dev smoke helpers:
 
 ```sh
@@ -247,18 +264,51 @@ From the Mac, the app-facing `home` relay should answer:
 ```sh
 curl -fsS --max-time 5 http://100.66.11.7:4510/readyz
 curl -fsS --max-time 5 http://100.66.11.7:4510/statusz
+curl -fsS --max-time 5 http://100.66.11.7:4510/routesz
 ```
+
+Use `readyz` only as process proof. Use `statusz` or `routesz` for route proof;
+an app-critical route failure should make `relay-doctor` report a problem even
+when `readyz` succeeds.
 
 `home` Realtime transcription is not claimed unless `OPENAI_API_KEY` is
 configured on `home`. The current safe state is that the `home` relay reports
 transcription `enabled: false` and `keyPresent: false`.
 
-## Logging Commands
+## Diagnostics Commands
 
 The iOS app writes Apple unified logs under subsystem
 `com.aelaguiz.CodexDock`. The Dock relay writes structured JSON lines to
 stderr, which the service target stores at
 `.codex-dock/logs/dock-relay.err.log`.
+
+The app also writes app-owned route evidence under
+`Library/Application Support/CodexDock/Diagnostics/`. This is the preferred
+physical-device artifact path when Apple unified log collection is blocked.
+
+Fetch a relay debug bundle:
+
+```sh
+rtk make relay-debug-bundle
+```
+
+Compare configured relay hosts:
+
+```sh
+rtk make relay-host-compare HOSTS=amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510
+```
+
+Copy app-owned diagnostics from a simulator:
+
+```sh
+rtk make sim-debug-bundle SIM='iPhone 14'
+```
+
+Copy app-owned diagnostics from a physical iPhone:
+
+```sh
+rtk make device-debug-bundle DEVICE=<device-udid>
+```
 
 Stream simulator logs:
 

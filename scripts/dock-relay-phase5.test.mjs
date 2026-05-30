@@ -1871,6 +1871,7 @@ test("relay health endpoints report configured phone auth mode", async () => {
       ok: true,
       service: "codex-dock-relay",
       auth: "bearer",
+      routeHealth: false,
       staticConfig: {
         ok: true,
         historyConfigured: true,
@@ -2085,7 +2086,7 @@ test("relay metricsz and debugz sessions expose loopback-safe diagnostics", asyn
   }
 });
 
-test("relay rich diagnostics are loopback-only by address classifier", () => {
+test("relay loopback classifier is available for diagnostics that need address labels", () => {
   assert.equal(isLoopbackRemoteAddress("127.0.0.1"), true);
   assert.equal(isLoopbackRemoteAddress("::1"), true);
   assert.equal(isLoopbackRemoteAddress("::ffff:127.0.0.1"), true);

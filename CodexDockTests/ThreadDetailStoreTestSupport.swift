@@ -410,4 +410,19 @@ func waitForDetailStore(
     throw DetailStoreTimeoutError()
 }
 
+@MainActor
+func waitForDetailStoreAsync(
+    timeout: Duration = .seconds(1),
+    _ predicate: @escaping () async -> Bool
+) async throws {
+    let start = ContinuousClock.now
+    while start.duration(to: .now) < timeout {
+        if await predicate() {
+            return
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    throw DetailStoreTimeoutError()
+}
+
 struct DetailStoreTimeoutError: Error {}

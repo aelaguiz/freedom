@@ -155,6 +155,125 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(second, .object(["value": .string("second-result")]))
     }
 
+    func testObservabilityContextInjectsTraceIntoObjectParamsAndRecordsSuccess() async throws {
+        let store = ClientObservabilityStore(persistenceDirectory: nil)
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+        let context = AppServerRequestObservabilityContext(
+            configuredHostID: "home.fairy-salmon.ts.net:4510",
+            route: AppServerMethods.threadList,
+            operationID: "op-client-thread-list",
+            traceID: "tr-client-thread-list",
+            clientBuild: "test-build",
+            store: store
+        )
+
+        let requestTask = Task {
+            try await client.sendRequest(
+                method: AppServerMethods.threadList,
+                params: .object(["limit": .integer(10)]),
+                timeout: .seconds(1),
+                observabilityContext: context
+            )
+        }
+
+        let request = try await transport.nextSentRequest()
+        guard case .object(let params) = request.params else {
+            return XCTFail("Expected object params")
+        }
+        guard case .object(let trace)? = params[ObservabilityContract.traceParamKey] else {
+            return XCTFail("Expected trace metadata")
+        }
+        XCTAssertEqual(params["limit"], .integer(10))
+        XCTAssertEqual(trace["operationID"], .string("op-client-thread-list"))
+        XCTAssertEqual(trace["traceID"], .string("tr-client-thread-list"))
+        XCTAssertEqual(trace["configuredHostID"], .string("home.fairy-salmon.ts.net:4510"))
+        XCTAssertEqual(trace["route"], .string(AppServerMethods.threadList))
+
+        await transport.enqueue(.response(JSONRPCResponse(id: request.id, result: .object(["ok": .bool(true)]))))
+        _ = try await requestTask.value
+
+        try await waitUntil {
+            let snapshots = await store.snapshots()
+            return snapshots.contains {
+                $0.route == AppServerMethods.threadList && $0.routeStatus == .healthy
+            }
+        }
+        let snapshots = await store.snapshots()
+        let snapshot = try XCTUnwrap(snapshots.first { $0.route == AppServerMethods.threadList })
+        XCTAssertEqual(snapshot.configuredHostID, "home.fairy-salmon.ts.net:4510")
+        XCTAssertEqual(snapshot.operationID, "op-client-thread-list")
+        XCTAssertTrue(snapshot.appCritical)
+    }
+
+    func testObservabilityContextCreatesParamsOnlyWhenNeededAndLeavesScalarParamsAlone() async throws {
+        let store = ClientObservabilityStore(persistenceDirectory: nil)
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+        let nilContext = AppServerRequestObservabilityContext(
+            configuredHostID: "home.fairy-salmon.ts.net:4510",
+            route: AppServerMethods.dockResync,
+            operationID: "op-client-nil",
+            traceID: "tr-client-nil",
+            store: store
+        )
+        let scalarContext = AppServerRequestObservabilityContext(
+            configuredHostID: "home.fairy-salmon.ts.net:4510",
+            route: "scalar/test",
+            operationID: "op-client-scalar",
+            traceID: "tr-client-scalar",
+            store: store
+        )
+
+        let nilTask = Task {
+            try await client.sendRequest(
+                method: AppServerMethods.dockResync,
+                timeout: .seconds(1),
+                observabilityContext: nilContext
+            )
+        }
+        let nilRequest = try await transport.nextSentRequest()
+        guard case .object(let nilParams) = nilRequest.params else {
+            return XCTFail("Expected trace-only params object")
+        }
+        XCTAssertNotNil(nilParams[ObservabilityContract.traceParamKey])
+        await transport.enqueue(.response(JSONRPCResponse(id: nilRequest.id, result: .object(["ok": .bool(true)]))))
+        _ = try await nilTask.value
+
+        let scalarTask = Task {
+            try await client.sendRequest(
+                method: "scalar/test",
+                params: .string("unchanged"),
+                timeout: .seconds(1),
+                observabilityContext: scalarContext
+            )
+        }
+        let scalarRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(scalarRequest.params, .string("unchanged"))
+        await transport.enqueue(.response(JSONRPCResponse(id: scalarRequest.id, result: .object(["ok": .bool(true)]))))
+        _ = try await scalarTask.value
+    }
+
+    func testRequestsWithoutObservabilityContextKeepExistingEncoding() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let requestTask = Task {
+            try await client.sendRequest(
+                method: "plain/request",
+                params: .object(["value": .string("kept")]),
+                timeout: .seconds(1)
+            )
+        }
+        let request = try await transport.nextSentRequest()
+        XCTAssertEqual(request.params, .object(["value": .string("kept")]))
+        await transport.enqueue(.response(JSONRPCResponse(id: request.id, result: .object(["ok": .bool(true)]))))
+        _ = try await requestTask.value
+    }
+
     func testReceiveLoopContinuesAfterResponseAndDeliversNotifications() async throws {
         let transport = ScriptedAppServerTransport()
         let client = AppServerClient(transport: transport)
@@ -1306,6 +1425,98 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(resumeResponse.thread.id, "thread-1")
     }
 
+    func testThreadDetailSessionAddsTraceMetadataToDetailRoutes() async throws {
+        let host = try DockHostConfiguration(host: "home.fairy-salmon.ts.net", port: 4510)
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        let factory = AppServerThreadDetailSessionFactory { endpoint in
+            XCTAssertEqual(endpoint, host.endpoint)
+            return client
+        }
+        let session = factory.makeSession(for: host)
+
+        let connectTask = Task {
+            try await session.connectAndInitialize(params: .codexDock(version: "0.1.0"), timeout: .seconds(1))
+        }
+        try await respondToInitialize(transport: transport)
+        _ = try await connectTask.value
+
+        let readTask = Task {
+            try await session.threadRead(
+                params: ThreadReadParams(threadId: "thread-1", includeTurns: true),
+                timeout: .seconds(1)
+            )
+        }
+        let readRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(readRequest.method, AppServerMethods.threadRead)
+        assertTraceMetadata(
+            in: readRequest.params,
+            route: AppServerMethods.threadRead,
+            configuredHostID: host.id
+        )
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: readRequest.id,
+                    result: try JSONValue.encoded(
+                        ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))
+                    )
+                )
+            )
+        )
+        _ = try await readTask.value
+
+        let turnsTask = Task {
+            try await session.threadTurnsList(
+                params: ThreadTurnsListParams(threadId: "thread-1", cursor: nil, limit: 250),
+                timeout: .seconds(1)
+            )
+        }
+        let turnsRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(turnsRequest.method, AppServerMethods.threadTurnsList)
+        assertTraceMetadata(
+            in: turnsRequest.params,
+            route: AppServerMethods.threadTurnsList,
+            configuredHostID: host.id
+        )
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: turnsRequest.id,
+                    result: try JSONValue.encoded(ThreadTurnsListResponseDTO(data: []))
+                )
+            )
+        )
+        _ = try await turnsTask.value
+
+        let resumeTask = Task {
+            try await session.threadResume(
+                params: ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
+                timeout: .seconds(1)
+            )
+        }
+        let resumeRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(resumeRequest.method, AppServerMethods.threadResume)
+        assertTraceMetadata(
+            in: resumeRequest.params,
+            route: AppServerMethods.threadResume,
+            configuredHostID: host.id
+        )
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: resumeRequest.id,
+                    result: try JSONValue.encoded(
+                        ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))
+                    )
+                )
+            )
+        )
+        _ = try await resumeTask.value
+
+        await session.disconnect()
+    }
+
     func testThreadArchiveAndUnarchiveSendTypedRequests() async throws {
         let transport = ScriptedAppServerTransport()
         let client = AppServerClient(transport: transport)
@@ -1362,6 +1573,64 @@ final class AppServerClientTests: XCTestCase {
 
         let unarchiveResponse = try await unarchiveTask.value
         XCTAssertEqual(unarchiveResponse.thread.id, "thread-1")
+    }
+
+    func testArchiveRouteFailureIsObservedFromRealTraffic() async throws {
+        let store = ClientObservabilityStore(persistenceDirectory: nil)
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+        let context = AppServerRequestObservabilityContext(
+            configuredHostID: "home.fairy-salmon.ts.net:4510",
+            route: AppServerMethods.threadArchive,
+            operationID: "op-archive",
+            traceID: "tr-archive",
+            store: store
+        )
+
+        let archiveTask = Task {
+            try await client.threadArchive(
+                params: ThreadArchiveParams(threadId: "thread-1"),
+                timeout: .seconds(1),
+                observabilityContext: context
+            )
+        }
+        let archiveRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(archiveRequest.method, AppServerMethods.threadArchive)
+        assertTraceMetadata(
+            in: archiveRequest.params,
+            route: AppServerMethods.threadArchive,
+            configuredHostID: "home.fairy-salmon.ts.net:4510"
+        )
+        await transport.enqueue(
+            .error(
+                JSONRPCErrorResponse(
+                    error: JSONRPCErrorObject(code: -32602, message: "archive failed"),
+                    id: archiveRequest.id
+                )
+            )
+        )
+
+        do {
+            _ = try await archiveTask.value
+            XCTFail("Expected archive failure")
+        } catch AppServerClientError.server(let error) {
+            XCTAssertEqual(error.message, "archive failed")
+        } catch {
+            XCTFail("Expected server error, got \(error)")
+        }
+
+        try await waitUntil {
+            let snapshots = await store.snapshots()
+            return snapshots.contains {
+                $0.route == AppServerMethods.threadArchive && $0.routeStatus == .failed
+            }
+        }
+        let snapshots = await store.snapshots()
+        let snapshot = try XCTUnwrap(snapshots.first { $0.route == AppServerMethods.threadArchive })
+        XCTAssertEqual(snapshot.operationID, "op-archive")
+        XCTAssertEqual(snapshot.statusReasons.first?.actual, ObservabilityFailureCategory.validation.rawValue)
+        XCTAssertEqual(ObservabilityContract.config(for: AppServerMethods.threadArchive).probeSafety, .passiveOnly)
     }
 
     func testServerRequestStreamReceivesRequestsWithoutFailingConnection() async throws {
@@ -2532,6 +2801,28 @@ private func initializeResult(relayInstanceID: String? = nil) -> JSONValue {
         result["relayInstanceID"] = .string(relayInstanceID)
     }
     return .object(result)
+}
+
+private func assertTraceMetadata(
+    in params: JSONValue?,
+    route: String,
+    configuredHostID: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) {
+    guard case .object(let object) = params else {
+        XCTFail("Expected object params", file: file, line: line)
+        return
+    }
+    guard case .object(let trace)? = object[ObservabilityContract.traceParamKey] else {
+        XCTFail("Expected trace metadata", file: file, line: line)
+        return
+    }
+    XCTAssertEqual(trace["schema"], .string("codexdock.trace.v1"), file: file, line: line)
+    XCTAssertEqual(trace["route"], .string(route), file: file, line: line)
+    XCTAssertEqual(trace["configuredHostID"], .string(configuredHostID), file: file, line: line)
+    XCTAssertNotNil(trace["operationID"], file: file, line: line)
+    XCTAssertNotNil(trace["traceID"], file: file, line: line)
 }
 
 private actor RealtimeEventProbe {

@@ -52,6 +52,7 @@ public struct HostConnectivitySnapshot: Equatable, Identifiable, Sendable {
     public let phase: HostConnectivityPhase
     public let lastCheckedAt: Date?
     public let lastSuccessAt: Date?
+    public let routeDiagnostics: [RouteDiagnosticSnapshot]
 
     public init(
         id: String,
@@ -59,7 +60,8 @@ public struct HostConnectivitySnapshot: Equatable, Identifiable, Sendable {
         endpoint: String,
         phase: HostConnectivityPhase,
         lastCheckedAt: Date? = nil,
-        lastSuccessAt: Date? = nil
+        lastSuccessAt: Date? = nil,
+        routeDiagnostics: [RouteDiagnosticSnapshot] = []
     ) {
         self.id = id
         self.displayName = displayName
@@ -67,6 +69,7 @@ public struct HostConnectivitySnapshot: Equatable, Identifiable, Sendable {
         self.phase = phase
         self.lastCheckedAt = lastCheckedAt
         self.lastSuccessAt = lastSuccessAt
+        self.routeDiagnostics = routeDiagnostics
     }
 }
 
@@ -134,6 +137,7 @@ public protocol AppConnectivityReporting: AnyObject {
     func reportArchiveState(_ state: ArchiveStoreState)
     func reportHostTest(host: DockHostConfiguration, status: HostConnectionTestStatus)
     func reportThreadDetail(host: DockHostConfiguration, liveState: ThreadDetailLiveState)
+    func reportRouteDiagnostic(host: DockHostConfiguration, diagnostic: RouteDiagnosticSnapshot)
     func reportLifecycle(_ snapshot: AppLifecycleSnapshot)
 }
 
@@ -160,6 +164,7 @@ public final class AppConnectivityStore: ObservableObject, AppConnectivityReport
         var displayName: String
         var endpoint: String
         var observations: [ObservationSource: Observation]
+        var routeDiagnostics: [String: RouteDiagnosticSnapshot]
         var lifecyclePhase: HostConnectivityPhase?
     }
 
@@ -216,6 +221,7 @@ public final class AppConnectivityStore: ObservableObject, AppConnectivityReport
                     displayName: hostViewModel.displayName,
                     endpoint: hostViewModel.endpoint,
                     observations: [:],
+                    routeDiagnostics: [:],
                     lifecyclePhase: nil
                 )
                 record.id = hostViewModel.id
@@ -334,6 +340,58 @@ public final class AppConnectivityStore: ObservableObject, AppConnectivityReport
         }
     }
 
+    public func reportRouteDiagnostic(host: DockHostConfiguration, diagnostic: RouteDiagnosticSnapshot) {
+        let hostViewModel = DockHostViewModel(host: host)
+        var record = records[host.id] ?? HostRecord(
+            id: hostViewModel.id,
+            displayName: hostViewModel.displayName,
+            endpoint: hostViewModel.endpoint,
+            observations: [:],
+            routeDiagnostics: [:],
+            lifecyclePhase: nil
+        )
+        record.routeDiagnostics[diagnostic.route] = diagnostic
+        records[host.id] = record
+        if !hostOrder.contains(host.id) {
+            hostOrder.append(host.id)
+        }
+        publish()
+    }
+
+    public func refreshRelayDiagnostics(
+        client: RelayDiagnosticsClient = RelayDiagnosticsClient(),
+        store: ClientObservabilityStore = .shared
+    ) async {
+        for host in hostConfigurations.values {
+            do {
+                let routes = try await client.fetchRoutes(for: host.endpoint)
+                await store.attachRelayDiagnostics(configuredHostID: host.id, relayRoutes: routes)
+                for route in routes {
+                    reportRouteDiagnostic(host: host, diagnostic: route)
+                }
+            } catch {
+                let diagnostic = RouteDiagnosticSnapshot(
+                    configuredHostID: host.id,
+                    route: "routesz",
+                    routeStatus: .failed,
+                    statusReasons: [
+                        RouteStatusReason(
+                            code: "failed:diagnostics-fetch",
+                            message: error.localizedDescription,
+                            actual: ObservabilityFailureCategory.downstream.rawValue,
+                            evidenceIDs: []
+                        )
+                    ],
+                    lastAttemptAt: now(),
+                    lastFailureAt: now(),
+                    appCritical: false,
+                    appImpact: "diagnostic-fetch"
+                )
+                reportRouteDiagnostic(host: host, diagnostic: diagnostic)
+            }
+        }
+    }
+
     public func reportLifecycle(_ snapshot: AppLifecycleSnapshot) {
         switch snapshot.phase {
         case .backgrounded:
@@ -405,6 +463,7 @@ public final class AppConnectivityStore: ObservableObject, AppConnectivityReport
             displayName: host.displayName,
             endpoint: host.endpoint,
             observations: [:],
+            routeDiagnostics: [:],
             lifecyclePhase: nil
         )
         if !hostOrder.contains(host.id) {
@@ -459,14 +518,25 @@ public final class AppConnectivityStore: ObservableObject, AppConnectivityReport
 
     private func snapshot(from record: HostRecord) -> HostConnectivitySnapshot {
         let observations = Array(record.observations.values)
+        let routeDiagnostics = record.routeDiagnostics.values.sorted { $0.route < $1.route }
+        let routePhase = phaseForRouteDiagnostics(routeDiagnostics)
+        let observationPhase = rollupObservations(observations)
         return HostConnectivitySnapshot(
             id: record.id,
             displayName: record.displayName,
             endpoint: record.endpoint,
-            phase: record.lifecyclePhase ?? rollupObservations(observations),
+            phase: record.lifecyclePhase ?? routePhase ?? observationPhase,
             lastCheckedAt: latestDate(observations.compactMap(\.lastCheckedAt)),
-            lastSuccessAt: latestDate(observations.compactMap(\.lastSuccessAt))
+            lastSuccessAt: latestDate(observations.compactMap(\.lastSuccessAt)),
+            routeDiagnostics: routeDiagnostics
         )
+    }
+
+    private func phaseForRouteDiagnostics(_ diagnostics: [RouteDiagnosticSnapshot]) -> HostConnectivityPhase? {
+        guard let failed = diagnostics.first(where: { $0.appCritical && $0.routeStatus == .failed }) else {
+            return nil
+        }
+        return .partial("\(failed.route) failed")
     }
 
     private func rollupObservations(_ observations: [Observation]) -> HostConnectivityPhase {

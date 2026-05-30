@@ -6,6 +6,8 @@ fallback_policy: forbidden
 owners: [Amir]
 reviewers: [Codex]
 doc_type: architectural_change
+superseded_by:
+  - docs/CODEX_DOCK_OBSERVABILITY_ARCHITECTURE_2026-05-30.md
 related:
   - https://developer.apple.com/documentation/os/logging
   - https://developer.apple.com/documentation/os/logger
@@ -16,6 +18,11 @@ related:
 ---
 
 # TL;DR
+
+Superseded scope note, 2026-05-30: this document remains the historical logging
+framework record. The current route-health, trace, bundle, and multi-host
+diagnostics source of truth is
+`docs/CODEX_DOCK_OBSERVABILITY_ARCHITECTURE_2026-05-30.md`.
 
 - Outcome: Codex Dock has a single, idiomatic logging and diagnostics pattern that lets Amir inspect simulator, physical iPhone, and Mac relay behavior without adding secrets to the app or changing product behavior.
 - Problem: The app currently reports user-visible state, but it does not leave a reliable event trail across WebSocket lifecycle, relay discovery, dock/archive loads, thread detail reconnects, voice capture, realtime transcription, local persistence, or relay failures.

@@ -31,12 +31,14 @@ public final class RelayRealtimeTranscriptionClient: RealtimeTranscriptionServic
     private let host: DockHostConfiguration
     private let completionTimeout: Duration
     private let maxChunkBytes: Int
+    private let observabilityStore: ClientObservabilityStore
     private let makeClient: @Sendable (DockRelayEndpoint) -> AppServerClient
 
     public init(
         host: DockHostConfiguration,
         completionTimeout: Duration = CodexDockConstants.Voice.transcriptionCompletionTimeout,
         maxChunkBytes: Int = CodexDockConstants.Voice.transcriptionMaxChunkBytes,
+        observabilityStore: ClientObservabilityStore = .shared,
         makeClient: @escaping @Sendable (DockRelayEndpoint) -> AppServerClient = {
             AppServerClient(webSocketURL: $0.webSocketURL, bearerToken: nil)
         }
@@ -44,6 +46,7 @@ public final class RelayRealtimeTranscriptionClient: RealtimeTranscriptionServic
         self.host = host
         self.completionTimeout = completionTimeout
         self.maxChunkBytes = maxChunkBytes
+        self.observabilityStore = observabilityStore
         self.makeClient = makeClient
     }
 
@@ -57,9 +60,15 @@ public final class RelayRealtimeTranscriptionClient: RealtimeTranscriptionServic
             let retained = try await AppServerHostConnector(makeClient: makeClient)
                 .retainConnectedClient(for: host) { connection in
                     let startStartedAt = Date()
+                    let context = AppServerRequestObservabilityContext(
+                        configuredHostID: hostID,
+                        route: AppServerMethods.audioTranscriptionStart,
+                        store: observabilityStore
+                    )
                     let response = try await connection.client.audioTranscriptionStart(
                         params: AudioTranscriptionStartParams(),
-                        timeout: CodexDockConstants.Voice.transcriptionCommandTimeout
+                        timeout: CodexDockConstants.Voice.transcriptionCommandTimeout,
+                        observabilityContext: context
                     )
                     DockLog.transcription.debug("relay transcription start command accepted host_id=\(hostID, privacy: .public) endpoint=\(DockLog.endpoint(connection.endpoint.webSocketURL), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startStartedAt), privacy: .public)")
                     return response
@@ -69,9 +78,11 @@ public final class RelayRealtimeTranscriptionClient: RealtimeTranscriptionServic
             DockLog.transcription.notice("relay transcription session started host_id=\(hostID, privacy: .public) endpoint=\(DockLog.endpoint(connection.endpoint.webSocketURL), privacy: .public) session_id=\(DockLog.publicID(response.sessionId), privacy: .public) model=\(DockLog.publicID(response.model), privacy: .public) language=\(DockLog.publicID(response.language), privacy: .public) delay=\(DockLog.publicID(response.delay), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
             return RelayRealtimeTranscriptionSession(
                 client: connection.client,
+                configuredHostID: hostID,
                 startResponse: response,
                 completionTimeout: completionTimeout,
-                maxChunkBytes: maxChunkBytes
+                maxChunkBytes: maxChunkBytes,
+                observabilityStore: observabilityStore
             )
         } catch {
             DockLog.transcription.error("relay transcription session start failed host_id=\(hostID, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
@@ -86,8 +97,10 @@ private final class RelayRealtimeTranscriptionSession: RealtimeTranscriptionSess
     let events: AsyncStream<RealtimeTranscriptionEvent>
 
     private let client: AppServerClient
+    private let configuredHostID: String
     private let completionTimeout: Duration
     private let maxChunkBytes: Int
+    private let observabilityStore: ClientObservabilityStore
     private let continuation: AsyncStream<RealtimeTranscriptionEvent>.Continuation
     private var notificationTask: Task<Void, Never>?
     private var completionTimeoutTask: Task<Void, Never>?
@@ -99,14 +112,18 @@ private final class RelayRealtimeTranscriptionSession: RealtimeTranscriptionSess
 
     init(
         client: AppServerClient,
+        configuredHostID: String,
         startResponse: AudioTranscriptionStartResponseDTO,
         completionTimeout: Duration,
-        maxChunkBytes: Int
+        maxChunkBytes: Int,
+        observabilityStore: ClientObservabilityStore
     ) {
         self.id = startResponse.sessionId
         self.client = client
+        self.configuredHostID = configuredHostID
         self.completionTimeout = completionTimeout
         self.maxChunkBytes = maxChunkBytes
+        self.observabilityStore = observabilityStore
         let stream = AsyncStream.makeStream(of: RealtimeTranscriptionEvent.self)
         self.events = stream.stream
         self.continuation = stream.continuation
@@ -150,7 +167,12 @@ private final class RelayRealtimeTranscriptionSession: RealtimeTranscriptionSess
                     sequence: sequence,
                     base64Audio: chunk.base64EncodedString()
                 ),
-                timeout: CodexDockConstants.Voice.transcriptionCommandTimeout
+                timeout: CodexDockConstants.Voice.transcriptionCommandTimeout,
+                observabilityContext: AppServerRequestObservabilityContext(
+                    configuredHostID: configuredHostID,
+                    route: AppServerMethods.audioTranscriptionAppend,
+                    store: observabilityStore
+                )
             )
         } catch {
             DockLog.transcription.error("relay transcription append failed session_id=\(DockLog.publicID(self.id), privacy: .public) sequence=\(sequence, privacy: .public) bytes=\(chunk.count, privacy: .public) last_sequence=\(self.lastSequence, privacy: .public) max_bytes=\(self.maxChunkBytes, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
@@ -178,7 +200,12 @@ private final class RelayRealtimeTranscriptionSession: RealtimeTranscriptionSess
         do {
             response = try await client.audioTranscriptionCommit(
                 params: AudioTranscriptionCommitParams(sessionId: id),
-                timeout: CodexDockConstants.Voice.transcriptionCommandTimeout
+                timeout: CodexDockConstants.Voice.transcriptionCommandTimeout,
+                observabilityContext: AppServerRequestObservabilityContext(
+                    configuredHostID: configuredHostID,
+                    route: AppServerMethods.audioTranscriptionCommit,
+                    store: observabilityStore
+                )
             )
         } catch {
             DockLog.transcription.error("relay transcription commit failed session_id=\(DockLog.publicID(self.id), privacy: .public) last_sequence=\(self.lastSequence, privacy: .public) appended_chunks=\(self.appendedChunks, privacy: .public) appended_bytes=\(self.appendedBytes, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
@@ -197,7 +224,12 @@ private final class RelayRealtimeTranscriptionSession: RealtimeTranscriptionSess
         DockLog.transcription.notice("relay transcription cancel requested session_id=\(DockLog.publicID(self.id), privacy: .public)")
         _ = try? await client.audioTranscriptionCancel(
             params: AudioTranscriptionCancelParams(sessionId: id),
-            timeout: CodexDockConstants.Voice.transcriptionCancelTimeout
+            timeout: CodexDockConstants.Voice.transcriptionCancelTimeout,
+            observabilityContext: AppServerRequestObservabilityContext(
+                configuredHostID: configuredHostID,
+                route: AppServerMethods.audioTranscriptionCancel,
+                store: observabilityStore
+            )
         )
         continuation.yield(.canceled(sessionID: id))
         continuation.yield(.closed(sessionID: id))
@@ -217,6 +249,12 @@ private final class RelayRealtimeTranscriptionSession: RealtimeTranscriptionSess
     private func handle(_ notification: JSONRPCNotification) async {
         guard !isClosed else {
             return
+        }
+        if notification.method.hasPrefix("audio/transcription/") {
+            await observabilityStore.recordPassive(
+                route: notification.method,
+                configuredHostID: configuredHostID
+            )
         }
 
         switch notification.method {

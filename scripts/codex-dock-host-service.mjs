@@ -824,9 +824,27 @@ async function checkRelayStatusz(name, url, runtime = {}) {
     const result = await (runtime.getJSON || getJSON)(url);
     const snapshotOK = result.body?.ok === true;
     const historyOK = result.body?.history?.lastHealth?.ok === true;
-    return redactValue({ name, url, ok: result.ok && snapshotOK && historyOK, statusCode: result.statusCode, snapshotOK, historyOK, body: result.body });
+    const appCriticalFailures = Array.isArray(result.body?.appCriticalFailures)
+      ? result.body.appCriticalFailures.map((route) => ({
+        route: route.route,
+        routeStatus: route.routeStatus,
+        statusReasons: route.statusReasons,
+      }))
+      : [];
+    const routesOK = appCriticalFailures.length === 0;
+    return redactValue({
+      name,
+      url,
+      ok: result.ok && snapshotOK && historyOK && routesOK,
+      statusCode: result.statusCode,
+      snapshotOK,
+      historyOK,
+      routesOK,
+      appCriticalFailures,
+      body: result.body,
+    });
   } catch (error) {
-    return redactValue({ name, url, ok: false, snapshotOK: false, historyOK: false, error });
+    return redactValue({ name, url, ok: false, snapshotOK: false, historyOK: false, routesOK: false, error });
   }
 }
 
@@ -895,6 +913,9 @@ async function doctorHostServices(config, runtime = {}) {
   for (const health of status.health) {
     if (!health.ok) {
       problems.push(`${health.name} is not healthy`);
+    }
+    for (const failure of health.appCriticalFailures || []) {
+      problems.push(`${health.name} app-critical route ${failure.route} is ${failure.routeStatus}`);
     }
   }
   return redactValue({

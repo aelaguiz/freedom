@@ -123,7 +123,12 @@ public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
                     sourceKinds: query.sourceKinds,
                     archived: query.archived
                 ),
-                timeout: CodexDockConstants.AppServer.defaultRequestTimeout
+                timeout: CodexDockConstants.AppServer.defaultRequestTimeout,
+                observabilityContext: AppServerRequestObservabilityContext(
+                    configuredHostID: hostID,
+                    route: AppServerMethods.threadList,
+                    store: .shared
+                )
             )
             let mapped = SessionSummaryMapper.map(response: response, hostID: hostID)
             summaries.append(contentsOf: mapped.summaries)
@@ -176,7 +181,12 @@ public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
         _ = try await withClient(for: host) { client in
             try await client.threadArchive(
                 params: ThreadArchiveParams(threadId: threadID),
-                timeout: CodexDockConstants.AppServer.defaultRequestTimeout
+                timeout: CodexDockConstants.AppServer.defaultRequestTimeout,
+                observabilityContext: AppServerRequestObservabilityContext(
+                    configuredHostID: host.id,
+                    route: AppServerMethods.threadArchive,
+                    store: .shared
+                )
             )
         }
         DockLog.dock.notice("dock archive finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")
@@ -187,7 +197,12 @@ public struct AppServerDockClient: DockSessionLoading, DockSessionArchiving {
         _ = try await withClient(for: host) { client in
             try await client.threadUnarchive(
                 params: ThreadUnarchiveParams(threadId: threadID),
-                timeout: CodexDockConstants.AppServer.defaultRequestTimeout
+                timeout: CodexDockConstants.AppServer.defaultRequestTimeout,
+                observabilityContext: AppServerRequestObservabilityContext(
+                    configuredHostID: host.id,
+                    route: AppServerMethods.threadUnarchive,
+                    store: .shared
+                )
             )
         }
         DockLog.archive.notice("archive restore finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")

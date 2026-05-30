@@ -1289,9 +1289,11 @@ final class ThreadDetailStoreTests: XCTestCase {
         )
         let voiceTransport = ScriptedAppServerTransport()
         let voiceClient = AppServerClient(transport: voiceTransport)
-        let realtime = RelayRealtimeTranscriptionClient(host: host) { _ in
-            voiceClient
-        }
+        let observabilityStore = ClientObservabilityStore(persistenceDirectory: nil)
+        let realtime = RelayRealtimeTranscriptionClient(
+            host: host,
+            observabilityStore: observabilityStore
+        ) { _ in voiceClient }
         let capture = FakeLiveVoiceCaptureController()
         let store = ThreadDetailStore(
             host: host,
@@ -1428,6 +1430,19 @@ final class ThreadDetailStoreTests: XCTestCase {
         XCTAssertEqual(store.composer.voice, ComposerVoiceState())
         let voiceMethods = await voiceTransport.sentMethodsSnapshot()
         XCTAssertFalse(voiceMethods.contains("audio/transcribe"))
+        try await waitForDetailStoreAsync {
+            let routes = await observabilityStore.snapshots().map(\.route)
+            return routes.contains(AppServerMethods.audioTranscriptionStart)
+                && routes.contains(AppServerMethods.audioTranscriptionAppend)
+                && routes.contains(AppServerMethods.audioTranscriptionCommit)
+                && routes.contains(AppServerMethods.audioTranscriptionCompleted)
+        }
+        let bundle = await observabilityStore.diagnosticBundle(hosts: [host.id])
+        XCTAssertTrue(bundle.omitted.contains("audio"))
+        XCTAssertTrue(bundle.omitted.contains("transcripts"))
+        let bundleText = String(data: try JSONEncoder().encode(bundle), encoding: .utf8) ?? ""
+        XCTAssertFalse(bundleText.contains(Data([9, 8, 7]).base64EncodedString()))
+        XCTAssertFalse(bundleText.contains("then summarize failures"))
         let startParams = await detailSession.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [])
     }

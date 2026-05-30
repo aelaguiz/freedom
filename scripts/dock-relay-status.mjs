@@ -210,7 +210,8 @@ function createRelayStatusTracker({ clock = () => new Date() } = {}) {
         return null;
       }
     })();
-    return sanitizeFields({
+    const observability = config.observability?.statusSnapshot?.() || null;
+    const snapshot = sanitizeFields({
       ok: true,
       service: "codex-dock-relay",
       version: config.version,
@@ -253,10 +254,14 @@ function createRelayStatusTracker({ clock = () => new Date() } = {}) {
       },
       reconnect,
     });
+    snapshot.routes = observability?.routes || [];
+    snapshot.appCriticalFailures = observability?.appCriticalFailures || [];
+    return snapshot;
   }
 
   function metricsSnapshot(config, runtime = {}) {
-    return sanitizeFields({
+    const observabilityMetrics = config.observability?.metricsSnapshot?.() || null;
+    const snapshot = sanitizeFields({
       ok: true,
       service: "codex-dock-relay",
       version: config.version,
@@ -276,12 +281,15 @@ function createRelayStatusTracker({ clock = () => new Date() } = {}) {
         upstreamActive: runtime.upstreamActive || 0,
         upstreamPools: Array.isArray(runtime.upstreamPools) ? runtime.upstreamPools : [],
       },
-      requests: requestMetrics(),
+      requests: observabilityMetrics?.requests || requestMetrics(),
       reconnect,
     });
+    snapshot.routeMetrics = observabilityMetrics?.routes || [];
+    return snapshot;
   }
 
   function debugSessionsSnapshot(config, runtime = {}) {
+    const traces = config.observability?.recentTraces?.({ limit: 10 }) || [];
     return sanitizeFields({
       ok: true,
       service: "codex-dock-relay",
@@ -304,6 +312,7 @@ function createRelayStatusTracker({ clock = () => new Date() } = {}) {
         lastClientFacingError,
       },
       reconnect,
+      recentOperationIDs: traces.map((trace) => trace.operationID).filter(Boolean),
     });
   }
 

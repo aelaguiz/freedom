@@ -100,29 +100,49 @@ private actor AppServerThreadDetailSession: ThreadDetailSession {
         params: ThreadReadParams,
         timeout: Duration
     ) async throws -> ThreadReadResponseDTO {
-        try await requireClient().threadRead(params: params, timeout: timeout)
+        try await requireClient().threadRead(
+            params: params,
+            timeout: timeout,
+            observabilityContext: context(for: AppServerMethods.threadRead)
+        )
     }
 
     func threadTurnsList(
         params: ThreadTurnsListParams,
         timeout: Duration
     ) async throws -> ThreadTurnsListResponseDTO {
-        try await requireClient().threadTurnsList(params: params, timeout: timeout)
+        try await requireClient().threadTurnsList(
+            params: params,
+            timeout: timeout,
+            observabilityContext: context(for: AppServerMethods.threadTurnsList)
+        )
     }
 
     func threadResume(
         params: ThreadResumeParams,
         timeout: Duration
     ) async throws -> ThreadResumeResponseDTO {
-        try await requireClient().threadResume(params: params, timeout: timeout)
+        try await requireClient().threadResume(
+            params: params,
+            timeout: timeout,
+            observabilityContext: context(for: AppServerMethods.threadResume)
+        )
     }
 
     func turnStart(params: TurnStartParams, timeout: Duration) async throws -> TurnStartResponseDTO {
-        try await requireClient().turnStart(params: params, timeout: timeout)
+        try await requireClient().turnStart(
+            params: params,
+            timeout: timeout,
+            observabilityContext: context(for: AppServerMethods.turnStart)
+        )
     }
 
     func turnSteer(params: TurnSteerParams, timeout: Duration) async throws -> TurnSteerResponseDTO {
-        try await requireClient().turnSteer(params: params, timeout: timeout)
+        try await requireClient().turnSteer(
+            params: params,
+            timeout: timeout,
+            observabilityContext: context(for: AppServerMethods.turnSteer)
+        )
     }
 
     func sendResponse(id: JSONRPCRequestID, result: JSONValue) async throws {
@@ -173,5 +193,13 @@ private actor AppServerThreadDetailSession: ThreadDetailSession {
             throw AppServerClientError.notConnected(.idle)
         }
         return client
+    }
+
+    private func context(for route: String) -> AppServerRequestObservabilityContext {
+        AppServerRequestObservabilityContext(
+            configuredHostID: host.id,
+            route: route,
+            store: .shared
+        )
     }
 }
