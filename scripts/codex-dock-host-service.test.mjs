@@ -797,6 +797,35 @@ test("logs and doctor redact service-manager and service output", async () => {
   assert.match(JSON.parse(doctorText).problems.join("\n"), /service is not active/);
 });
 
+test("macOS logs read bounded tail bytes from large service logs", async () => {
+  const cwd = tempDir();
+  const logDir = path.join(cwd, ".codex-dock-test", "logs");
+  fs.mkdirSync(logDir, { recursive: true });
+  fs.writeFileSync(path.join(logDir, "app-server.log"), `old-line\n${"x".repeat(1_100_000)}\nrecent-line\n`);
+  fs.writeFileSync(path.join(logDir, "dock-relay.err.log"), `old-relay-line\n${"y".repeat(1_100_000)}\nrecent-relay-line\n`);
+  const output = captureIO();
+
+  await main([
+    "logs",
+    "--platform",
+    "macos",
+    "--runtime-dir",
+    ".codex-dock-test",
+    "--host-id",
+    "home",
+    "--host-name",
+    "Home",
+    "--public-host",
+    "home.local",
+  ], output.io, { cwd, platform: "macos" });
+
+  const text = output.stdout();
+  assert.equal(text.includes("recent-line"), true);
+  assert.equal(text.includes("recent-relay-line"), true);
+  assert.equal(text.includes("old-line"), false);
+  assert.equal(text.includes("old-relay-line"), false);
+});
+
 test("linux logs redact JSON-RPC payloads cookies and provider secrets", async () => {
   const runner = fakeRunner(() => ({ exitCode: 0, stdout: secretLogFixture, stderr: secretLogFixture }));
   const output = captureIO();

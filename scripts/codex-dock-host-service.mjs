@@ -7,7 +7,7 @@ import {
   ensureDirectory,
   ensureTokenFile,
   getJSON,
-  readTextIfExists,
+  readTailTextIfExists,
   redactValue,
   runCommand,
   tailText,
@@ -896,8 +896,8 @@ async function logsHostServices(config, runtime = {}) {
     serviceManager: config.serviceManager,
     logs: serviceEntries(config).map((service) => ({
       role: service.role,
-      stdout: redactValue(tailText(readTextIfExists(service.stdoutLog), 200), "log"),
-      stderr: redactValue(tailText(readTextIfExists(service.stderrLog), 200), "log"),
+      stdout: redactValue(tailText(readTailTextIfExists(service.stdoutLog), 200), "log"),
+      stderr: redactValue(tailText(readTailTextIfExists(service.stderrLog), 200), "log"),
     })),
   };
 }

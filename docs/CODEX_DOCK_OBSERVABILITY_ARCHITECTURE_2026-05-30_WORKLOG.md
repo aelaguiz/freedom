@@ -115,3 +115,17 @@
     It reports both `amir-m5.fairy-salmon.ts.net:4510` and
     `home.fairy-salmon.ts.net:4510` ready, status OK, self-test OK, no
     app-critical failures, and fresh `dock/subscribe` rows.
+
+## 2026-05-30 Host-Service Log Tail Fix
+
+- While recovering local services, `rtk make host-service-logs` failed because
+  `.codex-dock/logs/dock-relay.err.log` was `8.6G` and the host-service logs
+  command tried to read the whole file into memory.
+- Fixed host-service logs to read bounded tail bytes from macOS service logs
+  before redaction and line tailing.
+- Verification:
+  - `rtk npm run test:relay`: passed, 115 tests.
+  - `rtk npm run test:host-service`: passed, 34 tests.
+  - `rtk node -- scripts/codex-dock-host-service.mjs logs | jq ...`: passed;
+    returned bounded redacted log tails with `dock-relay` stderr at `40593`
+    characters instead of crashing.

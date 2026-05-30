@@ -82,6 +82,27 @@ function readTextIfExists(filePath) {
   }
 }
 
+function readTailTextIfExists(filePath, maxBytes = 1_048_576) {
+  try {
+    const stats = fs.statSync(filePath);
+    const bytesToRead = Math.min(stats.size, maxBytes);
+    const start = Math.max(0, stats.size - bytesToRead);
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const buffer = Buffer.alloc(bytesToRead);
+      fs.readSync(fd, buffer, 0, bytesToRead, start);
+      return buffer.toString("utf8");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  }
+}
+
 function tailText(text, maxLines = 200) {
   const lines = String(text).split(/\r?\n/);
   return lines.slice(Math.max(0, lines.length - maxLines)).join("\n");
@@ -220,6 +241,7 @@ export {
   ensureDirectory,
   ensureTokenFile,
   getJSON,
+  readTailTextIfExists,
   readTextIfExists,
   redactValue,
   runCommand,
