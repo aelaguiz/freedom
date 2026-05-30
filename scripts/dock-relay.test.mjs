@@ -41,7 +41,10 @@ import {
   sleepMs,
   spawnLoopbackAppServerMarker,
 } from "./dock-relay-test-helpers.mjs";
-import { DOCK_SESSION_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
+import {
+  DOCK_SESSION_SCHEMA_VERSION,
+  DOCK_SESSION_TEXT_MAX_BYTES,
+} from "./dock-relay-constants.mjs";
 
 test("relay logger redacts credentials and payload fields", () => {
   const lines = [];
@@ -223,6 +226,42 @@ test("dock session table emits deltas and keeps last-good rows on refresh failur
   assert.deepEqual(table.snapshot().sessions.map((row) => row.threadID), ["thread-1"]);
 });
 
+test("dock session rows cap large text fields before persistence", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-session-table-"));
+  const persistedPath = path.join(tempDir, "session-table.json");
+  const host = { id: "home", displayName: "Home" };
+  const largeText = "A".repeat(DOCK_SESSION_TEXT_MAX_BYTES * 4);
+  const table = new DockSessionTable({ hostId: host.id, hostName: host.displayName });
+
+  try {
+    table.applySuccessfulRefresh({
+      host,
+      sessions: [{
+        id: "home::thread-1",
+        hostID: "home",
+        threadID: "thread-1",
+        backendSessionID: "session-1",
+        title: largeText,
+        status: "idle",
+        lane: "human",
+        summary: largeText,
+        messageSummary: largeText,
+        source: { kind: "human" },
+      }],
+      asOf: "2026-05-30T10:00:00.000Z",
+    });
+    fs.writeFileSync(persistedPath, `${JSON.stringify(table.snapshot(), null, 2)}\n`, "utf8");
+    const persisted = JSON.parse(fs.readFileSync(persistedPath, "utf8"));
+    const row = persisted.sessions[0];
+
+    assert.ok(Buffer.byteLength(row.summary, "utf8") <= DOCK_SESSION_TEXT_MAX_BYTES);
+    assert.ok(Buffer.byteLength(row.messageSummary, "utf8") <= DOCK_SESSION_TEXT_MAX_BYTES);
+    assert.match(row.summary, / \[truncated\]$/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("dock session aggregator uses provider boundary and loads persisted rows stale-on-boot", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-session-table-"));
   const persistedPath = path.join(tempDir, "session-table.json");
@@ -282,6 +321,57 @@ test("dock session aggregator uses provider boundary and loads persisted rows st
     assert.deepEqual(snapshot.sessions.map((row) => row.threadID), ["thread-1"]);
     restarted.stop();
   } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dock session snapshot returns last-good rows when refresh is slow", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-session-table-"));
+  const persistedPath = path.join(tempDir, "session-table.json");
+  const host = { id: "home", displayName: "Home", endpoint: "home.local:4510" };
+  const persisted = {
+    schemaVersion: DOCK_SESSION_SCHEMA_VERSION,
+    epoch: "epoch-1",
+    seq: 1,
+    asOf: "2026-05-30T10:00:00.000Z",
+    freshness: { status: "fresh", lastAttemptAt: null, lastSyncAt: "2026-05-30T10:00:00.000Z", lastError: null },
+    hosts: [host],
+    sessions: [{
+      id: "home::thread-1",
+      hostID: "home",
+      threadID: "thread-1",
+      backendSessionID: "session-1",
+      title: "Cached",
+      status: "idle",
+      lane: "human",
+      summary: "Cached row",
+      source: { kind: "human" },
+    }],
+  };
+  fs.writeFileSync(persistedPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
+
+  const aggregator = new DockSessionAggregator(
+    { hostId: host.id, hostName: host.displayName, dockSessionInitialRefreshTimeoutMs: 20 },
+    {
+      provider: {
+        async listSessions() {
+          await new Promise(() => {});
+        },
+      },
+      persistencePath: persistedPath,
+      refreshIntervalMs: 60_000,
+    },
+  );
+
+  try {
+    const snapshot = await Promise.race([
+      aggregator.snapshot(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("snapshot hung")), 500)),
+    ]);
+    assert.equal(snapshot.freshness.status, "stale");
+    assert.deepEqual(snapshot.sessions.map((row) => row.threadID), ["thread-1"]);
+  } finally {
+    aggregator.stop();
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
