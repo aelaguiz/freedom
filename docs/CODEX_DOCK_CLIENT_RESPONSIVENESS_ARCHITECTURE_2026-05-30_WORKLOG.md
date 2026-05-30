@@ -326,4 +326,6 @@ Status: COMPOSER AUDIT PASSED WITH NOTES - THERMONUCLEAR BLOCKER FIXED
   - `rtk swift test` passed, 306 tests, 5 skipped, 0 failures.
   - `rtk make app-test SIM='iPhone 17'` passed with log
     `.codex-dock/logs/app-test-20260530203359.log`.
-- Next step: commit and push.
+- Commit and push completed:
+  - `7e67177 Implement client responsiveness hard cut` was pushed to
+    `origin/codex-dock-agents-tab-live-counts`.

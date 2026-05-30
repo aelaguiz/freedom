@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - Client Responsiveness Hard Cut - Architecture Plan"
 date: 2026-05-30
-status: active
+status: complete
 fallback_policy: forbidden
 owners: [Amir, Codex]
 reviewers: ["Composer 2.5 Fast"]
@@ -54,16 +54,15 @@ search, filtering, grouping, and diff construction. `@MainActor` view stores
 hold already-prepared render snapshots and enqueue intents. SwiftUI views render
 stable bounded arrays and never derive large projections in `body`.
 
-Plan: first lock the target architecture with Composer 2.5 Fast, then use the
-ArcStep auto-plan receipts to turn this document into an implementation-ready
-hard-cut plan, then get Composer 2.5 Fast to review the finished plan. No
-production code is implemented by this document.
+Plan: the architecture was locked with Composer 2.5 Fast, implemented through
+ArcStep auto-implement, reopened after Composer 2.5 Fast audit, fixed through
+thermonuclear review, verified with Swift and simulator app tests, then
+committed and pushed.
 
 Non-negotiables: no runtime fallback to the current laggy store model, no
 parallel old/new UI state, no bulk work on `MainActor`, no `.project()` calls
 from SwiftUI `body`, no unbounded event arrays as render input, no data-layer
-operation that can block taps or typing, and no implementation until Amir asks
-for implementation in a later turn.
+operation that can block taps or typing, and no secret-bearing telemetry.
 
 <!-- arch_skill:block:planning_passes:start -->
 <!--
@@ -1195,7 +1194,7 @@ Verification:
 
 ## 7.3 Phase 1 - Dock Home hard cut
 
-Status: IN PROGRESS
+Status: COMPLETE AFTER COMPOSER REOPEN
 
 Completed work:
 
@@ -1208,11 +1207,19 @@ Completed work:
 - Added `DockDataEngine` as a non-main actor that owns `DockSessionTable`
   mutation, local metadata input, and render snapshot production.
 - Added focused tests for `DockRenderProjector` and `DockDataEngine`.
+- Completed the hard cut through `DockScreenStore`, runtime construction,
+  debounced search projection, render signposts, row-budget logging, and
+  SwiftUI rendering from prepared render snapshots.
 
-Verification so far:
+Verification:
 
 - `rtk swift test --filter DockRenderProjectorTests` passed, 2 tests.
 - `rtk swift test --filter DockDataEngineTests` passed, 3 tests.
+- `rtk swift test --filter DockScreenStoreTests` passed, 4 tests.
+- `rtk swift test --filter ClientRuntimeTests` passed, 7 tests after the
+  final connectivity sink fix.
+- `rtk swift test --filter DockStoreTests` passed, 48 tests.
+- `rtk swift test --filter DockStoreStreamTests` passed, 10 tests.
 
 Goal: move Dock Home stream ingestion, indexed state, projection, grouping,
 search, filtering, pinned split, facets, host status, and main publication out
@@ -1810,10 +1817,11 @@ audio, prompt text, transcript text, or full JSON-RPC payloads.
 
 - Decision-complete: yes
 - Unresolved decisions: none
-- Decision: proceed to implement? yes
-- Implementation authorization note: this means the plan is ready for a future
-  implementation turn. It does not authorize code implementation in the current
-  documentation-only turn.
+- Decision: proceed to implement? completed
+- Implementation status: implementation, Composer 2.5 Fast re-audit,
+  thermonuclear review fixes, verification, commit, and push are complete.
+  Detailed phase evidence lives in
+  `docs/CODEX_DOCK_CLIENT_RESPONSIVENESS_ARCHITECTURE_2026-05-30_WORKLOG.md`.
 
 ## 10.2 Consistency pass
 
@@ -1828,8 +1836,9 @@ audio, prompt text, transcript text, or full JSON-RPC payloads.
   Connectivity, local metadata, and commands.
 - The old bad paths are identified for deletion or responsibility removal.
 - Verification commands follow this repo's `rtk`/Makefile-owned workflow.
-- No production code implementation is included in this planning document
-  update.
+- Production implementation is complete in the committed tree; this plan now
+  records current architecture truth and points detailed implementation evidence
+  to the worklog.
 
 ## 10.3 Decisions
 
@@ -1870,5 +1879,19 @@ audio, prompt text, transcript text, or full JSON-RPC payloads.
   `rtk swift test --filter ClientRuntimeTests`,
   `rtk swift test --filter DockStoreTests`, and
   `rtk swift test --filter ThreadDetailStoreTests`.
+- 2026-05-30: ArcStep auto-implement completed Phases 0-7. Composer 2.5 Fast
+  re-audit returned `VERDICT: pass-with-notes`, `BLOCKING: none`,
+  `CONFIDENCE: high` in
+  `/tmp/fresh-consult/codex-dock-responsiveness-audit-20260530TCR745t`.
+- 2026-05-30: Thermonuclear review blocker fixed by moving public Dock model,
+  projection, and snapshot types into `CodexDock/Dock/DockModels.swift`; final
+  line counts were `DockStore.swift` 606, `DockModels.swift` 451, and
+  `DockView.swift` 993.
+- 2026-05-30: Final verification passed with `rtk swift test` at 306 tests,
+  5 skipped, 0 failures, and `rtk make app-test SIM='iPhone 17'` with log
+  `.codex-dock/logs/app-test-20260530203359.log`.
+- 2026-05-30: Implementation was committed and pushed to
+  `origin/codex-dock-agents-tab-live-counts` as
+  `7e67177 Implement client responsiveness hard cut`.
 
 <!-- arch_skill:block:consistency_pass:end -->
