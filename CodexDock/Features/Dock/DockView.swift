@@ -10,6 +10,7 @@ public struct CodexDockRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var dockStore: DockStore
     @StateObject private var archiveStore: ArchiveStore
+    @StateObject private var archiveCleanupStore: ArchiveCleanupStore
     @StateObject private var hostsStore: HostSettingsStore
     @StateObject private var connectivityStore: AppConnectivityStore
     @StateObject private var connectivityScreenStore: ConnectivityScreenStore
@@ -18,7 +19,7 @@ public struct CodexDockRootView: View {
     private let usesRuntimeConnectivitySink: Bool
     private let threadDetailFactory: any ThreadDetailSessionMaking
     @State private var foregroundResumeTask: Task<Void, Never>?
-    @State private var selectedRootTab: AutomationID.RootTab = .dock
+    @State private var activeTaskSheet: DockTaskSheet?
 
     public init(store: DockStore) {
         self.threadDetailFactory = AppServerThreadDetailSessionFactory()
@@ -29,6 +30,7 @@ public struct CodexDockRootView: View {
             self.runtime = runtime
             self.usesRuntimeConnectivitySink = false
             _archiveStore = StateObject(wrappedValue: ArchiveStore(registry: registry))
+            _archiveCleanupStore = StateObject(wrappedValue: ArchiveCleanupStore(registry: registry))
             _hostsStore = StateObject(wrappedValue: HostSettingsStore(registry: registry))
             _connectivityStore = StateObject(wrappedValue: AppConnectivityStore(registry: registry))
             _connectivityScreenStore = StateObject(
@@ -39,6 +41,7 @@ public struct CodexDockRootView: View {
             self.usesRuntimeConnectivitySink = false
             let error = DockHostConfigurationError.missingEndpoint
             _archiveStore = StateObject(wrappedValue: ArchiveStore(configurationError: error))
+            _archiveCleanupStore = StateObject(wrappedValue: ArchiveCleanupStore(configurationError: error))
             _hostsStore = StateObject(wrappedValue: HostSettingsStore(configurationError: error))
             _connectivityStore = StateObject(wrappedValue: AppConnectivityStore(configurationError: error))
             _connectivityScreenStore = StateObject(
@@ -97,6 +100,15 @@ public struct CodexDockRootView: View {
                 metadataStore: metadataStore
             )
         )
+        _archiveCleanupStore = StateObject(
+            wrappedValue: ArchiveCleanupStore(
+                registry: registry,
+                loader: client,
+                archiver: client,
+                metadataStore: metadataStore,
+                now: runtime.currentDate
+            )
+        )
         _hostsStore = StateObject(
             wrappedValue: runtime.makeHostSettingsStore(
                 tester: client
@@ -113,6 +125,7 @@ public struct CodexDockRootView: View {
         self.threadDetailFactory = AppServerThreadDetailSessionFactory()
         _dockStore = StateObject(wrappedValue: DockStore(configurationError: error))
         _archiveStore = StateObject(wrappedValue: ArchiveStore(configurationError: error))
+        _archiveCleanupStore = StateObject(wrappedValue: ArchiveCleanupStore(configurationError: error))
         _hostsStore = StateObject(wrappedValue: HostSettingsStore(configurationError: error))
         _connectivityStore = StateObject(wrappedValue: AppConnectivityStore(configurationError: error))
         _connectivityScreenStore = StateObject(
@@ -122,50 +135,37 @@ public struct CodexDockRootView: View {
     }
 
     public var body: some View {
-        TabView(selection: $selectedRootTab) {
-            DockView(
-                store: dockStore,
-                lifecycleCoordinator: lifecycleCoordinator,
-                connectivityReporter: connectivityStore,
-                connectivityStore: connectivityStore,
-                runtime: runtime,
-                threadDetailFactory: threadDetailFactory,
-                onOpenRelaySettings: {
-                    selectedRootTab = .relay
-                },
-                onArchiveSucceeded: {
-                    await archiveStore.refresh()
-                }
-            )
-                .tabItem {
-                    Label("Dock", systemImage: "rectangle.stack")
-                        .codexAutomationID(AutomationID.Root.tab(.dock))
-                }
-                .tag(AutomationID.RootTab.dock)
-
-            ArchiveView(
-                store: archiveStore,
-                onRestoreSucceeded: {
-                    await dockStore.refresh()
-                }
-            )
-                .tabItem {
-                    Label("Archive", systemImage: "archivebox")
-                        .codexAutomationID(AutomationID.Root.tab(.archive))
-                }
-                .tag(AutomationID.RootTab.archive)
-
-            HostsView(store: hostsStore)
-                .tabItem {
-                    Label("Relay", systemImage: "desktopcomputer")
-                        .codexAutomationID(AutomationID.Root.tab(.relay))
-                }
-                .tag(AutomationID.RootTab.relay)
-        }
+        DockView(
+            store: dockStore,
+            lifecycleCoordinator: lifecycleCoordinator,
+            connectivityReporter: connectivityStore,
+            connectivityStore: connectivityStore,
+            runtime: runtime,
+            threadDetailFactory: threadDetailFactory,
+            onOpenArchiveCleanup: {
+                activeTaskSheet = .archiveCleanup
+            },
+            onOpenArchivedThreads: {
+                activeTaskSheet = .archivedThreads
+            },
+            onOpenSystemHealth: {
+                activeTaskSheet = .systemHealth
+            },
+            onOpenRelaySettings: {
+                activeTaskSheet = .relaySettings
+            },
+            onArchiveSucceeded: {
+                await archiveStore.refresh()
+            }
+        )
         .tint(.blue)
         .accessibilityElement(children: .contain)
-        .codexAutomationID(AutomationID.Root.tabs)
-        .accessibilityValue(selectedRootTab.rawValue)
+        .codexAutomationID(AutomationID.App.root)
+        .accessibilityValue(activeTaskSheet?.rawValue ?? "dock")
+        .sheet(item: $activeTaskSheet) { sheet in
+            taskSheet(sheet)
+                .dockTaskSheetPresentation()
+        }
         .task {
             if usesRuntimeConnectivitySink {
                 connectivityScreenStore.start(mirroring: connectivityStore)
@@ -185,7 +185,66 @@ public struct CodexDockRootView: View {
                 await connectivityScreenStore.configure(registry)
                 await dockStore.updateRegistry(registry)
                 await archiveStore.updateRegistry(registry)
+                await archiveCleanupStore.updateRegistry(registry)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func taskSheet(_ sheet: DockTaskSheet) -> some View {
+        switch sheet {
+        case .archiveCleanup:
+            ArchiveCleanupView(
+                store: archiveCleanupStore,
+                onOpenArchivedThreads: {
+                    activeTaskSheet = .archivedThreads
+                },
+                onArchiveSucceeded: {
+                    await dockStore.refresh()
+                    await archiveStore.refresh()
+                },
+                onClose: {
+                    activeTaskSheet = nil
+                }
+            )
+        case .archivedThreads:
+            ArchiveView(
+                store: archiveStore,
+                title: "Archived Threads",
+                onClose: {
+                    activeTaskSheet = nil
+                },
+                onRestoreSucceeded: {
+                    await dockStore.refresh()
+                }
+            )
+        case .systemHealth:
+            SystemHealthView(
+                store: connectivityStore,
+                onOpenRelaySettings: {
+                    activeTaskSheet = .relaySettings
+                },
+                relaySettingsDestination: {
+                    HostsView(
+                        store: hostsStore,
+                        title: "Relay Settings",
+                        hidesEditorUntilRequested: true,
+                        usesNavigationStack: false
+                    )
+                },
+                onClose: {
+                    activeTaskSheet = nil
+                }
+            )
+        case .relaySettings:
+            HostsView(
+                store: hostsStore,
+                title: "Relay Settings",
+                hidesEditorUntilRequested: true,
+                onClose: {
+                    activeTaskSheet = nil
+                }
+            )
         }
     }
 
@@ -257,6 +316,9 @@ public struct DockView: View {
     private let connectivityStore: AppConnectivityStore?
     private let runtime: ClientRuntime?
     private let threadDetailFactory: any ThreadDetailSessionMaking
+    private let onOpenArchiveCleanup: @MainActor () -> Void
+    private let onOpenArchivedThreads: @MainActor () -> Void
+    private let onOpenSystemHealth: @MainActor () -> Void
     private let onOpenRelaySettings: @MainActor () -> Void
     private let onArchiveSucceeded: @MainActor () async -> Void
     @State private var isFilterSurfacePresented = false
@@ -273,6 +335,9 @@ public struct DockView: View {
         connectivityStore: AppConnectivityStore? = nil,
         runtime: ClientRuntime? = nil,
         threadDetailFactory: any ThreadDetailSessionMaking = AppServerThreadDetailSessionFactory(),
+        onOpenArchiveCleanup: @escaping @MainActor () -> Void = {},
+        onOpenArchivedThreads: @escaping @MainActor () -> Void = {},
+        onOpenSystemHealth: @escaping @MainActor () -> Void = {},
         onOpenRelaySettings: @escaping @MainActor () -> Void = {},
         onArchiveSucceeded: @escaping @MainActor () async -> Void = {}
     ) {
@@ -283,6 +348,9 @@ public struct DockView: View {
         self.connectivityStore = connectivityStore
         self.runtime = runtime
         self.threadDetailFactory = threadDetailFactory
+        self.onOpenArchiveCleanup = onOpenArchiveCleanup
+        self.onOpenArchivedThreads = onOpenArchivedThreads
+        self.onOpenSystemHealth = onOpenSystemHealth
         self.onOpenRelaySettings = onOpenRelaySettings
         self.onArchiveSucceeded = onArchiveSucceeded
     }
@@ -297,7 +365,7 @@ public struct DockView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
-                .padding(.bottom, 24)
+                .padding(.bottom, 104)
             }
             .background(dockBackgroundColor)
             .dockNavigationChrome()
@@ -341,9 +409,19 @@ public struct DockView: View {
                 Spacer(minLength: 12)
 
                 if let connectivityStore {
-                    GlobalConnectivityIndicatorView(store: connectivityStore)
+                    GlobalConnectivityIndicatorView(
+                        store: connectivityStore,
+                        onOpenSystemHealth: onOpenSystemHealth
+                    )
                         .fixedSize(horizontal: true, vertical: false)
                 }
+
+                DockTaskMenuView(
+                    onOpenArchiveCleanup: onOpenArchiveCleanup,
+                    onOpenArchivedThreads: onOpenArchivedThreads,
+                    onOpenSystemHealth: onOpenSystemHealth,
+                    onOpenRelaySettings: onOpenRelaySettings
+                )
             }
         }
     }
@@ -898,114 +976,10 @@ public struct DockView: View {
 
     @ViewBuilder
     private func rowContextMenu(_ row: DockRowViewModel) -> some View {
-        rowActions(row)
-    }
-
-    @ViewBuilder
-    private func rowActions(_ row: DockRowViewModel) -> some View {
-        Button(role: row.isPinned ? .destructive : nil) {
-            Task {
-                await store.setPinned(!row.isPinned, for: row)
-            }
-        } label: {
-            Label(row.isPinned ? "Unpin" : "Pin", systemImage: row.isPinned ? "pin.slash" : "pin.fill")
-        }
-        .codexAutomationID(
-            AutomationID.Dock.rowAction(
-                hostID: row.id.hostID,
-                threadID: row.id.threadID,
-                action: row.isPinned ? .unpin : .pin
-            )
-        )
-
-        Button {
-            Task {
-                await store.setLabel("Watch", for: row)
-            }
-        } label: {
-            Label("Mark Watch", systemImage: "tag")
-        }
-        .codexAutomationID(
-            AutomationID.Dock.rowAction(
-                hostID: row.id.hostID,
-                threadID: row.id.threadID,
-                action: .markWatch
-            )
-        )
-
-        Button {
-            Task {
-                await store.setLabel(nil, for: row)
-            }
-        } label: {
-            Label("Clear Label", systemImage: "tag.slash")
-        }
-        .codexAutomationID(
-            AutomationID.Dock.rowAction(
-                hostID: row.id.hostID,
-                threadID: row.id.threadID,
-                action: .clearLabel
-            )
-        )
-
-        Button(role: .destructive) {
-            Task {
-                if await store.archive(row) {
-                    await onArchiveSucceeded()
-                }
-            }
-        } label: {
-            Label("Archive", systemImage: "archivebox")
-        }
-        .codexAutomationID(
-            AutomationID.Dock.rowAction(
-                hostID: row.id.hostID,
-                threadID: row.id.threadID,
-                action: .archive
-            )
-        )
-
-        Menu {
-            ForEach(DockRowRail.allCases, id: \.self) { rail in
-                Button {
-                    Task {
-                        await store.setRail(rail, for: row)
-                    }
-                } label: {
-                    Label(rail.label, systemImage: rail.systemImage)
-                }
-                .codexAutomationID(
-                    AutomationID.Dock.rowColorAction(
-                        hostID: row.id.hostID,
-                        threadID: row.id.threadID,
-                        rail: rail.rawValue
-                    )
-                )
-            }
-
-            Button {
-                Task {
-                    await store.setRail(nil, for: row)
-                }
-            } label: {
-                Label("Clear Color", systemImage: "circle.slash")
-            }
-            .codexAutomationID(
-                AutomationID.Dock.rowAction(
-                    hostID: row.id.hostID,
-                    threadID: row.id.threadID,
-                    action: .clearColor
-                )
-            )
-        } label: {
-            Label("Color", systemImage: "paintpalette")
-        }
-        .codexAutomationID(
-            AutomationID.Dock.rowAction(
-                hostID: row.id.hostID,
-                threadID: row.id.threadID,
-                action: .color
-            )
+        DockRowContextMenu(
+            row: row,
+            store: store,
+            onArchiveSucceeded: onArchiveSucceeded
         )
     }
 

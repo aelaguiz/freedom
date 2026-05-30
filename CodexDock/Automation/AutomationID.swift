@@ -43,12 +43,6 @@ public extension AutomationID {
         case unsupported
     }
 
-    enum RootTab: String, Sendable {
-        case dock
-        case archive
-        case relay
-    }
-
     enum DockRowAction: String, Sendable {
         case pin
         case unpin
@@ -78,16 +72,93 @@ public extension AutomationID {
         }
     }
 
-    enum Root {
-        public static let tabs = AutomationID("codexdock.root.tabs")
+    enum Connectivity {
+        public static let globalIndicator = AutomationID("codexdock.connectivity.global")
+    }
 
-        public static func tab(_ tab: RootTab) -> AutomationID {
-            AutomationID("codexdock.root.tab.\(tab.rawValue)")
+    enum TaskSheet {
+        public static let moreButton = AutomationID("codexdock.tasks.more")
+
+        public static func menuItem(_ sheet: DockTaskSheet) -> AutomationID {
+            AutomationID("codexdock.tasks.menu.\(sheet.rawValue)")
+        }
+
+        public static func sheet(_ sheet: DockTaskSheet) -> AutomationID {
+            AutomationID("codexdock.tasks.sheet.\(sheet.rawValue)")
         }
     }
 
-    enum Connectivity {
-        public static let globalIndicator = AutomationID("codexdock.connectivity.global")
+    enum SystemHealth {
+        public static let root = AutomationID("codexdock.system-health.root")
+        public static let closeButton = AutomationID("codexdock.system-health.close")
+        public static let runCheckButton = AutomationID("codexdock.system-health.run-check")
+        public static let summary = AutomationID("codexdock.system-health.summary")
+        public static let relaySettingsButton = AutomationID("codexdock.system-health.relay-settings")
+        public static let copyDoctorButton = AutomationID("codexdock.system-health.copy-doctor")
+
+        public static func state(_ kind: StateKind) -> AutomationID {
+            AutomationID("codexdock.system-health.state.\(kind.rawValue)")
+        }
+
+        public static func category(_ categoryID: String) -> AutomationID {
+            AutomationID("codexdock.system-health.category.\(safeSegment(categoryID))")
+        }
+
+        public static func hostCard(hostID: String) -> AutomationID {
+            AutomationID("codexdock.system-health.host.\(safeSegment(hostID))")
+        }
+
+        public static func hostDetail(hostID: String) -> AutomationID {
+            AutomationID("codexdock.system-health.host.\(safeSegment(hostID)).detail")
+        }
+    }
+
+    enum ArchiveCleanup {
+        public static let root = AutomationID("codexdock.archive-cleanup.root")
+        public static let closeButton = AutomationID("codexdock.archive-cleanup.close")
+        public static let previewButton = AutomationID("codexdock.archive-cleanup.preview")
+        public static let archiveButton = AutomationID("codexdock.archive-cleanup.archive")
+        public static let openArchivedThreadsButton = AutomationID("codexdock.archive-cleanup.open-archived-threads")
+        public static let customAgeField = AutomationID("codexdock.archive-cleanup.age.custom.field")
+        public static let customAgeApplyButton = AutomationID("codexdock.archive-cleanup.age.custom.apply")
+        public static let summary = AutomationID("codexdock.archive-cleanup.summary")
+        public static let viewAllButton = AutomationID("codexdock.archive-cleanup.preview.view-all")
+        public static let reviewListButton = AutomationID("codexdock.archive-cleanup.review-list.open")
+        public static let reviewList = AutomationID("codexdock.archive-cleanup.review-list")
+        public static let reviewSearchField = AutomationID("codexdock.archive-cleanup.review-list.search")
+        public static let reviewArchiveButton = AutomationID("codexdock.archive-cleanup.review-list.archive")
+        public static let selectedCount = AutomationID("codexdock.archive-cleanup.selected-count")
+        public static let showExcludedToggle = AutomationID("codexdock.archive-cleanup.review-list.show-excluded")
+        public static let progress = AutomationID("codexdock.archive-cleanup.progress")
+        public static let stopRemainingButton = AutomationID("codexdock.archive-cleanup.progress.stop")
+        public static let retryFailedButton = AutomationID("codexdock.archive-cleanup.progress.retry-failed")
+        public static let viewArchivedButton = AutomationID("codexdock.archive-cleanup.progress.view-archived")
+        public static let confirmArchiveButton = AutomationID("codexdock.archive-cleanup.confirm.archive")
+        public static let doneButton = AutomationID("codexdock.archive-cleanup.progress.done")
+
+        public static func state(_ kind: StateKind) -> AutomationID {
+            AutomationID("codexdock.archive-cleanup.state.\(kind.rawValue)")
+        }
+
+        public static func ageButton(_ value: String) -> AutomationID {
+            AutomationID("codexdock.archive-cleanup.age.\(safeSegment(value))")
+        }
+
+        public static func hostSummary(hostID: String) -> AutomationID {
+            AutomationID("codexdock.archive-cleanup.host.\(safeSegment(hostID))")
+        }
+
+        public static func row(hostID: String, threadID: String) -> AutomationID {
+            AutomationID("codexdock.archive-cleanup.row.\(safeSegment(hostID)).\(safeSegment(threadID))")
+        }
+
+        public static func selectionToggle(hostID: String, threadID: String) -> AutomationID {
+            AutomationID("codexdock.archive-cleanup.row.\(safeSegment(hostID)).\(safeSegment(threadID)).select")
+        }
+
+        public static func filterChip(_ value: String) -> AutomationID {
+            AutomationID("codexdock.archive-cleanup.filter.\(safeSegment(value))")
+        }
     }
 
     enum Dock {
@@ -185,6 +256,15 @@ public extension AutomationID {
     enum Archive {
         public static let root = AutomationID("codexdock.archive.root")
         public static let refreshButton = AutomationID("codexdock.archive.refresh")
+        public static let searchField = AutomationID("codexdock.archive.search")
+        public static let selectButton = AutomationID("codexdock.archive.select")
+        public static let cancelSelectionButton = AutomationID("codexdock.archive.selection.cancel")
+        public static let selectionToolbar = AutomationID("codexdock.archive.selection.toolbar")
+        public static let restoreSelectedButton = AutomationID("codexdock.archive.selection.restore")
+        public static let batchProgress = AutomationID("codexdock.archive.batch.progress")
+        public static let stopRemainingButton = AutomationID("codexdock.archive.batch.stop")
+        public static let retryFailedButton = AutomationID("codexdock.archive.batch.retry-failed")
+        public static let doneButton = AutomationID("codexdock.archive.batch.done")
 
         public static func state(_ kind: StateKind) -> AutomationID {
             AutomationID("codexdock.archive.state.\(kind.rawValue)")
@@ -205,11 +285,20 @@ public extension AutomationID {
         public static func restoreButton(hostID: String, threadID: String) -> AutomationID {
             AutomationID("codexdock.archive.row.\(safeSegment(hostID)).\(safeSegment(threadID)).restore")
         }
+
+        public static func selectionToggle(hostID: String, threadID: String) -> AutomationID {
+            AutomationID("codexdock.archive.row.\(safeSegment(hostID)).\(safeSegment(threadID)).select")
+        }
+
+        public static func filterChip(_ value: String) -> AutomationID {
+            AutomationID("codexdock.archive.filter.\(safeSegment(value))")
+        }
     }
 
     enum Relay {
         public static let root = AutomationID("codexdock.relay.root")
         public static let testAllButton = AutomationID("codexdock.relay.test-all")
+        public static let addButton = AutomationID("codexdock.relay.add")
         public static let editor = AutomationID("codexdock.relay.editor")
         public static let hostField = AutomationID("codexdock.relay.editor.host")
         public static let portField = AutomationID("codexdock.relay.editor.port")

@@ -23,6 +23,12 @@ public enum CodexDockConstants {
         public static let bonjourResolveTimeout: TimeInterval = 4
     }
 
+    public enum ArchiveCleanup {
+        public static let archiveBatchConcurrency = 1
+        public static let restoreBatchConcurrency = 1
+        public static let confirmationThreshold = 100
+    }
+
     public enum Voice {
         public static let transcriptionCompletionTimeout: Duration = .seconds(30)
         public static let transcriptionCommandTimeout: Duration = .seconds(10)

@@ -32,6 +32,22 @@ public enum ArchiveStoreState: Equatable, Sendable {
     case unavailable(ArchiveSnapshot, String)
 }
 
+public enum ArchiveRestoreRowStatus: Equatable, Sendable {
+    case restored
+    case failed(String)
+    case skipped
+}
+
+public struct ArchiveRestoreResult: Equatable, Sendable {
+    public let row: DockRowViewModel
+    public let status: ArchiveRestoreRowStatus
+
+    public init(row: DockRowViewModel, status: ArchiveRestoreRowStatus) {
+        self.row = row
+        self.status = status
+    }
+}
+
 @MainActor
 public final class ArchiveStore: ObservableObject {
     @Published public private(set) var state: ArchiveStoreState
@@ -114,23 +130,70 @@ public final class ArchiveStore: ObservableObject {
 
     @discardableResult
     public func restore(_ row: DockRowViewModel) async -> Bool {
+        let result = await restoreRow(row)
+        switch result.status {
+        case .restored:
+            await refresh()
+            return true
+        case .failed:
+            return false
+        case .skipped:
+            return false
+        }
+    }
+
+    @discardableResult
+    public func restoreRows(
+        _ rows: [DockRowViewModel],
+        shouldStop: @MainActor () -> Bool = { false },
+        onProgress: @MainActor ([ArchiveRestoreResult]) -> Void = { _ in }
+    ) async -> [ArchiveRestoreResult] {
+        guard !rows.isEmpty else {
+            return []
+        }
+
+        var didRestoreAnyRow = false
+        var results: [ArchiveRestoreResult] = []
+        for row in rows {
+            if shouldStop() {
+                results.append(ArchiveRestoreResult(row: row, status: .skipped))
+                onProgress(results)
+                continue
+            }
+
+            let result = await restoreRow(row)
+            if case .restored = result.status {
+                didRestoreAnyRow = true
+            }
+            results.append(result)
+            onProgress(results)
+        }
+
+        if didRestoreAnyRow {
+            await refresh()
+        }
+        return results
+    }
+
+    private func restoreRow(_ row: DockRowViewModel) async -> ArchiveRestoreResult {
         guard let host = hosts.first(where: { $0.id == row.id.hostID }) else {
             DockLog.archive.error("archive restore skipped missing host_id=\(row.id.hostID, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
-            setActionError("Host \(row.id.hostID) is no longer configured.")
-            return false
+            let message = "Host \(row.id.hostID) is no longer configured."
+            setActionError(message)
+            return ArchiveRestoreResult(row: row, status: .failed(message))
         }
 
         do {
             DockLog.archive.notice("archive restore action started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
             try await commandEngine.unarchive(row, on: host)
             setActionError(nil)
-            await refresh()
             DockLog.archive.notice("archive restore action finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
-            return true
+            return ArchiveRestoreResult(row: row, status: .restored)
         } catch {
             DockLog.archive.error("archive restore action failed host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-            setActionError(error.localizedDescription)
-            return false
+            let message = error.localizedDescription
+            setActionError(message)
+            return ArchiveRestoreResult(row: row, status: .failed(message))
         }
     }
 

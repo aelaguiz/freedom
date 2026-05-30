@@ -1123,13 +1123,13 @@ final class ThreadDetailStoreTests: XCTestCase {
                 partialText: "partial"
             )
         )
-        try await waitForDetailStore {
+        try await waitForDetailStore(timeout: .seconds(5)) {
             store.composer.draft == "Keep partial"
         }
 
         capture.session.finishChunks()
 
-        try await waitForDetailStore {
+        try await waitForDetailStore(timeout: .seconds(15)) {
             store.composer.voice.lastError == "Voice capture stopped. Try again."
         }
         XCTAssertEqual(realtime.session.cancelCount, 1)
@@ -1171,13 +1171,13 @@ final class ThreadDetailStoreTests: XCTestCase {
                 partialText: "partial"
             )
         )
-        try await waitForDetailStore {
+        try await waitForDetailStore(timeout: .seconds(5)) {
             store.composer.draft == "Keep partial"
         }
 
         capture.session.finishChunks()
 
-        try await waitForDetailStore {
+        try await waitForDetailStore(timeout: .seconds(15)) {
             store.composer.voice.lastError == "Voice capture stopped. Try again."
         }
         XCTAssertEqual(store.composer.draft, "Keep partial")

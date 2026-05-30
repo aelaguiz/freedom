@@ -9,37 +9,90 @@ import AppKit
 public struct HostsView: View {
     @ObservedObject private var screenStore: HostSettingsScreenStore
     private let store: HostSettingsStore
+    private let title: String
+    private let hidesEditorUntilRequested: Bool
+    private let usesNavigationStack: Bool
+    private let onClose: (@MainActor () -> Void)?
     @State private var draft = HostDraft()
     @State private var editingHostID: String?
     @State private var validationMessage: String?
+    @State private var isEditorVisible = false
+    @State private var hostRemovalCandidate: HostSettingsRowViewModel?
+    @State private var isConfirmingHostRemoval = false
 
-    public init(store: HostSettingsStore) {
+    public init(
+        store: HostSettingsStore,
+        title: String = "Relay",
+        hidesEditorUntilRequested: Bool = false,
+        usesNavigationStack: Bool = true,
+        onClose: (@MainActor () -> Void)? = nil
+    ) {
         self.store = store
+        self.title = title
+        self.hidesEditorUntilRequested = hidesEditorUntilRequested
+        self.usesNavigationStack = usesNavigationStack
+        self.onClose = onClose
         _screenStore = ObservedObject(wrappedValue: store.screenStore)
     }
 
     public var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    header
-                    content
+        wrappedContent
+            .accessibilityElement(children: .contain)
+            .codexAutomationID(AutomationID.Relay.root)
+            .accessibilityValue(relayScreenValue)
+            .confirmationDialog(
+                "Remove final relay?",
+                isPresented: $isConfirmingHostRemoval,
+                titleVisibility: .visible
+            ) {
+                if let hostRemovalCandidate {
+                    Button("Remove Relay", role: .destructive) {
+                        remove(hostRemovalCandidate)
+                    }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 24)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                if let hostRemovalCandidate {
+                    Text("Removing \(hostRemovalCandidate.displayHost.displayName) leaves Codex Dock without a saved relay host.")
+                }
             }
-            .background(hostsBackgroundColor)
-            .dockNavigationChrome()
+    }
+
+    @ViewBuilder
+    private var wrappedContent: some View {
+        if usesNavigationStack {
+            NavigationStack {
+                contentRoot
+            }
+        } else {
+            contentRoot
         }
-        .accessibilityElement(children: .contain)
-        .codexAutomationID(AutomationID.Relay.root)
-        .accessibilityValue(relayScreenValue)
+    }
+
+    private var contentRoot: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                header
+                content
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 24)
+        }
+        .background(hostsBackgroundColor)
+        .dockNavigationChrome()
+        .toolbar {
+            if let onClose {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close", action: onClose)
+                }
+            }
+        }
     }
 
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
-            Text("Relay")
+            Text(title)
                 .font(.largeTitle.weight(.semibold))
                 .foregroundStyle(.primary)
 
@@ -58,6 +111,21 @@ public struct HostsView: View {
             .disabled(screenStore.rows.isEmpty)
             .accessibilityLabel("Test relay connections")
             .codexAutomationID(AutomationID.Relay.testAllButton)
+
+            Button {
+                editingHostID = nil
+                draft = HostDraft()
+                validationMessage = nil
+                isEditorVisible = true
+            } label: {
+                Label("Add Relay", systemImage: "plus")
+                    .labelStyle(.iconOnly)
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Add Relay")
+            .codexAutomationID(AutomationID.Relay.addButton)
         }
     }
 
@@ -100,18 +168,14 @@ public struct HostsView: View {
                         editingHostID = row.id
                         draft = HostDraft(host: row.host)
                         validationMessage = nil
+                        isEditorVisible = true
                     },
                     onRemove: {
-                        Task {
-                            do {
-                                try await store.removeHost(row.id)
-                                if editingHostID == row.id {
-                                    editingHostID = nil
-                                    draft = HostDraft()
-                                }
-                            } catch {
-                                validationMessage = error.localizedDescription
-                            }
+                        if screenStore.rows.count <= 1 {
+                            hostRemovalCandidate = row
+                            isConfirmingHostRemoval = true
+                        } else {
+                            remove(row)
                         }
                     }
                 )
@@ -119,17 +183,21 @@ public struct HostsView: View {
         }
     }
 
+    @ViewBuilder
     private var hostEditor: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(editingHostID == nil ? "Add Relay" : "Edit Relay")
-                    .font(.headline)
-                Spacer()
-                if editingHostID != nil {
+        if hidesEditorUntilRequested, !isEditorVisible {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text(editingHostID == nil ? "Add Relay" : "Edit Relay")
+                        .font(.headline)
+                    Spacer()
                     Button {
                         editingHostID = nil
                         draft = HostDraft()
                         validationMessage = nil
+                        isEditorVisible = false
                     } label: {
                         Label("Cancel", systemImage: "xmark")
                             .labelStyle(.iconOnly)
@@ -137,44 +205,44 @@ public struct HostsView: View {
                     .buttonStyle(.borderless)
                     .codexAutomationID(AutomationID.Relay.cancelButton)
                 }
-            }
 
-            VStack(spacing: 10) {
-                HostTextField(
-                    title: "Host",
-                    text: $draft.host,
-                    automationID: AutomationID.Relay.hostField
-                )
-                HostTextField(
-                    title: "Port",
-                    text: $draft.port,
-                    automationID: AutomationID.Relay.portField
-                )
-            }
+                VStack(spacing: 10) {
+                    HostTextField(
+                        title: "Host",
+                        text: $draft.host,
+                        automationID: AutomationID.Relay.hostField
+                    )
+                    HostTextField(
+                        title: "Port",
+                        text: $draft.port,
+                        automationID: AutomationID.Relay.portField
+                    )
+                }
 
-            if let validationMessage {
-                ActionErrorBanner(
-                    message: validationMessage,
-                    automationID: AutomationID.Relay.state(.validationError)
-                )
-            }
+                if let validationMessage {
+                    ActionErrorBanner(
+                        message: validationMessage,
+                        automationID: AutomationID.Relay.state(.validationError)
+                    )
+                }
 
-            Button {
-                saveDraft()
-            } label: {
-                Label("Save Relay", systemImage: "square.and.arrow.down")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+                Button {
+                    saveDraft()
+                } label: {
+                    Label("Save Relay", systemImage: "square.and.arrow.down")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.borderedProminent)
+                .codexAutomationID(AutomationID.Relay.saveButton)
             }
-            .buttonStyle(.borderedProminent)
-            .codexAutomationID(AutomationID.Relay.saveButton)
+            .padding(14)
+            .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .accessibilityElement(children: .contain)
+            .codexAutomationID(AutomationID.Relay.editor)
+            .accessibilityValue(editingHostID == nil ? "add" : "edit; host=\(editingHostID ?? "")")
         }
-        .padding(14)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .accessibilityElement(children: .contain)
-        .codexAutomationID(AutomationID.Relay.editor)
-        .accessibilityValue(editingHostID == nil ? "add" : "edit; host=\(editingHostID ?? "")")
     }
 
     private func saveDraft() {
@@ -188,6 +256,23 @@ public struct HostsView: View {
                 editingHostID = nil
                 draft = HostDraft()
                 validationMessage = nil
+                isEditorVisible = false
+            } catch {
+                validationMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func remove(_ row: HostSettingsRowViewModel) {
+        Task {
+            do {
+                try await store.removeHost(row.id)
+                if editingHostID == row.id {
+                    editingHostID = nil
+                    draft = HostDraft()
+                    isEditorVisible = false
+                }
+                hostRemovalCandidate = nil
             } catch {
                 validationMessage = error.localizedDescription
             }
@@ -197,6 +282,9 @@ public struct HostsView: View {
     private var relayScreenValue: String {
         if screenStore.configurationError != nil {
             return "configuration-error"
+        }
+        if hidesEditorUntilRequested, !isEditorVisible {
+            return "loaded; hosts=\(screenStore.rows.count); editor=hidden"
         }
         return "loaded; hosts=\(screenStore.rows.count); editor=\(editingHostID == nil ? "add" : "edit")"
     }

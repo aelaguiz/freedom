@@ -2,15 +2,24 @@ import SwiftUI
 
 public struct GlobalConnectivityIndicatorView: View {
     @ObservedObject private var store: AppConnectivityStore
+    private let onOpenSystemHealth: (@MainActor () -> Void)?
     @State private var showsDiagnostics = false
 
-    public init(store: AppConnectivityStore) {
+    public init(
+        store: AppConnectivityStore,
+        onOpenSystemHealth: (@MainActor () -> Void)? = nil
+    ) {
         self.store = store
+        self.onOpenSystemHealth = onOpenSystemHealth
     }
 
     public var body: some View {
         Button {
-            showsDiagnostics = true
+            if let onOpenSystemHealth {
+                onOpenSystemHealth()
+            } else {
+                showsDiagnostics = true
+            }
         } label: {
             Label(displayLabel, systemImage: systemImage)
                 .font(.caption.weight(.semibold))
@@ -25,10 +34,10 @@ public struct GlobalConnectivityIndicatorView: View {
         .accessibilityValue("\(store.overallStatus.label): \(store.overallStatus.message)")
         .codexAutomationID(AutomationID.Connectivity.globalIndicator)
         .sheet(isPresented: $showsDiagnostics) {
-            ConnectivityDiagnosticsSheet(hosts: store.hosts)
-                .task {
-                    await store.refreshRelayDiagnostics()
-                }
+            SystemHealthView(store: store, onClose: {
+                showsDiagnostics = false
+            })
+            .dockTaskSheetPresentation()
         }
     }
 

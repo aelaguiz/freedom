@@ -42,6 +42,11 @@ public struct DockSessionQuery: Equatable, Sendable {
         sourceKinds: nil,
         maxPages: CodexDockConstants.Dock.activeSessionMaxPages
     )
+    public static let activeHumanFullScan = DockSessionQuery(
+        archived: false,
+        sourceKinds: nil,
+        maxPages: nil
+    )
     public static let archivedHuman = DockSessionQuery(archived: true, sourceKinds: nil)
     public static let activeAgents = DockSessionQuery(
         archived: false,

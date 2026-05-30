@@ -1220,6 +1220,80 @@ final class AppServerClientTests: XCTestCase {
         await client.disconnect()
     }
 
+    func testAppServerDockClientCleanupFullScanFollowsActiveHumanCursors() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        XCTAssertEqual(DockSessionQuery.activeHuman.maxPages, CodexDockConstants.Dock.activeSessionMaxPages)
+        XCTAssertNil(DockSessionQuery.activeHumanFullScan.maxPages)
+
+        let dockClient = AppServerDockClient()
+        let task = Task {
+            try await dockClient.loadSessions(
+                using: client,
+                hostID: "Amir-M5",
+                query: .activeHumanFullScan
+            )
+        }
+
+        let firstRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(firstRequest.method, AppServerMethods.threadList)
+        guard case .object(let firstParams) = try XCTUnwrap(firstRequest.params) else {
+            return XCTFail("Expected first thread/list params")
+        }
+        XCTAssertEqual(firstParams["limit"], .integer(250))
+        XCTAssertEqual(firstParams["cursor"], nil)
+        XCTAssertEqual(firstParams["sourceKinds"], nil)
+        XCTAssertEqual(firstParams["archived"], .bool(false))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: firstRequest.id,
+                    result: try JSONValue.encoded(
+                        ThreadListResponseDTO(
+                            data: [
+                                threadListRow(id: "thread-1", updatedAt: 1_790_000_001),
+                            ],
+                            nextCursor: "cursor-1"
+                        )
+                    )
+                )
+            )
+        )
+
+        let secondRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(secondRequest.method, AppServerMethods.threadList)
+        guard case .object(let secondParams) = try XCTUnwrap(secondRequest.params) else {
+            return XCTFail("Expected second thread/list params")
+        }
+        XCTAssertEqual(secondParams["limit"], .integer(250))
+        XCTAssertEqual(secondParams["cursor"], .string("cursor-1"))
+        XCTAssertEqual(secondParams["sourceKinds"], nil)
+        XCTAssertEqual(secondParams["archived"], .bool(false))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: secondRequest.id,
+                    result: try JSONValue.encoded(
+                        ThreadListResponseDTO(
+                            data: [
+                                threadListRow(id: "thread-2", updatedAt: 1_790_000_000),
+                            ],
+                            nextCursor: nil
+                        )
+                    )
+                )
+            )
+        )
+
+        let result = try await task.value
+        XCTAssertEqual(result.summaries.map(\.id.threadID), ["thread-1", "thread-2"])
+        await client.disconnect()
+    }
+
     func testAppServerDockClientUsesBoundedPageLimitForAgents() async throws {
         let transport = ScriptedAppServerTransport()
         let client = AppServerClient(transport: transport)

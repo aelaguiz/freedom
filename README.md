@@ -143,8 +143,11 @@ status, host display name, host id, source, and thread id. Codex runtime
 `notLoaded` is normalized by the relay to Dock `dormant`; Dock Home does not
 spend row-badge space on that background state.
 
-The app has one root connectivity indicator. It appears above Dock, Archive,
-Hosts, and pushed Session detail screens. The labels are `Unconfigured`,
+The app has one root connectivity indicator. It appears above Dock and opens
+the `System Health` sheet for relay and route diagnostics. Archive recovery,
+cleanup, and relay host editing live in the Dock `More` menu as `Archived
+Threads`, `Archive Cleanup`, and `Relay Settings` task sheets, not app-level
+tabs. The labels are `Unconfigured`,
 `Checking`, `Online`, `Partial`, `Reconnecting`, `Backgrounded`, `Resuming`,
 `Stale`, `Offline`, `Error`, and `Config error`. A nil host bearer token is
 normal for the personal physical-phone relay path; it is not shown as missing

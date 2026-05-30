@@ -411,11 +411,14 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         let app = launchRelayBackedApp()
         XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
 
-        app.tapRootTab(.relay)
+        app.openTaskSheet(.relaySettings)
 
         XCTAssertTrue(app.element(id: AutomationID.Relay.root).waitForExistence(timeout: 10))
         XCTAssertTrue(app.element(id: AutomationID.Relay.testAllButton).exists)
-        XCTAssertTrue(app.element(id: AutomationID.Relay.editor).exists)
+        XCTAssertTrue(app.element(id: AutomationID.Relay.addButton).exists)
+        XCTAssertFalse(app.element(id: AutomationID.Relay.editor).exists)
+        app.element(id: AutomationID.Relay.addButton).tap()
+        XCTAssertTrue(app.element(id: AutomationID.Relay.editor).waitForExistence(timeout: 5))
         XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Relay.hostField, maxSwipes: 3))
         XCTAssertTrue(app.element(id: AutomationID.Relay.hostField).exists)
         XCTAssertTrue(app.element(id: AutomationID.Relay.portField).exists)
@@ -539,19 +542,57 @@ private extension XCUIApplication {
         return element
     }
 
-    func tapRootTab(_ tab: AutomationID.RootTab) {
-        let tabIDElement = element(id: AutomationID.Root.tab(tab))
-        if tabIDElement.waitForExistence(timeout: 2) {
-            tabIDElement.tap()
-            return
+    func openTaskSheet(_ sheet: DockTaskSheet) {
+        let menuCandidates = [
+            AutomationID.TaskSheet.menuItem(sheet).rawValue,
+            sheet.menuLabel,
+        ]
+
+        for candidate in menuCandidates {
+            guard openTaskSheetMenu() else {
+                return
+            }
+            let button = buttons[candidate].firstMatch
+            if button.waitForExistence(timeout: 2) {
+                button.tap()
+                if waitForTaskSheet(sheet, timeout: 5) {
+                    return
+                }
+            }
         }
 
-        let fallbackButton = tabBars.buttons[tab.platformTabLabel]
-        XCTAssertTrue(
-            fallbackButton.waitForExistence(timeout: 5),
-            "SwiftUI did not expose \(AutomationID.Root.tab(tab).rawValue); falling back to the platform tab bar label for \(tab.platformTabLabel)."
+        XCTFail(
+            "Dock task sheet \(sheet.rawValue) did not open from More. Expected root id=\(sheet.expectedRootID.rawValue).\n\nAccessibility tree:\n\(debugDescription)"
         )
-        fallbackButton.tap()
+    }
+
+    private func openTaskSheetMenu(
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> Bool {
+        let moreButton = element(id: AutomationID.TaskSheet.moreButton)
+        guard moreButton.waitForExistence(timeout: 5) else {
+            XCTFail(
+                "Dock More menu was missing.\n\nAccessibility tree:\n\(debugDescription)",
+                file: file,
+                line: line
+            )
+            return false
+        }
+        moreButton.tap()
+        return true
+    }
+
+    private func waitForTaskSheet(_ sheet: DockTaskSheet, timeout: TimeInterval) -> Bool {
+        let rootID = sheet.expectedRootID
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element(id: rootID).exists {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        return element(id: rootID).exists
     }
 
     func scrollUntilElementExists(id: AutomationID, maxSwipes: Int) -> Bool {
@@ -833,15 +874,30 @@ private extension XCUIApplication {
     }
 }
 
-private extension AutomationID.RootTab {
-    var platformTabLabel: String {
+private extension DockTaskSheet {
+    var menuLabel: String {
         switch self {
-        case .dock:
-            return "Dock"
-        case .archive:
-            return "Archive"
-        case .relay:
-            return "Relay"
+        case .archiveCleanup:
+            return "Archive cleanup"
+        case .archivedThreads:
+            return "Archived threads"
+        case .systemHealth:
+            return "System health"
+        case .relaySettings:
+            return "Relay settings"
+        }
+    }
+
+    var expectedRootID: AutomationID {
+        switch self {
+        case .archiveCleanup:
+            return AutomationID.ArchiveCleanup.root
+        case .archivedThreads:
+            return AutomationID.Archive.root
+        case .systemHealth:
+            return AutomationID.SystemHealth.root
+        case .relaySettings:
+            return AutomationID.Relay.root
         }
     }
 }
