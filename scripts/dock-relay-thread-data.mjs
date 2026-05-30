@@ -426,8 +426,16 @@ async function readHistoryThreadList(config, params) {
   return historyClientForConfig(config).request("thread/list", params);
 }
 
+async function readHistoryThreadSearch(config, params) {
+  return historyClientForConfig(config).request("thread/search", params);
+}
+
 async function readHistoryThread(config, params) {
   return historyClientForConfig(config).request("thread/read", params);
+}
+
+async function readHistoryThreadGoal(config, params) {
+  return historyClientForConfig(config).request("thread/goal/get", params);
 }
 
 async function readThreadTurnsFromEndpoint(endpoint, params, timeoutMs = undefined, logger = defaultRelayLogger) {
@@ -446,12 +454,36 @@ async function readThreadFromEndpoint(endpoint, params, logger = defaultRelayLog
   );
 }
 
+async function readThreadGoalFromEndpoint(endpoint, params, logger = defaultRelayLogger) {
+  return withClient(
+    endpoint.url,
+    { bearerToken: endpoint.bearerToken || null, logger },
+    async (client) => client.request("thread/goal/get", params),
+  );
+}
+
 function sanitizeRelayFields(thread) {
   if (!thread || typeof thread !== "object") {
     return thread;
   }
   const { dockRelaySource, ...clean } = thread;
   return clean;
+}
+
+function sanitizeThreadSearchResult(result) {
+  if (!result || typeof result !== "object") {
+    return result;
+  }
+  if (result.thread && typeof result.thread === "object") {
+    return {
+      ...result,
+      thread: sanitizeRelayFields(result.thread),
+    };
+  }
+  if (result.id) {
+    return sanitizeRelayFields(result);
+  }
+  return result;
 }
 
 async function aggregateThreadList(config, params = {}) {
@@ -475,6 +507,36 @@ async function aggregateThreadList(config, params = {}) {
     data: dataWithSummaries,
     liveOverlay,
   };
+}
+
+async function aggregateThreadSearch(config, params = {}) {
+  const logger = relayLogger(config);
+  const historyParams = clampThreadListParams(params);
+  const history = await readHistoryThreadSearch(config, historyParams);
+  const data = Array.isArray(history.data) ? history.data.map(sanitizeThreadSearchResult) : [];
+  logger.info("thread_search.loaded", {
+    requestedLimit: params.limit,
+    effectiveLimit: historyParams.limit,
+    returnedRows: data.length,
+  });
+  return {
+    ...history,
+    data,
+  };
+}
+
+async function aggregateThreadGoalGet(config, params = {}) {
+  if (!params.threadId) {
+    throw new Error("thread/goal/get requires threadId");
+  }
+  const endpoint = await endpointForThread(config, params.threadId);
+  const result = isHistoryEndpoint(config, endpoint)
+    ? await readHistoryThreadGoal(config, params)
+    : await readThreadGoalFromEndpoint(endpoint, params, relayLogger(config));
+  relayLogger(config).info("thread_goal_get.loaded", {
+    goalPresent: result?.goal != null,
+  });
+  return result;
 }
 
 async function aggregateLoadedList(config, params = {}) {
@@ -542,8 +604,10 @@ async function unarchiveThread(config, params = {}) {
 
 export {
   aggregateLoadedList,
+  aggregateThreadGoalGet,
   aggregateThreadList,
   aggregateThreadRead,
+  aggregateThreadSearch,
   archiveThread,
   attentionFlagsForServerRequest,
   collectLiveRows,
@@ -556,6 +620,10 @@ export {
   disabledLiveOverlay,
   pendingRequestsForActiveThread,
   preferThread,
+  readHistoryThread,
+  readHistoryThreadGoal,
+  readHistoryThreadList,
+  readHistoryThreadSearch,
   sanitizeRelayFields,
   liveStatusCacheForConfig,
   sessionRouterForConfig,

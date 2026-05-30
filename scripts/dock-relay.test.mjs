@@ -33,10 +33,13 @@ import {
 } from "./dock-relay-thread-data.mjs";
 
 import {
+  closeProcess,
   closeWebSocketServer,
   jsonRpcRequest,
   onceListening,
   openWebSocket,
+  sleepMs,
+  spawnLoopbackAppServerMarker,
 } from "./dock-relay-test-helpers.mjs";
 import { DOCK_SESSION_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
 
@@ -680,6 +683,174 @@ test("relay keeps the raw history app-server token on the Mac side", async () =>
   }
 });
 
+test("thread/search forwards app-server search params and strips relay-only thread fields", async () => {
+  let observedAuthorization = null;
+  const observedSearchParams = [];
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  historyServer.on("connection", (ws, request) => {
+    observedAuthorization = request.headers.authorization;
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "codex-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/search") {
+        observedSearchParams.push(message.params || {});
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            data: [
+              {
+                thread: {
+                  id: "thread-1",
+                  preview: "Search result",
+                  updatedAt: 100,
+                  status: { type: "notLoaded" },
+                  source: "cli",
+                  dockRelaySource: { bearerToken: "must-not-leak" },
+                },
+                snippets: [{ field: "preview", text: "Search result" }],
+              },
+            ],
+            nextCursor: "next-page",
+            backwardsCursor: null,
+          },
+        }));
+      }
+    });
+  });
+
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const response = await jsonRpcRequest(ws, "thread/search", {
+      archived: false,
+      limit: 999,
+      searchTerm: "thread-1",
+      sourceKinds: ["cli", "exec"],
+      sortKey: "updated_at",
+      sortDirection: "desc",
+    });
+
+    assert.equal(response.error, undefined);
+    assert.equal(observedAuthorization, "Bearer history-token");
+    assert.deepEqual(observedSearchParams, [
+      {
+        archived: false,
+        limit: 250,
+        searchTerm: "thread-1",
+        sourceKinds: ["cli", "exec"],
+        sortKey: "updated_at",
+        sortDirection: "desc",
+      },
+    ]);
+    assert.equal(response.result.nextCursor, "next-page");
+    assert.deepEqual(response.result.data.map((row) => row.thread.id), ["thread-1"]);
+    assert.deepEqual(response.result.data[0].snippets, [{ field: "preview", text: "Search result" }]);
+    assert.equal(response.result.data[0].thread.dockRelaySource, undefined);
+    assert.equal(JSON.stringify(response.result).includes("must-not-leak"), false);
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeWebSocketServer(historyServer);
+  }
+});
+
+test("thread/goal/get forwards app-server goal reads through the relay", async () => {
+  let observedAuthorization = null;
+  const observedGoalParams = [];
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  historyServer.on("connection", (ws, request) => {
+    observedAuthorization = request.headers.authorization;
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "codex-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/goal/get") {
+        observedGoalParams.push(message.params || {});
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            goal: {
+              threadId: "thread-1",
+              objective: "Reach parity",
+              status: "in_progress",
+              tokenBudget: null,
+              tokensUsed: 12,
+              timeUsedSeconds: 34,
+              createdAt: 1000,
+              updatedAt: 2000,
+            },
+          },
+        }));
+      }
+    });
+  });
+
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const response = await jsonRpcRequest(ws, "thread/goal/get", {
+      threadId: "thread-1",
+    });
+
+    assert.equal(response.error, undefined);
+    assert.equal(observedAuthorization, "Bearer history-token");
+    assert.deepEqual(observedGoalParams, [{ threadId: "thread-1" }]);
+    assert.deepEqual(response.result, {
+      goal: {
+        threadId: "thread-1",
+        objective: "Reach parity",
+        status: "in_progress",
+        tokenBudget: null,
+        tokensUsed: 12,
+        timeUsedSeconds: 34,
+        createdAt: 1000,
+        updatedAt: 2000,
+      },
+    });
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeWebSocketServer(historyServer);
+  }
+});
+
 test("dock/subscribe returns a normalized relay-owned session snapshot", async () => {
   let observedAuthorization = null;
   const observedThreadListParams = [];
@@ -772,6 +943,8 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
 
     assert.equal(observedAuthorization, "Bearer history-token");
     assert.equal(observedThreadListParams.length, 2);
+    assert.deepEqual(observedThreadListParams.map((params) => params.archived), [false, false]);
+    assert.ok(observedThreadListParams.every((params) => params.includePreviewless === undefined));
     assert.equal(response.error, undefined);
     assert.equal(response.result.kind, "snapshot");
     assert.equal(response.result.hosts[0].id, "Amir-M5");
@@ -784,6 +957,225 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
     );
     assert.equal(JSON.stringify(response.result).includes("notLoaded"), false);
     assert.equal(JSON.stringify(response.result).includes("must-not-leak"), false);
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeWebSocketServer(historyServer);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dock/subscribe overlays live status without changing stored Codex order", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-test-"));
+  const liveServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(liveServer);
+  const liveUrl = `ws://127.0.0.1:${liveServer.address().port}`;
+  const liveMarker = spawnLoopbackAppServerMarker(liveUrl);
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+
+  liveServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "live-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/loaded/list") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: { data: ["live-thread"], nextCursor: null },
+        }));
+      } else if (message.method === "thread/read") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            thread: {
+              id: "live-thread",
+              sessionId: "live-session",
+              preview: "Live preview should not replace stored summary",
+              updatedAt: 10,
+              source: "cli",
+              status: {
+                type: "active",
+                activeFlags: ["waitingOnUserInput"],
+              },
+            },
+          },
+        }));
+      }
+    });
+  });
+
+  historyServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "history-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/list") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            data: [
+              {
+                id: "live-thread",
+                sessionId: "stored-session",
+                preview: "Stored summary",
+                latestSummary: "Stored summary",
+                updatedAt: 300,
+                source: "cli",
+                status: { type: "notLoaded" },
+              },
+              {
+                id: "stored-thread",
+                sessionId: "stored-only-session",
+                preview: "Stored only",
+                updatedAt: 200,
+                source: "cli",
+                status: { type: "notLoaded" },
+              },
+            ],
+            nextCursor: null,
+            backwardsCursor: null,
+          },
+        }));
+      }
+    });
+  });
+
+  await sleepMs(20);
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    hostId: "Amir-M5",
+    advertiseBonjour: false,
+    dockSessionPersistencePath: path.join(tempDir, "session-table.json"),
+    dockSessionRefreshIntervalMs: 60_000,
+    threadSummaryCache: {
+      decorateRows: (rows) => rows,
+      warmRows: () => {},
+    },
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const response = await jsonRpcRequest(ws, "dock/subscribe");
+    assert.equal(response.error, undefined);
+    assert.deepEqual(response.result.sessions.map((session) => session.threadID), [
+      "live-thread",
+      "stored-thread",
+    ]);
+    const liveSession = response.result.sessions.find((session) => session.threadID === "live-thread");
+    assert.equal(liveSession.status, "needsInput");
+    assert.equal(liveSession.backendSessionID, "live-session");
+    assert.equal(liveSession.updatedAt, 300);
+    assert.equal(liveSession.summary, "Stored summary");
+    assert.equal(response.result.sessions.find((session) => session.threadID === "stored-thread").status, "dormant");
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeProcess(liveMarker);
+    await closeWebSocketServer(liveServer);
+    await closeWebSocketServer(historyServer);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dock/subscribe drains combined source pages before default interactive extras", async () => {
+  const observedThreadListParams = [];
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-test-"));
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  historyServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "codex-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/list") {
+        const params = message.params || {};
+        observedThreadListParams.push(params);
+        const automation = Array.isArray(params.sourceKinds);
+        const cursor = params.cursor || null;
+        let data = [];
+        let nextCursor = null;
+        if (!automation && cursor === null) {
+          data = [{ id: "human-page-1", preview: "Human page 1", updatedAt: 40, status: { type: "notLoaded" }, source: "cli" }];
+          nextCursor = "human-page-2";
+        } else if (!automation && cursor === "human-page-2") {
+          data = [{ id: "human-page-2", preview: "Human page 2", updatedAt: 30, status: { type: "notLoaded" }, source: "cli" }];
+        } else if (automation && cursor === null) {
+          data = [{ id: "agent-page-1", preview: "Agent page 1", updatedAt: 20, status: { type: "notLoaded" }, source: "exec" }];
+          nextCursor = "agent-page-2";
+        } else if (automation && cursor === "agent-page-2") {
+          data = [{ id: "agent-page-2", preview: "Agent page 2", updatedAt: 10, status: { type: "notLoaded" }, source: "exec" }];
+        }
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            data,
+            nextCursor,
+            backwardsCursor: null,
+          },
+        }));
+      }
+    });
+  });
+
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    hostId: "Amir-M5",
+    advertiseBonjour: false,
+    dockSessionPersistencePath: path.join(tempDir, "session-table.json"),
+    dockSessionRefreshIntervalMs: 60_000,
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const response = await jsonRpcRequest(ws, "dock/subscribe");
+
+    assert.equal(response.error, undefined);
+    assert.deepEqual(
+      response.result.sessions.map((row) => row.threadID),
+      ["agent-page-1", "agent-page-2", "human-page-1", "human-page-2"],
+    );
+    assert.equal(observedThreadListParams.length, 4);
+    assert.ok(observedThreadListParams.every((params) => params.archived === false));
+    assert.ok(observedThreadListParams.every((params) => params.includePreviewless === undefined));
+    assert.ok(observedThreadListParams.some((params) => !params.sourceKinds && !params.cursor));
+    assert.ok(observedThreadListParams.some((params) => !params.sourceKinds && params.cursor === "human-page-2"));
+    assert.ok(observedThreadListParams.some((params) => Array.isArray(params.sourceKinds) && !params.cursor));
+    assert.ok(observedThreadListParams.some((params) => Array.isArray(params.sourceKinds) && params.cursor === "agent-page-2"));
   } finally {
     ws.close();
     await relay.close();

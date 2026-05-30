@@ -49,6 +49,7 @@ import {
   dockSessionAggregatorForConfig,
   handleDockSubscribe,
 } from "./dock-relay-session-table.mjs";
+import { buildRelayStateSnapshot } from "./dock-relay-state-snapshot.mjs";
 import {
   loadDotEnvFile,
   parsePhoneAuthMode,
@@ -56,8 +57,10 @@ import {
 } from "./dock-relay-env.mjs";
 import {
   aggregateLoadedList,
+  aggregateThreadGoalGet,
   aggregateThreadList,
   aggregateThreadRead,
+  aggregateThreadSearch,
   archiveThread,
   attentionFlagsForServerRequest,
   endpointForThread,
@@ -419,10 +422,16 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       };
     case "thread/list":
       return aggregateThreadList(config, params || {});
+    case "thread/search":
+      return aggregateThreadSearch(config, params || {});
+    case "thread/goal/get":
+      return aggregateThreadGoalGet(config, params || {});
     case DOCK_SUBSCRIBE_METHOD:
       return handleDockSubscribe({ config, session, downstreamWs, sendJson });
     case DOCK_RESYNC_METHOD:
       return dockSessionAggregatorForConfig(config).resync();
+    case "relay/state/snapshot":
+      return buildRelayStateSnapshot(config, params || {});
     case "thread/loaded/list":
       return aggregateLoadedList(config, params || {});
     case "thread/read":

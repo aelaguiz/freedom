@@ -10,7 +10,12 @@ import {
   DOCK_SESSION_SCHEMA_VERSION,
   THREAD_LIST_MAX_LIMIT,
 } from "./dock-relay-constants.mjs";
-import { aggregateThreadList, preferThread } from "./dock-relay-thread-data.mjs";
+import {
+  aggregateThreadList,
+  liveStatusCacheForConfig,
+  preferThread,
+  sanitizeRelayFields,
+} from "./dock-relay-thread-data.mjs";
 
 const DOCK_SUBSCRIBE_METHOD = "dock/subscribe";
 const DOCK_RESYNC_METHOD = "dock/resync";
@@ -19,11 +24,17 @@ const DOCK_UPDATE_METHOD = "dock/update";
 const AGENT_SOURCE_KINDS = Object.freeze([
   "exec",
   "appServer",
+  "subAgent",
   "subAgentReview",
   "subAgentCompact",
   "subAgentThreadSpawn",
   "subAgentOther",
   "unknown",
+]);
+const DOCK_EXPLICIT_SOURCE_KINDS = Object.freeze([
+  "cli",
+  "vscode",
+  ...AGENT_SOURCE_KINDS,
 ]);
 
 function nowISOString() {
@@ -189,15 +200,95 @@ function normalizeThread(thread, host, scope) {
   };
 }
 
-function sortedSessions(sessions) {
-  return [...sessions].sort((lhs, rhs) => {
-    const lhsUpdated = Number(lhs.updatedAt || 0);
-    const rhsUpdated = Number(rhs.updatedAt || 0);
-    if (lhsUpdated !== rhsUpdated) {
-      return rhsUpdated - lhsUpdated;
+function normalizedSourceName(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function sourceNameFromThread(thread) {
+  const source = thread?.source;
+  if (typeof source === "string") {
+    return normalizedSourceName(source);
+  }
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return "";
+  }
+  for (const key of ["type", "kind", "sourceKind", "source_kind", "source"]) {
+    if (typeof source[key] === "string") {
+      return normalizedSourceName(source[key]);
     }
-    return String(lhs.id).localeCompare(String(rhs.id));
-  });
+  }
+  for (const key of Object.keys(source)) {
+    const normalized = normalizedSourceName(key);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return "";
+}
+
+function dockLaneForThread(thread, fallbackLane = "automation") {
+  switch (sourceNameFromThread(thread)) {
+    case "cli":
+    case "vscode":
+    case "atlas":
+    case "chatgpt":
+      return "human";
+    default:
+      return fallbackLane;
+  }
+}
+
+function overlayLiveStatus(storedRow, liveRow) {
+  if (!liveRow?.status) {
+    return storedRow;
+  }
+  const cleanLiveRow = sanitizeRelayFields(liveRow);
+  return {
+    ...storedRow,
+    sessionId: nonEmpty(cleanLiveRow.sessionId) || storedRow.sessionId,
+    status: cleanLiveRow.status,
+  };
+}
+
+function orderedDockRows(primaryRows, interactiveRows, liveRows = []) {
+  const byThreadID = new Map();
+  const liveRowsByID = new Map(liveRows.map((row) => [row?.id, row]).filter(([id]) => id));
+  const orderedThreadIDs = [];
+  const addRow = (row, lane) => {
+    if (!row?.id) {
+      return;
+    }
+    const liveRow = liveRowsByID.get(row.id);
+    const rowWithLiveStatus = liveRow ? overlayLiveStatus(row, liveRow) : row;
+    const existing = byThreadID.get(row.id);
+    if (!existing) {
+      orderedThreadIDs.push(row.id);
+      byThreadID.set(row.id, { lane, row: rowWithLiveStatus });
+      return;
+    }
+    byThreadID.set(row.id, {
+      lane: existing.lane,
+      row: preferThread(rowWithLiveStatus, existing.row),
+    });
+  };
+
+  for (const row of primaryRows) {
+    addRow(row, dockLaneForThread(row));
+  }
+  for (const row of interactiveRows) {
+    addRow(row, "human");
+  }
+  return orderedThreadIDs.map((threadID) => byThreadID.get(threadID)).filter(Boolean);
+}
+
+async function fetchDockLiveRows(config) {
+  try {
+    const snapshot = await liveStatusCacheForConfig(config).snapshotForRouting();
+    return Array.isArray(snapshot.rows) ? snapshot.rows : [];
+  } catch (error) {
+    config.logger?.warn?.("dock.live_status_overlay_failed", { error });
+    return [];
+  }
 }
 
 async function fetchDockSessionRows(config) {
@@ -208,28 +299,39 @@ async function fetchDockSessionRows(config) {
     sortDirection: "desc",
     modelProviders: [],
   };
-  const [human, automation] = await Promise.all([
-    aggregateThreadList(config, baseParams),
-    aggregateThreadList(config, {
+  const [primaryRows, interactiveRows, liveRows] = await Promise.all([
+    fetchDockThreadListRows(config, {
       ...baseParams,
-      sourceKinds: AGENT_SOURCE_KINDS,
+      sourceKinds: DOCK_EXPLICIT_SOURCE_KINDS,
     }),
+    fetchDockThreadListRows(config, baseParams),
+    fetchDockLiveRows(config),
   ]);
-  const byThreadID = new Map();
-  for (const [response, lane] of [[human, "human"], [automation, "automation"]]) {
-    const rows = Array.isArray(response?.data) ? response.data : [];
-    for (const row of rows) {
-      if (!row?.id) {
-        continue;
-      }
-      const existing = byThreadID.get(row.id);
-      byThreadID.set(row.id, {
-        lane,
-        row: preferThread(row, existing?.row),
-      });
+  return orderedDockRows(primaryRows, interactiveRows, liveRows);
+}
+
+async function fetchDockThreadListRows(config, params) {
+  let cursor = params.cursor || null;
+  const rows = [];
+  const seenCursors = new Set();
+  while (true) {
+    const request = cursor ? { ...params, cursor } : { ...params };
+    const response = await aggregateThreadList(config, request);
+    if (Array.isArray(response?.data)) {
+      rows.push(...response.data);
     }
+    const nextCursor = response?.nextCursor || null;
+    if (!nextCursor) {
+      break;
+    }
+    const cursorKey = JSON.stringify(nextCursor);
+    if (seenCursors.has(cursorKey)) {
+      throw new Error(`thread/list returned repeated cursor while refreshing dock sessions: ${cursorKey}`);
+    }
+    seenCursors.add(cursorKey);
+    cursor = nextCursor;
   }
-  return [...byThreadID.values()];
+  return rows;
 }
 
 class CodexDockSessionProvider {
@@ -299,7 +401,7 @@ class DockSessionTable {
       asOf: this.asOf,
       freshness: this.freshness,
       hosts: [...this.hostsByID.values()].sort((lhs, rhs) => String(lhs.id).localeCompare(String(rhs.id))),
-      sessions: sortedSessions(this.sessionsByID.values()),
+      sessions: [...this.sessionsByID.values()],
     };
   }
 
@@ -307,7 +409,7 @@ class DockSessionTable {
     const previousSeq = this.seq;
     const previousSessions = new Map(this.sessionsByID);
     const previousHosts = new Map(this.hostsByID);
-    const normalizedSessions = sortedSessions(sessions);
+    const normalizedSessions = [...sessions];
     const nextSessions = new Map(normalizedSessions.map((session) => [session.id, session]));
     const nextHosts = new Map([[host.id, host]]);
     const upsertHosts = [];
@@ -437,9 +539,7 @@ class DockSessionAggregator {
 
   async snapshot() {
     this.start();
-    if (this.refreshPromise) {
-      await this.refreshPromise.catch(() => {});
-    }
+    await this.refreshNow({ notify: false }).catch(() => {});
     return this.table.snapshot();
   }
 
@@ -577,4 +677,5 @@ export {
   handleDockSubscribe,
   normalizeThread,
   normalizedStatus,
+  orderedDockRows,
 };

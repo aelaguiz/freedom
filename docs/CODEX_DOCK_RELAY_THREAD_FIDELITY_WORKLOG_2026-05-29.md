@@ -4,6 +4,10 @@ date: 2026-05-29
 status: active
 doc_type: worklog
 owners: [Amir, Codex]
+related:
+  - docs/CODEX_DOCK_GOALS_2026-05-29.md
+  - docs/CODEX_APP_SERVER_THREAD_TYPES_AND_STATE_2026-05-29.md
+  - docs/CODEX_DISK_DB_THREAD_TYPES_AND_STATE_2026-05-29.md
 ---
 
 # Codex Dock Relay Thread Fidelity Worklog
@@ -16,6 +20,8 @@ in SQLite.
 
 The goal is diagnostic only. This work documents differences; it does not fix
 them.
+
+Related goal source: [Codex Dock Goals](CODEX_DOCK_GOALS_2026-05-29.md).
 
 ## Tool Added
 

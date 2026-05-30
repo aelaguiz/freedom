@@ -908,6 +908,129 @@ test("thread/turns/list routes to the thread owning upstream", async () => {
   }
 });
 
+test("thread/goal/get routes to the thread owning upstream", async () => {
+  const liveServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(liveServer);
+  const liveUrl = `ws://127.0.0.1:${liveServer.address().port}`;
+  const liveMarker = spawnLoopbackAppServerMarker(liveUrl);
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  let liveGoalRequests = 0;
+  let historyGoalRequests = 0;
+
+  liveServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "live-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/loaded/list") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: { data: ["live-owner"], nextCursor: null },
+        }));
+      } else if (message.method === "thread/read") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            thread: {
+              id: "live-owner",
+              updatedAt: 30,
+              source: { custom: "chatgpt" },
+              status: { type: "idle" },
+            },
+          },
+        }));
+      } else if (message.method === "thread/goal/get") {
+        liveGoalRequests += 1;
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            goal: {
+              threadId: message.params.threadId,
+              objective: "Live goal",
+              status: "in_progress",
+              tokenBudget: null,
+              tokensUsed: 1,
+              timeUsedSeconds: 2,
+              createdAt: 3,
+              updatedAt: 4,
+            },
+          },
+        }));
+      }
+    });
+  });
+
+  historyServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "history-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/goal/get") {
+        historyGoalRequests += 1;
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            goal: {
+              threadId: message.params.threadId,
+              objective: "History goal",
+              status: "paused",
+              tokenBudget: 100,
+              tokensUsed: 10,
+              timeUsedSeconds: 20,
+              createdAt: 30,
+              updatedAt: 40,
+            },
+          },
+        }));
+      }
+    });
+  });
+
+  await sleepMs(20);
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const liveResponse = await jsonRpcRequest(ws, "thread/goal/get", { threadId: "live-owner" });
+    assert.equal(liveResponse.result.goal.objective, "Live goal");
+    const historyResponse = await jsonRpcRequest(ws, "thread/goal/get", { threadId: "history-owner" });
+    assert.equal(historyResponse.result.goal.objective, "History goal");
+    assert.equal(liveGoalRequests, 1);
+    assert.equal(historyGoalRequests, 1);
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeProcess(liveMarker);
+    await closeWebSocketServer(liveServer);
+    await closeWebSocketServer(historyServer);
+  }
+});
+
 test("thread/resume forwards upstream notifications requests and phone responses", async () => {
   const threadId = "thread-forward-phase5";
   let forwardedResponse = null;

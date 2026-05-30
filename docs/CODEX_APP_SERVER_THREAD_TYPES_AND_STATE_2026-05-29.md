@@ -4,6 +4,10 @@ date: 2026-05-29
 status: active
 doc_type: reference
 owners: [Amir, Codex]
+related:
+  - docs/CODEX_DOCK_GOALS_2026-05-29.md
+  - docs/CODEX_DOCK_RELAY_THREAD_FIDELITY_WORKLOG_2026-05-29.md
+  - docs/CODEX_DISK_DB_THREAD_TYPES_AND_STATE_2026-05-29.md
 ---
 
 # Codex App-Server Thread Types And State
@@ -24,9 +28,12 @@ It exposes several smaller facts. A client has to combine those facts:
 - `thread/loaded/list`, `thread/closed`, and `Thread.status.type` are the main
   live-vs-stored signals.
 - `thread/goal/get` is the authoritative goal API when the goals feature is
-  enabled and the thread is persisted.
+  enabled and the thread is persisted, but it is a read-by-thread-ID API. It is
+  not a standalone goal listing API and it does not expose SQLite `goal_id`.
 - Turn/item history is where prompt starts, spawned-agent tool calls, JSON-ish
   output, review mode, commands, compaction, and user messages can be inspected.
+
+Related goal source: [Codex Dock Goals](CODEX_DOCK_GOALS_2026-05-29.md).
 
 ## Scope
 
@@ -96,7 +103,7 @@ Use these confidence levels when designing UI or relay metadata:
 
 | Surface | What it tells you | Important limit |
 | --- | --- | --- |
-| `thread/list` | Stored threads with status overlay, source filters, archived filter, cwd/search/model filters. | Does not populate `turns`; omitted/empty `sourceKinds` only returns interactive sources. |
+| `thread/list` | Stored threads with status overlay, source filters, archived filter, cwd/search/model filters. | Does not populate `turns`; omitted/empty `sourceKinds` only returns interactive sources; rows without a preview are not listable. |
 | `thread/search` | Stored threads plus snippets. | Same kind of stored summary as list. |
 | `thread/read` | One thread by ID, optionally with turns. | Reads without resuming. Ephemeral history is not generally available once unloaded. |
 | `thread/resume` | Loads or rejoins a thread. | If the thread is already running, app-server rejoins the live thread instead of cold-resuming. |
@@ -104,7 +111,7 @@ Use these confidence levels when designing UI or relay metadata:
 | `thread/fork` | Creates a fork from another thread. | Forks are relationship/type signals through `forkedFromId`, not separate source types. |
 | `thread/loaded/list` | IDs currently loaded in memory. | IDs only; use `thread/read` or subscriptions for details. |
 | `thread/unsubscribe` | Removes this connection's subscription. | If it was the last subscriber, unload happens after 30 minutes of no subscribers and no activity. |
-| `thread/goal/get` | Current persisted goal, if any. | Requires goals feature and a persisted thread. Ephemeral threads do not support goals. |
+| `thread/goal/get` | Current persisted goal for a known thread ID, if any. | Requires goals feature and a persisted thread. Ephemeral threads do not support goals. It does not list all goals and does not expose SQLite `goal_id`. |
 | `thread/turns/list` | Paged stored turn history. | Experimental; full item hydration is limited by `itemsView`. |
 | `turn/start` | Starts a turn, optionally with `outputSchema`. | The schema is a turn request setting; it is not a durable `Thread` field. |
 | `thread/realtime/*` | Realtime session actions and notifications. | Realtime active state is not a durable `Thread` summary field. |
@@ -740,6 +747,11 @@ Goal fields:
 - `createdAt`
 - `updatedAt`
 
+Not exposed through app-server goal APIs:
+
+- SQLite `goal_id`.
+- A standalone list of every row in `goals_1.sqlite.thread_goals`.
+
 ### How To Tell If A Goal Is Running
 
 There is no single perfect `goalIsCurrentlyExecuting` field.
@@ -773,9 +785,15 @@ Important API limits:
   `goals feature is disabled`.
 - If the thread is ephemeral, goal APIs fail because goals require a persisted
   thread.
+- `thread/goal/get` needs a known, materialized thread ID. It cannot discover
+  orphan rows that exist in `goals_1.sqlite` but have no current
+  `state_5.sqlite.threads` row.
 - The model-facing tools can mark a goal `complete` or `blocked`; statuses
   like paused, usage-limited, and budget-limited are controlled by app/server
   policy or external mutation.
+- Goal counters and status can change while a thread is running. For an audit,
+  treat goal comparisons as non-atomic unless the app-server is quiesced or
+  the API provides one snapshot of thread and goal state together.
 
 ## Started With A Prompt
 
@@ -1117,6 +1135,12 @@ Important caveat:
 
 `thread/list` and `thread/search` are the main stored-thread discovery APIs.
 
+Important listability limit:
+
+- `thread/list` filters out rows with an empty preview. A thread can be
+  directly readable by `thread/read` if the caller already knows the ID, while
+  still being absent from every `thread/list` page.
+
 `thread/list` parameters:
 
 | Parameter | Meaning |
@@ -1389,3 +1413,41 @@ Inspected upstream files in `/Users/aelaguiz/workspace/codex`:
   - Internal spawn-edge table shape.
 - `codex-rs/state/src/runtime/threads.rs`
   - Internal spawned-descendant traversal and agent-path lookup.
+
+## Live App-Server Proof On 2026-05-30
+
+Runtime app-server:
+
+```text
+/Users/aelaguiz/.local/bin/codex
+codex-cli 0.135.0-alpha.2
+```
+
+Observed facts:
+
+- `relay/state/snapshot` represented 1514 active app-server-listable threads.
+- SQLite had 1515 active thread rows.
+- The one missing thread was direct-readable by ID but absent from every
+  app-server `thread/list` scope because its preview was empty:
+  `019e56d4-4339-76a1-9ef3-37f081af3f08`.
+- `dock/subscribe` returned 1514 sessions, exactly matching the active
+  app-server-listable set.
+- `dock/subscribe` returned 0 archived rows, 0 duplicate session IDs, and 0
+  duplicate thread IDs.
+- Spawn parent/child parity matched 1189 of 1189 app-server-listable spawned
+  rows.
+
+Read-only source check:
+
+- Current `ThreadListParams` has no previewless/exhaustive list option.
+- Current SQLite list filtering applies `threads.preview <> ''`.
+- Current rollout listing requires session metadata and a discoverable preview.
+- Current `thread/read` can read at least some previewless threads when the
+  caller already knows the thread ID.
+
+Meaning:
+
+- The relay can be complete for the set app-server can list.
+- The relay cannot discover previewless direct-readable threads without a new
+  app-server list surface or bypassing app-server, which this project must not
+  do.

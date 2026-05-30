@@ -4,6 +4,10 @@ date: 2026-05-29
 status: active
 doc_type: reference
 owners: [Amir, Codex]
+related:
+  - docs/CODEX_DOCK_GOALS_2026-05-29.md
+  - docs/CODEX_DOCK_RELAY_THREAD_FIDELITY_WORKLOG_2026-05-29.md
+  - docs/CODEX_APP_SERVER_THREAD_TYPES_AND_STATE_2026-05-29.md
 ---
 
 # Codex Disk And Database Thread Types And State
@@ -16,6 +20,8 @@ metadata, and the app-server is still required for live state. A thread can be
 stored on disk and not loaded, loaded in the app-server, archived, spawned by
 another thread, forked, goal-tracked, or prompt-started. No single storage field
 answers all of that.
+
+Related goal source: [Codex Dock Goals](CODEX_DOCK_GOALS_2026-05-29.md).
 
 ## Scope
 
@@ -87,8 +93,8 @@ Use this rule of thumb:
 | Is it forked? | Rollout `payload.forked_from_id` in the `session_meta` line. | `state_5.sqlite.threads` does not have a `forked_from_id` column. |
 | Did it start with a prompt? | First persisted user message in rollout; DB `first_user_message` and `preview`. | Whether that prompt came in the same RPC that created the thread. |
 | Was it a JSON-mode turn? | Usually not durable for normal turns. `final_output_json_schema` lives in the turn runtime path, not `TurnContextItem` or `threads`. | Old JSON-mode use after the fact. |
-| Does it have a current goal? | `goals_1.sqlite.thread_goals`. | Ephemeral thread goals, because ephemeral threads do not get persisted goals. |
-| What is the current goal status? | `goals_1.sqlite.thread_goals.status`. | Whether a currently running turn is about to change it. |
+| Does it have a current goal? | `goals_1.sqlite.thread_goals`. | Ephemeral thread goals, because ephemeral threads do not get persisted goals. App-server cannot list orphan goal rows by itself. |
+| What is the current goal status? | `goals_1.sqlite.thread_goals.status`. | Whether a currently running turn is about to change it. Goal rows can change while an audit is running. |
 | What turns/items happened? | Rollout JSONL. | Some live events are intentionally not persisted. |
 | Is realtime active now? | App-server live state. Rollout `turn_context.realtime_active` is only last persisted turn context. | Current realtime state from disk alone. |
 
@@ -430,6 +436,17 @@ complete
 the current state migrations drop it. For current storage, check
 `goals_1.sqlite`.
 
+Observed storage caveat from the 2026-05-30 relay parity audit:
+
+- `goals_1.sqlite.thread_goals` can contain rows whose `thread_id` is absent
+  from current `state_5.sqlite.threads`.
+- App-server `thread/goal/get` can read a goal for a known materialized thread
+  ID, but app-server does not expose a standalone goal-list API.
+- App-server goal payloads do not include SQLite `goal_id`.
+- For current app-server-reachable threads, compare by `thread_id` and goal
+  content. For orphan goal rows, storage can prove the row exists, but the
+  app-server cannot discover it without a thread list/read path for that ID.
+
 ## `session_index.jsonl`
 
 Thread names can also be stored in this append-only sidecar:
@@ -645,7 +662,8 @@ Goal event trail:
 Expected app-server match:
 
 - `thread/goal/get` should match `goals_1.sqlite.thread_goals` for persisted
-  threads when the goals feature is enabled.
+  threads when the goals feature is enabled and the thread has a current
+  materialized thread row.
 
 Caveats:
 
@@ -654,6 +672,13 @@ Caveats:
   changed.
 - `thread_goal_updated` events are history. `goals_1.sqlite.thread_goals` is
   the current persisted row.
+- `goals_1.sqlite` can contain orphan goal rows whose `thread_id` is absent
+  from `state_5.sqlite.threads`.
+- App-server does not expose SQLite `goal_id` and does not expose a
+  goal-list API. It only exposes current goal state by known thread ID.
+- Goal rows can change while the app-server is running. A storage-vs-app-server
+  audit must either quiesce the app-server or record before/after goal row
+  stability.
 
 ### Turn State
 
@@ -1131,6 +1156,20 @@ Expected rule:
 If a goal was updated several times, old rollout events will not match the
 current goal row.
 
+### Goal DB Has Row, App-Server Cannot Show It
+
+Possible explanations:
+
+- The goal row's `thread_id` is absent from `state_5.sqlite.threads`.
+- The thread exists only as stale historical storage.
+- The app-server has no standalone goal list API and cannot discover goal rows
+  without a current known thread ID.
+- The thread is ephemeral, in which case a persisted goal row would be
+  unexpected.
+
+Check whether the thread ID exists in `state_5.sqlite.threads`, whether its
+`rollout_path` exists, and whether `thread/read` can read the ID directly.
+
 ### JSON Mode Cannot Be Found
 
 Expected rule:
@@ -1208,3 +1247,41 @@ For durable truth, start with the rollout JSONL. For fast metadata and spawn
 edges, use `state_5.sqlite`. For current goals, use `goals_1.sqlite`. For live
 state, loaded state, ephemeral threads, realtime current state, and exact
 JSON-mode turn requests, cross-check with the app-server.
+
+## Live Cross-Check On 2026-05-30
+
+Latest full parity report:
+
+```text
+/tmp/codex-client/relay-state-parity-20260530-live-after-cleanup.json
+```
+
+Observed durable storage facts:
+
+- `state_5.sqlite.threads` contained 1515 active thread rows.
+- 1514 of those rows were app-server-listable.
+- 1 row had an empty preview and was outside current app-server list
+  discovery:
+  `019e56d4-4339-76a1-9ef3-37f081af3f08`.
+- `thread_spawn_edges` contained 1189 child edges with current child thread
+  rows, and all 1189 matched the relay/app-server spawned-source parent.
+- `goals_1.sqlite.thread_goals` contained 165 rows.
+- 142 goal rows had matching current thread rows and were visible through
+  app-server `thread/goal/get`.
+- 23 goal rows pointed at thread IDs absent from `state_5.sqlite.threads`.
+
+Observed mismatch classes:
+
+- 179 storage metadata disagreements between SQLite/current app-server values
+  and rollout `session_meta`, mostly `cwd`, `updatedAt`, and git metadata.
+- 47 app-server list-row inconsistencies where the same thread returned
+  different field values across list scopes.
+- 20 read-detail disagreements between app-server read surfaces, rollout
+  metadata, or live routed detail.
+
+Meaning:
+
+- Disk/DB proves one true thread exists that app-server cannot enumerate by
+  list, even though app-server can read it by known ID.
+- Disk/DB also proves current goal rows are not an atomic app-server-listable
+  thread-only set, because orphan goal rows exist.

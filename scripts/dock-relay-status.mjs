@@ -355,7 +355,8 @@ function classifyRelayRequestError(method, error) {
       retryable: error.data.retryable ?? error.code !== -32602,
     };
   }
-  if (method === "thread/list" || method === "thread/read" || method === "thread/turns/list"
+  if (method === "thread/list" || method === "thread/search" || method === "thread/read"
+    || method === "thread/turns/list" || method === "thread/goal/get"
     || method === "thread/archive" || method === "thread/unarchive") {
     return {
       subsystem: "history",
