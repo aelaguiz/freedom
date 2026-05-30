@@ -37,12 +37,28 @@ done.
 - `outputs/04-pinned-filter-manage.png` - companion surface: Filters sheet with
   `Pinned only` and an inline manage/unpin list.
 
+## Pin/Unpin Flow Mockups
+
+- `outputs/flow-contact-sheet.png` - 2x2 review sheet for the pin/unpin flows.
+- `outputs/flow-01-watch-strip-pin-unpin.png` - full Option A flow: pin from a
+  row, watch in Dock, open pinned thread, unpin when done.
+- `outputs/flow-02-pinned-lens-pin-unpin.png` - full Option B flow: pin from
+  detail, use the `Pinned` lens, review pinned rows, unpin from the lens.
+- `outputs/flow-03-bottom-watch-pin-unpin.png` - full Option D flow: pin from a
+  row, show bottom watch accessory, expand it, unpin from the watch sheet.
+- `outputs/flow-04-filter-manage-pin-unpin.png` - full Option C companion flow:
+  open Filters, choose `Pinned only`, manage pinned rows, unpin and clear scope.
+
 ## Prompt Files
 
 - `prompts/01-pinned-watch-strip.md`
 - `prompts/02-pinned-lens.md`
 - `prompts/03-bottom-watch-accessory.md`
 - `prompts/04-pinned-filter-manage.md`
+- `prompts/flows/01-watch-strip-pin-unpin-flow.md`
+- `prompts/flows/02-pinned-lens-pin-unpin-flow.md`
+- `prompts/flows/03-bottom-watch-pin-unpin-flow.md`
+- `prompts/flows/04-filter-manage-pin-unpin-flow.md`
 
 ## Generation Notes
 
@@ -59,6 +75,19 @@ done.
   - `/Users/aelaguiz/workspace/lessons_studio/feat/feat/feat/gw_controls/docs/APP/REF/GPT2/openai-gpt-image-2-prompting-guide.md`
   - `/Users/aelaguiz/workspace/lessons_studio/feat/feat/feat/gw_controls/docs/APP/REF/GPT2/gpt-image-2-character-scene-consistency-production-guide.md`
 
+Flow mockup generation:
+
+- Model: `gpt-image-2`
+- Quality: `high`
+- Size: `landscape`
+- Reason for `high`: the flow boards have four small iPhone screens and dense
+  labels, so text legibility matters more than draft cost.
+- Reference approach:
+  - same real screenshots as the concept mockups
+  - matching concept mockup as the primary style anchor
+  - `outputs/contact-sheet.png` as a whole-set consistency anchor
+  - `gw-controls-figma-ref.png` as the external visual reference
+
 ## Product Read
 
 Strongest direction:
@@ -72,6 +101,16 @@ Why:
 - It is explicit user state, not inference.
 - It keeps pinning small enough for phone.
 - It gives a visible place to unpin/manage.
+
+Strongest full interaction flow:
+
+- `outputs/flow-01-watch-strip-pin-unpin.png`
+
+Why:
+
+- It shows the entire expected loop without changing the Dock's default job:
+  pin from row, keep watching in `Newest`, open the pinned thread, then unpin
+  when done.
 
 Useful supporting surface:
 

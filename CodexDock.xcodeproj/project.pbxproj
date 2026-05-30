@@ -48,6 +48,7 @@
 		74C104A7F7207E4AF17272C5 /* DockSessionProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C81305AA09AC5FF83868663 /* DockSessionProjection.swift */; };
 		7620B7A25D86E81210477475 /* AppServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABDB5847612728C391956985 /* AppServerClient.swift */; };
 		763F61037E061541DFDC5EC7 /* ThreadDetailStoreTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AEFC520C4BAC0B3AE2B1174 /* ThreadDetailStoreTestSupport.swift */; };
+		79FDCB72D584D3964DF6E79B /* DockPinnedViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C60772205481B8CBBE5DE8BA /* DockPinnedViews.swift */; };
 		7AF96D0A47BCA693F3A69031 /* AppConnectivityStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A210B5FEF921CE9BD7B07766 /* AppConnectivityStoreTests.swift */; };
 		7B25578066AF31343072FDB2 /* CodexDockBootstrapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C5D41B7D2FF05EE75C975E6 /* CodexDockBootstrapView.swift */; };
 		804101052873E16E35EA46C3 /* AppConnectivityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AC49015E8B9106FA9F6FBD7 /* AppConnectivityStore.swift */; };
@@ -217,6 +218,7 @@
 		ACA75584AA40FC172ED36E9D /* AppServerMethods.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerMethods.swift; sourceTree = "<group>"; };
 		BBB8A0894987E6B3EEDB7A78 /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
 		C281E2BC7148818E81A05BDD /* MetricKitDiagnosticsReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitDiagnosticsReporter.swift; sourceTree = "<group>"; };
+		C60772205481B8CBBE5DE8BA /* DockPinnedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockPinnedViews.swift; sourceTree = "<group>"; };
 		C6E2A340406A35F4BAA5D661 /* ThreadDetailStreamingMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailStreamingMergeTests.swift; sourceTree = "<group>"; };
 		CD386E730F3CFC73F11ED939 /* RelayBootstrapStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayBootstrapStore.swift; sourceTree = "<group>"; };
 		D0ED12D9B6DD8F64B1253A01 /* AppLifecycleCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLifecycleCoordinator.swift; sourceTree = "<group>"; };
@@ -456,6 +458,7 @@
 				3C5D41B7D2FF05EE75C975E6 /* CodexDockBootstrapView.swift */,
 				EB38D84A51C0B2DFCD81D1B1 /* DockFilterSurfaceView.swift */,
 				A590A4B3617FA9C7D793CF50 /* DockGroupRows.swift */,
+				C60772205481B8CBBE5DE8BA /* DockPinnedViews.swift */,
 				FA43C7C5E471419A46890F20 /* DockSharedViews.swift */,
 				4A92948E4571E0CEE65CAE35 /* DockView.swift */,
 			);
@@ -690,6 +693,7 @@
 				E2000FC36D2227D461E5DD2F /* DockFilterSurfaceView.swift in Sources */,
 				B67F53656DBBB5DAAFBE8051 /* DockGroupRows.swift in Sources */,
 				E8B4F584399DE2B51D9E3B1A /* DockHostConfiguration.swift in Sources */,
+				79FDCB72D584D3964DF6E79B /* DockPinnedViews.swift in Sources */,
 				74C104A7F7207E4AF17272C5 /* DockSessionProjection.swift in Sources */,
 				69D02FDE3B2CC81AC588D424 /* DockSessionTable.swift in Sources */,
 				8C3C7A78B136227B1485019D /* DockSharedViews.swift in Sources */,

@@ -117,6 +117,128 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         )
     }
 
+    func testScriptedDockSwipePinPersistsAcrossLensesRefreshRelaunchAndUnpin() throws {
+        let host = "scripted-pin-\(UUID().uuidString.prefix(8)).local:4510"
+        let endpoint = try DockRelayEndpoint.parse(host)
+        let slug = endpoint.id.map { character in
+            character.isLetter || character.isNumber ? String(character) : "-"
+        }.joined()
+        let threadID = "\(slug)-running"
+        let rowID = AutomationID.Dock.row(hostID: endpoint.id, threadID: threadID)
+        let pinActionID = AutomationID.Dock.rowAction(hostID: endpoint.id, threadID: threadID, action: .pin)
+        let unpinActionID = AutomationID.Dock.rowAction(hostID: endpoint.id, threadID: threadID, action: .unpin)
+        let manageRowID = AutomationID.Dock.pinnedManageRow(hostID: endpoint.id, threadID: threadID)
+        let manageUnpinID = AutomationID.Dock.pinnedManageUnpinButton(hostID: endpoint.id, threadID: threadID)
+        let app = launchRelayBackedApp(
+            hosts: host,
+            dockStreamScenario: "retention"
+        )
+        XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
+
+        let root = app.element(id: AutomationID.Dock.root)
+        XCTAssertTrue(
+            root.waitForAnyStringValue(containing: ["rows=2", "rows=3"], timeout: 10),
+            "Scripted stream did not publish rows. Root value: \(root.stringValue)"
+        )
+        XCTAssertFalse(app.element(id: AutomationID.Dock.pinnedSection).exists)
+
+        let row = app.element(id: rowID)
+        XCTAssertTrue(
+            row.waitForExistence(timeout: 10),
+            "Scripted running row did not render.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+        row.swipeLeft()
+        let pinButton = app.element(id: pinActionID)
+        XCTAssertTrue(
+            pinButton.waitForExistence(timeout: 5),
+            "Swipe did not expose the row-specific Pin action.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+        pinButton.tap()
+
+        XCTAssertTrue(root.waitForStringValue(containing: "pinned=1", timeout: 10))
+        app.assertElementExists(id: AutomationID.Dock.pinnedSection.rawValue, timeout: 10)
+        XCTAssertTrue(app.element(id: rowID).waitForStringValue(containing: "Pinned", timeout: 5))
+
+        let searchField = app.element(id: AutomationID.Dock.searchField)
+        searchField.tap()
+        searchField.typeText("no-pinned-match")
+        XCTAssertTrue(
+            root.waitForStringValue(containing: "pinned=0", timeout: 5),
+            "Search did not narrow pinned rows. Root value: \(root.stringValue)"
+        )
+        XCTAssertTrue(
+            app.waitForElementToDisappear(id: AutomationID.Dock.pinnedSection, timeout: 5),
+            "Pinned section stayed visible after search excluded the pinned row.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+        app.assertElementExists(id: AutomationID.Dock.pinnedHiddenHint.rawValue, timeout: 5)
+        app.element(id: AutomationID.Dock.clearSearchButton).tap()
+        XCTAssertTrue(root.waitForStringValue(containing: "pinned=1", timeout: 5))
+        app.assertElementExists(id: AutomationID.Dock.pinnedSection.rawValue, timeout: 5)
+        XCTAssertTrue(app.waitForElementToDisappear(id: AutomationID.Dock.pinnedHiddenHint, timeout: 5))
+
+        app.element(id: AutomationID.Dock.pinnedManageButton).tap()
+        app.assertElementExists(id: AutomationID.Dock.pinnedManageSheet.rawValue, timeout: 10)
+        app.assertElementExists(id: manageRowID.rawValue, timeout: 10)
+        let manageUnpinButton = app.element(id: manageUnpinID)
+        XCTAssertTrue(
+            manageUnpinButton.waitForExistence(timeout: 5),
+            "Manage did not expose the row-specific Unpin action.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+        manageUnpinButton.tap()
+        app.buttons["Done"].tap()
+        XCTAssertTrue(root.waitForStringValue(containing: "pinned=0", timeout: 10))
+        XCTAssertTrue(
+            app.waitForElementToDisappear(id: AutomationID.Dock.pinnedSection, timeout: 5),
+            "Pinned section stayed visible after Manage unpin.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+
+        let repinRow = app.element(id: rowID)
+        XCTAssertTrue(repinRow.waitForExistence(timeout: 10))
+        repinRow.swipeLeft()
+        let repinButton = app.element(id: pinActionID)
+        XCTAssertTrue(
+            repinButton.waitForExistence(timeout: 5),
+            "Swipe did not expose Pin after Manage unpin.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+        repinButton.tap()
+        XCTAssertTrue(root.waitForStringValue(containing: "pinned=1", timeout: 10))
+        app.assertElementExists(id: AutomationID.Dock.pinnedSection.rawValue, timeout: 10)
+
+        app.element(id: AutomationID.Dock.lensButton(DockLensID.host.rawValue)).tap()
+        XCTAssertTrue(root.waitForStringValue(containing: "lens=host", timeout: 5))
+        app.assertElementExists(id: AutomationID.Dock.pinnedSection.rawValue, timeout: 5)
+
+        app.element(id: AutomationID.Dock.lensButton(DockLensID.branch.rawValue)).tap()
+        XCTAssertTrue(root.waitForStringValue(containing: "lens=branch", timeout: 5))
+        app.assertElementExists(id: AutomationID.Dock.pinnedSection.rawValue, timeout: 5)
+
+        app.swipeDown()
+        XCTAssertTrue(root.waitForStringValue(containing: "pinned=1", timeout: 10))
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
+        let relaunchedRoot = app.element(id: AutomationID.Dock.root)
+        XCTAssertTrue(relaunchedRoot.waitForStringValue(containing: "pinned=1", timeout: 10))
+        app.assertElementExists(id: AutomationID.Dock.pinnedSection.rawValue, timeout: 10)
+
+        let relaunchedRow = app.element(id: rowID)
+        XCTAssertTrue(relaunchedRow.waitForExistence(timeout: 10))
+        relaunchedRow.swipeLeft()
+        let unpinButton = app.element(id: unpinActionID)
+        XCTAssertTrue(
+            unpinButton.waitForExistence(timeout: 5),
+            "Swipe did not expose the row-specific Unpin action.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+        unpinButton.tap()
+
+        XCTAssertTrue(relaunchedRoot.waitForStringValue(containing: "pinned=0", timeout: 10))
+        XCTAssertTrue(
+            app.waitForElementToDisappear(id: AutomationID.Dock.pinnedSection, timeout: 5),
+            "Pinned section stayed visible after unpin.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+    }
+
     func testScriptedDormantRowDetailDoesNotShowNotLoadedStatus() throws {
         let app = launchRelayBackedApp(
             hosts: "scripted-m5.local:4510",
@@ -330,6 +452,17 @@ private extension XCUIApplication {
             }
         }
         return false
+    }
+
+    func waitForElementToDisappear(id: AutomationID, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !element(id: id).exists {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        return !element(id: id).exists
     }
 
     func waitForHittableButton(

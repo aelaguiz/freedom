@@ -183,6 +183,24 @@ final class DockStoreTestsProjection: XCTestCase {
         XCTAssertEqual(visible.rows.map(\.id.threadID), ["idle", "running"])
     }
 
+    func testDefaultIdleHiddenDoesNotHidePinnedRows() {
+        let snapshot = makeSnapshot(rows: [
+            makeRow(threadID: "idle-pinned", title: "Idle pinned", branch: "main", status: .idle, lastActivity: 400, isPinned: true, pinnedAt: 500),
+            makeRow(threadID: "idle-body", title: "Idle body", branch: "main", status: .idle, lastActivity: 300)
+        ])
+
+        let projection = snapshot.project(options: .init(lens: .newest))
+
+        XCTAssertEqual(projection.pinnedRows.map(\.id.threadID), ["idle-pinned"])
+        XCTAssertEqual(projection.rows, [])
+        XCTAssertEqual(projection.hiddenCounts.idle, 1)
+        XCTAssertEqual(projection.summary.resultCount, 1)
+        XCTAssertEqual(
+            projection.pinnedSummary,
+            DockPinnedSummary(visibleCount: 1, totalCount: 1, hiddenByScopeCount: 0)
+        )
+    }
+
     func testDormantOnlyEmptyReasonUsesNormalFilterCopy() {
         let snapshot = makeSnapshot(rows: [
             makeRow(threadID: "running", title: "Running", branch: "main", status: .running, lastActivity: 300)
@@ -197,6 +215,169 @@ final class DockStoreTestsProjection: XCTestCase {
 
         XCTAssertEqual(projection.emptyReason, .noFilterMatches)
         XCTAssertEqual(projection.emptyReason?.message, "No sessions match the active filters.")
+    }
+
+    func testPinnedRowsAreSplitFromNewestBodyAndCountInSummary() {
+        let snapshot = makeSnapshot(rows: [
+            makeRow(threadID: "pinned", title: "Pinned row", branch: "main", status: .running, lastActivity: 100, isPinned: true, pinnedAt: 300),
+            makeRow(threadID: "normal", title: "Normal row", branch: "main", status: .running, lastActivity: 200)
+        ])
+
+        let projection = snapshot.project(options: .init(lens: .newest))
+
+        XCTAssertEqual(projection.pinnedRows.map(\.id.threadID), ["pinned"])
+        XCTAssertEqual(projection.rows.map(\.id.threadID), ["normal"])
+        XCTAssertEqual(projection.summary.resultCount, 2)
+        XCTAssertEqual(
+            projection.pinnedSummary,
+            DockPinnedSummary(visibleCount: 1, totalCount: 1, hiddenByScopeCount: 0)
+        )
+    }
+
+    func testPinnedRowsStayAboveHostAndBranchLensesWithoutDuplicatingInGroups() {
+        let amir = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
+        let home = makeProjectionHost(host: "home.fairy-salmon.ts.net")
+        let snapshot = makeSnapshot(
+            rows: [
+                makeRow(host: amir, threadID: "amir-pinned", title: "Amir pinned", branch: "main", status: .running, lastActivity: 300, isPinned: true, pinnedAt: 350),
+                makeRow(host: amir, threadID: "amir-body", title: "Amir body", branch: "main", status: .running, lastActivity: 200),
+                makeRow(host: home, threadID: "home-body", title: "Home body", branch: "feature", status: .running, lastActivity: 100)
+            ],
+            hosts: [amir, home]
+        )
+
+        let hostProjection = snapshot.project(options: .init(lens: .host))
+        let branchProjection = snapshot.project(options: .init(lens: .branch))
+
+        XCTAssertEqual(hostProjection.pinnedRows.map(\.id.threadID), ["amir-pinned"])
+        XCTAssertEqual(hostProjection.groups.flatMap(\.rows).map(\.id.threadID), ["amir-body", "home-body"])
+        XCTAssertEqual(branchProjection.pinnedRows.map(\.id.threadID), ["amir-pinned"])
+        XCTAssertEqual(branchProjection.groups.flatMap(\.rows).map(\.id.threadID), ["amir-body", "home-body"])
+    }
+
+    func testSearchCanHidePinnedRowsAndReportsHiddenPinnedCount() {
+        let snapshot = makeSnapshot(rows: [
+            makeRow(threadID: "pinned", title: "Pinned alpha", branch: "main", status: .running, lastActivity: 300, isPinned: true, pinnedAt: 350),
+            makeRow(threadID: "normal", title: "Normal beta", branch: "main", status: .running, lastActivity: 200)
+        ])
+
+        let projection = snapshot.project(options: .init(lens: .newest, searchText: "beta"))
+
+        XCTAssertEqual(projection.pinnedRows, [])
+        XCTAssertEqual(projection.rows.map(\.id.threadID), ["normal"])
+        XCTAssertEqual(
+            projection.pinnedSummary,
+            DockPinnedSummary(visibleCount: 0, totalCount: 1, hiddenByScopeCount: 1)
+        )
+    }
+
+    func testFiltersCanHidePinnedRowsAndReportsHiddenPinnedCount() {
+        let amir = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
+        let home = makeProjectionHost(host: "home.fairy-salmon.ts.net")
+        let snapshot = makeSnapshot(
+            rows: [
+                makeRow(host: amir, threadID: "amir-pinned", title: "Amir pinned", branch: "main", status: .running, lastActivity: 300, isPinned: true, pinnedAt: 350),
+                makeRow(host: home, threadID: "home-body", title: "Home body", branch: "main", status: .running, lastActivity: 200)
+            ],
+            hosts: [amir, home]
+        )
+        let filters = DockFilterState(selectedHostIDs: [home.id])
+
+        let projection = snapshot.project(options: .init(lens: .host, filters: filters))
+
+        XCTAssertEqual(projection.pinnedRows, [])
+        XCTAssertEqual(projection.groups.flatMap(\.rows).map(\.id.threadID), ["home-body"])
+        XCTAssertEqual(
+            projection.pinnedSummary,
+            DockPinnedSummary(visibleCount: 0, totalCount: 1, hiddenByScopeCount: 1)
+        )
+    }
+
+    func testPinnedRowsSortByActivityThenPinnedAtThenStableID() {
+        let snapshot = makeSnapshot(rows: [
+            makeRow(threadID: "same-old-pin-b", title: "Same B", branch: "main", status: .running, lastActivity: 300, isPinned: true, pinnedAt: 100),
+            makeRow(threadID: "new-activity", title: "New activity", branch: "main", status: .running, lastActivity: 400, isPinned: true, pinnedAt: 50),
+            makeRow(threadID: "same-new-pin-a", title: "Same A", branch: "main", status: .running, lastActivity: 300, isPinned: true, pinnedAt: 200)
+        ])
+
+        let projection = snapshot.project(options: .init(lens: .newest))
+
+        XCTAssertEqual(
+            projection.pinnedRows.map(\.id.threadID),
+            ["new-activity", "same-new-pin-a", "same-old-pin-b"]
+        )
+    }
+
+    func testDockSessionTableAddsCachedPinnedRowsWhenLiveSummaryIsAbsent() {
+        let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
+        let key = LocalThreadMetadataKey(
+            hostID: host.id,
+            backendSessionID: "cached-session",
+            threadID: "cached-thread"
+        )
+        var table = DockSessionTable()
+        table.reset(hosts: [host])
+
+        let snapshot = table.snapshot(
+            hosts: [host],
+            localMetadata: [
+                key: LocalThreadMetadata(
+                    rail: .green,
+                    isPinned: true,
+                    pinnedAt: Date(timeIntervalSince1970: 250),
+                    lastKnownPinnedDisplay: LocalPinnedDisplaySnapshot(
+                        title: "Cached pinned",
+                        hostDisplayName: "Old Host",
+                        hostEndpoint: "old-host:4510",
+                        repository: "cached-repo",
+                        branch: "feature/cache",
+                        status: .running,
+                        lastActivity: "5m ago",
+                        lastActivityDate: Date(timeIntervalSince1970: 200),
+                        summary: "Cached summary",
+                        rail: .orange,
+                        label: "Watch",
+                        originKind: .human
+                    )
+                )
+            ],
+            now: { Date(timeIntervalSince1970: 300) }
+        )
+
+        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["cached-thread"])
+        XCTAssertEqual(snapshot.rows[0].title, "Cached pinned")
+        XCTAssertEqual(snapshot.rows[0].hostDisplayName, host.displayName)
+        XCTAssertEqual(snapshot.rows[0].repository, "cached-repo")
+        XCTAssertEqual(snapshot.rows[0].rail, .green)
+        XCTAssertTrue(snapshot.rows[0].isPinned)
+    }
+
+    func testDockSessionTableAddsNotLoadedPinnedPlaceholderWithoutCachedDisplay() {
+        let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
+        let key = LocalThreadMetadataKey(
+            hostID: host.id,
+            backendSessionID: "missing-session",
+            threadID: "missing-thread"
+        )
+        var table = DockSessionTable()
+        table.reset(hosts: [host])
+
+        let snapshot = table.snapshot(
+            hosts: [host],
+            localMetadata: [
+                key: LocalThreadMetadata(
+                    isPinned: true,
+                    pinnedAt: Date(timeIntervalSince1970: 250)
+                )
+            ],
+            now: { Date(timeIntervalSince1970: 300) }
+        )
+
+        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["missing-thread"])
+        XCTAssertEqual(snapshot.rows[0].title, "Not loaded")
+        XCTAssertEqual(snapshot.rows[0].status, .dormant)
+        XCTAssertEqual(snapshot.rows[0].summary, "This pinned thread is not loaded yet.")
+        XCTAssertTrue(snapshot.rows[0].isPinned)
     }
 }
 
@@ -231,7 +412,9 @@ private func makeRow(
     status: DockRowStatusKind,
     lastActivity: TimeInterval,
     label: String? = nil,
-    origin: SessionOrigin = .humanInteractive(subtype: .cli)
+    origin: SessionOrigin = .humanInteractive(subtype: .cli),
+    isPinned: Bool = false,
+    pinnedAt: TimeInterval? = nil
 ) -> DockRowViewModel {
     DockRowViewModel(
         id: HostScopedThreadID(hostID: host.id, threadID: threadID),
@@ -247,6 +430,8 @@ private func makeRow(
         summary: "Summary for \(title)",
         rail: .blue,
         label: label,
-        origin: origin
+        origin: origin,
+        isPinned: isPinned,
+        pinnedAt: pinnedAt.map(Date.init(timeIntervalSince1970:))
     )
 }

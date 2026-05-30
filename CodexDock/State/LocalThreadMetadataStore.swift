@@ -12,17 +12,91 @@ public struct LocalThreadMetadataKey: Codable, Equatable, Hashable, Sendable {
     }
 }
 
-public struct LocalThreadMetadata: Codable, Equatable, Sendable {
-    public var label: String?
-    public var rail: DockRowRail?
+public enum LocalPinnedDisplayOriginKind: String, Codable, Equatable, Sendable {
+    case human
+    case automation
+    case unknown
 
-    public init(label: String? = nil, rail: DockRowRail? = nil) {
-        self.label = Self.normalized(label)
-        self.rail = rail
+    public init(origin: SessionOrigin) {
+        switch origin.kind {
+        case .humanInteractive:
+            self = .human
+        case .agentOrAutomation:
+            self = .automation
+        case .unknown:
+            self = .unknown
+        }
     }
 
-    public var isEmpty: Bool {
-        label == nil && rail == nil
+    public var sessionOrigin: SessionOrigin {
+        switch self {
+        case .human:
+            return .humanInteractive(subtype: .cli)
+        case .automation:
+            return .agentOrAutomation(subtype: .exec)
+        case .unknown:
+            return .unknown()
+        }
+    }
+}
+
+public struct LocalPinnedDisplaySnapshot: Codable, Equatable, Sendable {
+    public var title: String
+    public var hostDisplayName: String
+    public var hostEndpoint: String
+    public var repository: String
+    public var branch: String
+    public var status: DockRowStatusKind
+    public var lastActivity: String
+    public var lastActivityDate: Date
+    public var summary: String
+    public var rail: DockRowRail
+    public var label: String?
+    public var originKind: LocalPinnedDisplayOriginKind
+
+    public init(
+        title: String,
+        hostDisplayName: String,
+        hostEndpoint: String,
+        repository: String,
+        branch: String,
+        status: DockRowStatusKind,
+        lastActivity: String,
+        lastActivityDate: Date,
+        summary: String,
+        rail: DockRowRail,
+        label: String?,
+        originKind: LocalPinnedDisplayOriginKind
+    ) {
+        self.title = title
+        self.hostDisplayName = hostDisplayName
+        self.hostEndpoint = hostEndpoint
+        self.repository = repository
+        self.branch = branch
+        self.status = status
+        self.lastActivity = lastActivity
+        self.lastActivityDate = lastActivityDate
+        self.summary = summary
+        self.rail = rail
+        self.label = Self.normalized(label)
+        self.originKind = originKind
+    }
+
+    public init(row: DockRowViewModel) {
+        self.init(
+            title: row.title,
+            hostDisplayName: row.hostDisplayName,
+            hostEndpoint: row.hostEndpoint,
+            repository: row.repository,
+            branch: row.branch,
+            status: row.status,
+            lastActivity: row.lastActivity,
+            lastActivityDate: row.lastActivityDate,
+            summary: row.summary,
+            rail: row.rail,
+            label: row.label,
+            originKind: LocalPinnedDisplayOriginKind(origin: row.origin)
+        )
     }
 
     private static func normalized(_ value: String?) -> String? {
@@ -31,6 +105,79 @@ public struct LocalThreadMetadata: Codable, Equatable, Sendable {
             return trimmed
         }
         return nil
+    }
+}
+
+public struct LocalThreadMetadata: Codable, Equatable, Sendable {
+    public var label: String? {
+        didSet {
+            label = Self.normalized(label)
+        }
+    }
+    public var rail: DockRowRail?
+    public var isPinned: Bool
+    public var pinnedAt: Date?
+    public var lastKnownPinnedDisplay: LocalPinnedDisplaySnapshot?
+
+    public init(
+        label: String? = nil,
+        rail: DockRowRail? = nil,
+        isPinned: Bool = false,
+        pinnedAt: Date? = nil,
+        lastKnownPinnedDisplay: LocalPinnedDisplaySnapshot? = nil
+    ) {
+        self.label = Self.normalized(label)
+        self.rail = rail
+        self.isPinned = isPinned
+        self.pinnedAt = isPinned ? pinnedAt : nil
+        self.lastKnownPinnedDisplay = isPinned ? lastKnownPinnedDisplay : nil
+    }
+
+    public var isEmpty: Bool {
+        label == nil
+            && rail == nil
+            && !isPinned
+            && pinnedAt == nil
+            && lastKnownPinnedDisplay == nil
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            return trimmed
+        }
+        return nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case label
+        case rail
+        case isPinned
+        case pinnedAt
+        case lastKnownPinnedDisplay
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            label: try container.decodeIfPresent(String.self, forKey: .label),
+            rail: try container.decodeIfPresent(DockRowRail.self, forKey: .rail),
+            isPinned: try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false,
+            pinnedAt: try container.decodeIfPresent(Date.self, forKey: .pinnedAt),
+            lastKnownPinnedDisplay: try container.decodeIfPresent(
+                LocalPinnedDisplaySnapshot.self,
+                forKey: .lastKnownPinnedDisplay
+            )
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(label, forKey: .label)
+        try container.encodeIfPresent(rail, forKey: .rail)
+        try container.encode(isPinned, forKey: .isPinned)
+        try container.encodeIfPresent(pinnedAt, forKey: .pinnedAt)
+        try container.encodeIfPresent(lastKnownPinnedDisplay, forKey: .lastKnownPinnedDisplay)
     }
 }
 

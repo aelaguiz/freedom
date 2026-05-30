@@ -620,7 +620,11 @@ actor RecordingDockArchiver: DockSessionArchiving {
 }
 
 actor InMemoryLocalThreadMetadataStore: LocalThreadMetadataStoring {
-    private var values: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
+    private var values: [LocalThreadMetadataKey: LocalThreadMetadata]
+
+    init(values: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]) {
+        self.values = values
+    }
 
     func load() async throws -> [LocalThreadMetadataKey: LocalThreadMetadata] {
         values
@@ -636,6 +640,35 @@ actor InMemoryLocalThreadMetadataStore: LocalThreadMetadataStoring {
             values.removeValue(forKey: key)
         }
         return values
+    }
+
+    func valuesSnapshot() -> [LocalThreadMetadataKey: LocalThreadMetadata] {
+        values
+    }
+}
+
+struct LocalThreadMetadataTestError: LocalizedError {
+    var errorDescription: String? {
+        "metadata save failed"
+    }
+}
+
+actor FailingLocalThreadMetadataStore: LocalThreadMetadataStoring {
+    private let values: [LocalThreadMetadataKey: LocalThreadMetadata]
+
+    init(values: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]) {
+        self.values = values
+    }
+
+    func load() async throws -> [LocalThreadMetadataKey: LocalThreadMetadata] {
+        values
+    }
+
+    func save(
+        _ metadata: LocalThreadMetadata?,
+        for key: LocalThreadMetadataKey
+    ) async throws -> [LocalThreadMetadataKey: LocalThreadMetadata] {
+        throw LocalThreadMetadataTestError()
     }
 }
 

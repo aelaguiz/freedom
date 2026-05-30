@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-public enum DockRowStatusKind: String, Equatable, Sendable, CaseIterable {
+public enum DockRowStatusKind: String, Codable, Equatable, Sendable, CaseIterable {
     case running
     case needsInput
     case needsApproval
@@ -192,6 +192,44 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
     public let rail: DockRowRail
     public let label: String?
     public let origin: SessionOrigin
+    public let isPinned: Bool
+    public let pinnedAt: Date?
+
+    public init(
+        id: HostScopedThreadID,
+        backendSessionID: String,
+        title: String,
+        hostDisplayName: String,
+        hostEndpoint: String,
+        repository: String,
+        branch: String,
+        status: DockRowStatusKind,
+        lastActivity: String,
+        lastActivityDate: Date,
+        summary: String,
+        rail: DockRowRail,
+        label: String?,
+        origin: SessionOrigin,
+        isPinned: Bool = false,
+        pinnedAt: Date? = nil
+    ) {
+        self.id = id
+        self.backendSessionID = backendSessionID
+        self.title = title
+        self.hostDisplayName = hostDisplayName
+        self.hostEndpoint = hostEndpoint
+        self.repository = repository
+        self.branch = branch
+        self.status = status
+        self.lastActivity = lastActivity
+        self.lastActivityDate = lastActivityDate
+        self.summary = summary
+        self.rail = rail
+        self.label = label
+        self.origin = origin
+        self.isPinned = isPinned
+        self.pinnedAt = isPinned ? pinnedAt : nil
+    }
 
     public var metadataKey: LocalThreadMetadataKey {
         LocalThreadMetadataKey(
@@ -231,6 +269,18 @@ public struct DockProjectionGroupViewModel: Equatable, Identifiable, Sendable {
 
 public struct DockProjectionHiddenCounts: Equatable, Sendable {
     public let idle: Int
+}
+
+public struct DockPinnedSummary: Equatable, Sendable {
+    public let visibleCount: Int
+    public let totalCount: Int
+    public let hiddenByScopeCount: Int
+
+    public init(visibleCount: Int, totalCount: Int, hiddenByScopeCount: Int) {
+        self.visibleCount = visibleCount
+        self.totalCount = totalCount
+        self.hiddenByScopeCount = hiddenByScopeCount
+    }
 }
 
 public struct DockProjectionFacets: Equatable, Sendable {
@@ -518,6 +568,19 @@ public final class DockStore: ObservableObject {
         await save(metadata: metadata, for: row.metadataKey)
     }
 
+    public func setPinned(_ isPinned: Bool, for row: DockRowViewModel) async {
+        var metadata = localMetadata[row.metadataKey] ?? LocalThreadMetadata()
+        metadata.isPinned = isPinned
+        if isPinned {
+            metadata.pinnedAt = metadata.pinnedAt ?? now()
+            metadata.lastKnownPinnedDisplay = LocalPinnedDisplaySnapshot(row: row)
+        } else {
+            metadata.pinnedAt = nil
+            metadata.lastKnownPinnedDisplay = nil
+        }
+        await save(metadata: metadata, for: row.metadataKey)
+    }
+
     @discardableResult
     public func archive(_ row: DockRowViewModel) async -> Bool {
         guard let host = hostConfiguration(for: row.id.hostID) else {
@@ -785,11 +848,12 @@ public final class DockStore: ObservableObject {
         do {
             DockLog.persistence.debug("dock metadata save started host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) has_metadata=\(!metadata.isEmpty, privacy: .public)")
             localMetadata = try await metadataStore.save(metadata.isEmpty ? nil : metadata, for: key)
-            await refresh()
+            actionError = nil
+            publishSnapshot()
             DockLog.persistence.debug("dock metadata save finished host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) entries=\(self.localMetadata.count, privacy: .public)")
         } catch {
             DockLog.persistence.error("dock metadata save failed host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-            state = .error(DockHostViewModel(host: hosts[0]), error.localizedDescription)
+            actionError = error.localizedDescription
         }
     }
 }

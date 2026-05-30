@@ -481,6 +481,137 @@ final class DockStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.rows[0].rail, .red)
     }
 
+    @MainActor
+    func testSetPinnedPersistsAndReprojectsPinnedRowsAfterReload() async {
+        let host = makeHost()
+        let metadataStore = InMemoryLocalThreadMetadataStore()
+        let loader = FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [
+            makeSummary(
+                hostID: host.id,
+                threadID: "thread-pin",
+                branch: "main",
+                status: .active(activeFlags: []),
+                lastActivity: Date(timeIntervalSince1970: 1_900),
+                prompt: "Pinned row"
+            )
+        ])))
+        let store = DockStore(
+            host: host,
+            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            metadataStore: metadataStore,
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+        await store.load()
+
+        guard case let .loaded(initialSnapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+        await store.setPinned(true, for: initialSnapshot.rows[0])
+
+        let storedValues = await metadataStore.valuesSnapshot()
+        let key = initialSnapshot.rows[0].metadataKey
+        XCTAssertTrue(storedValues[key]?.isPinned == true)
+        XCTAssertEqual(storedValues[key]?.pinnedAt, Date(timeIntervalSince1970: 2_000))
+        XCTAssertEqual(storedValues[key]?.lastKnownPinnedDisplay?.title, "Pinned row")
+
+        let reloaded = DockStore(
+            host: host,
+            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            metadataStore: metadataStore,
+            now: { Date(timeIntervalSince1970: 2_100) }
+        )
+        await reloaded.load()
+
+        guard case let .loaded(snapshot) = reloaded.state else {
+            return XCTFail("Expected loaded state, got \(reloaded.state)")
+        }
+
+        let projection = snapshot.project(options: .init(lens: .host))
+        XCTAssertEqual(projection.pinnedRows.map(\.id.threadID), ["thread-pin"])
+        XCTAssertEqual(projection.groups.flatMap(\.rows), [])
+    }
+
+    @MainActor
+    func testSetPinnedFalseClearsPinFieldsButPreservesLabelAndRail() async throws {
+        let host = makeHost()
+        let metadataStore = InMemoryLocalThreadMetadataStore()
+        let loader = FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [
+            makeSummary(
+                hostID: host.id,
+                threadID: "thread-unpin",
+                branch: "main",
+                status: .active(activeFlags: []),
+                lastActivity: Date(timeIntervalSince1970: 1_900),
+                prompt: "Unpin row"
+            )
+        ])))
+        let store = DockStore(
+            host: host,
+            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            metadataStore: metadataStore,
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+        await store.load()
+
+        guard case let .loaded(initialSnapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+
+        let row = initialSnapshot.rows[0]
+        await store.setLabel("Watch", for: row)
+        await store.setRail(.red, for: row)
+        guard case let .loaded(decoratedSnapshot) = store.state else {
+            return XCTFail("Expected decorated loaded state, got \(store.state)")
+        }
+        await store.setPinned(true, for: decoratedSnapshot.rows[0])
+        guard case let .loaded(pinnedSnapshot) = store.state else {
+            return XCTFail("Expected pinned loaded state, got \(store.state)")
+        }
+        await store.setPinned(false, for: pinnedSnapshot.rows[0])
+
+        let storedValues = await metadataStore.valuesSnapshot()
+        let metadata = try XCTUnwrap(storedValues[row.metadataKey])
+        XCTAssertEqual(metadata.label, "Watch")
+        XCTAssertEqual(metadata.rail, .red)
+        XCTAssertEqual(metadata.isPinned, false)
+        XCTAssertNil(metadata.pinnedAt)
+        XCTAssertNil(metadata.lastKnownPinnedDisplay)
+    }
+
+    @MainActor
+    func testSetPinnedSaveFailureKeepsDockLoadedAndShowsActionError() async {
+        let host = makeHost()
+        let metadataStore = FailingLocalThreadMetadataStore()
+        let loader = FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [
+            makeSummary(
+                hostID: host.id,
+                threadID: "thread-fail",
+                branch: "main",
+                status: .active(activeFlags: []),
+                lastActivity: Date(timeIntervalSince1970: 1_900),
+                prompt: "Pin failure row"
+            )
+        ])))
+        let store = DockStore(
+            host: host,
+            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            metadataStore: metadataStore
+        )
+        await store.load()
+
+        guard case let .loaded(initialSnapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+        await store.setPinned(true, for: initialSnapshot.rows[0])
+
+        XCTAssertEqual(store.actionError, "metadata save failed")
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected failed pin save to keep Dock loaded, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["thread-fail"])
+        XCTAssertFalse(snapshot.rows[0].isPinned)
+    }
+
     func testLocalMetadataKeyKeepsHostBackendAndThreadIdentity() async throws {
         let store = InMemoryLocalThreadMetadataStore()
         let amirKey = LocalThreadMetadataKey(
@@ -519,6 +650,47 @@ final class DockStoreTests: XCTestCase {
         let values = try await reloadedStore.load()
 
         XCTAssertEqual(values[key], LocalThreadMetadata(label: "Watch", rail: .red))
+    }
+
+    func testFileLocalMetadataStoreDecodesLegacyValuesWithoutPinnedFields() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("thread-metadata.json")
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let legacyJSON = """
+        [
+          {
+            "key": {
+              "hostID": "Amir-M5",
+              "backendSessionID": "session-1",
+              "threadID": "thread-1"
+            },
+            "metadata": {
+              "label": "Watch",
+              "rail": "red"
+            }
+          }
+        ]
+        """
+        try Data(legacyJSON.utf8).write(to: fileURL)
+
+        let store = FileLocalThreadMetadataStore(fileURL: fileURL)
+        let values = try await store.load()
+        let key = LocalThreadMetadataKey(
+            hostID: "Amir-M5",
+            backendSessionID: "session-1",
+            threadID: "thread-1"
+        )
+
+        XCTAssertEqual(values[key]?.label, "Watch")
+        XCTAssertEqual(values[key]?.rail, .red)
+        XCTAssertEqual(values[key]?.isPinned, false)
+        XCTAssertNil(values[key]?.pinnedAt)
+        XCTAssertNil(values[key]?.lastKnownPinnedDisplay)
     }
 
     @MainActor

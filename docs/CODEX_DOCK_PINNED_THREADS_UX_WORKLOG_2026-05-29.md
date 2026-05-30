@@ -242,3 +242,45 @@ Visual review:
 Created mockup index:
 
 - `docs/mockups/codex-dock-pinned-threads-2026-05-29/README.md`
+
+## 2026-05-29 Follow-up: Pin/Unpin Flow Mockups
+
+User asked for the full pin UX to go with the concept mockups: how to pin,
+where the pinned state appears, and how to unpin for each variation.
+
+Created flow prompt files:
+
+- `docs/mockups/codex-dock-pinned-threads-2026-05-29/prompts/flows/01-watch-strip-pin-unpin-flow.md`
+- `docs/mockups/codex-dock-pinned-threads-2026-05-29/prompts/flows/02-pinned-lens-pin-unpin-flow.md`
+- `docs/mockups/codex-dock-pinned-threads-2026-05-29/prompts/flows/03-bottom-watch-pin-unpin-flow.md`
+- `docs/mockups/codex-dock-pinned-threads-2026-05-29/prompts/flows/04-filter-manage-pin-unpin-flow.md`
+
+Generated with the same GPT Image 2 path, but `--quality high` and
+`--size landscape` because these are dense multi-screen flow boards:
+
+```bash
+OPENAI_API_KEY="$(awk -F= '$1=="OPENAI_API_KEY"{sub(/^[^=]*=/,""); print; exit}' .env)" uv run /Users/aelaguiz/.codex/skills/gpt-image/scripts/generate.py --model gpt-image-2 --size landscape --quality high ...
+```
+
+Generated flow outputs:
+
+- `docs/mockups/codex-dock-pinned-threads-2026-05-29/outputs/flow-01-watch-strip-pin-unpin.png`
+- `docs/mockups/codex-dock-pinned-threads-2026-05-29/outputs/flow-02-pinned-lens-pin-unpin.png`
+- `docs/mockups/codex-dock-pinned-threads-2026-05-29/outputs/flow-03-bottom-watch-pin-unpin.png`
+- `docs/mockups/codex-dock-pinned-threads-2026-05-29/outputs/flow-04-filter-manage-pin-unpin.png`
+- `docs/mockups/codex-dock-pinned-threads-2026-05-29/outputs/flow-contact-sheet.png`
+
+Visual review:
+
+- `flow-01-watch-strip-pin-unpin.png` clearly shows pin from row, pinned strip,
+  opening the pinned thread, and unpin feedback.
+- `flow-02-pinned-lens-pin-unpin.png` clearly shows pin from detail, the
+  `Pinned` lens appearing, review mode, and row unpin.
+- `flow-03-bottom-watch-pin-unpin.png` clearly shows row pinning, bottom
+  accessory appearance, expanded watch sheet, and unpin from the sheet.
+- `flow-04-filter-manage-pin-unpin.png` clearly shows opening Filters, selecting
+  `Pinned only`, managing pinned rows, and unpinning/clearing scope.
+
+Updated:
+
+- `docs/mockups/codex-dock-pinned-threads-2026-05-29/README.md`

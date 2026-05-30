@@ -130,6 +130,7 @@ struct DockMessageView: View {
 
 struct DockRowView: View {
     let row: DockRowViewModel
+    var showsPinIndicator = false
     var automationID: AutomationID? = nil
 
     var body: some View {
@@ -140,6 +141,14 @@ struct DockRowView: View {
 
             VStack(alignment: .leading, spacing: 7) {
                 HStack(alignment: .top, spacing: 8) {
+                    if showsPinIndicator, row.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.blue)
+                            .padding(.top, 2)
+                            .accessibilityHidden(true)
+                    }
+
                     Text(row.title)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(2)
@@ -268,6 +277,7 @@ extension DockRowViewModel {
             "status=\(status.rawValue)",
             "origin=\(origin.automationKind)",
             "label=\(label == nil ? "none" : "present")",
+            isPinned ? "Pinned" : "Not pinned",
         ].joined(separator: "; ")
     }
 }

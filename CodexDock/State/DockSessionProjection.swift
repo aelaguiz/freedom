@@ -18,6 +18,9 @@ struct DockProjectionOptions: Equatable, Sendable {
 
 struct DockSessionProjection: Equatable, Sendable {
     let lens: DockLensID
+    let pinnedRows: [DockRowViewModel]
+    let allPinnedRows: [DockRowViewModel]
+    let pinnedSummary: DockPinnedSummary
     let rows: [DockRowViewModel]
     let groups: [DockProjectionGroupViewModel]
     let summary: DockProjectionSummary
@@ -41,19 +44,30 @@ private struct DockSessionProjectionProjector {
     func project() -> DockSessionProjection {
         let searchedRows = snapshot.rows.filter(matchesSearch)
         let filteredIgnoringIdle = searchedRows.filter(matchesNonIdleFilters)
+        let pinnedRows = filteredIgnoringIdle.filter(\.isPinned).sorted(by: pinnedRowPrecedes)
         let hiddenIdleRows = options.filters.showsIdle
             ? []
-            : filteredIgnoringIdle.filter { $0.status == .idle }
+            : filteredIgnoringIdle.filter { !$0.isPinned && $0.status == .idle }
         let hiddenIdleCount = hiddenIdleRows.count
-        let visibleRows = filteredIgnoringIdle
+        let bodyRows = filteredIgnoringIdle
+            .filter { !$0.isPinned }
             .filter { options.filters.showsIdle || $0.status != .idle }
             .sorted(by: rowPrecedesByRecency)
-        let groups = groups(for: visibleRows, hiddenIdleRows: hiddenIdleRows)
+        let visibleRows = (pinnedRows + bodyRows).sorted(by: rowPrecedesByRecency)
+        let allPinnedRows = snapshot.rows.filter(\.isPinned).sorted(by: pinnedRowPrecedes)
+        let groups = groups(for: bodyRows, hiddenIdleRows: hiddenIdleRows)
         let emptyReason = visibleRows.isEmpty ? emptyReason(searchedRows: searchedRows, hiddenIdleCount: hiddenIdleCount) : nil
 
         return DockSessionProjection(
             lens: options.lens,
-            rows: options.lens == .newest ? visibleRows : [],
+            pinnedRows: pinnedRows,
+            allPinnedRows: allPinnedRows,
+            pinnedSummary: DockPinnedSummary(
+                visibleCount: pinnedRows.count,
+                totalCount: allPinnedRows.count,
+                hiddenByScopeCount: max(0, allPinnedRows.count - pinnedRows.count)
+            ),
+            rows: options.lens == .newest ? bodyRows : [],
             groups: groups,
             summary: summary(for: visibleRows),
             hiddenCounts: DockProjectionHiddenCounts(idle: hiddenIdleCount),
@@ -340,6 +354,20 @@ private struct DockSessionProjectionProjector {
         let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
         if titleOrder != .orderedSame {
             return titleOrder == .orderedAscending
+        }
+
+        return "\(lhs.id.hostID)::\(lhs.id.threadID)" < "\(rhs.id.hostID)::\(rhs.id.threadID)"
+    }
+
+    private func pinnedRowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
+        if lhs.lastActivityDate != rhs.lastActivityDate {
+            return lhs.lastActivityDate > rhs.lastActivityDate
+        }
+
+        let lhsPinnedAt = lhs.pinnedAt ?? Date.distantPast
+        let rhsPinnedAt = rhs.pinnedAt ?? Date.distantPast
+        if lhsPinnedAt != rhsPinnedAt {
+            return lhsPinnedAt > rhsPinnedAt
         }
 
         return "\(lhs.id.hostID)::\(lhs.id.threadID)" < "\(rhs.id.hostID)::\(rhs.id.threadID)"

@@ -157,7 +157,9 @@ struct DockSessionTable: Equatable, Sendable {
             localMetadata: localMetadata,
             now: now
         )
-        let rows = projector.rows(from: summaries)
+        let liveRows = projector.rows(from: summaries)
+        let loadedKeys = Set(liveRows.map(\.metadataKey))
+        let rows = liveRows + projector.cachedPinnedRows(excluding: loadedKeys)
         return DockSnapshot(
             host: DockHostViewModel(host: hosts[0]),
             hosts: hosts.map(DockHostViewModel.init),

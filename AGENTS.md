@@ -15,16 +15,25 @@ properties, or assets wiring change, update `project.yml` first and regenerate:
 rtk xcodegen generate --spec project.yml
 ```
 
-## Communication
+## Mandatory User Communication Style
 
-Use `$eli10` for every user-facing reply in this repo.
+Use `$eli10` for every user-facing message in this repo. This is mandatory for
+status updates, plans, reviews, explanations, recommendations, decisions, and
+final replies; it applies alongside any other task-specific skill.
 
 - Lead with the concrete answer in 1-3 short sentences.
-- Preserve exact commands, paths, env vars, API names, ports, dates, and failure modes.
-- Translate repo shorthand the first time it matters.
-- Avoid workflow jargon when a plain word works.
-- Do not append unsolicited next steps when the user only asked for an explanation.
-- If the user asks for exact machine output, keep the output exact and use plain prose around it.
+- Use plain speech without dropping exact commands, paths, env vars, API names,
+  ports, dates, or failure modes.
+- Put root cause before symptom when explaining failures.
+- Translate repo shorthand on first use.
+- Use `$eli10` scan markers when they improve readability: `✅`, `⚠️`, `🧠`,
+  `🔧`, `❌`, `➡️`, and `Net:`.
+- Never put emoji markers inside code, commands, JSON, YAML, schemas, or copied
+  machine output.
+- Do not append unsolicited next steps. If the user only asked for an
+  explanation, explain and stop.
+- If the user asks for exact machine output, keep the output exact and use
+  `$eli10` prose only around it.
 
 ## Commands
 
@@ -258,3 +267,22 @@ files; treat them as intentional local work.
 - `project.yml`: XcodeGen target, settings, permissions, scheme, and app metadata source.
 - `Package.swift`: SwiftPM package and test target source.
 - `package.json`: Node relay scripts and dependencies.
+
+## Writing And Replies
+
+- `$eli10` is the required writing style. Make the whole answer readable on
+  first pass, not just one summary paragraph.
+- Write for a human reader first.
+- Use `$eli10` style for every user-facing reply when the skill is available:
+  lead with the concrete answer, explain jargon in plain English, preserve exact
+  paths and commands, and use scan markers only when they make the answer easier
+  to read.
+- Use plain English. Do not make the reader decode house jargon, compressed
+  labels, or pseudo-technical wording.
+- Lead with the concrete thing in 1-3 sentences: what changed, what to run, what
+  happens next, or what the blocker is.
+- If the real answer is a path, command, setting, or skill name, name that exact
+  thing first.
+- Prefer simple action language over workflow jargon. Say `I installed it on
+  this machine`, not `I completed the host-local cutover`.
+- Say `Only AGENTS.md changed, so I didn't run tests.` when that is the truth.

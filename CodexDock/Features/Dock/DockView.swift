@@ -209,8 +209,11 @@ public struct DockView: View {
     @State private var searchText = ""
     @State private var filterState = DockFilterState.default
     @State private var isFilterSurfacePresented = false
+    @State private var isPinnedManagePresented = false
+    @State private var selectedDetailRow: DockRowViewModel?
     @State private var collapsedHostGroupIDs: Set<String> = []
     @State private var collapsedBranchGroupIDs: Set<String> = []
+    private let pinnedInlineLimit = 3
 
     public init(
         store: DockStore,
@@ -245,11 +248,24 @@ public struct DockView: View {
             .refreshable {
                 await store.refresh()
             }
+            .navigationDestination(isPresented: detailNavigationBinding) {
+                selectedDetailDestination
+            }
         }
         .sheet(isPresented: $isFilterSurfacePresented) {
             DockFilterSurfaceView(
                 filters: $filterState,
                 projection: currentProjection
+            )
+        }
+        .sheet(isPresented: $isPinnedManagePresented) {
+            PinnedThreadsManageView(
+                rows: currentProjection?.allPinnedRows ?? [],
+                onUnpin: { row in
+                    Task {
+                        await store.setPinned(false, for: row)
+                    }
+                }
             )
         }
     }
@@ -403,6 +419,40 @@ public struct DockView: View {
         return nil
     }
 
+    private var detailNavigationBinding: Binding<Bool> {
+        Binding(
+            get: {
+                selectedDetailRow != nil
+            },
+            set: { isPresented in
+                if !isPresented {
+                    selectedDetailRow = nil
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var selectedDetailDestination: some View {
+        if let selectedDetailRow,
+           let host = store.hostConfiguration(for: selectedDetailRow.id.hostID) {
+            SessionDetailView(
+                store: ThreadDetailStore(
+                    host: host,
+                    row: selectedDetailRow,
+                    lifecycleCoordinator: lifecycleCoordinator,
+                    connectivityReporter: connectivityReporter
+                )
+            )
+        } else {
+            DockMessageView(
+                icon: "exclamationmark.triangle",
+                title: "Thread unavailable",
+                message: "This thread's host is no longer configured."
+            )
+        }
+    }
+
     private var activeSummaryText: String {
         currentProjection?.summary.text ?? "0 shown · Hosts: Any · Branches: Any · Status: Any · Repo: Any · Source: Any · Idle hidden"
     }
@@ -455,6 +505,9 @@ public struct DockView: View {
             }
 
             if let emptyReason = projection.emptyReason {
+                if shouldShowPinnedHiddenHint(projection) {
+                    pinnedHiddenHint(projection)
+                }
                 DockMessageView(
                     icon: "line.3.horizontal.decrease.circle",
                     title: emptyReason.title,
@@ -476,38 +529,135 @@ public struct DockView: View {
         _ projection: DockSessionProjection,
         snapshot: DockSnapshot
     ) -> some View {
-        switch selectedLens {
-        case .newest:
-            LazyVStack(spacing: 10) {
-                ForEach(projection.rows) { row in
-                    dockRow(row)
-                }
-                ForEach(contextualHostStates(in: snapshot)) { hostState in
-                    hostContextRow(
-                        hostState,
-                        automationID: AutomationID.Dock.hostSummary(hostID: hostState.host.id)
-                    )
-                }
+        VStack(alignment: .leading, spacing: 12) {
+            if !projection.pinnedRows.isEmpty {
+                pinnedSection(projection)
+            } else if shouldShowPinnedHiddenHint(projection) {
+                pinnedHiddenHint(projection)
             }
-        case .host:
-            LazyVStack(spacing: 12) {
-                ForEach(projection.groups) { group in
-                    projectionGroup(group, collapsedIDs: $collapsedHostGroupIDs)
+
+            switch selectedLens {
+            case .newest:
+                LazyVStack(spacing: 10) {
+                    ForEach(projection.rows) { row in
+                        dockRow(row)
+                    }
+                    ForEach(contextualHostStates(in: snapshot)) { hostState in
+                        hostContextRow(
+                            hostState,
+                            automationID: AutomationID.Dock.hostSummary(hostID: hostState.host.id)
+                        )
+                    }
                 }
-            }
-        case .branch:
-            LazyVStack(spacing: 12) {
-                ForEach(projection.groups) { group in
-                    projectionGroup(group, collapsedIDs: $collapsedBranchGroupIDs)
+            case .host:
+                LazyVStack(spacing: 12) {
+                    ForEach(projection.groups) { group in
+                        projectionGroup(group, collapsedIDs: $collapsedHostGroupIDs)
+                    }
                 }
-                ForEach(contextualHostStates(in: snapshot)) { hostState in
-                    hostContextRow(
-                        hostState,
-                        automationID: AutomationID.Dock.hostSummary(hostID: hostState.host.id)
-                    )
+            case .branch:
+                LazyVStack(spacing: 12) {
+                    ForEach(projection.groups) { group in
+                        projectionGroup(group, collapsedIDs: $collapsedBranchGroupIDs)
+                    }
+                    ForEach(contextualHostStates(in: snapshot)) { hostState in
+                        hostContextRow(
+                            hostState,
+                            automationID: AutomationID.Dock.hostSummary(hostID: hostState.host.id)
+                        )
+                    }
                 }
             }
         }
+    }
+
+    private func pinnedSection(_ projection: DockSessionProjection) -> some View {
+        let visiblePinnedRows = Array(projection.pinnedRows.prefix(pinnedInlineLimit))
+        let headerTitle = projection.pinnedSummary.totalCount > projection.pinnedSummary.visibleCount
+            ? "Pinned \(projection.pinnedSummary.visibleCount) of \(projection.pinnedSummary.totalCount)"
+            : "Pinned \(projection.pinnedSummary.visibleCount)"
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label(headerTitle, systemImage: "pin.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .accessibilityAddTraits(.isHeader)
+                    .codexAutomationID(AutomationID.Dock.pinnedHeader)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    isPinnedManagePresented = true
+                } label: {
+                    Label("Manage", systemImage: "slider.horizontal.3")
+                        .labelStyle(.titleAndIcon)
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
+                .accessibilityLabel("Manage pinned threads")
+                .codexAutomationID(AutomationID.Dock.pinnedManageButton)
+            }
+
+            LazyVStack(spacing: 10) {
+                ForEach(visiblePinnedRows) { row in
+                    dockRow(row, showsPinIndicator: true)
+                }
+
+                if projection.pinnedRows.count > pinnedInlineLimit {
+                    Button {
+                        isPinnedManagePresented = true
+                    } label: {
+                        Label("Show all \(projection.pinnedSummary.totalCount) pinned", systemImage: "ellipsis.circle")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Show all pinned threads")
+                    .codexAutomationID(AutomationID.Dock.pinnedShowAllButton)
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityValue(headerTitle)
+        .codexAutomationID(AutomationID.Dock.pinnedSection)
+    }
+
+    private func pinnedHiddenHint(_ projection: DockSessionProjection) -> some View {
+        let title = normalizedQuery(searchText).isEmpty
+            ? "Pinned hidden by filters"
+            : "No pinned rows match search"
+
+        return HStack(spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+
+            Button {
+                isPinnedManagePresented = true
+            } label: {
+                Text("Manage")
+            }
+            .font(.caption.weight(.semibold))
+            .buttonStyle(.plain)
+            .foregroundStyle(.blue)
+            .accessibilityLabel("Manage pinned threads")
+            .codexAutomationID(AutomationID.Dock.pinnedManageButton)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityValue("\(projection.pinnedSummary.hiddenByScopeCount) pinned hidden")
+        .codexAutomationID(AutomationID.Dock.pinnedHiddenHint)
+    }
+
+    private func shouldShowPinnedHiddenHint(_ projection: DockSessionProjection) -> Bool {
+        projection.pinnedRows.isEmpty && projection.pinnedSummary.hiddenByScopeCount > 0
+    }
+
+    private func normalizedQuery(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var projectionOptions: DockProjectionOptions {
@@ -527,7 +677,8 @@ public struct DockView: View {
         case .loading(let hosts):
             return "loading; hosts=\(hosts.count); lens=\(selectedLens.rawValue); filters=\(filterState.activeFilterCount)"
         case .loaded(let snapshot):
-            return "loaded; rows=\(snapshot.rowCount); lens=\(selectedLens.rawValue); search=\(!searchText.isEmpty); filters=\(filterState.activeFilterCount); \(activeSummaryText)"
+            let pinnedCount = snapshot.project(options: projectionOptions).pinnedRows.count
+            return "loaded; rows=\(snapshot.rowCount); pinned=\(pinnedCount); lens=\(selectedLens.rawValue); search=\(!searchText.isEmpty); filters=\(filterState.activeFilterCount); \(activeSummaryText)"
         case .offline(let host, _):
             return "offline; host=\(host.id); lens=\(selectedLens.rawValue); filters=\(filterState.activeFilterCount)"
         case .error(let host, _):
@@ -535,38 +686,39 @@ public struct DockView: View {
         }
     }
 
-    private func dockRow(_ row: DockRowViewModel) -> some View {
-        Group {
-            if let host = store.hostConfiguration(for: row.id.hostID) {
-                NavigationLink {
-                    SessionDetailView(
-                        store: ThreadDetailStore(
-                            host: host,
-                            row: row,
-                            lifecycleCoordinator: lifecycleCoordinator,
-                            connectivityReporter: connectivityReporter
-                        )
-                    )
-                } label: {
-                    DockRowView(row: row)
+    private func dockRow(_ row: DockRowViewModel, showsPinIndicator: Bool = false) -> some View {
+        DockSwipeActionRow(
+            row: row,
+            actionID: AutomationID.Dock.rowAction(
+                hostID: row.id.hostID,
+                threadID: row.id.threadID,
+                action: row.isPinned ? .unpin : .pin
+            ),
+            onTogglePinned: {
+                Task {
+                    await store.setPinned(!row.isPinned, for: row)
                 }
-                .buttonStyle(.plain)
-                .accessibilityElement(children: .combine)
-                .codexAutomationID(AutomationID.Dock.row(hostID: row.id.hostID, threadID: row.id.threadID))
-                .accessibilityValue(row.automationValue)
-                .contextMenu {
-                    rowContextMenu(row)
-                }
-            } else {
-                DockRowView(
-                    row: row,
-                    automationID: AutomationID.Dock.row(hostID: row.id.hostID, threadID: row.id.threadID)
-                )
-                .accessibilityValue(row.automationValue)
-                .contextMenu {
-                    rowContextMenu(row)
-                }
+            },
+            canOpen: store.hostConfiguration(for: row.id.hostID) != nil,
+            onOpen: {
+                selectedDetailRow = row
             }
+        ) {
+            dockRowContent(row, showsPinIndicator: showsPinIndicator)
+        }
+        .accessibilityAction(named: Text(row.isPinned ? "Unpin thread" : "Pin thread")) {
+            Task {
+                await store.setPinned(!row.isPinned, for: row)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func dockRowContent(_ row: DockRowViewModel, showsPinIndicator: Bool) -> some View {
+        DockRowView(row: row, showsPinIndicator: showsPinIndicator)
+        .accessibilityValue(row.automationValue)
+        .contextMenu {
+            rowContextMenu(row)
         }
     }
 
@@ -691,6 +843,21 @@ public struct DockView: View {
 
     @ViewBuilder
     private func rowActions(_ row: DockRowViewModel) -> some View {
+        Button(role: row.isPinned ? .destructive : nil) {
+            Task {
+                await store.setPinned(!row.isPinned, for: row)
+            }
+        } label: {
+            Label(row.isPinned ? "Unpin" : "Pin", systemImage: row.isPinned ? "pin.slash" : "pin.fill")
+        }
+        .codexAutomationID(
+            AutomationID.Dock.rowAction(
+                hostID: row.id.hostID,
+                threadID: row.id.threadID,
+                action: row.isPinned ? .unpin : .pin
+            )
+        )
+
         Button {
             Task {
                 await store.setLabel("Watch", for: row)

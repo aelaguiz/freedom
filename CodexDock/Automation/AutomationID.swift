@@ -50,6 +50,8 @@ public extension AutomationID {
     }
 
     enum DockRowAction: String, Sendable {
+        case pin
+        case unpin
         case markWatch = "mark-watch"
         case clearLabel = "clear-label"
         case archive
@@ -104,6 +106,12 @@ public extension AutomationID {
         public static let filterRepoQuery = AutomationID("codexdock.dock.filters.repo.query")
         public static let filterSourcePicker = AutomationID("codexdock.dock.filters.source")
         public static let filterIdleToggle = AutomationID("codexdock.dock.filters.idle")
+        public static let pinnedSection = AutomationID("codexdock.dock.pinned.section")
+        public static let pinnedHeader = AutomationID("codexdock.dock.pinned.header")
+        public static let pinnedManageButton = AutomationID("codexdock.dock.pinned.manage")
+        public static let pinnedManageSheet = AutomationID("codexdock.dock.pinned.manage.sheet")
+        public static let pinnedShowAllButton = AutomationID("codexdock.dock.pinned.show-all")
+        public static let pinnedHiddenHint = AutomationID("codexdock.dock.pinned.hidden")
 
         public static func state(_ kind: StateKind) -> AutomationID {
             AutomationID("codexdock.dock.state.\(kind.rawValue)")
@@ -167,6 +175,14 @@ public extension AutomationID {
 
         public static func rowAction(hostID: String, threadID: String, action: DockRowAction) -> AutomationID {
             AutomationID("codexdock.dock.row.\(safeSegment(hostID)).\(safeSegment(threadID)).action.\(action.rawValue)")
+        }
+
+        public static func pinnedManageRow(hostID: String, threadID: String) -> AutomationID {
+            AutomationID("codexdock.dock.pinned.manage.row.\(safeSegment(hostID)).\(safeSegment(threadID))")
+        }
+
+        public static func pinnedManageUnpinButton(hostID: String, threadID: String) -> AutomationID {
+            AutomationID("codexdock.dock.pinned.manage.row.\(safeSegment(hostID)).\(safeSegment(threadID)).unpin")
         }
 
         public static func rowColorAction(hostID: String, threadID: String, rail: String) -> AutomationID {

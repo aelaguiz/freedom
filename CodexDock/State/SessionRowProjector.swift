@@ -9,6 +9,18 @@ struct SessionRowProjector {
         summaries.map(makeRow)
     }
 
+    func cachedPinnedRows(excluding loadedKeys: Set<LocalThreadMetadataKey>) -> [DockRowViewModel] {
+        let activeHostIDs = Set(hosts.map(\.id))
+        return localMetadata.compactMap { key, metadata in
+            guard metadata.isPinned,
+                  !loadedKeys.contains(key),
+                  activeHostIDs.contains(key.hostID) else {
+                return nil
+            }
+            return cachedPinnedRow(key: key, metadata: metadata)
+        }
+    }
+
     func makeRow(summary: SessionSummary) -> DockRowViewModel {
         let metadata = localMetadata[
             LocalThreadMetadataKey(
@@ -31,7 +43,35 @@ struct SessionRowProjector {
             summary: latestSummary(for: summary),
             rail: metadata?.rail ?? rail(for: summary),
             label: metadata?.label,
-            origin: summary.origin
+            origin: summary.origin,
+            isPinned: metadata?.isPinned ?? false,
+            pinnedAt: metadata?.pinnedAt
+        )
+    }
+
+    private func cachedPinnedRow(
+        key: LocalThreadMetadataKey,
+        metadata: LocalThreadMetadata
+    ) -> DockRowViewModel {
+        let snapshot = metadata.lastKnownPinnedDisplay
+        let fallbackDate = metadata.pinnedAt ?? Date.distantPast
+        return DockRowViewModel(
+            id: HostScopedThreadID(hostID: key.hostID, threadID: key.threadID),
+            backendSessionID: key.backendSessionID,
+            title: nonEmpty(snapshot?.title) ?? "Not loaded",
+            hostDisplayName: hostDisplayNameForCachedRow(hostID: key.hostID, snapshot: snapshot),
+            hostEndpoint: hostEndpointForCachedRow(hostID: key.hostID, snapshot: snapshot),
+            repository: nonEmpty(snapshot?.repository) ?? "Unknown workspace",
+            branch: nonEmpty(snapshot?.branch) ?? "No branch",
+            status: snapshot?.status ?? .dormant,
+            lastActivity: nonEmpty(snapshot?.lastActivity) ?? "Not loaded",
+            lastActivityDate: snapshot?.lastActivityDate ?? fallbackDate,
+            summary: nonEmpty(snapshot?.summary) ?? "This pinned thread is not loaded yet.",
+            rail: metadata.rail ?? snapshot?.rail ?? .blue,
+            label: metadata.label ?? snapshot?.label,
+            origin: snapshot?.originKind.sessionOrigin ?? .unknown(),
+            isPinned: true,
+            pinnedAt: metadata.pinnedAt
         )
     }
 
@@ -122,6 +162,24 @@ struct SessionRowProjector {
 
     private func hostEndpoint(for hostID: String) -> String {
         hosts.first { $0.id == hostID }?.endpoint.displayEndpoint ?? hostID
+    }
+
+    private func hostDisplayNameForCachedRow(
+        hostID: String,
+        snapshot: LocalPinnedDisplaySnapshot?
+    ) -> String {
+        hosts.first { $0.id == hostID }?.displayName
+            ?? nonEmpty(snapshot?.hostDisplayName)
+            ?? hostID
+    }
+
+    private func hostEndpointForCachedRow(
+        hostID: String,
+        snapshot: LocalPinnedDisplaySnapshot?
+    ) -> String {
+        hosts.first { $0.id == hostID }?.endpoint.displayEndpoint
+            ?? nonEmpty(snapshot?.hostEndpoint)
+            ?? hostID
     }
 
     private func shortThreadID(_ threadID: String) -> String {
