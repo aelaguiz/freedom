@@ -49,6 +49,14 @@ function nonEmpty(value) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function optionalNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function sortedJSONString(value) {
   return JSON.stringify(sortJSON(value));
 }
@@ -178,7 +186,7 @@ function normalizeThread(thread, host, scope) {
     return null;
   }
   const sessionID = nonEmpty(thread?.sessionId) || threadID;
-  const updatedAt = Number(thread?.updatedAt ?? thread?.createdAt ?? 0);
+  const updatedAt = optionalNumber(thread?.updatedAt ?? thread?.createdAt) ?? 0;
   const sourceKind = sourceKindFromThread(thread, scope);
   return {
     id: `${host.id}::${threadID}`,
@@ -194,6 +202,8 @@ function normalizeThread(thread, host, scope) {
     branch: nonEmpty(thread?.gitInfo?.branch),
     updatedAt,
     summary: nonEmpty(thread?.latestSummary) || nonEmpty(thread?.preview) || titleForThread(thread),
+    messageSummary: nonEmpty(thread?.messageSummary),
+    messageUpdatedAt: optionalNumber(thread?.messageUpdatedAt),
     source: {
       kind: sourceKind,
     },

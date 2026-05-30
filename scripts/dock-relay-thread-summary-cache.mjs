@@ -61,7 +61,7 @@ function textFromItem(item) {
     || nonEmptyText(textFromContent(item.content));
 }
 
-function isSummaryCandidate(item) {
+function isMessageSummaryCandidate(item) {
   return item?.type === "userMessage" || item?.type === "agentMessage";
 }
 
@@ -75,7 +75,7 @@ function eventPrecedes(lhs, rhs) {
   return lhs.itemIndex < rhs.itemIndex;
 }
 
-function latestMeaningfulSummaryFromTurns(turns = []) {
+function latestMeaningfulMessageFromTurns(turns = []) {
   let latest = null;
   turns.forEach((turn, turnIndex) => {
     const timestampMs = parseTimestampMs(turn?.startedAt)
@@ -83,7 +83,7 @@ function latestMeaningfulSummaryFromTurns(turns = []) {
       ?? 0;
     const items = Array.isArray(turn?.items) ? turn.items : [];
     items.forEach((item, itemIndex) => {
-      if (!isSummaryCandidate(item)) {
+      if (!isMessageSummaryCandidate(item)) {
         return;
       }
       const text = textFromItem(item);
@@ -101,7 +101,17 @@ function latestMeaningfulSummaryFromTurns(turns = []) {
       }
     });
   });
-  return latest?.text || null;
+  if (!latest?.text) {
+    return null;
+  }
+  return {
+    text: latest.text,
+    timestampSeconds: Math.floor(latest.timestampMs / 1000),
+  };
+}
+
+function latestMeaningfulSummaryFromTurns(turns = []) {
+  return latestMeaningfulMessageFromTurns(turns)?.text || null;
 }
 
 class ThreadSummaryCache {
@@ -126,7 +136,7 @@ class ThreadSummaryCache {
 
   decorateRows(rows = []) {
     return rows.map((row) => {
-      if (nonEmptyText(row?.latestSummary)) {
+      if (nonEmptyText(row?.messageSummary)) {
         return row;
       }
       const entry = this.entryForRow(row, { allowStale: true });
@@ -135,7 +145,9 @@ class ThreadSummaryCache {
       }
       return {
         ...row,
-        latestSummary: entry.summary,
+        latestSummary: nonEmptyText(row?.latestSummary) || entry.summary,
+        messageSummary: entry.summary,
+        messageUpdatedAt: entry.messageUpdatedAt ?? null,
       };
     });
   }
@@ -211,9 +223,11 @@ class ThreadSummaryCache {
       threadId: task.threadId,
       limit: this.turnLimit,
     });
+    const message = latestMeaningfulMessageFromTurns(turns?.data || []);
     this.remember(task.threadId, {
       version: task.version,
-      summary: latestMeaningfulSummaryFromTurns(turns?.data || []),
+      summary: message?.text || null,
+      messageUpdatedAt: message?.timestampSeconds ?? null,
       checkedAtMs: Date.now(),
     });
   }
@@ -244,5 +258,6 @@ class ThreadSummaryCache {
 
 export {
   ThreadSummaryCache,
+  latestMeaningfulMessageFromTurns,
   latestMeaningfulSummaryFromTurns,
 };
