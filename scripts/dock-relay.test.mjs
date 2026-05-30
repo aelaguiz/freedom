@@ -388,6 +388,7 @@ test("thread summary cache keeps the last useful summary while a row version war
   cache.remember("thread-1", {
     version: "10",
     summary: "Latest known useful update",
+    messageUpdatedAt: 9,
     checkedAtMs: 1,
   });
 
@@ -400,6 +401,8 @@ test("thread summary cache keeps the last useful summary while a row version war
   ]);
 
   assert.equal(decorated[0].latestSummary, "Latest known useful update");
+  assert.equal(decorated[0].messageSummary, "Latest known useful update");
+  assert.equal(decorated[0].messageUpdatedAt, 9);
 });
 
 test("phase 2 live overlay is explicit degraded metadata", () => {
@@ -903,6 +906,8 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
                 sessionId: "history-session",
                 preview: "History thread",
                 latestSummary: "Stored history row",
+                messageSummary: "Stored history message",
+                messageUpdatedAt: 1_780_000_090,
                 updatedAt: 1_780_000_100,
                 status: {
                   type: "notLoaded",
@@ -955,6 +960,10 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
         ["history-thread", "dormant", "human", "cli", "human"],
       ],
     );
+    const historySession = response.result.sessions.find((row) => row.threadID === "history-thread");
+    assert.equal(historySession.summary, "Stored history row");
+    assert.equal(historySession.messageSummary, "Stored history message");
+    assert.equal(historySession.messageUpdatedAt, 1_780_000_090);
     assert.equal(JSON.stringify(response.result).includes("notLoaded"), false);
     assert.equal(JSON.stringify(response.result).includes("must-not-leak"), false);
   } finally {
@@ -1036,6 +1045,8 @@ test("dock/subscribe overlays live status without changing stored Codex order", 
                 sessionId: "stored-session",
                 preview: "Stored summary",
                 latestSummary: "Stored summary",
+                messageSummary: "Stored message",
+                messageUpdatedAt: 250,
                 updatedAt: 300,
                 source: "cli",
                 status: { type: "notLoaded" },
@@ -1088,6 +1099,8 @@ test("dock/subscribe overlays live status without changing stored Codex order", 
     assert.equal(liveSession.backendSessionID, "live-session");
     assert.equal(liveSession.updatedAt, 300);
     assert.equal(liveSession.summary, "Stored summary");
+    assert.equal(liveSession.messageSummary, "Stored message");
+    assert.equal(liveSession.messageUpdatedAt, 250);
     assert.equal(response.result.sessions.find((session) => session.threadID === "stored-thread").status, "dormant");
   } finally {
     ws.close();

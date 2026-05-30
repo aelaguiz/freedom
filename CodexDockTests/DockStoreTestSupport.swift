@@ -264,6 +264,8 @@ actor LoaderBackedDockStreamConnection: DockStreamConnection {
             branch: string(from: summary.branch),
             updatedAt: Int64(summary.lastActivity.timeIntervalSince1970),
             summary: string(from: summary.shortEventSummary),
+            messageSummary: string(from: summary.shortEventSummary),
+            messageUpdatedAt: Int64((summary.messageActivityDate ?? summary.lastActivity).timeIntervalSince1970),
             source: DockStreamSourceDTO(kind: streamSource(from: summary.origin))
         )
     }
@@ -642,6 +644,14 @@ actor InMemoryLocalThreadMetadataStore: LocalThreadMetadataStoring {
         return values
     }
 
+    func save(
+        _ values: [LocalThreadMetadataKey: LocalThreadMetadata]
+    ) async throws -> [LocalThreadMetadataKey: LocalThreadMetadata] {
+        let persistedValues = values.filter { !$0.value.isEmpty }
+        self.values = persistedValues
+        return persistedValues
+    }
+
     func valuesSnapshot() -> [LocalThreadMetadataKey: LocalThreadMetadata] {
         values
     }
@@ -667,6 +677,12 @@ actor FailingLocalThreadMetadataStore: LocalThreadMetadataStoring {
     func save(
         _ metadata: LocalThreadMetadata?,
         for key: LocalThreadMetadataKey
+    ) async throws -> [LocalThreadMetadataKey: LocalThreadMetadata] {
+        throw LocalThreadMetadataTestError()
+    }
+
+    func save(
+        _ values: [LocalThreadMetadataKey: LocalThreadMetadata]
     ) async throws -> [LocalThreadMetadataKey: LocalThreadMetadata] {
         throw LocalThreadMetadataTestError()
     }
@@ -760,6 +776,7 @@ func makeSummary(
         branch: .known(branch),
         lastActivity: lastActivity,
         shortEventSummary: .known("Assistant update for \(prompt)"),
+        messageActivityDate: lastActivity,
         origin: origin
     )
 }
@@ -804,6 +821,8 @@ func dockStreamSession(
         branch: "main",
         updatedAt: updatedAt,
         summary: "Summary for \(title)",
+        messageSummary: "Summary for \(title)",
+        messageUpdatedAt: updatedAt,
         source: DockStreamSourceDTO(kind: .human)
     )
 }

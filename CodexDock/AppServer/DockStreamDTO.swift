@@ -233,6 +233,8 @@ public struct DockStreamSessionDTO: Codable, Equatable, Sendable {
     public let branch: String?
     public let updatedAt: Int64?
     public let summary: String?
+    public let messageSummary: String?
+    public let messageUpdatedAt: Int64?
     public let source: DockStreamSourceDTO?
 
     public init(
@@ -249,6 +251,8 @@ public struct DockStreamSessionDTO: Codable, Equatable, Sendable {
         branch: String? = nil,
         updatedAt: Int64? = nil,
         summary: String? = nil,
+        messageSummary: String? = nil,
+        messageUpdatedAt: Int64? = nil,
         source: DockStreamSourceDTO? = nil
     ) {
         self.id = id
@@ -264,6 +268,8 @@ public struct DockStreamSessionDTO: Codable, Equatable, Sendable {
         self.branch = branch
         self.updatedAt = updatedAt
         self.summary = summary
+        self.messageSummary = messageSummary
+        self.messageUpdatedAt = messageUpdatedAt
         self.source = source
     }
 }

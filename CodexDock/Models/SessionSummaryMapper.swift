@@ -79,9 +79,9 @@ public enum SessionSummaryMapper {
         }
 
         let preview = nonEmpty(thread.preview)
-        let shortEventSummary = nonEmpty(thread.latestSummary)
-            ?? latestMeaningfulSummary(from: thread)
-            ?? preview
+        let latestMessage = ThreadMessageSemantics.latestMessage(in: ThreadEventNormalizer.events(from: thread))
+        let shortEventSummary = latestMessage.flatMap { nonEmpty($0.body) }
+        let messageActivityDate = latestMessage.flatMap(ThreadMessageSemantics.activityDate)
         let displayTitle = displayTitle(
             name: thread.name,
             preview: preview,
@@ -99,50 +99,10 @@ public enum SessionSummaryMapper {
             branch: text(from: thread.gitInfo?.branch),
             lastActivity: Date(timeIntervalSince1970: TimeInterval(timestamp)),
             shortEventSummary: shortEventSummary.map { .known(collapsed($0)) } ?? .unknown,
+            messageActivityDate: messageActivityDate,
             origin: origin(from: thread)
         )
         return .success(summary)
-    }
-
-    private static func latestMeaningfulSummary(from thread: ThreadDTO) -> String? {
-        let messageEvents = ThreadEventNormalizer.events(from: thread).filter(isStoredMessageEvent)
-        return messageEvents
-            .max(by: eventPrecedes)
-            .flatMap { nonEmpty($0.body) }
-    }
-
-    private static func isStoredMessageEvent(_ event: ThreadEvent) -> Bool {
-        event.kind == .userMessage || (event.kind == .agentMessage && event.title == "Agent message")
-    }
-
-    private static func eventPrecedes(_ lhs: ThreadEvent, _ rhs: ThreadEvent) -> Bool {
-        let lhsDate = lhs.displayGroupDate ?? lhs.date
-        let rhsDate = rhs.displayGroupDate ?? rhs.date
-        if let lhsDate, let rhsDate, lhsDate != rhsDate {
-            return lhsDate < rhsDate
-        }
-        if lhsDate == nil, rhsDate != nil {
-            return true
-        }
-        if lhsDate != nil, rhsDate == nil {
-            return false
-        }
-
-        let lhsTurn = lhs.turnSequence ?? Int.min
-        let rhsTurn = rhs.turnSequence ?? Int.min
-        if lhsTurn != rhsTurn {
-            return lhsTurn < rhsTurn
-        }
-
-        let lhsItem = lhs.itemSequence ?? Int.min
-        let rhsItem = rhs.itemSequence ?? Int.min
-        if lhsItem != rhsItem {
-            return lhsItem < rhsItem
-        }
-
-        let lhsEvent = lhs.eventSequence ?? Int.min
-        let rhsEvent = rhs.eventSequence ?? Int.min
-        return lhsEvent < rhsEvent
     }
 
     private static func origin(from thread: ThreadDTO) -> SessionOrigin {

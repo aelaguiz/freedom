@@ -293,18 +293,19 @@ final class DockStoreTestsProjection: XCTestCase {
         )
     }
 
-    func testPinnedRowsSortByActivityThenPinnedAtThenStableID() {
+    func testPinnedRowsSortByPinnedOrderThenLegacyPinnedAtThenStableID() {
         let snapshot = makeSnapshot(rows: [
-            makeRow(threadID: "same-old-pin-b", title: "Same B", branch: "main", status: .running, lastActivity: 300, isPinned: true, pinnedAt: 100),
-            makeRow(threadID: "new-activity", title: "New activity", branch: "main", status: .running, lastActivity: 400, isPinned: true, pinnedAt: 50),
-            makeRow(threadID: "same-new-pin-a", title: "Same A", branch: "main", status: .running, lastActivity: 300, isPinned: true, pinnedAt: 200)
+            makeRow(threadID: "order-two", title: "Order two", branch: "main", status: .running, lastActivity: 400, isPinned: true, pinnedAt: 50, pinnedOrder: 2),
+            makeRow(threadID: "legacy-old", title: "Legacy old", branch: "main", status: .running, lastActivity: 500, isPinned: true, pinnedAt: 100),
+            makeRow(threadID: "order-zero", title: "Order zero", branch: "main", status: .running, lastActivity: 300, isPinned: true, pinnedAt: 300, pinnedOrder: 0),
+            makeRow(threadID: "legacy-new", title: "Legacy new", branch: "main", status: .running, lastActivity: 100, isPinned: true, pinnedAt: 200)
         ])
 
         let projection = snapshot.project(options: .init(lens: .newest))
 
         XCTAssertEqual(
             projection.pinnedRows.map(\.id.threadID),
-            ["new-activity", "same-new-pin-a", "same-old-pin-b"]
+            ["order-zero", "order-two", "legacy-old", "legacy-new"]
         )
     }
 
@@ -414,7 +415,8 @@ private func makeRow(
     label: String? = nil,
     origin: SessionOrigin = .humanInteractive(subtype: .cli),
     isPinned: Bool = false,
-    pinnedAt: TimeInterval? = nil
+    pinnedAt: TimeInterval? = nil,
+    pinnedOrder: Int? = nil
 ) -> DockRowViewModel {
     DockRowViewModel(
         id: HostScopedThreadID(hostID: host.id, threadID: threadID),
@@ -432,6 +434,7 @@ private func makeRow(
         label: label,
         origin: origin,
         isPinned: isPinned,
-        pinnedAt: pinnedAt.map(Date.init(timeIntervalSince1970:))
+        pinnedAt: pinnedAt.map(Date.init(timeIntervalSince1970:)),
+        pinnedOrder: pinnedOrder
     )
 }

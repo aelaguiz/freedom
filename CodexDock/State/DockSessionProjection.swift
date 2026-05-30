@@ -360,14 +360,22 @@ private struct DockSessionProjectionProjector {
     }
 
     private func pinnedRowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
-        if lhs.lastActivityDate != rhs.lastActivityDate {
-            return lhs.lastActivityDate > rhs.lastActivityDate
+        if let lhsOrder = lhs.pinnedOrder,
+           let rhsOrder = rhs.pinnedOrder,
+           lhsOrder != rhsOrder {
+            return lhsOrder < rhsOrder
+        }
+        if lhs.pinnedOrder != nil {
+            return true
+        }
+        if rhs.pinnedOrder != nil {
+            return false
         }
 
         let lhsPinnedAt = lhs.pinnedAt ?? Date.distantPast
         let rhsPinnedAt = rhs.pinnedAt ?? Date.distantPast
         if lhsPinnedAt != rhsPinnedAt {
-            return lhsPinnedAt > rhsPinnedAt
+            return lhsPinnedAt < rhsPinnedAt
         }
 
         return "\(lhs.id.hostID)::\(lhs.id.threadID)" < "\(rhs.id.hostID)::\(rhs.id.threadID)"

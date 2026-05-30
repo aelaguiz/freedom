@@ -1,4 +1,9 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+
+private let dockPinnedRowCellReuseID = "DockPinnedRowCell"
+#endif
 
 struct DockSwipeActionRow<Content: View>: View {
     let row: DockRowViewModel
@@ -86,65 +91,322 @@ struct DockSwipeActionRow<Content: View>: View {
     }
 }
 
-struct PinnedThreadsManageView: View {
-    let rows: [DockRowViewModel]
+struct DockPinnedSectionView<RowContent: View>: View {
+    let projection: DockSessionProjection
+    @Binding var isCollapsed: Bool
+    let onMove: ([DockRowViewModel]) -> Void
     let onUnpin: (DockRowViewModel) -> Void
-    @Environment(\.dismiss) private var dismiss
+    let onOpen: (DockRowViewModel) -> Void
+    @ViewBuilder let rowContent: (DockRowViewModel) -> RowContent
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    if rows.isEmpty {
-                        DockMessageView(
-                            icon: "pin.slash",
-                            title: "No pinned threads",
-                            message: "Pinned threads will appear here."
-                        )
-                    } else {
-                        ForEach(rows) { row in
-                            pinnedRow(row)
-                        }
-                    }
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                    isCollapsed.toggle()
                 }
-                .padding(16)
+            } label: {
+                HStack(spacing: 8) {
+                    Label(headerTitle, systemImage: "pin.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .accessibilityAddTraits(.isHeader)
+                        .codexAutomationID(AutomationID.Dock.pinnedHeader)
+
+                    Spacer(minLength: 8)
+
+                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
             }
-            .navigationTitle("Pinned")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Pinned")
+            .accessibilityValue(isCollapsed ? "Collapsed, \(headerTitle)" : "Expanded, \(headerTitle)")
+            .codexAutomationID(AutomationID.Dock.pinnedToggleButton)
+
+            if !isCollapsed {
+                DockPinnedRowsList(
+                    rows: projection.pinnedRows,
+                    onReorder: onMove,
+                    onUnpin: onUnpin,
+                    onOpen: onOpen,
+                    rowContent: rowContent
+                )
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Manage pinned threads")
-        .codexAutomationID(AutomationID.Dock.pinnedManageSheet)
+        .accessibilityValue(headerTitle)
+        .codexAutomationID(AutomationID.Dock.pinnedSection)
     }
 
-    private func pinnedRow(_ row: DockRowViewModel) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            DockRowView(row: row, showsPinIndicator: true)
-                .accessibilityValue(row.automationValue)
-                .codexAutomationID(AutomationID.Dock.pinnedManageRow(hostID: row.id.hostID, threadID: row.id.threadID))
-                .layoutPriority(1)
+    private var headerTitle: String {
+        projection.pinnedSummary.totalCount > projection.pinnedSummary.visibleCount
+            ? "Pinned \(projection.pinnedSummary.visibleCount) of \(projection.pinnedSummary.totalCount)"
+            : "Pinned \(projection.pinnedSummary.visibleCount)"
+    }
+}
 
-            Button(role: .destructive) {
-                onUnpin(row)
-            } label: {
-                Image(systemName: "pin.slash")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 38, height: 38)
-            }
-            .buttonStyle(.bordered)
-            .accessibilityLabel("Unpin thread")
-            .codexAutomationID(
-                AutomationID.Dock.pinnedManageUnpinButton(
-                    hostID: row.id.hostID,
-                    threadID: row.id.threadID
-                )
+struct DockPinnedHiddenHintView: View {
+    let projection: DockSessionProjection
+    let searchText: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label(title, systemImage: "pin.slash")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+
+            Text("\(projection.pinnedSummary.hiddenByScopeCount) hidden")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityValue("\(projection.pinnedSummary.hiddenByScopeCount) pinned hidden")
+        .codexAutomationID(AutomationID.Dock.pinnedHiddenHint)
+    }
+
+    private var title: String {
+        normalizedQuery(searchText).isEmpty
+            ? "Pinned hidden by filters"
+            : "No pinned rows match search"
+    }
+
+    private func normalizedQuery(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+struct DockPinnedRowsList<RowContent: View>: View {
+    let rows: [DockRowViewModel]
+    let onReorder: ([DockRowViewModel]) -> Void
+    let onUnpin: (DockRowViewModel) -> Void
+    let onOpen: (DockRowViewModel) -> Void
+    @ViewBuilder let rowContent: (DockRowViewModel) -> RowContent
+
+    private let rowHeight: CGFloat = 170
+    private let rowSpacing: CGFloat = 10
+
+    var body: some View {
+        Group {
+            #if os(iOS)
+            DockPinnedReorderCollectionView(
+                rows: rows,
+                rowSpacing: rowSpacing,
+                onReorder: onReorder,
+                onUnpin: onUnpin,
+                onOpen: onOpen,
+                rowContent: rowContent
             )
+            .frame(minHeight: listHeight, maxHeight: listHeight)
+            #else
+            VStack(alignment: .leading, spacing: rowSpacing) {
+                ForEach(rows) { row in
+                    rowContent(row)
+                }
+            }
+            #endif
+        }
+        .codexAutomationID(AutomationID.Dock.pinnedRowsList)
+    }
+
+    private var listHeight: CGFloat {
+        max(rowHeight, (CGFloat(rows.count) * rowHeight) + (CGFloat(max(0, rows.count - 1)) * rowSpacing))
+    }
+}
+
+#if os(iOS)
+private struct DockPinnedReorderCollectionView<RowContent: View>: UIViewRepresentable {
+    let rows: [DockRowViewModel]
+    let rowSpacing: CGFloat
+    let onReorder: ([DockRowViewModel]) -> Void
+    let onUnpin: (DockRowViewModel) -> Void
+    let onOpen: (DockRowViewModel) -> Void
+    @ViewBuilder let rowContent: (DockRowViewModel) -> RowContent
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeUIView(context: Context) -> UICollectionView {
+        let coordinator = context.coordinator
+        var configuration = UICollectionLayoutListConfiguration(appearance: .plain)
+        configuration.backgroundColor = .clear
+        configuration.showsSeparators = false
+        configuration.trailingSwipeActionsConfigurationProvider = { indexPath in
+            coordinator.trailingSwipeActionsConfiguration(for: indexPath)
+        }
+        let layout = UICollectionViewCompositionalLayout.list(using: configuration)
+
+        let collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        collectionView.backgroundColor = .clear
+        collectionView.alwaysBounceVertical = false
+        collectionView.isScrollEnabled = false
+        collectionView.showsHorizontalScrollIndicator = false
+        collectionView.showsVerticalScrollIndicator = false
+        collectionView.dataSource = context.coordinator
+        collectionView.delegate = context.coordinator
+        collectionView.register(UICollectionViewListCell.self, forCellWithReuseIdentifier: dockPinnedRowCellReuseID)
+        collectionView.accessibilityIdentifier = AutomationID.Dock.pinnedRowsList.rawValue
+
+        let longPress = UILongPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleLongPress(_:))
+        )
+        longPress.minimumPressDuration = 0.35
+        longPress.cancelsTouchesInView = true
+        longPress.delegate = context.coordinator
+        collectionView.addGestureRecognizer(longPress)
+
+        return collectionView
+    }
+
+    func updateUIView(_ collectionView: UICollectionView, context: Context) {
+        context.coordinator.parent = self
+        guard !context.coordinator.isMoving else {
+            return
+        }
+        context.coordinator.workingRows = rows
+        collectionView.reloadData()
+    }
+
+    final class Coordinator: NSObject, UICollectionViewDataSource, UICollectionViewDelegate, UIGestureRecognizerDelegate {
+        var parent: DockPinnedReorderCollectionView
+        var workingRows: [DockRowViewModel]
+        var isMoving = false
+
+        init(_ parent: DockPinnedReorderCollectionView) {
+            self.parent = parent
+            self.workingRows = parent.rows
+        }
+
+        func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
+            workingRows.count
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView,
+            cellForItemAt indexPath: IndexPath
+        ) -> UICollectionViewCell {
+            let cell = collectionView.dequeueReusableCell(
+                withReuseIdentifier: dockPinnedRowCellReuseID,
+                for: indexPath
+            )
+            guard let cell = cell as? UICollectionViewListCell else {
+                return cell
+            }
+            cell.contentConfiguration = nil
+            cell.backgroundColor = .clear
+            cell.contentView.backgroundColor = .clear
+            cell.backgroundConfiguration = .clear()
+
+            guard indexPath.item < workingRows.count else {
+                return cell
+            }
+
+            let row = workingRows[indexPath.item]
+            cell.contentConfiguration = UIHostingConfiguration {
+                parent.rowContent(row)
+                    .padding(.vertical, parent.rowSpacing / 2)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            .margins(.all, 0)
+            return cell
+        }
+
+        func collectionView(_ collectionView: UICollectionView, canMoveItemAt indexPath: IndexPath) -> Bool {
+            indexPath.item < workingRows.count
+        }
+
+        func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+            guard indexPath.item < workingRows.count else {
+                return
+            }
+            parent.onOpen(workingRows[indexPath.item])
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView,
+            moveItemAt sourceIndexPath: IndexPath,
+            to destinationIndexPath: IndexPath
+        ) {
+            guard sourceIndexPath.item != destinationIndexPath.item,
+                  sourceIndexPath.item < workingRows.count else {
+                return
+            }
+
+            let row = workingRows.remove(at: sourceIndexPath.item)
+            let insertionIndex = Swift.max(0, Swift.min(workingRows.count, destinationIndexPath.item))
+            workingRows.insert(row, at: insertionIndex)
+        }
+
+        func trailingSwipeActionsConfiguration(for indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+            guard indexPath.item < workingRows.count else {
+                return nil
+            }
+
+            let row = workingRows[indexPath.item]
+            let action = UIContextualAction(style: .destructive, title: "Unpin") { [weak self] _, _, completion in
+                self?.parent.onUnpin(row)
+                completion(true)
+            }
+            action.image = UIImage(systemName: "pin.slash")
+
+            let configuration = UISwipeActionsConfiguration(actions: [action])
+            configuration.performsFirstActionWithFullSwipe = true
+            return configuration
+        }
+
+        @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+            guard let collectionView = gesture.view as? UICollectionView else {
+                return
+            }
+
+            let location = gesture.location(in: collectionView)
+            switch gesture.state {
+            case .began:
+                guard let indexPath = collectionView.indexPathForItem(at: location) else {
+                    return
+                }
+                workingRows = parent.rows
+                guard collectionView.beginInteractiveMovementForItem(at: indexPath) else {
+                    isMoving = false
+                    workingRows = parent.rows
+                    return
+                }
+                isMoving = true
+            case .changed:
+                guard isMoving else {
+                    return
+                }
+                collectionView.updateInteractiveMovementTargetPosition(location)
+            case .ended:
+                guard isMoving else {
+                    return
+                }
+                collectionView.endInteractiveMovement()
+                isMoving = false
+                parent.onReorder(workingRows)
+            default:
+                collectionView.cancelInteractiveMovement()
+                isMoving = false
+                workingRows = parent.rows
+            }
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            if gestureRecognizer is UILongPressGestureRecognizer
+                || otherGestureRecognizer is UILongPressGestureRecognizer {
+                return false
+            }
+            return true
         }
     }
 }
+#endif

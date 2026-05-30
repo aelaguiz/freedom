@@ -194,6 +194,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
     public let origin: SessionOrigin
     public let isPinned: Bool
     public let pinnedAt: Date?
+    public let pinnedOrder: Int?
 
     public init(
         id: HostScopedThreadID,
@@ -211,7 +212,8 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
         label: String?,
         origin: SessionOrigin,
         isPinned: Bool = false,
-        pinnedAt: Date? = nil
+        pinnedAt: Date? = nil,
+        pinnedOrder: Int? = nil
     ) {
         self.id = id
         self.backendSessionID = backendSessionID
@@ -229,6 +231,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
         self.origin = origin
         self.isPinned = isPinned
         self.pinnedAt = isPinned ? pinnedAt : nil
+        self.pinnedOrder = isPinned ? pinnedOrder : nil
     }
 
     public var metadataKey: LocalThreadMetadataKey {
@@ -569,16 +572,54 @@ public final class DockStore: ObservableObject {
     }
 
     public func setPinned(_ isPinned: Bool, for row: DockRowViewModel) async {
-        var metadata = localMetadata[row.metadataKey] ?? LocalThreadMetadata()
-        metadata.isPinned = isPinned
+        var values = PinnedMetadataOrdering.normalized(localMetadata)
+        var metadata = values[row.metadataKey] ?? LocalThreadMetadata()
         if isPinned {
+            let wasPinned = metadata.isPinned
+            metadata.isPinned = true
             metadata.pinnedAt = metadata.pinnedAt ?? now()
+            if !wasPinned || metadata.pinnedOrder == nil {
+                metadata.pinnedOrder = PinnedMetadataOrdering.nextOrder(in: values, excluding: row.metadataKey)
+            }
             metadata.lastKnownPinnedDisplay = LocalPinnedDisplaySnapshot(row: row)
         } else {
+            metadata.isPinned = false
             metadata.pinnedAt = nil
+            metadata.pinnedOrder = nil
             metadata.lastKnownPinnedDisplay = nil
         }
-        await save(metadata: metadata, for: row.metadataKey)
+        values[row.metadataKey] = metadata
+        values = PinnedMetadataOrdering.normalized(values)
+        await save(metadataValues: values)
+    }
+
+    public func reorderPinnedRows(_ visibleRowsInNewOrder: [DockRowViewModel]) async {
+        var values = PinnedMetadataOrdering.normalized(localMetadata)
+        let visibleKeys = PinnedMetadataOrdering.uniqueKeys(
+            visibleRowsInNewOrder.map(\.metadataKey).filter { values[$0]?.isPinned == true }
+        )
+        guard visibleKeys.count > 1 else {
+            return
+        }
+
+        let visibleKeySet = Set(visibleKeys)
+        let orderedPinnedKeys = PinnedMetadataOrdering.orderedKeys(in: values)
+        var reorderedVisibleKeys = visibleKeys.makeIterator()
+        let mergedKeys = orderedPinnedKeys.compactMap { key in
+            if visibleKeySet.contains(key) {
+                return reorderedVisibleKeys.next()
+            }
+            return key
+        }
+
+        for (index, key) in mergedKeys.enumerated() {
+            guard var metadata = values[key], metadata.isPinned else {
+                continue
+            }
+            metadata.pinnedOrder = index
+            values[key] = metadata
+        }
+        await save(metadataValues: values)
     }
 
     @discardableResult
@@ -856,4 +897,23 @@ public final class DockStore: ObservableObject {
             actionError = error.localizedDescription
         }
     }
+
+    private func save(metadataValues values: [LocalThreadMetadataKey: LocalThreadMetadata]) async {
+        let persistedValues = values.filter { !$0.value.isEmpty }
+        guard localMetadata != persistedValues else {
+            return
+        }
+
+        do {
+            DockLog.persistence.debug("dock metadata batch save started entries=\(persistedValues.count, privacy: .public)")
+            localMetadata = try await metadataStore.save(persistedValues)
+            actionError = nil
+            publishSnapshot()
+            DockLog.persistence.debug("dock metadata save finished entries=\(self.localMetadata.count, privacy: .public)")
+        } catch {
+            DockLog.persistence.error("dock metadata save failed error=\(DockLog.errorSummary(error), privacy: .public)")
+            actionError = error.localizedDescription
+        }
+    }
+
 }

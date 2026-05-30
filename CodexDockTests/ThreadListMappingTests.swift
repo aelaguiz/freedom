@@ -91,7 +91,8 @@ final class ThreadListMappingTests: XCTestCase {
         XCTAssertEqual(summary.workingDirectory, .known("/Users/aelaguiz/workspace/codex-client"))
         XCTAssertEqual(summary.branch, .known("main"))
         XCTAssertEqual(summary.lastActivity.timeIntervalSince1970, 1_790_000_010)
-        XCTAssertEqual(summary.shortEventSummary, .known("Build the Dock"))
+        XCTAssertEqual(summary.shortEventSummary, .unknown)
+        XCTAssertNil(summary.messageActivityDate)
         XCTAssertEqual(summary.origin.kind, .humanInteractive)
         XCTAssertEqual(summary.origin.humanSubtype, .cli)
         XCTAssertEqual(summary.origin.evidence.sourceKind, .cli)
@@ -159,9 +160,10 @@ final class ThreadListMappingTests: XCTestCase {
         let summary = result.summaries[0]
         XCTAssertEqual(summary.displayTitle, "Stable thread title")
         XCTAssertEqual(summary.shortEventSummary, .known("Latest agent update"))
+        XCTAssertEqual(summary.messageActivityDate?.timeIntervalSince1970, 1_790_000_020)
     }
 
-    func testMapsRelayLatestSummaryWithoutListTurnsToShortEventSummary() {
+    func testIgnoresRelayLatestSummaryWithoutListTurnsForDockMessageSummary() {
         let response = ThreadListResponseDTO(
             data: [
                 ThreadDTO(
@@ -183,7 +185,8 @@ final class ThreadListMappingTests: XCTestCase {
         let result = SessionSummaryMapper.map(response: response, hostID: "Amir-M5")
 
         XCTAssertEqual(result.failures, [])
-        XCTAssertEqual(result.summaries[0].shortEventSummary, .known("Latest useful message from relay"))
+        XCTAssertEqual(result.summaries[0].shortEventSummary, .unknown)
+        XCTAssertNil(result.summaries[0].messageActivityDate)
     }
 
     func testSparsePayloadMapsUnknownOptionalMetadataWithoutDroppingThread() throws {

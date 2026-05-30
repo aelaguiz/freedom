@@ -9,7 +9,8 @@ struct ArchiveSessionProjector {
         let rows = SessionRowProjector(
             hosts: hosts,
             localMetadata: localMetadata,
-            now: now
+            now: now,
+            activityMode: .raw
         ).rows(from: summaries)
         let groupedRows = Dictionary(grouping: rows, by: sectionID(for:))
 

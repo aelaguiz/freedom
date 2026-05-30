@@ -185,8 +185,8 @@ struct DockSessionTable: Equatable, Sendable {
         }
         return Array(state.sessionsByID.values)
             .sorted { lhs, rhs in
-                let lhsUpdated = lhs.updatedAt ?? 0
-                let rhsUpdated = rhs.updatedAt ?? 0
+                let lhsUpdated = lhs.messageUpdatedAt ?? Int64.min
+                let rhsUpdated = rhs.messageUpdatedAt ?? Int64.min
                 if lhsUpdated != rhsUpdated {
                     return lhsUpdated > rhsUpdated
                 }
@@ -213,7 +213,10 @@ struct DockSessionTable: Equatable, Sendable {
             workingDirectory: text(from: session.workingDirectory),
             branch: text(from: session.branch),
             lastActivity: Date(timeIntervalSince1970: TimeInterval(session.updatedAt ?? 0)),
-            shortEventSummary: text(from: session.summary),
+            shortEventSummary: text(from: session.messageSummary),
+            messageActivityDate: session.messageUpdatedAt.map {
+                Date(timeIntervalSince1970: TimeInterval($0))
+            },
             origin: origin(from: session)
         )
     }

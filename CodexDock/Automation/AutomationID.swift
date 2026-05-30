@@ -108,9 +108,9 @@ public extension AutomationID {
         public static let filterIdleToggle = AutomationID("codexdock.dock.filters.idle")
         public static let pinnedSection = AutomationID("codexdock.dock.pinned.section")
         public static let pinnedHeader = AutomationID("codexdock.dock.pinned.header")
-        public static let pinnedManageButton = AutomationID("codexdock.dock.pinned.manage")
-        public static let pinnedManageSheet = AutomationID("codexdock.dock.pinned.manage.sheet")
-        public static let pinnedShowAllButton = AutomationID("codexdock.dock.pinned.show-all")
+        public static let pinnedToggleButton = AutomationID("codexdock.dock.pinned.toggle")
+        public static let pinnedRowsList = AutomationID("codexdock.dock.pinned.rows")
+        public static let pinnedBodyDivider = AutomationID("codexdock.dock.pinned.body-divider")
         public static let pinnedHiddenHint = AutomationID("codexdock.dock.pinned.hidden")
 
         public static func state(_ kind: StateKind) -> AutomationID {
@@ -175,14 +175,6 @@ public extension AutomationID {
 
         public static func rowAction(hostID: String, threadID: String, action: DockRowAction) -> AutomationID {
             AutomationID("codexdock.dock.row.\(safeSegment(hostID)).\(safeSegment(threadID)).action.\(action.rawValue)")
-        }
-
-        public static func pinnedManageRow(hostID: String, threadID: String) -> AutomationID {
-            AutomationID("codexdock.dock.pinned.manage.row.\(safeSegment(hostID)).\(safeSegment(threadID))")
-        }
-
-        public static func pinnedManageUnpinButton(hostID: String, threadID: String) -> AutomationID {
-            AutomationID("codexdock.dock.pinned.manage.row.\(safeSegment(hostID)).\(safeSegment(threadID)).unpin")
         }
 
         public static func rowColorAction(hostID: String, threadID: String, rail: String) -> AutomationID {

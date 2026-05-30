@@ -1,9 +1,15 @@
 import Foundation
 
+enum SessionRowActivityMode: Equatable, Sendable {
+    case dockMessage
+    case raw
+}
+
 struct SessionRowProjector {
     let hosts: [DockHostConfiguration]
     let localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata]
     let now: @Sendable () -> Date
+    var activityMode: SessionRowActivityMode = .dockMessage
 
     func rows(from summaries: [SessionSummary]) -> [DockRowViewModel] {
         summaries.map(makeRow)
@@ -29,6 +35,7 @@ struct SessionRowProjector {
                 threadID: summary.id.threadID
             )
         ]
+        let activity = activityDisplay(for: summary)
         return DockRowViewModel(
             id: summary.id,
             backendSessionID: summary.backendSessionID,
@@ -38,14 +45,15 @@ struct SessionRowProjector {
             repository: repository(for: summary),
             branch: text(summary.branch, fallback: "No branch"),
             status: status(for: summary),
-            lastActivity: relativeTime(since: summary.lastActivity),
-            lastActivityDate: summary.lastActivity,
-            summary: latestSummary(for: summary),
+            lastActivity: activity.label,
+            lastActivityDate: activity.date,
+            summary: rowSummary(for: summary),
             rail: metadata?.rail ?? rail(for: summary),
             label: metadata?.label,
             origin: summary.origin,
             isPinned: metadata?.isPinned ?? false,
-            pinnedAt: metadata?.pinnedAt
+            pinnedAt: metadata?.pinnedAt,
+            pinnedOrder: metadata?.pinnedOrder
         )
     }
 
@@ -71,7 +79,8 @@ struct SessionRowProjector {
             label: metadata.label ?? snapshot?.label,
             origin: snapshot?.originKind.sessionOrigin ?? .unknown(),
             isPinned: true,
-            pinnedAt: metadata.pinnedAt
+            pinnedAt: metadata.pinnedAt,
+            pinnedOrder: metadata.pinnedOrder
         )
     }
 
@@ -87,12 +96,27 @@ struct SessionRowProjector {
         return text(summary.workingDirectory, fallback: "Unknown workspace")
     }
 
-    private func latestSummary(for summary: SessionSummary) -> String {
+    private func rowSummary(for summary: SessionSummary) -> String {
         if let eventSummary = nonEmpty(text(summary.shortEventSummary, fallback: "")) {
             return eventSummary
         }
 
+        guard activityMode == .raw else {
+            return "No message preview"
+        }
         return summary.displayTitle
+    }
+
+    private func activityDisplay(for summary: SessionSummary) -> (label: String, date: Date) {
+        switch activityMode {
+        case .dockMessage:
+            guard let messageActivityDate = summary.messageActivityDate else {
+                return ("No messages", .distantPast)
+            }
+            return (relativeTime(since: messageActivityDate), messageActivityDate)
+        case .raw:
+            return (relativeTime(since: summary.lastActivity), summary.lastActivity)
+        }
     }
 
     private func status(for summary: SessionSummary) -> DockRowStatusKind {

@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - Swipe Pinned Top - Architecture Plan"
 date: 2026-05-30
-status: active
+status: complete
 fallback_policy: forbidden
 owners: [aelaguiz]
 reviewers: [Codex, Composer 2.5 Fast]
@@ -26,7 +26,7 @@ recency-sorted watchlist with `Manage` into a static, user-ordered list:
 
 - pin order is stable by the order rows were pinned;
 - users can long-press a pinned row and drag it to rearrange pinned order with
-  native iOS list movement;
+  native UIKit collection/list movement;
 - there is no visible reorder handle or edit-mode affordance;
 - tapping the `Pinned` label collapses/expands the section;
 - all visible pinned rows render inline, with no `Show all N pinned` button;
@@ -82,7 +82,7 @@ single persistent pinned section above the selected lens content.
 - No recency sorting inside the pinned section.
 - No visible three-row cap, `Show all N pinned`, `Manage` button, or pinned
   management sheet.
-- Reorder must use native iOS list or collection movement APIs, not a custom
+- Reorder must use native UIKit collection/list movement APIs, not a custom
   drag/drop sorting implementation.
 - Reorder must be available from the pinned section itself with a long press on
   a pinned row. It must not require a visible reorder indicator, Edit button,
@@ -215,7 +215,9 @@ must show the same class of events the Dock used for its preview/order.
 - Row de-duplication from the selected lens body when the row is visible in
   `Pinned`.
 - Search/filter scoped behavior exactly as defined in the UX spec.
-- Context menu and accessibility alternatives to the swipe gesture.
+- Context menu and accessibility alternatives for body-row `Pin`; pinned-row
+  `Unpin` keeps swipe and accessibility alternatives because long press on a
+  pinned row is reserved for native reorder.
 - Stable automation IDs for simulator/UI proof.
 - Focused model/projection/store tests and iPhone 17 simulator test coverage.
 
@@ -236,8 +238,10 @@ must show the same class of events the Dock used for its preview/order.
   metadata-only pinned rows when a live thread is not currently loaded.
 - `DockSessionProjection` exposes pinned rows separately from body rows and
   de-duplicates body content.
-- The Dock UI renders `Pinned N` above all three lenses and exposes `Pin` /
-  `Unpin` through swipe, context menu, and accessibility actions.
+- The Dock UI renders `Pinned N` above all three lenses, exposes body-row `Pin`
+  through swipe, context menu, and accessibility actions, and exposes
+  pinned-row `Unpin` through swipe and accessibility actions without stealing
+  the long-press reorder gesture.
 - The Dock UI does not cap pinned rows at three and does not render
   `Show all N pinned`, `Manage`, or a pinned management sheet.
 - Pinned rows stay in stable user order. Activity updates do not move them.
@@ -301,6 +305,62 @@ must show the same class of events the Dock used for its preview/order.
   it does not erase label or rail metadata.
 - No fallback or runtime shim is introduced.
 
+## 0.6 User-opened requirements from 2026-05-30 amendment
+
+`R-DP-001 - Dock cards show only true messages`
+
+The Dock row/card preview line must display only the newest true user/agent
+message that Thread Detail's default `Messages` filter would include. Tool
+calls, command output, request-card text, reasoning/thinking tokens, status
+events, and unknown events must never become the Dock card preview.
+
+`R-DP-002 - Dock ordering follows true-message freshness`
+
+Dock row ordering in `Newest`, host groups, and branch groups must use the
+newest true-message timestamp. Newer non-message activity can update row status
+or diagnostics, but it must not move the row above another row with a newer
+true message.
+
+`R-DP-003 - One shared message classifier`
+
+Thread Detail and Dock must call the same Swift classifier for the meaning of
+true message. The relay may mirror that rule in Node only at the stream-summary
+boundary, and the mirror must have fixture coverage for included and excluded
+event classes.
+
+`R-DP-004 - Pinned reorder uses the native iOS long-press movement pattern`
+
+Pinned reorder must start from a long press on a pinned row and drag to a new
+position. There is no reorder handle, no `EditButton`, no edit-mode toggle, and
+no visible instruction text. The implementation must use native UIKit
+collection/list interactive movement or a simulator-proven equivalent native
+SwiftUI movement path; it must not use a homegrown drag/drop sorting engine.
+
+`R-DP-005 - Reorder is not a 2+ item mode`
+
+The pinned section uses the same long-press-capable row surface even when only
+one pinned row is visible. A single row has nowhere useful to move, so the store
+may no-op the resulting order write, but the UI must not expose a separate
+"reorder unavailable until two pins" mode.
+
+`R-DP-006 - "Message" means Thread Detail's default Messages filter`
+
+The Dock card must use the exact same semantic rule as
+`ThreadDetailMessageFilter.default`, which is `.messages`, through
+`ThreadMessageSemantics.isDefaultVisibleMessage(_:)`. It must not use the
+broader `ThreadEventKind.agentMessage` filter, the Thread Detail `All` filter,
+the raw relay `preview`, generic `summary` / `latestSummary`, raw `updatedAt`,
+or string labels to decide what the visible Dock card says or where the row
+sorts. If the Dock stream supplies `messageSummary` and `messageUpdatedAt`,
+those fields are valid only because the relay generated them from the mirrored
+true-message rule.
+
+Acceptance evidence must prove the user-visible equivalence: for a fixture
+thread with a true user/agent message followed by newer tool output, reasoning,
+request, status, or unknown activity, the Dock card keeps the true-message
+preview/order and opening Thread Detail with the default `Messages` filter shows
+that same class of event while excluding the newer non-message activity.
+
 # 1) Key Design Considerations (what matters most)
 
 ## 1.1 Priorities (ranked)
@@ -320,27 +380,31 @@ must show the same class of events the Dock used for its preview/order.
 
 ## 1.2 Constraints
 
-- SwiftUI `List` movement is the first native interaction path to try for row
-  reorder. The preferred SwiftUI path is `ForEach.onMove(perform:)` in the
-  pinned rows list because Apple's SwiftUI drag-source guidance describes list
-  reordering by long-pressing a row and dragging it to a new location.
-  `List(..., editActions: .move)` is acceptable only if simulator proof shows
-  the same long-press/no-visible-handle interaction.
-- If SwiftUI list movement cannot satisfy the no-visible-handle long-press
-  interaction in the iPhone 17 simulator, the next native path is UIKit
-  collection/list interactive movement, not a homegrown gesture. Apple's
+- For the requested no-handle, no-edit-button long-press reorder, the primary
+  native path is UIKit collection/list interactive movement. Apple's
   `UICollectionViewController.installsStandardGestureForInteractiveMovement`
-  installs the standard long-press gesture for reordering, and
-  `UICollectionView` updates the move through its data source. A SwiftUI wrapper
-  around that native control is acceptable; a custom `DragGesture`/drop target
-  sorting implementation is not.
+  is the canonical built-in gesture: it installs a standard long-press-based
+  recognizer for reordering collection-view items. A SwiftUI wrapper around
+  UIKit collection/list movement is acceptable because the movement remains
+  system-owned.
+- The implementation may use the equivalent `UICollectionView` interactive
+  movement calls directly: `beginInteractiveMovementForItem(at:)`,
+  `updateInteractiveMovementTargetPosition(_:)`, and
+  `endInteractiveMovement()` / `cancelInteractiveMovement()`. This is native
+  iOS row movement; the custom code only bridges the gesture result into
+  `DockStore.reorderPinnedRows(...)`.
+- SwiftUI `List` / `ForEach.onMove(perform:)` is secondary, not primary, for
+  this exact UX because Apple's SwiftUI edit-mode path normally exposes edit
+  controls. It is acceptable only if iPhone 17 simulator proof shows the same
+  long-press row movement with no visible handle, no `EditButton`, and no edit
+  mode.
 - Reorder must not require an `EditButton`, edit mode, a visible grip, or any
   persistent reorder affordance. The user-facing gesture is long-press row,
   drag, drop.
 - Swipe remains the user-facing pin/unpin action. If the existing
   `ScrollView`/`LazyVStack` surface prevents native swipe and native reorder
-  from coexisting, the plan must prefer a native `List` surface over
-  accumulating more custom gesture code.
+  from coexisting, the plan must prefer a native collection/list subsection
+  over accumulating more custom gesture code.
 - Local metadata is asynchronous and may fail; failure must roll back or keep
   the old state with an action error.
 - The Dock already has `Mark Watch`, rail color, archive, host grouping, branch
@@ -377,8 +441,8 @@ must show the same class of events the Dock used for its preview/order.
 - Put message-derived row preview and message-derived row activity on the
   summary/stream model so Dock projection can sort without opening Thread
   Detail.
-- Put reorder mutation in `DockStore`; the view receives native move indices
-  from SwiftUI and the store writes local metadata.
+- Put reorder mutation in `DockStore`; the view receives a native collection or
+  list movement result and the store writes local metadata.
 - Keep UI rendering declarative: the view renders projection truth rather than
   recomputing pinned membership.
 - Add tiny, named view helpers for the pinned section instead of large inline
@@ -394,10 +458,11 @@ must show the same class of events the Dock used for its preview/order.
 - The earlier capped/Manage design is superseded. The pinned section can become
   taller when the user pins many rows; that is acceptable because pinning many
   rows is an explicit user choice and the section can collapse.
-- Native long-press reorder may require moving the Dock vertical surface closer
-  to SwiftUI `List`. That is a larger UI architecture change than a custom
-  `DragGesture`, but it is the right tradeoff because the user explicitly asked
-  for a canonical iOS reorder implementation with no visible reorder indicator.
+- Native long-press reorder may require embedding a UIKit collection/list
+  surface inside the Dock pinned section. That is a larger UI architecture
+  change than a custom `DragGesture`, but it is the right tradeoff because the
+  user explicitly asked for a canonical iOS reorder implementation with no
+  visible reorder indicator.
 - The Dock stream may need a small optional DTO addition for
   `messageUpdatedAt`/message-derived summary. That is acceptable because the
   user experience breaks when the client only has raw `updatedAt`, which can be
@@ -456,32 +521,36 @@ Adopted conclusions:
 
 2026-05-30 amendment research:
 
-- Apple SwiftUI's current iOS SDK exposes `ForEach`/`List` initializers with
-  `editActions` and `EditActions.move`, and `DynamicViewContent.onMove`.
-  Evidence was checked in the installed iOS 26 SDK SwiftUI interface:
-  `SwiftUI.swiftmodule/...swiftinterface` contains `EditActions<Data>.move`,
-  `List(... editActions: ...)`, and
-  `onMove(perform: (IndexSet, Int) -> Void)`.
-- Apple's public SwiftUI drag-source guidance says list reordering can happen
-  by long-pressing a row and dragging it to a new location. This makes
-  `ForEach.onMove(perform:)` the preferred canonical API because it matches the
-  requested hidden-affordance gesture.
+- Apple's public UIKit documentation for collection-view interactive movement
+  is the best match for the requested iOS pattern. The
+  `UICollectionViewController.installsStandardGestureForInteractiveMovement`
+  API installs the standard long-press-based gesture recognizer for item
+  reordering.
+- Apple's public `UICollectionView.beginInteractiveMovementForItem(at:)`
+  documentation says interactive movement starts when the gesture begins,
+  updates target position while the gesture changes, and ends or cancels when
+  interaction ends. That maps directly to the desired user behavior:
+  long-press a pinned row, drag it to a new position, drop it.
+- The implementation must therefore prefer native UIKit collection/list
+  movement for pinned-row reorder. A SwiftUI `UIViewRepresentable` wrapper is
+  allowed because the gesture, item movement, and move callbacks still belong
+  to UIKit; the wrapper only connects the native reorder result to SwiftUI
+  state.
+- Apple's SwiftUI `EditMode` and `onMove(perform:)` APIs remain useful context,
+  but they are not the primary path for this requirement because SwiftUI's
+  normal list movement is tied to edit-mode move controls. The requested UX
+  explicitly rejects visible reorder handles, an `EditButton`, and edit mode.
 - `draggable`/`dropDestination` are not the first-choice APIs for this
   pinned-row reorder. They are transfer/drop APIs for moving data between
-  sources and destinations. For an in-list reorder, Apple's own SwiftUI
-  guidance points to `List` + `ForEach.onMove(perform:)`, so implementation
-  must start there and only reopen this plan if simulator proof shows native
-  list movement cannot satisfy the Dock layout.
-- Apple's public SwiftUI documentation for `onMove(perform:)`, `List`
-  `editActions`, and SwiftUI drag/drop is the canonical API family for list row
-  movement. Use these paths before considering drag/drop delegates.
+  sources and destinations. This task is same-list row reordering, so the
+  canonical implementation must be native collection/list movement.
 - Research links:
   - SwiftUI `onMove(perform:)`:
     <https://developer.apple.com/documentation/swiftui/dynamicviewcontent/onmove%28perform%3A%29>
-  - SwiftUI drag source guidance:
-    <https://developer.apple.com/documentation/swiftui/making-a-view-into-a-drag-source>
   - UIKit standard long-press interactive movement:
     <https://developer.apple.com/documentation/uikit/uicollectionviewcontroller/installsstandardgestureforinteractivemovement>
+  - UIKit begin interactive movement:
+    <https://developer.apple.com/documentation/uikit/uicollectionview/begininteractivemovementforitem%28at%3A%29>
   - UIKit collection-view interactive movement:
     <https://developer.apple.com/documentation/uikit/uicollectionview>
   - Apple HIG drag and drop:
@@ -506,7 +575,7 @@ Adopted conclusions:
   Dock, the pinned/body boundary should be a native section/separator, not a
   decorative card-within-card treatment.
 
-2026-05-30 message-classification research:
+2026-05-30 user-amended message-classification research:
 
 - `CodexDock/Models/ThreadEvent.swift` already owns the Thread Detail filter
   model. `ThreadDetailMessageFilter.default == .messages`.
@@ -520,29 +589,29 @@ Adopted conclusions:
 - `SessionDetailView` applies `selectedMessageFilter.visibleEvents(from:)` to
   the loaded thread before rendering `ThreadMessageListView`, so the visible
   default detail transcript is already defined by that filter.
-- `SessionSummaryMapper` currently has a private
-  `latestMeaningfulSummary(from:)` and private `isStoredMessageEvent(_:)`.
-  That is close to the desired behavior, but it is still a second Dock/list
-  predicate. The plan must delete that private predicate and call the shared
-  true-message classifier instead.
-- `SessionSummaryMapper` currently prefers `thread.latestSummary` before
-  deriving a message summary from turns. Relay tests indicate
-  `ThreadSummaryCache` tries to warm `latestSummary` from `userMessage` and
-  `agentMessage`, but the Swift mapper cannot assume every incoming
-  `latestSummary` was produced by the same rule unless the DTO/protocol makes
-  that explicit or relay-side tests guarantee it.
-- `DockSessionTable.summary(from:)`, `SessionRowProjector.makeRow(summary:)`,
-  and `DockSessionProjection.rowPrecedesByRecency` currently use `updatedAt` /
-  `SessionSummary.lastActivity` as row freshness. That is the exact path where
-  tool/thinking/status updates can reorder the Dock independently from message
-  activity.
-- `scripts/dock-relay-session-table.mjs` currently normalizes Dock stream
-  `updatedAt` from `thread.updatedAt` and `summary` from
-  `thread.latestSummary || thread.preview || titleForThread(thread)`.
-  `scripts/dock-relay-thread-summary-cache.mjs` currently returns only summary
-  text, not the timestamp of the newest true message. Dock ordering therefore
-  cannot be made correct by the client alone for relay-stream rows unless the
-  relay includes message-derived activity or the client has enough turn data.
+- Current Swift code already has the intended owner:
+  `ThreadMessageSemantics.isDefaultVisibleMessage(_:)`, and
+  `ThreadDetailMessageFilter.messages.includes(_:)` calls it.
+- Current `SessionSummaryMapper` derives Dock thread-list preview and
+  `messageActivityDate` from `ThreadEventNormalizer.events(from:)` plus
+  `ThreadMessageSemantics.latestMessage(in:)`. This is the correct direction:
+  no Dock-only private predicate should be reintroduced.
+- Current stream DTO/model code already carries separate message-derived
+  fields: `DockStreamSessionDTO.messageSummary`,
+  `DockStreamSessionDTO.messageUpdatedAt`, and
+  `SessionSummary.messageActivityDate`.
+- Current `DockSessionTable.sortedSessions(for:)`,
+  `DockSessionTable.summary(from:)`, `SessionRowProjector.activityDisplay(for:)`,
+  and `DockSessionProjection.rowPrecedesByRecency` now run through the
+  message-derived row date/summary path. That is the intended no-rip behavior:
+  raw `updatedAt` can remain a transport/freshness fact, but it must not be the
+  Dock card/order fact when message-derived activity exists.
+- Current relay code decorates rows with `messageSummary` and
+  `messageUpdatedAt`, and `scripts/dock-relay-thread-summary-cache.mjs` returns
+  newest user/agent message text plus timestamp. The remaining hardening is to
+  keep that Node predicate named, tested, and aligned with the Swift
+  true-message rule so reasoning, plan, tool, output, request, status, and
+  unknown items cannot sneak back into Dock cards or ordering.
 
 Rejected conclusions:
 
@@ -552,8 +621,9 @@ Rejected conclusions:
 - Do not rely only on context menus; hidden menus are not enough for primary
   row actions.
 - Do not implement reorder with a bespoke `DragGesture`, hover gap detector, or
-  custom drop target unless native iOS list movement is proven impossible in
-  the simulator and the plan is explicitly reopened.
+  custom drop target. The approved route is native UIKit collection/list
+  interactive movement, with SwiftUI only wrapping that native control if
+  needed.
 - Do not render a reorder handle, grip, Edit button, or Manage button merely to
   reveal reorder. The long-press row drag is the affordance.
 - Do not keep the earlier `Manage` sheet/cap/overflow design; the new product
@@ -696,7 +766,7 @@ could otherwise branch:
 - Host/Branch lenses keep pins visible; explicit filters/search may hide them.
 - Pinned order is static by pin order and user drag order, not activity order.
 - New pins append after existing pins.
-- Reorder uses native iOS list or collection interactive movement.
+- Reorder uses native UIKit collection/list interactive movement.
 - Reorder starts from long-pressing a row and dragging; no visible indicator is
   shown.
 - Reorder is not gated on "at least two pins" as a mode. With one visible pin,
@@ -823,29 +893,30 @@ thread/list row or dock stream row
 ## 4.3 Object model + key abstractions
 
 - `LocalThreadMetadataKey`: `hostID + backendSessionID + threadID`.
-- `LocalThreadMetadata`: optional `label`, optional `rail`.
+- `LocalThreadMetadata`: optional `label`, optional `rail`, `isPinned`,
+  `pinnedAt`, `pinnedOrder`, and optional `lastKnownPinnedDisplay`.
 - `DockRowViewModel`: row display model with title, host, repo, branch, status,
-  last activity, summary, rail, label, and origin.
+  last activity, summary, rail, label, origin, and pinned metadata.
 - `DockProjectionOptions`: selected lens, search text, filters.
 - `DockSessionProjection`: projected rows/groups/summary/facets/empty reason.
 - `DockProjectionGroupViewModel`: host/branch groups.
 
-Missing today:
+Missing / still requiring proof today:
 
-- The current implementation has `isPinned`, `pinnedAt`, cached pinned display,
-  `pinnedRows`, `Pin`/`Unpin`, and a pinned-section render path.
-- The current implementation still has amendment conflicts: activity-based
-  pinned sort, a three-row inline cap, `Show all N pinned`, `Manage pinned`
-  sheet/button, and custom swipe container. Those are now implementation debt
-  to remove before this plan can be considered complete.
-- The current implementation has no durable `pinnedOrder`, no native list
-  reorder path, no collapse state, and no pinned/body divider contract.
-- Dock card preview and ordering are not yet tied to the Thread Detail default
-  message predicate. Swift currently has a private summary predicate in
-  `SessionSummaryMapper`, while the relay stream still carries only
-  `summary`/`updatedAt` from relay row normalization. That leaves room for Dock
-  preview/order to drift when tools, thinking, request cards, or status updates
-  are newer than the last real message.
+- The current implementation has `isPinned`, `pinnedAt`, `pinnedOrder`, cached
+  pinned display, `pinnedRows`, `Pin`/`Unpin`, and a pinned-section render path.
+- The current implementation still must prove the amended UX in the iPhone 17
+  simulator: no three-row cap, no `Show all N pinned`, no `Manage pinned`
+  sheet/button, collapse by tapping `Pinned`, native long-press reorder, scoped
+  reorder under search/filter, and a pinned/body divider.
+- Dock card preview and ordering are now wired to message-derived fields in
+  Swift, but the implementation is incomplete until tests prove the no-rip
+  case: newer tool, thinking, request, status, or unknown activity must not
+  replace the Dock preview or move the row ahead of a row with a newer true
+  message.
+- The relay has message-derived stream fields, but the Node message predicate
+  still needs explicit fixture coverage against the same included/excluded
+  event classes as the Swift `ThreadMessageSemantics` rule.
 
 ## 4.4 Observability + failure behavior today
 
@@ -991,7 +1062,7 @@ Dock row swipe/context/accessibility action
 Unpin action:
 
 ```text
-Pinned row swipe/context/accessibility action
+Pinned row swipe/accessibility action
   -> DockStore.setPinned(false, for: row)
   -> LocalThreadMetadata.isPinned = false / pinnedAt = nil
   -> LocalThreadMetadata.pinnedOrder = nil
@@ -1006,7 +1077,7 @@ Reorder action:
 
 ```text
 Long-press a pinned row in the expanded Pinned section
-  -> native iOS list move begins with no visible reorder handle
+  -> native UIKit collection/list move begins with no visible reorder handle
   -> DockStore.reorderPinnedRows(orderedIDs or source/destination)
   -> store rewrites contiguous pinnedOrder values for the full pinned set
   -> save metadata for affected pinned rows
@@ -1162,16 +1233,20 @@ Rationale: the projection owns scope truth. The UI should not recompute whether
 pins are hidden by search/filter.
 
 `ThreadMessageSemantics` or an equivalently named shared Swift helper owns the
-true-message rule:
+true-message rule. The current implementation lives in
+`CodexDock/Models/ThreadEvent.swift`:
 
 ```swift
 enum ThreadMessageSemantics {
     static func isDefaultVisibleMessage(_ event: ThreadEvent) -> Bool
-    static func newestMessage(in events: [ThreadEvent]) -> ThreadEvent?
-    static func messagePreview(from events: [ThreadEvent]) -> String?
-    static func messageActivityDate(from events: [ThreadEvent]) -> Date?
+    static func latestMessage(in events: [ThreadEvent]) -> ThreadEvent?
+    static func activityDate(for event: ThreadEvent) -> Date?
 }
 ```
+
+Small preview/date convenience helpers may be added if they reduce duplication,
+but they must call this same classifier rather than introducing a second
+Dock-only predicate.
 
 Current required predicate:
 
@@ -1242,6 +1317,11 @@ Message preview/order decision:
 - The Dock row/card summary line displays newest true-message text only.
 - The Dock row/card time label and `lastActivityDate` used for sorting should
   represent newest true-message activity when known.
+- "Newest true-message text" means the newest event returned by
+  `ThreadMessageSemantics.latestMessage(in:)`, which is the same event class
+  that `ThreadDetailMessageFilter.default.visibleEvents(from:)` would display.
+  It does not mean newest `kind == .agentMessage`, newest `summary`, newest
+  relay `preview`, newest request card, or newest raw activity timestamp.
 - Non-message activity can still update row status (`running`, `needsApproval`,
   `needsInput`, `idle`, error/offline state) and freshness diagnostics.
 - A newer command output, tool call, reasoning delta, request card, or status
@@ -1287,9 +1367,9 @@ Ordering and reorder decision:
   either move the dragged visible row within the full pinned order around the
   nearest visible neighbors or prove a clearer native behavior in the
   simulator. Do not introduce a separate edit mode for scoped reorder.
-- If the canonical native reorder path requires a `List`, use one `List`-based
-  Dock surface or a pinned subsection that is not nested inside another scroll
-  view. Do not add custom drag/drop sorting to keep the current
+- If the canonical native reorder path requires a UIKit collection/list
+  subsection, use that native subsection even if it means wrapping UIKit inside
+  SwiftUI. Do not add custom drag/drop sorting to keep the current
   `ScrollView`/`LazyVStack` shape.
 - If native reorder cannot be made to coexist with the current Dock layout in
   the iPhone 17 simulator, stop and reopen planning rather than falling back to
@@ -1454,15 +1534,15 @@ v Pinned 5
 
 | Area | File | Symbol / Call site | Current behavior | Required change | Why | New API / contract | Tests impacted |
 |---|---|---|---|---|---|---|---|
-| True-message classifier | `CodexDock/Models/ThreadEvent.swift` | `ThreadDetailMessageFilter.includes`, new helper | Filter owns predicate inline | Add shared `ThreadMessageSemantics` helper and make `.messages` call it | Thread Detail and Dock must mean the same thing by "message" | `isDefaultVisibleMessage(_:)`, latest-message helpers | `ThreadEventNormalizerTests` |
-| Thread-list summary mapping | `CodexDock/Models/SessionSummaryMapper.swift` | `latestMeaningfulSummary`, `isStoredMessageEvent`, `eventPrecedes` | Private Dock/list predicate duplicates Thread Detail rule; prefers unqualified `latestSummary` | Delete private predicate; call shared classifier; only trust relay summaries marked/guaranteed message-derived | Prevent tools/reasoning from becoming Dock cards | `SessionSummary.messagePreview/messageActivityDate` or equivalent | `ThreadListMappingTests` |
-| Session model | `CodexDock/Models/SessionSummary.swift` | `lastActivity`, `shortEventSummary` | One freshness and one summary field blur raw updatedAt vs message activity | Carry message-derived preview/activity explicitly, while preserving raw activity if needed | Dock order must use message activity, not raw tool freshness | optional `messageActivityDate`; message-derived preview contract | Mapping/projector tests |
-| Dock stream DTO | `CodexDock/AppServer/DockStreamDTO.swift` | `DockStreamSessionDTO.updatedAt`, `.summary` | Stream only carries raw `updatedAt` plus generic summary | Add optional `messageSummary` and `messageUpdatedAt`; keep `summary` as legacy/raw row summary only | Relay stream rows need enough data to sort correctly without opening detail | optional `messageSummary`, optional `messageUpdatedAt`, raw `updatedAt` for diagnostics/status | Dock stream decode/backward-compat tests |
-| Relay message semantics | `scripts/dock-relay-thread-message-semantics.mjs` or equivalent | new helper | Message classification is embedded in summary cache | Centralize Node-side item predicate for `userMessage`/`agentMessage`; exclude reasoning, plan, command/tool, request/status/unknown | Relay cannot import Swift but must mirror the named rule | `isDefaultVisibleMessageItem`, latest-message helper | `rtk npm run test:relay` |
-| Relay summary cache | `scripts/dock-relay-thread-summary-cache.mjs` | `latestMeaningfulSummaryFromTurns` | Returns latest user/agent text only; no timestamp | Return latest true-message text and timestamp/order metadata | Dock ordering needs message freshness, not row `updatedAt` | `{ text, timestampSeconds }` or equivalent | relay phase5 tests |
-| Relay Dock stream | `scripts/dock-relay-session-table.mjs` | `normalizeThread`, `fetchDockSessionRows` | Emits `summary` from `latestSummary || preview || title` and `updatedAt` from raw row | Emit message-derived summary/activity; keep raw freshness separate | Prevent Dock stream order from ripping on tools/thinking | stream row message fields | relay session table tests |
-| Dock row projection | `CodexDock/State/SessionRowProjector.swift` | `makeRow(summary:)`, `latestSummary(for:)` | Uses `summary.shortEventSummary` and `summary.lastActivity` | Render message-derived preview and use message-derived activity date for row ordering/time | Row/card should match Thread Detail default filter | `row.summary`, `row.lastActivityDate` message-derived | Projection tests |
-| Dock projection ordering | `CodexDock/State/DockSessionProjection.swift` | `rowPrecedesByRecency`, `groupPrecedes` | Sorts by row `lastActivityDate` which is currently raw freshness | Sort by message-derived row date; groups use newest message-derived child date | Newest/Host/Branch order must track messages | no view-side sorting | Projection tests |
+| True-message classifier | `CodexDock/Models/ThreadEvent.swift` | `ThreadMessageSemantics`, `ThreadDetailMessageFilter.includes` | Shared helper exists and `.messages` calls it | Keep this as the single Swift source of truth; do not reintroduce view/mapper-local predicates | Thread Detail and Dock must mean the same thing by "message" | `isDefaultVisibleMessage(_:)`, latest-message helpers | `ThreadEventNormalizerTests` |
+| Thread-list summary mapping | `CodexDock/Models/SessionSummaryMapper.swift` | `ThreadEventNormalizer.events`, `ThreadMessageSemantics.latestMessage` | Mapper derives summary/activity from the shared classifier | Preserve this path; only trust relay summaries when they are explicitly message-derived | Prevent tools/reasoning from becoming Dock cards | `SessionSummary.shortEventSummary`, `messageActivityDate` | `ThreadListMappingTests` |
+| Session model | `CodexDock/Models/SessionSummary.swift` | `lastActivity`, `shortEventSummary`, `messageActivityDate` | Raw activity and message-derived activity are separate | Keep Dock UI/order on message-derived preview/activity while preserving raw activity for freshness/diagnostics | Dock order must use message activity, not raw tool freshness | optional `messageActivityDate`; message-derived preview contract | Mapping/projector tests |
+| Dock stream DTO | `CodexDock/AppServer/DockStreamDTO.swift` | `DockStreamSessionDTO.updatedAt`, `.summary`, `.messageSummary`, `.messageUpdatedAt` | Stream carries raw activity plus optional message-derived summary/activity | Keep `messageSummary` and `messageUpdatedAt` backward-compatible and make Dock rows prefer them | Relay stream rows need enough data to sort correctly without opening detail | optional `messageSummary`, optional `messageUpdatedAt`, raw `updatedAt` for diagnostics/status | Dock stream decode/backward-compat tests |
+| Relay message semantics | `scripts/dock-relay-thread-message-semantics.mjs` or equivalent | new helper or existing predicate extraction | Message classification is still embedded in summary cache | Centralize Node-side item predicate for `userMessage`/`agentMessage`; exclude reasoning, plan, command/tool, request/status/unknown | Relay cannot import Swift but must mirror the named rule | `isDefaultVisibleMessageItem`, latest-message helper | `rtk npm run test:relay` |
+| Relay summary cache | `scripts/dock-relay-thread-summary-cache.mjs` | `latestMeaningfulMessageFromTurns`, `latestMeaningfulSummaryFromTurns` | Returns latest user/agent text plus timestamp | Keep timestamped true-message output and add fixture coverage for excluded item types | Dock ordering needs message freshness, not row `updatedAt` | `{ text, timestampSeconds }` or equivalent | relay phase5 tests |
+| Relay Dock stream | `scripts/dock-relay-session-table.mjs` | `normalizeThread`, `fetchDockSessionRows` | Emits raw `summary`/`updatedAt` plus message-derived fields when available | Preserve raw fields for compatibility, but require Dock clients to use message-derived fields for cards/order | Prevent Dock stream order from ripping on tools/thinking | stream row message fields | relay session table tests |
+| Dock row projection | `CodexDock/State/SessionRowProjector.swift` | `makeRow(summary:)`, `activityDisplay(for:)`, `rowSummary(for:)` | Renders message-derived summary/date in default Dock mode | Keep default `activityMode == .dockMessage`; raw mode must stay diagnostic/test-only | Row/card should match Thread Detail default filter | `row.summary`, `row.lastActivityDate` message-derived | Projection tests |
+| Dock projection ordering | `CodexDock/State/DockSessionProjection.swift` | `rowPrecedesByRecency`, `groupPrecedes` | Sorts by row `lastActivityDate`, which default projection makes message-derived | Keep sorting in projection and keep row dates message-derived before projection receives them | Newest/Host/Branch order must track messages | no view-side sorting | Projection tests |
 | Metadata model | `CodexDock/State/LocalThreadMetadataStore.swift` | `LocalThreadMetadata` | Stores label/rail plus first-pass pin fields | Add/keep `isPinned`, `pinnedAt`, `pinnedOrder`, and `lastKnownPinnedDisplay` with explicit decode-safe defaults | Pin membership, stable order, and cached display must persist locally | `LocalThreadMetadata(isPinned:pinnedAt:pinnedOrder:lastKnownPinnedDisplay:)` | Metadata compatibility/store tests |
 | Cached pin display | `CodexDock/State/LocalThreadMetadataStore.swift` | `LocalPinnedDisplaySnapshot` | Does not exist | Store compact display facts at pin time | Pinned rows must remain useful after refresh/relaunch/offline host | Codable snapshot type | Metadata compatibility/store tests |
 | Cached status encoding | `CodexDock/State/DockStore.swift` | `DockRowStatusKind` | `RawRepresentable`, `Equatable`, `Sendable`, `CaseIterable` only | Add `Codable` conformance | `LocalPinnedDisplaySnapshot` stores row status | Codable status enum | Metadata compatibility tests |
@@ -1476,8 +1556,8 @@ v Pinned 5
 | Store errors | `CodexDock/State/DockStore.swift` | `save(metadata:for:)` | Local metadata save failure sets full error state | Prefer `actionError` for row action failure | Keep Dock usable | no state crash on local save failure | Failure tests |
 | Automation IDs | `CodexDock/Automation/AutomationID.swift` | `DockRowAction`, `Dock` IDs | First-pass pin/manage IDs | Keep pin/unpin/pinned section IDs; add collapse/reorder IDs if needed; remove dead Manage/Show-all IDs with UI deletion | Simulator proof | IDs in spec | AutomationIDTests/UI tests |
 | UI section | `CodexDock/Features/Dock/DockView.swift` or helper | `projectedContent` | Renders pinned section with cap/Manage | Render all visible pinned rows inline before lens body, with collapsible header and divider | Core UX | `pinnedSection(...)` | UI tests |
-| UI reorder | `CodexDock/Features/Dock/DockView.swift` or helper | pinned row list | Does not exist | Use native SwiftUI `ForEach.onMove`/`List` long-press row movement; no custom drag/drop sort and no visible handle/edit mode | Canonical iOS reorder matching requested gesture | system move action -> store reorder | UI tests |
-| UI row actions | `CodexDock/Features/Dock/DockView.swift` | `dockRow`, `rowActions` | First-pass custom swipe/context pin/unpin | Keep swipe/context/accessibility pin/unpin, but prefer native List swipe if moving to List for reorder | Primary gesture + fallback | `pinAction(row)`/`unpinAction(row)` helpers | UI tests |
+| UI reorder | `CodexDock/Features/Dock/DockView.swift` or helper | pinned row list | Does not exist | Use native UIKit collection/list interactive movement for long-press row reorder; no custom drag/drop sort and no visible handle/edit mode | Canonical iOS reorder matching requested gesture | native movement result -> store reorder | UI tests |
+| UI row actions | `CodexDock/Features/Dock/DockView.swift` | `dockRow`, `rowActions` | First-pass custom swipe/context pin/unpin | Keep body-row swipe/context/accessibility `Pin`; keep pinned-row swipe/accessibility `Unpin` without attaching a pinned-row context menu that intercepts long-press reorder | Primary gesture + fallback | `pinAction(row)`/`unpinAction(row)` helpers | UI tests |
 | Removed management | `CodexDock/Features/Dock/DockView.swift`, `CodexDock/Features/Dock/DockPinnedViews.swift` | `PinnedThreadsManageView`, `pinnedManageButton`, `pinnedShowAllButton` | First pass has Manage sheet and overflow | Delete Manage button/sheet and Show-all button | User rejected this surface; unpin by swipe and reorder by drag replace it | no management API | UI tests assert absence |
 | Collapse | `CodexDock/Features/Dock/DockView.swift` or helper | pinned header | Header is static | Tapping `Pinned` toggles collapsed/expanded state | User asked for direct collapse | `isPinnedCollapsed` state | UI tests |
 | Divider | `CodexDock/Features/Dock/DockView.swift` or helper | between pinned and body | No explicit contract | Add native section boundary/divider when pinned header and body both render | Visual association/separation | system separator/divider | UI tests or screenshot proof |
@@ -1588,19 +1668,19 @@ Checklist (must all be done):
   cached display exists.
 - Add `isPinned` and `pinnedAt` to `DockRowViewModel` and all test helpers.
 - Add `pinnedOrder` to `DockRowViewModel` and all test helpers.
-- Add a shared Swift true-message helper in `CodexDock/Models/ThreadEvent.swift`
-  or a tightly adjacent model file.
-- Make `ThreadDetailMessageFilter.messages.includes(_:)` call that shared
-  helper.
-- Delete `SessionSummaryMapper.isStoredMessageEvent` and any equivalent private
-  Dock/list predicate. `SessionSummaryMapper` must call the shared helper.
-- Extend `SessionSummary` and row projection to carry/render
-  message-derived preview and use message-derived activity for ordering/time.
-- Extend `DockStreamSessionDTO` and `DockSessionTable.summary(from:)` with
+- Keep the shared Swift true-message helper in
+  `CodexDock/Models/ThreadEvent.swift`, and keep
+  `ThreadDetailMessageFilter.messages.includes(_:)` calling it.
+- Keep `SessionSummaryMapper` free of private Dock/list message predicates.
+  It must continue to derive message preview/activity through
+  `ThreadMessageSemantics`.
+- Keep `SessionSummary` and row projection carrying/rendering
+  message-derived preview and using message-derived activity for ordering/time.
+- Keep `DockStreamSessionDTO` and `DockSessionTable.summary(from:)` carrying
   backward-compatible `messageSummary` and `messageUpdatedAt` fields from the
   relay Dock stream.
-- Add or update relay-side message-summary helper code so summary warming
-  returns latest true-message text plus true-message timestamp, not only text.
+- Keep relay-side summary warming returning latest true-message text plus the
+  true-message timestamp.
 - Add fixture coverage proving Swift and Node classify user/agent messages as
   messages and reasoning/plan/tool/output/request/status/unknown as not
   messages.
@@ -1727,13 +1807,12 @@ Checklist (must all be done):
   the pinned section.
 - Add a native divider or section boundary between pinned rows and body
   rows/groups when both exist.
-- Use native iOS movement for reorder. Preferred implementation is
-  `ForEach.onMove` inside a native `List`-compatible pinned rows surface,
-  because Apple's SwiftUI guidance says list reordering supports long-press row
-  drag. `List(..., editActions: .move)` is allowed only if it proves the same
-  no-handle long-press behavior in the simulator. If SwiftUI cannot prove that
-  interaction, use UIKit's standard collection/list interactive movement
-  gesture through a native wrapper. Do not build custom drag/drop sorting.
+- Use native iOS movement for reorder. Preferred implementation is UIKit
+  collection/list interactive movement because Apple's UIKit collection APIs
+  have a standard long-press movement pattern. A SwiftUI wrapper is fine if the
+  row movement itself is still UIKit-owned. SwiftUI `List`/`onMove` is allowed
+  only if it proves the same no-handle, no-edit-mode long-press behavior in the
+  simulator. Do not build custom drag/drop sorting.
 - Do not show a reorder handle, grip, Edit button, edit mode, or instructional
   text for reorder.
 - Do not gate reorder behind a minimum pinned count. One visible pin has no
@@ -1744,8 +1823,9 @@ Checklist (must all be done):
   position relative to the visible neighbors without exposing a separate mode.
 - Add trailing `Pin` swipe action for unpinned Dock rows.
 - Add trailing `Unpin` swipe action for pinned rows.
-- Add context-menu `Pin`/`Unpin` actions without removing existing `Mark Watch`,
-  `Clear Label`, `Color`, or `Archive` actions.
+- Add body-row context-menu `Pin` without removing existing `Mark Watch`,
+  `Clear Label`, `Color`, or `Archive` actions. Do not attach the normal row
+  context menu to pinned rows because pinned-row long press owns reorder.
 - Add accessibility custom actions for `Pin thread` and `Unpin thread`.
 - Add accessible pinned semantics: pinned rows include `Pinned` in their
   accessibility value, the pinned section has a stable header/section ID, and
@@ -1787,7 +1867,8 @@ Exit criteria (all required):
   rip to tools/reasoning/status events.
 - There is no visible reorder indicator or edit-mode requirement.
 - A visual divider/section boundary separates pinned rows from the rest of Dock.
-- Swipe/context/accessibility actions call the same store mutation path.
+- Swipe/context/accessibility `Pin` actions and swipe/accessibility `Unpin`
+  actions call the same store mutation path.
 - Store tests prove persistence and failure behavior.
 - Existing row actions still exist.
 - File growth does not push `DockView.swift` over a maintainability cliff; split
@@ -1911,6 +1992,108 @@ Rollback:
 
 <!-- arch_skill:block:phase_plan:end -->
 
+## Implementation Evidence - 2026-05-30
+
+Status: complete for the app/runtime paths, iPhone 17 simulator proof, and
+thermo-nuclear maintainability review.
+
+Implemented:
+
+- `LocalThreadMetadata.pinnedOrder` and `DockRowViewModel.pinnedOrder` now carry
+  durable user-owned pin order.
+- `DockStore.setPinned` appends new pins after existing pins and normalizes pin
+  order.
+- `DockStore.reorderPinnedRows` writes reordered visible pinned rows while
+  preserving hidden search/filter scoped pinned slots.
+- `PinnedMetadataOrdering` owns pin-order normalization, stable ordering,
+  uniqueness, and append-order helpers so `DockStore` stays below the
+  1,000-line review threshold.
+- Pinned metadata writes use one batch save through `LocalThreadMetadataStoring`
+  instead of a sequence of partial per-row saves.
+- `DockPinnedSectionView` renders all visible pinned rows inline above every
+  Dock lens, with collapse/expand on the `Pinned` header.
+- The old three-row cap, `Show all`, `Manage`, and pinned management sheet
+  paths were removed.
+- Pinned reorder uses native UIKit collection interactive movement from a
+  long press on the row. No visible reorder handle or edit-mode affordance is
+  rendered.
+- Pinned rows intentionally do not attach the normal row context menu because
+  that menu uses the same long-press gesture as reorder. Pinned-row `Unpin`
+  remains available through native trailing swipe and accessibility action.
+- A Dock-local left swipe still owns row `Pin` / `Unpin` because the current
+  Dock body is a `ScrollView`, not a native `List`.
+- `ThreadMessageSemantics` centralizes the true-message predicate used by
+  Thread Detail's default `Messages` filter and Dock row/card mapping.
+- Relay stream DTOs now carry optional `messageSummary` and `messageUpdatedAt`
+  so Dock preview/order can use newest true-message activity instead of raw
+  tool/status freshness.
+- Archive keeps raw activity semantics through `ArchiveSessionProjector`; Dock
+  alone uses message activity for row order/preview.
+
+Verification run after cleanup:
+
+```bash
+rtk git diff --check
+rtk swift test --filter DockStoreTests
+rtk swift test --filter ThreadDetailStoreTests
+rtk swift test --filter 'ThreadListMappingTests|ThreadEventNormalizerTests|AutomationIDTests'
+rtk swift test --filter AutomationIDTests
+rtk npm run test:relay
+rtk make app-test SIM='iPhone 17'
+```
+
+Results:
+
+- `rtk git diff --check`: passed.
+- `rtk swift test --filter DockStoreTests`: 48 tests passed.
+- `rtk swift test --filter ThreadDetailStoreTests`: 52 tests passed.
+- `rtk swift test --filter 'ThreadListMappingTests|ThreadEventNormalizerTests|AutomationIDTests'`: 27 tests passed.
+- `rtk swift test --filter AutomationIDTests`: 3 tests passed after the
+  preview cleanup compile pass.
+- `rtk npm run test:relay`: 105 tests passed.
+- `rtk make app-test SIM='iPhone 17'`: passed on iPhone 17 simulator
+  `DEF1631B-7125-43C6-BFA3-4423BF103C91` through Makefile-owned app-test
+  target with result bundle
+  `/tmp/codex-client/app-test-detached-20260530T132652Z/DerivedData/Logs/Test/Test-CodexDockApp-2026.05.30_08-26-54--0500.xcresult`;
+  result `Passed`, 260 passed, 0 failed, 5 skipped, 265 total.
+
+Physical install:
+
+```bash
+rtk make iphone-17-pro
+rtk make device-config-verify DEVICE=CB9FFF0E-89AD-57B5-9C00-6552D814875E
+```
+
+Result:
+
+- Installed `com.aelaguiz.CodexDockApp` build `20260530133223` on iPhone 17 Pro
+  `CB9FFF0E-89AD-57B5-9C00-6552D814875E`.
+- Verified saved relay hosts:
+  `amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510`.
+- Device launch log reported:
+  `Launched application with com.aelaguiz.CodexDockApp bundle identifier.`
+- `rtk make dock-relay-status` reported the raw app-server and Dock relay ready.
+
+Resolved proof/review notes:
+
+- Earlier simulator failures were harness or gesture-conflict failures, not
+  accepted proof: scripted launches reused an existing app process, body-row
+  pinning happened too close to the tab bar, and pinned-row long press opened
+  the row context menu instead of native movement.
+- `CodexDockUITests/CodexDockAutomationSmokeTests.swift` now terminates the app
+  before scripted launches, scrolls body rows into a safer swipe area, and
+  proves native pinned reorder plus scoped reorder.
+- `dockPinnedRow` disables the normal row context menu so long-press starts
+  native pinned movement. This preserves the user's no-handle reorder
+  requirement.
+- Parent thermo-nuclear review found no remaining blocking structural issue:
+  `DockStore.swift` is 919 lines, `DockView.swift` is 928 lines,
+  `DockPinnedViews.swift` is 412 lines, and pinned ordering lives in the focused
+  `PinnedMetadataOrdering` helper.
+- Composer 2.5 Fast fresh consult completed at
+  `/tmp/fresh-consult/codex-dock-pinned-final-composer-20260530T133301Z-2lk1727q/final.txt`
+  with `VERDICT: pass-with-notes`, `BLOCKING: none`, `CONFIDENCE: high`.
+
 <!-- arch_skill:block:consistency_pass:start -->
 ## Consistency Pass
 - Reviewers: explorer 1, explorer 2, self-integrator
@@ -1949,11 +2132,11 @@ Rollback:
     filter, because reasoning/plan events can be agent-kind but
     thinking-visible. Dock cards/order must follow the default `Messages`
     filter.
-  - 2026-05-30 follow-up: the native reorder research now starts from
-    `List`/`ForEach.onMove(perform:)`, keeps UIKit collection/list standard
-    interactive movement as the native long-press fallback, and rejects
-    `draggable` / `dropDestination` as the first-choice implementation for
-    in-list pinned-row reordering.
+  - 2026-05-30 follow-up: the native reorder research now starts from UIKit
+    collection/list standard interactive movement because it directly owns the
+    long-press row-move pattern with no visible handle. SwiftUI
+    `List`/`ForEach.onMove(perform:)` remains secondary unless simulator proof
+    shows it can satisfy the same no-handle/no-edit-mode behavior.
   - 2026-05-30 auto-plan repair: frontmatter is `status: active`; Section 5,
     Section 6, and Phase 1 explicitly include `pinnedOrder` in metadata
     emptiness, unpin cleanup, and store/projection proof.
@@ -2102,9 +2285,9 @@ a native `List` row.
 
 Superseded on 2026-05-30 for reorder: swipe may remain a Dock-local pin/unpin
 action if native swipe still cannot coexist with the current layout, but pinned
-row reorder must use native iOS list or collection interactive movement. If
-native reorder requires a larger `List`-based Dock surface or a native UIKit
-collection wrapper, prefer that over adding custom reorder gestures.
+row reorder must use native UIKit collection/list interactive movement. If
+native reorder requires a native UIKit collection wrapper, prefer that over
+adding custom reorder gestures.
 
 ## 2026-05-30 - Intent-derived: Dock cards and ordering mean true messages
 
@@ -2152,3 +2335,82 @@ is active and ready for `implement-loop` once the stage gate confirms readiness.
 Consequences: Implementation must remove the stale first-pass capped/Manage
 surface, add durable `pinnedOrder`, native reorder, collapse, scoped reorder,
 and message-derived Dock preview/order. No scope cut is approved.
+
+## 2026-05-30 - User-directed: long-press reorder means native collection movement
+
+Blocker: Treating SwiftUI `List.onMove` as the default reorder path is too
+ambiguous for the requested interaction. The user asked for the well-known iOS
+pattern: long-press a row, drag it, drop it, with no visible reorder handle and
+no edit mode.
+
+Consulted: Apple's UIKit collection interactive movement docs,
+`UICollectionViewController.installsStandardGestureForInteractiveMovement`,
+`UICollectionView.beginInteractiveMovementForItem(at:)`,
+`CodexDock/Features/Dock/DockPinnedViews.swift`, and the current pinned plan.
+
+Intent says: Reordering should feel like native iOS direct manipulation, not a
+homegrown drag/drop list.
+
+Decision: Use native UIKit collection/list interactive movement as the primary
+implementation path for pinned reorder. SwiftUI may wrap the native control,
+but SwiftUI edit-mode movement is only acceptable if simulator proof shows the
+same no-handle long-press behavior.
+
+Consequences: Simulator testing must prove the long-press reorder on
+`iPhone 17`. Unit tests can prove store order persistence, but they do not
+replace simulator proof for the gesture.
+
+## 2026-05-30 - User-directed: Dock cards must match Thread Detail Messages
+
+Blocker: The phrase "message" is easy to implement incorrectly if Dock treats
+generic summaries, raw `updatedAt`, `kind == .agentMessage`, or relay preview
+text as equivalent to a visible conversation message.
+
+Consulted: User amendment, `CodexDock/Models/ThreadEvent.swift`,
+`ThreadDetailMessageFilter.default`, `ThreadMessageSemantics`,
+`CodexDock/Models/SessionSummaryMapper.swift`,
+`CodexDock/State/DockSessionTable.swift`,
+`CodexDock/State/DockSessionProjection.swift`,
+`scripts/dock-relay-thread-summary-cache.mjs`, and Apple UIKit reorder
+documentation for the adjacent long-press pin-order requirement.
+
+Intent says: The card at the top-level Dock list should show only true
+conversation messages, exactly like the default Thread Detail `Messages`
+filter. Dock ordering should use that same true-message freshness so a newer
+tool call, thinking token, request card, command output, status update, or
+unknown event cannot make the card text rip or move the row.
+
+Decision: Treat `ThreadMessageSemantics.isDefaultVisibleMessage(_:)` as the
+Swift source of truth and make every Dock preview/order path consume
+message-derived summary/activity produced by that rule. Relay-side Node code may
+mirror the rule only to emit explicit `messageSummary` / `messageUpdatedAt`
+fields; it may not relabel arbitrary summaries as messages.
+
+Consequences: Tests and simulator proof must compare Dock behavior against
+Thread Detail's default filter, not against an invented Dock-only definition.
+Any future filter work that changes `ThreadDetailMessageFilter.default` must
+update the Dock classifier contract and tests in the same change.
+
+## 2026-05-30 - Intent-derived: pinned-row context menu cannot own long press
+
+Blocker: The iPhone 17 simulator proved that attaching the normal row context
+menu to pinned rows steals the same long-press gesture that must start native
+reorder.
+
+Consulted: User correction that reorder should start by click-and-hold with no
+visible handle, Section 0 North Star, `DockPinnedReorderCollectionView`, and
+the failing simulator result from
+`Test-CodexDockApp-2026.05.30_08-16-03--0500.xcresult`.
+
+Intent says: The primary pinned-row long press must rearrange the pinned list.
+There must be no visible reorder handle, edit mode, Manage sheet, or alternate
+management surface.
+
+Decision: Keep context-menu actions on normal Dock rows for `Pin` and the
+existing row actions, but do not attach the normal row context menu to pinned
+rows. Pinned-row `Unpin` is available through native trailing swipe and the
+accessibility custom action.
+
+Consequences: Long-press reorder and pinned-row unpin no longer compete for the
+same gesture. The final simulator pass proves native reorder, scoped reorder,
+swipe unpin, accessibility IDs, and absence of Manage/Show-all.

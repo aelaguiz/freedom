@@ -112,8 +112,7 @@ public enum ThreadDetailMessageFilter: Equatable, Sendable, Identifiable, CaseIt
     public func includes(_ event: ThreadEvent) -> Bool {
         switch self {
         case .messages:
-            return event.visibilityCategory == .message
-                && (event.kind == .userMessage || event.kind == .agentMessage)
+            return ThreadMessageSemantics.isDefaultVisibleMessage(event)
         case .all:
             return true
         case .kind(let kind):
@@ -123,6 +122,21 @@ public enum ThreadDetailMessageFilter: Equatable, Sendable, Identifiable, CaseIt
 
     public func visibleEvents(from events: [ThreadEvent]) -> [ThreadEvent] {
         ThreadEventDisplayOrder.newestFirst(events.filter { includes($0) })
+    }
+}
+
+public enum ThreadMessageSemantics {
+    public static func isDefaultVisibleMessage(_ event: ThreadEvent) -> Bool {
+        event.visibilityCategory == .message
+            && (event.kind == .userMessage || event.kind == .agentMessage)
+    }
+
+    public static func latestMessage(in events: [ThreadEvent]) -> ThreadEvent? {
+        ThreadEventDisplayOrder.newestFirst(events.filter(isDefaultVisibleMessage)).first
+    }
+
+    public static func activityDate(for event: ThreadEvent) -> Date? {
+        event.displayGroupDate ?? event.date
     }
 }
 

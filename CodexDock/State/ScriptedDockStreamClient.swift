@@ -3,6 +3,8 @@ import Foundation
 
 enum ScriptedDockStreamScenario: String, Sendable {
     case retention
+    case messageNoise
+    case pinnedOrder
     case schemaMismatch
 }
 
@@ -66,6 +68,10 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         switch scenario {
         case .retention:
             await runRetentionScript()
+        case .messageNoise:
+            await runMessageNoiseScript()
+        case .pinnedOrder:
+            await runPinnedOrderScript()
         case .schemaMismatch:
             await runSchemaMismatchScript()
         }
@@ -119,6 +125,16 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
                 upsertSessions: [schemaRecoveredSession()]
             )
         )
+    }
+
+    private func runPinnedOrderScript() async {
+        await sleep(milliseconds: 250)
+        yield(heartbeat(seq: 1, freshness: .fresh))
+    }
+
+    private func runMessageNoiseScript() async {
+        await sleep(milliseconds: 250)
+        yield(heartbeat(seq: 1, freshness: .fresh))
     }
 
     private func yield(_ update: DockStreamUpdateDTO) {
@@ -206,13 +222,25 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
     }
 
     private func initialSessions() -> [DockStreamSessionDTO] {
-        [
+        if scenario == .messageNoise {
+            return messageNoiseSessions()
+        }
+        if scenario == .pinnedOrder {
+            return pinnedOrderSessions()
+        }
+        return [
             runningSession(),
             dormantSession()
         ]
     }
 
     private func resyncedSessions() -> [DockStreamSessionDTO] {
+        if scenario == .messageNoise {
+            return messageNoiseSessions()
+        }
+        if scenario == .pinnedOrder {
+            return pinnedOrderSessions()
+        }
         if scenario == .schemaMismatch {
             return [
                 schemaRecoveredSession(),
@@ -282,13 +310,75 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         )
     }
 
+    private func pinnedOrderSessions() -> [DockStreamSessionDTO] {
+        [
+            session(
+                key: "alpha",
+                title: "Pinned Alpha visible \(host.displayName)",
+                status: .running,
+                updatedAt: 1_779_990_100,
+                summary: "Alpha visible true message.",
+                source: .human
+            ),
+            session(
+                key: "bravo",
+                title: "Pinned Bravo hidden \(host.displayName)",
+                status: .needsInput,
+                updatedAt: 1_779_990_200,
+                summary: "Bravo hidden true message.",
+                source: .human
+            ),
+            session(
+                key: "charlie",
+                title: "Pinned Charlie visible \(host.displayName)",
+                status: .needsApproval,
+                updatedAt: 1_779_990_300,
+                summary: "Charlie visible true message.",
+                source: .automation
+            ),
+            session(
+                key: "delta",
+                title: "Pinned Delta hidden \(host.displayName)",
+                status: .running,
+                updatedAt: 1_779_990_400,
+                summary: "Delta hidden true message.",
+                source: .automation
+            )
+        ]
+    }
+
+    private func messageNoiseSessions() -> [DockStreamSessionDTO] {
+        [
+            session(
+                key: "newer-message",
+                title: "True Newer \(host.displayName)",
+                status: .running,
+                updatedAt: 1_779_990_610,
+                summary: "Newer true message keeps first place.",
+                source: .human
+            ),
+            session(
+                key: "noise",
+                title: "Noisy Tool \(host.displayName)",
+                status: .running,
+                updatedAt: 1_779_990_900,
+                summary: "TOOL OUTPUT SHOULD NOT DISPLAY",
+                source: .automation,
+                messageSummary: "Stable true message before tool noise.",
+                messageUpdatedAt: 1_779_990_200
+            )
+        ]
+    }
+
     private func session(
         key: String,
         title: String,
         status: DockStreamSessionStatus,
         updatedAt: Int64,
         summary: String,
-        source: DockStreamSourceKind
+        source: DockStreamSourceKind,
+        messageSummary: String? = nil,
+        messageUpdatedAt: Int64? = nil
     ) -> DockStreamSessionDTO {
         let threadID = "\(slug)-\(key)"
         return DockStreamSessionDTO(
@@ -305,6 +395,8 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
             branch: "feature/relay-aggregator",
             updatedAt: updatedAt,
             summary: summary,
+            messageSummary: messageSummary ?? summary,
+            messageUpdatedAt: messageUpdatedAt ?? updatedAt,
             source: DockStreamSourceDTO(kind: source)
         )
     }

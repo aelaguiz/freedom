@@ -2,8 +2,8 @@
 
 Plan: `docs/CODEX_DOCK_SWIPE_PINNED_TOP_ARCHITECTURE_PLAN_2026-05-30.md`
 Audit log: `docs/CODEX_DOCK_SWIPE_PINNED_TOP_ARCHITECTURE_PLAN_2026-05-30_PLAN_AUDIT.md`
-Current plan verdict: ready-for-user-review; implementation paused until user approval
-Current implementation code-review verdict: stale after 2026-05-30 amendments; prior Composer 2.5 Fast pass-with-notes does not cover static order, native reorder, collapse, no Manage/Show-all, divider, or true-message Dock cards/order
+Current plan verdict: complete; amended scope implemented and proven in iPhone 17 simulator
+Current implementation code-review verdict: parent thermo-nuclear maintainability pass found no blocking structural issue
 Last reviewed: 2026-05-30
 Scope: whole plan, implementation readiness, prior implementation review, and reopened amendment review
 
@@ -23,18 +23,14 @@ None.
 - Composer 2.5 Fast reported missing mockup PNGs, but parent spot-check found
   that note stale: `docs/mockups/codex-dock-swipe-pinned-top-2026-05-30/outputs/`
   contains generated PNG outputs.
-- The first-pass implementation still contains now-rejected concepts in the
-  dirty worktree, including activity-sorted pinned rows, Manage/overflow
-  surfaces, and no native reorder/collapse/true-message card-order proof. That
-  is implementation debt, not a plan blocker.
-- The relay/client message-order path needs implementation diligence because
-  raw `updatedAt` is still useful for freshness but must not remain the Dock
-  row/card order key once true-message activity exists.
+- The old Composer 2.5 Fast review remains historical for the pre-amendment
+  implementation. The final amended scope is covered by the parent
+  thermo-nuclear pass and iPhone 17 simulator proof below.
 
 ## Current Implementation Findings
 
-The implementation finding below is historical. It does not clear the amended
-scope because the amended scope did not exist when Composer reviewed the code.
+The Composer finding below is historical. It does not clear the amended scope
+because the amended scope did not exist when Composer reviewed the code.
 
 Composer 2.5 Fast fresh review completed at
 `/tmp/fresh-consult/codex-dock-swipe-pinned-review-20260530-kCPuWi` with:
@@ -44,6 +40,33 @@ Composer 2.5 Fast fresh review completed at
 - `CONFIDENCE: high`
 - Parent action taken: split pinned/swipe UI helpers out of `DockView.swift`
   and rerun simulator proof before final review closure.
+
+Current parent thermo-nuclear maintainability pass:
+
+- `DockView.swift` is 928 lines after extraction, under the 1000-line review
+  threshold.
+- `DockPinnedViews.swift` owns the pinned/swipe UI and native UIKit reorder
+  bridge in 412 lines instead of growing `DockView.swift`.
+- `DockStore.swift` is 919 lines after extracting stable pin-order
+  normalization into `PinnedMetadataOrdering`.
+- Pin order, metadata normalization, and reorder persistence use one batch save
+  path to avoid partial metadata writes.
+- True-message classification is centralized in `ThreadMessageSemantics`.
+- Pinned rows intentionally do not attach the normal row context menu because
+  it intercepts the required long-press reorder gesture; pinned-row `Unpin`
+  remains available through native trailing swipe and accessibility action.
+- No current blocking structural finding remains.
+
+Final Composer 2.5 Fast fresh consult:
+
+- Run directory:
+  `/tmp/fresh-consult/codex-dock-pinned-final-composer-20260530T133301Z-2lk1727q`
+- `VERDICT: pass-with-notes`
+- `BLOCKING: none`
+- `CONFIDENCE: high`
+- Non-blocking notes were limited to expected proof scope: the iPhone 17 proof
+  is scripted, non-iOS pinned-list rendering is display-only, and parent thermo
+  review remains the authority for the thermonuclear gate.
 
 ## Relevant Code Coverage Ledger
 
@@ -96,6 +119,7 @@ Composer 2.5 Fast fresh review completed at
 | PLA-DEC-006 | Should first-pass Manage/overflow survive the user amendment? | Keep cap/Manage vs. render all pins inline and unpin by swipe | Changes UI, tests, automation IDs, and implementation deletion list | Delete Manage/Show-all/cap. Reorder by native long-press row movement and collapse by tapping `Pinned` | User | TL;DR, Sections 0, 5, 6, 7 | resolved |
 | PLA-DEC-007 | What should Dock row/card "message" mean? | Generic latest summary/raw updatedAt vs. Thread Detail default messages | Changes preview, sort order, relay DTOs, and tests | Use the same true-message predicate as `ThreadDetailMessageFilter.default`: `.message` visibility and user/agent message kind | User | TL;DR, Sections 0, 3, 5, 6, 7, 8 | resolved |
 | PLA-DEC-008 | Can the client sort by true-message activity without relay help? | Client derives from ThreadDTO turns vs. relay provides message summary/activity | Affects stream protocol and performance | Add backward-compatible read-only relay fields if needed; do not sort by raw tool `updatedAt` when message activity is known | Plan/code research | Sections 1.2, 3.1, 5.2, 5.3, 6.1 | resolved |
+| PLA-DEC-009 | Can pinned rows keep the normal row context menu? | Keep context menu and break long-press reorder vs. reserve long press for reorder | Changes gesture ownership and plan proof | Do not attach the normal row context menu to pinned rows; keep pinned-row Unpin on native swipe and accessibility action | User intent + simulator proof | Section 10 decision log, Phase 2 UI proof | resolved |
 
 ## Pass History
 
@@ -156,6 +180,60 @@ Composer 2.5 Fast fresh review completed at
 - Next audit focus: implementation-audit after code is updated to match this
   amended plan
 
+### Pass 3 - 2026-05-30
+
+- Mode: implementation-audit / thermo-nuclear maintainability review
+- Scope: current dirty implementation after pinned order, native reorder,
+  no-cap/no-Manage cleanup, true-message Dock preview/order, physical iPhone
+  install, and UI-harness cleanup
+- Baseline reviewed:
+  `CodexDock/Features/Dock/DockView.swift`,
+  `CodexDock/Features/Dock/DockPinnedViews.swift`,
+  `CodexDock/State/DockStore.swift`,
+  `CodexDock/State/PinnedMetadataOrdering.swift`,
+  `CodexDock/State/LocalThreadMetadataStore.swift`,
+  `CodexDock/Models/ThreadEvent.swift`,
+  `CodexDock/Models/SessionSummaryMapper.swift`,
+  `CodexDock/State/SessionRowProjector.swift`,
+  `CodexDockUITests/CodexDockAutomationSmokeTests.swift`, and relay test
+  diffs.
+- Verification accepted:
+  - `rtk git diff --check`: passed.
+  - `rtk swift test --filter DockStoreTests`: 48 tests passed.
+  - `rtk swift test --filter ThreadDetailStoreTests`: 52 tests passed.
+  - `rtk swift test --filter 'ThreadListMappingTests|ThreadEventNormalizerTests|AutomationIDTests'`: 27 tests passed.
+  - `rtk swift test --filter AutomationIDTests`: 3 tests passed after preview
+    cleanup.
+  - `rtk npm run test:relay`: 105 tests passed.
+  - `rtk make app-test SIM='iPhone 17'`: passed with result bundle
+    `/tmp/codex-client/app-test-detached-20260530T132652Z/DerivedData/Logs/Test/Test-CodexDockApp-2026.05.30_08-26-54--0500.xcresult`;
+    result `Passed`, 260 passed, 0 failed, 5 skipped, 265 total.
+  - `rtk make iphone-17-pro`: installed and launched build `20260530133223` on
+    iPhone 17 Pro `CB9FFF0E-89AD-57B5-9C00-6552D814875E`.
+  - `rtk make device-config-verify DEVICE=CB9FFF0E-89AD-57B5-9C00-6552D814875E`:
+    verified hosts `amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510`.
+- Structural findings added: none blocking.
+- Findings resolved during audit:
+  - Removed the stale first-pass Manage/Show-all/capped inline model from the
+    live Dock UI.
+  - Kept native reorder isolated behind `DockPinnedReorderCollectionView`
+    instead of spreading drag state through `DockView`.
+  - Changed metadata reorder persistence from sequential per-key saves to one
+    batch save.
+  - Extracted pin-order normalization into `PinnedMetadataOrdering`, dropping
+    `DockStore.swift` below the 1000-line maintainability threshold.
+  - Removed the pinned-row context menu after simulator proof showed it stole
+    the long-press reorder gesture.
+  - Fixed UI-test launch isolation and body-row swipe positioning after the
+    latest simulator failure signatures.
+  - Changed `DockViewPreview.swift` to use
+    `CodexDockConstants.Ports.dockRelay` instead of hard-coded raw app-server
+    port `4500`.
+- Findings carried forward: none.
+- Verdict: complete; no blocking implementation, proof, or maintainability
+  finding remains.
+- Next audit focus: none for this plan.
+
 ## Proper-Audit Checklist Status
 
 - Plan artifact resolved: yes
@@ -166,7 +244,7 @@ Composer 2.5 Fast fresh review completed at
 - Relevant code coverage complete for readiness: yes
 - Native subagent policy recorded: yes, not used because available tool requires explicit user permission
 - Architecture quality, proof, drift, deletion, and side-door lenses run: yes
-- Remaining blockers: none
-- What was not checked: physical device behavior, actual simulator execution of
-  the amended flow, and fresh code-review verdicts; those belong after
-  implementation.
+- Remaining blockers: none.
+- What was not checked: no additional physical-device behavioral walkthrough
+  was required after the iPhone 17 simulator pass; the physical install/config
+  path was already verified separately.

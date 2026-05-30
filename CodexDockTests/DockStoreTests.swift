@@ -512,6 +512,7 @@ final class DockStoreTests: XCTestCase {
         let key = initialSnapshot.rows[0].metadataKey
         XCTAssertTrue(storedValues[key]?.isPinned == true)
         XCTAssertEqual(storedValues[key]?.pinnedAt, Date(timeIntervalSince1970: 2_000))
+        XCTAssertEqual(storedValues[key]?.pinnedOrder, 0)
         XCTAssertEqual(storedValues[key]?.lastKnownPinnedDisplay?.title, "Pinned row")
 
         let reloaded = DockStore(
@@ -575,7 +576,119 @@ final class DockStoreTests: XCTestCase {
         XCTAssertEqual(metadata.rail, .red)
         XCTAssertEqual(metadata.isPinned, false)
         XCTAssertNil(metadata.pinnedAt)
+        XCTAssertNil(metadata.pinnedOrder)
         XCTAssertNil(metadata.lastKnownPinnedDisplay)
+    }
+
+    @MainActor
+    func testSetPinnedAppendsNewPinsAfterExistingPinnedOrder() async throws {
+        let host = makeHost()
+        let metadataStore = InMemoryLocalThreadMetadataStore()
+        let loader = FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [
+            makeSummary(
+                hostID: host.id,
+                threadID: "thread-a",
+                branch: "main",
+                status: .active(activeFlags: []),
+                lastActivity: Date(timeIntervalSince1970: 1_900),
+                prompt: "Thread A"
+            ),
+            makeSummary(
+                hostID: host.id,
+                threadID: "thread-b",
+                branch: "main",
+                status: .active(activeFlags: []),
+                lastActivity: Date(timeIntervalSince1970: 1_800),
+                prompt: "Thread B"
+            )
+        ])))
+        let store = DockStore(
+            host: host,
+            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            metadataStore: metadataStore,
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+        await store.load()
+
+        guard case let .loaded(initialSnapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+        let rowsByThreadID = Dictionary(uniqueKeysWithValues: initialSnapshot.rows.map { ($0.id.threadID, $0) })
+        let threadB = try XCTUnwrap(rowsByThreadID["thread-b"])
+        let threadA = try XCTUnwrap(rowsByThreadID["thread-a"])
+
+        await store.setPinned(true, for: threadB)
+        await store.setPinned(true, for: threadA)
+
+        let storedValues = await metadataStore.valuesSnapshot()
+        XCTAssertEqual(storedValues[threadB.metadataKey]?.pinnedOrder, 0)
+        XCTAssertEqual(storedValues[threadA.metadataKey]?.pinnedOrder, 1)
+    }
+
+    @MainActor
+    func testReorderPinnedRowsPreservesHiddenScopedSlotsAndWritesContiguousOrder() async throws {
+        let host = makeHost()
+        let metadataStore = InMemoryLocalThreadMetadataStore()
+        let loader = FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [
+            makeSummary(
+                hostID: host.id,
+                threadID: "thread-a",
+                branch: "main",
+                status: .active(activeFlags: []),
+                lastActivity: Date(timeIntervalSince1970: 1_900),
+                prompt: "Thread A"
+            ),
+            makeSummary(
+                hostID: host.id,
+                threadID: "thread-b",
+                branch: "main",
+                status: .active(activeFlags: []),
+                lastActivity: Date(timeIntervalSince1970: 1_800),
+                prompt: "Thread B"
+            ),
+            makeSummary(
+                hostID: host.id,
+                threadID: "thread-c",
+                branch: "main",
+                status: .active(activeFlags: []),
+                lastActivity: Date(timeIntervalSince1970: 1_700),
+                prompt: "Thread C"
+            )
+        ])))
+        let store = DockStore(
+            host: host,
+            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            metadataStore: metadataStore,
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+        await store.load()
+
+        guard case let .loaded(initialSnapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+        let rowsByThreadID = Dictionary(uniqueKeysWithValues: initialSnapshot.rows.map { ($0.id.threadID, $0) })
+        let threadA = try XCTUnwrap(rowsByThreadID["thread-a"])
+        let threadB = try XCTUnwrap(rowsByThreadID["thread-b"])
+        let threadC = try XCTUnwrap(rowsByThreadID["thread-c"])
+
+        await store.setPinned(true, for: threadA)
+        await store.setPinned(true, for: threadB)
+        await store.setPinned(true, for: threadC)
+
+        guard case let .loaded(pinnedSnapshot) = store.state else {
+            return XCTFail("Expected pinned loaded state, got \(store.state)")
+        }
+        let pinnedRows = pinnedSnapshot.project(options: .init()).pinnedRows
+        let pinnedRowsByThreadID = Dictionary(uniqueKeysWithValues: pinnedRows.map { ($0.id.threadID, $0) })
+        await store.reorderPinnedRows([
+            try XCTUnwrap(pinnedRowsByThreadID["thread-c"]),
+            try XCTUnwrap(pinnedRowsByThreadID["thread-a"])
+        ])
+
+        let storedValues = await metadataStore.valuesSnapshot()
+        XCTAssertEqual(storedValues[threadC.metadataKey]?.pinnedOrder, 0)
+        XCTAssertEqual(storedValues[threadB.metadataKey]?.pinnedOrder, 1)
+        XCTAssertEqual(storedValues[threadA.metadataKey]?.pinnedOrder, 2)
     }
 
     @MainActor
@@ -690,6 +803,7 @@ final class DockStoreTests: XCTestCase {
         XCTAssertEqual(values[key]?.rail, .red)
         XCTAssertEqual(values[key]?.isPinned, false)
         XCTAssertNil(values[key]?.pinnedAt)
+        XCTAssertNil(values[key]?.pinnedOrder)
         XCTAssertNil(values[key]?.lastKnownPinnedDisplay)
     }
 

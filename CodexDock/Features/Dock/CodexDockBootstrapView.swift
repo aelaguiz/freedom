@@ -86,6 +86,7 @@ public struct CodexDockBootstrapView: View {
             CodexDockRootView(
                 registry: registry,
                 streamClient: streamClient,
+                threadDetailFactory: threadDetailFactory,
                 lifecycleCoordinator: lifecycleCoordinator,
                 connectivityStore: connectivityStore
             )
@@ -124,6 +125,16 @@ public struct CodexDockBootstrapView: View {
         }
         #endif
         return AppServerDockStreamClient()
+    }
+
+    private var threadDetailFactory: any ThreadDetailSessionMaking {
+        #if DEBUG
+        if let rawScenario = ProcessInfo.processInfo.environment["CODEX_DOCK_UI_DOCK_STREAM_SCENARIO"],
+           let scenario = ScriptedDockStreamScenario(rawValue: rawScenario) {
+            return ScriptedThreadDetailSessionFactory(scenario: scenario)
+        }
+        #endif
+        return AppServerThreadDetailSessionFactory()
     }
 
     private func appScenePhase(from scenePhase: ScenePhase) -> AppScenePhase {

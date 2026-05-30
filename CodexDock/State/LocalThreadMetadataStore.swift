@@ -117,6 +117,7 @@ public struct LocalThreadMetadata: Codable, Equatable, Sendable {
     public var rail: DockRowRail?
     public var isPinned: Bool
     public var pinnedAt: Date?
+    public var pinnedOrder: Int?
     public var lastKnownPinnedDisplay: LocalPinnedDisplaySnapshot?
 
     public init(
@@ -124,12 +125,14 @@ public struct LocalThreadMetadata: Codable, Equatable, Sendable {
         rail: DockRowRail? = nil,
         isPinned: Bool = false,
         pinnedAt: Date? = nil,
+        pinnedOrder: Int? = nil,
         lastKnownPinnedDisplay: LocalPinnedDisplaySnapshot? = nil
     ) {
         self.label = Self.normalized(label)
         self.rail = rail
         self.isPinned = isPinned
         self.pinnedAt = isPinned ? pinnedAt : nil
+        self.pinnedOrder = isPinned ? pinnedOrder : nil
         self.lastKnownPinnedDisplay = isPinned ? lastKnownPinnedDisplay : nil
     }
 
@@ -138,6 +141,7 @@ public struct LocalThreadMetadata: Codable, Equatable, Sendable {
             && rail == nil
             && !isPinned
             && pinnedAt == nil
+            && pinnedOrder == nil
             && lastKnownPinnedDisplay == nil
     }
 
@@ -154,6 +158,7 @@ public struct LocalThreadMetadata: Codable, Equatable, Sendable {
         case rail
         case isPinned
         case pinnedAt
+        case pinnedOrder
         case lastKnownPinnedDisplay
     }
 
@@ -164,6 +169,7 @@ public struct LocalThreadMetadata: Codable, Equatable, Sendable {
             rail: try container.decodeIfPresent(DockRowRail.self, forKey: .rail),
             isPinned: try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false,
             pinnedAt: try container.decodeIfPresent(Date.self, forKey: .pinnedAt),
+            pinnedOrder: try container.decodeIfPresent(Int.self, forKey: .pinnedOrder),
             lastKnownPinnedDisplay: try container.decodeIfPresent(
                 LocalPinnedDisplaySnapshot.self,
                 forKey: .lastKnownPinnedDisplay
@@ -177,6 +183,7 @@ public struct LocalThreadMetadata: Codable, Equatable, Sendable {
         try container.encodeIfPresent(rail, forKey: .rail)
         try container.encode(isPinned, forKey: .isPinned)
         try container.encodeIfPresent(pinnedAt, forKey: .pinnedAt)
+        try container.encodeIfPresent(pinnedOrder, forKey: .pinnedOrder)
         try container.encodeIfPresent(lastKnownPinnedDisplay, forKey: .lastKnownPinnedDisplay)
     }
 }
@@ -186,6 +193,9 @@ public protocol LocalThreadMetadataStoring: Sendable {
     func save(
         _ metadata: LocalThreadMetadata?,
         for key: LocalThreadMetadataKey
+    ) async throws -> [LocalThreadMetadataKey: LocalThreadMetadata]
+    func save(
+        _ values: [LocalThreadMetadataKey: LocalThreadMetadata]
     ) async throws -> [LocalThreadMetadataKey: LocalThreadMetadata]
 }
 
@@ -233,10 +243,20 @@ public actor FileLocalThreadMetadataStore: LocalThreadMetadataStoring {
             values.removeValue(forKey: key)
         }
         DockLog.persistence.debug("thread metadata persist started host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) entries=\(values.count, privacy: .public)")
-        try persist(values)
-        cache = values
-        DockLog.persistence.debug("thread metadata persist finished host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) entries=\(values.count, privacy: .public)")
-        return values
+        let persisted = try await save(values)
+        DockLog.persistence.debug("thread metadata persist finished host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) entries=\(persisted.count, privacy: .public)")
+        return persisted
+    }
+
+    public func save(
+        _ values: [LocalThreadMetadataKey: LocalThreadMetadata]
+    ) async throws -> [LocalThreadMetadataKey: LocalThreadMetadata] {
+        let persistedValues = values.filter { !$0.value.isEmpty }
+        DockLog.persistence.debug("thread metadata batch persist started entries=\(persistedValues.count, privacy: .public)")
+        try persist(persistedValues)
+        cache = persistedValues
+        DockLog.persistence.debug("thread metadata batch persist finished entries=\(persistedValues.count, privacy: .public)")
+        return persistedValues
     }
 
     private func persist(_ values: [LocalThreadMetadataKey: LocalThreadMetadata]) throws {

@@ -176,6 +176,7 @@ public struct SessionSummary: Equatable, Sendable {
     public let branch: SessionSummaryText
     public let lastActivity: Date
     public let shortEventSummary: SessionSummaryText
+    public let messageActivityDate: Date?
     public let origin: SessionOrigin
 
     public var backendThreadID: String {
@@ -192,6 +193,7 @@ public struct SessionSummary: Equatable, Sendable {
         branch: SessionSummaryText,
         lastActivity: Date,
         shortEventSummary: SessionSummaryText,
+        messageActivityDate: Date? = nil,
         origin: SessionOrigin
     ) {
         self.id = id
@@ -203,6 +205,7 @@ public struct SessionSummary: Equatable, Sendable {
         self.branch = branch
         self.lastActivity = lastActivity
         self.shortEventSummary = shortEventSummary
+        self.messageActivityDate = messageActivityDate
         self.origin = origin
     }
 }

@@ -44,7 +44,10 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
     }
 
     func testDockLensesAndFiltersAreDrivableInSimulator() throws {
-        let app = launchRelayBackedApp()
+        let app = launchRelayBackedApp(
+            hosts: "scripted-lenses.local:4510",
+            dockStreamScenario: "retention"
+        )
         XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
         let root = app.element(id: AutomationID.Dock.root)
         XCTAssertTrue(root.waitForStringValue(containing: "lens=newest", timeout: 5))
@@ -126,9 +129,6 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         let threadID = "\(slug)-running"
         let rowID = AutomationID.Dock.row(hostID: endpoint.id, threadID: threadID)
         let pinActionID = AutomationID.Dock.rowAction(hostID: endpoint.id, threadID: threadID, action: .pin)
-        let unpinActionID = AutomationID.Dock.rowAction(hostID: endpoint.id, threadID: threadID, action: .unpin)
-        let manageRowID = AutomationID.Dock.pinnedManageRow(hostID: endpoint.id, threadID: threadID)
-        let manageUnpinID = AutomationID.Dock.pinnedManageUnpinButton(hostID: endpoint.id, threadID: threadID)
         let app = launchRelayBackedApp(
             hosts: host,
             dockStreamScenario: "retention"
@@ -157,7 +157,16 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
 
         XCTAssertTrue(root.waitForStringValue(containing: "pinned=1", timeout: 10))
         app.assertElementExists(id: AutomationID.Dock.pinnedSection.rawValue, timeout: 10)
+        app.assertElementExists(id: AutomationID.Dock.pinnedRowsList.rawValue, timeout: 10)
+        app.assertElementExists(id: AutomationID.Dock.pinnedBodyDivider.rawValue, timeout: 5)
+        XCTAssertFalse(app.buttons["Manage"].exists)
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Show all")).firstMatch.exists)
         XCTAssertTrue(app.element(id: rowID).waitForStringValue(containing: "Pinned", timeout: 5))
+
+        app.element(id: AutomationID.Dock.pinnedToggleButton).tap()
+        XCTAssertTrue(app.waitForElementToDisappear(id: AutomationID.Dock.pinnedRowsList, timeout: 5))
+        app.element(id: AutomationID.Dock.pinnedToggleButton).tap()
+        app.assertElementExists(id: AutomationID.Dock.pinnedRowsList.rawValue, timeout: 5)
 
         let searchField = app.element(id: AutomationID.Dock.searchField)
         searchField.tap()
@@ -176,20 +185,14 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         app.assertElementExists(id: AutomationID.Dock.pinnedSection.rawValue, timeout: 5)
         XCTAssertTrue(app.waitForElementToDisappear(id: AutomationID.Dock.pinnedHiddenHint, timeout: 5))
 
-        app.element(id: AutomationID.Dock.pinnedManageButton).tap()
-        app.assertElementExists(id: AutomationID.Dock.pinnedManageSheet.rawValue, timeout: 10)
-        app.assertElementExists(id: manageRowID.rawValue, timeout: 10)
-        let manageUnpinButton = app.element(id: manageUnpinID)
+        app.swipeFirstPinnedCellLeft()
         XCTAssertTrue(
-            manageUnpinButton.waitForExistence(timeout: 5),
-            "Manage did not expose the row-specific Unpin action.\n\nAccessibility tree:\n\(app.debugDescription)"
+            root.waitForStringValue(containing: "pinned=0", timeout: 10),
+            "Inline pinned row did not unpin after swipe.\n\nAccessibility tree:\n\(app.debugDescription)"
         )
-        manageUnpinButton.tap()
-        app.buttons["Done"].tap()
-        XCTAssertTrue(root.waitForStringValue(containing: "pinned=0", timeout: 10))
         XCTAssertTrue(
             app.waitForElementToDisappear(id: AutomationID.Dock.pinnedSection, timeout: 5),
-            "Pinned section stayed visible after Manage unpin.\n\nAccessibility tree:\n\(app.debugDescription)"
+            "Pinned section stayed visible after inline unpin.\n\nAccessibility tree:\n\(app.debugDescription)"
         )
 
         let repinRow = app.element(id: rowID)
@@ -198,7 +201,7 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         let repinButton = app.element(id: pinActionID)
         XCTAssertTrue(
             repinButton.waitForExistence(timeout: 5),
-            "Swipe did not expose Pin after Manage unpin.\n\nAccessibility tree:\n\(app.debugDescription)"
+            "Swipe did not expose Pin after inline unpin.\n\nAccessibility tree:\n\(app.debugDescription)"
         )
         repinButton.tap()
         XCTAssertTrue(root.waitForStringValue(containing: "pinned=1", timeout: 10))
@@ -224,19 +227,116 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
 
         let relaunchedRow = app.element(id: rowID)
         XCTAssertTrue(relaunchedRow.waitForExistence(timeout: 10))
-        relaunchedRow.swipeLeft()
-        let unpinButton = app.element(id: unpinActionID)
-        XCTAssertTrue(
-            unpinButton.waitForExistence(timeout: 5),
-            "Swipe did not expose the row-specific Unpin action.\n\nAccessibility tree:\n\(app.debugDescription)"
-        )
-        unpinButton.tap()
+        app.swipeFirstPinnedCellLeft()
 
-        XCTAssertTrue(relaunchedRoot.waitForStringValue(containing: "pinned=0", timeout: 10))
+        XCTAssertTrue(
+            relaunchedRoot.waitForStringValue(containing: "pinned=0", timeout: 10),
+            "Relaunched pinned row did not unpin after swipe.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
         XCTAssertTrue(
             app.waitForElementToDisappear(id: AutomationID.Dock.pinnedSection, timeout: 5),
             "Pinned section stayed visible after unpin.\n\nAccessibility tree:\n\(app.debugDescription)"
         )
+    }
+
+    func testScriptedPinnedRowsKeepUserOrderAcrossNativeAndScopedReorder() throws {
+        let host = "scripted-order-\(UUID().uuidString.prefix(8)).local:4510"
+        let endpoint = try DockRelayEndpoint.parse(host)
+        let slug = endpoint.id.map { character in
+            character.isLetter || character.isNumber ? String(character) : "-"
+        }.joined()
+        let alpha = AutomationID.Dock.row(hostID: endpoint.id, threadID: "\(slug)-alpha")
+        let bravo = AutomationID.Dock.row(hostID: endpoint.id, threadID: "\(slug)-bravo")
+        let charlie = AutomationID.Dock.row(hostID: endpoint.id, threadID: "\(slug)-charlie")
+        let delta = AutomationID.Dock.row(hostID: endpoint.id, threadID: "\(slug)-delta")
+        let app = launchRelayBackedApp(
+            hosts: host,
+            dockStreamScenario: "pinnedOrder"
+        )
+        XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
+
+        let root = app.element(id: AutomationID.Dock.root)
+        XCTAssertTrue(
+            root.waitForStringValue(containing: "rows=4", timeout: 10),
+            "Scripted order stream did not publish rows. Root value: \(root.stringValue)"
+        )
+
+        app.pinDockRow(rowID: alpha, threadID: "\(slug)-alpha", endpoint: endpoint)
+        app.pinDockRow(rowID: bravo, threadID: "\(slug)-bravo", endpoint: endpoint)
+        app.pinDockRow(rowID: charlie, threadID: "\(slug)-charlie", endpoint: endpoint)
+        app.pinDockRow(rowID: delta, threadID: "\(slug)-delta", endpoint: endpoint)
+        app.scrollDockToTop()
+        XCTAssertTrue(root.waitForStringValue(containing: "pinned=4", timeout: 10))
+        XCTAssertTrue(app.waitForPinnedOrder([alpha, bravo, charlie, delta], timeout: 5))
+
+        app.dragPinnedCell(fromIndex: 2, toIndex: 0)
+        XCTAssertTrue(
+            app.waitForPinnedOrder([charlie, alpha, bravo, delta], timeout: 10),
+            "Native reorder did not move Charlie above Alpha.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+
+        app.swipeDown()
+        XCTAssertTrue(app.waitForPinnedOrder([charlie, alpha, bravo, delta], timeout: 10))
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
+        XCTAssertTrue(app.waitForPinnedOrder([charlie, alpha, bravo, delta], timeout: 10))
+
+        let searchField = app.element(id: AutomationID.Dock.searchField)
+        searchField.tap()
+        searchField.typeText("visible")
+        XCTAssertTrue(root.waitForStringValue(containing: "pinned=2", timeout: 5))
+        XCTAssertTrue(app.waitForPinnedOrder([charlie, alpha], timeout: 5))
+
+        app.dragPinnedCell(fromIndex: 1, toIndex: 0)
+        XCTAssertTrue(app.waitForPinnedOrder([alpha, charlie], timeout: 10))
+
+        app.element(id: AutomationID.Dock.clearSearchButton).tap()
+        XCTAssertTrue(root.waitForStringValue(containing: "pinned=4", timeout: 5))
+        XCTAssertTrue(
+            app.waitForPinnedOrder([alpha, charlie, bravo, delta], timeout: 10),
+            "Scoped reorder did not preserve hidden pinned rows after clearing search.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+    }
+
+    func testScriptedDockCardsUseTrueMessagesForPreviewOrderAndDetailFilter() throws {
+        let host = "scripted-noise-\(UUID().uuidString.prefix(8)).local:4510"
+        let endpoint = try DockRelayEndpoint.parse(host)
+        let slug = endpoint.id.map { character in
+            character.isLetter || character.isNumber ? String(character) : "-"
+        }.joined()
+        let newer = AutomationID.Dock.row(hostID: endpoint.id, threadID: "\(slug)-newer-message")
+        let noisy = AutomationID.Dock.row(hostID: endpoint.id, threadID: "\(slug)-noise")
+        let app = launchRelayBackedApp(
+            hosts: host,
+            dockStreamScenario: "messageNoise"
+        )
+        XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
+
+        let root = app.element(id: AutomationID.Dock.root)
+        XCTAssertTrue(
+            root.waitForStringValue(containing: "rows=2", timeout: 10),
+            "Scripted message-noise stream did not publish rows. Root value: \(root.stringValue)"
+        )
+        XCTAssertTrue(
+            app.waitForRowOrder([newer, noisy], timeout: 10),
+            "A row with newer non-message activity moved above a row with a newer true message.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+        XCTAssertTrue(app.staticTexts["Stable true message before tool noise."].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["TOOL OUTPUT SHOULD NOT DISPLAY"].exists)
+        XCTAssertFalse(app.staticTexts["INTERNAL REASONING SHOULD NOT DISPLAY"].exists)
+
+        let noisyRow = app.element(id: noisy)
+        XCTAssertTrue(noisyRow.waitForExistence(timeout: 5))
+        noisyRow.tap()
+
+        XCTAssertNotNil(app.waitForElement(identifierPrefix: "codexdock.session.root.", timeout: 10))
+        XCTAssertTrue(app.element(id: AutomationID.Session.messageFilter).waitForStringValue(containing: "messages", timeout: 10))
+        XCTAssertTrue(app.element(id: AutomationID.Session.messageList).waitForStringValue(containing: "events=1", timeout: 10))
+        XCTAssertTrue(app.staticTexts["Stable true message before tool noise."].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["TOOL OUTPUT SHOULD NOT DISPLAY"].exists)
+        XCTAssertFalse(app.staticTexts["INTERNAL REASONING SHOULD NOT DISPLAY"].exists)
     }
 
     func testScriptedDormantRowDetailDoesNotShowNotLoadedStatus() throws {
@@ -354,6 +454,7 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         if let dockStreamScenario {
             app.launchEnvironment["CODEX_DOCK_UI_DOCK_STREAM_SCENARIO"] = dockStreamScenario
         }
+        app.terminate()
         app.launch()
         return app
     }
@@ -463,6 +564,147 @@ private extension XCUIApplication {
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }
         return !element(id: id).exists
+    }
+
+    func swipeFirstPinnedCellLeft(
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let cell = collectionViews[AutomationID.Dock.pinnedRowsList.rawValue].cells.firstMatch
+        guard cell.waitForExistence(timeout: 5) else {
+            XCTFail("Pinned collection cell was missing.\n\nAccessibility tree:\n\(debugDescription)", file: file, line: line)
+            return
+        }
+        let start = cell.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5))
+        let end = cell.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    func pinDockRow(
+        rowID: AutomationID,
+        threadID: String,
+        endpoint: DockRelayEndpoint,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(
+            scrollUntilElementIsInComfortableSwipeArea(id: rowID, maxSwipes: 8),
+            "Dock row was missing, not hittable, or too close to a screen edge before pin. id=\(rowID.rawValue)\n\nAccessibility tree:\n\(debugDescription)",
+            file: file,
+            line: line
+        )
+        let row = element(id: rowID)
+        swipeElementLeft(row)
+        let pinAction = AutomationID.Dock.rowAction(hostID: endpoint.id, threadID: threadID, action: .pin)
+        let pinButton = element(id: pinAction)
+        XCTAssertTrue(
+            pinButton.waitForExistence(timeout: 5),
+            "Swipe did not expose Pin for row id=\(rowID.rawValue).\n\nAccessibility tree:\n\(debugDescription)",
+            file: file,
+            line: line
+        )
+        pinButton.tap()
+    }
+
+    func scrollDockToTop(maxSwipes: Int = 4) {
+        for _ in 0..<maxSwipes {
+            swipeDown()
+        }
+    }
+
+    func scrollUntilElementIsInComfortableSwipeArea(id: AutomationID, maxSwipes: Int) -> Bool {
+        for _ in 0...maxSwipes {
+            let candidate = element(id: id)
+            if candidate.waitForExistence(timeout: 1), candidate.isHittable {
+                if isComfortableSwipeFrame(candidate.frame) {
+                    return true
+                }
+                if shouldScrollUp(toExpose: candidate.frame) {
+                    swipeUp()
+                } else {
+                    swipeDown()
+                }
+            } else {
+                swipeUp()
+            }
+        }
+        return false
+    }
+
+    private func swipeElementLeft(_ element: XCUIElement) {
+        let start = element.coordinate(withNormalizedOffset: CGVector(dx: 0.90, dy: 0.5))
+        let end = element.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    private func isComfortableSwipeFrame(_ frame: CGRect) -> Bool {
+        let visibleFrame = primaryWindowFrame(defaultingTo: frame)
+        let topInset: CGFloat = 96
+        let bottomLimit = tabBars.firstMatch.exists
+            ? tabBars.firstMatch.frame.minY - 12
+            : visibleFrame.maxY - 96
+        return frame.minY >= visibleFrame.minY + topInset
+            && frame.maxY <= bottomLimit
+    }
+
+    private func shouldScrollUp(toExpose frame: CGRect) -> Bool {
+        frame.midY >= primaryWindowFrame(defaultingTo: frame).midY
+    }
+
+    private func primaryWindowFrame(defaultingTo frame: CGRect) -> CGRect {
+        let window = windows.firstMatch
+        return window.exists ? window.frame : frame
+    }
+
+    func scrollUntilElementIsHittable(id: AutomationID, maxSwipes: Int) -> Bool {
+        if element(id: id).waitForExistence(timeout: 1), element(id: id).isHittable {
+            return true
+        }
+        for _ in 0..<maxSwipes {
+            swipeUp()
+            let candidate = element(id: id)
+            if candidate.waitForExistence(timeout: 1), candidate.isHittable {
+                return true
+            }
+        }
+        return false
+    }
+
+    func dragPinnedCell(
+        fromIndex sourceIndex: Int,
+        toIndex destinationIndex: Int,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let cells = collectionViews[AutomationID.Dock.pinnedRowsList.rawValue].cells
+        let source = cells.element(boundBy: sourceIndex)
+        let destination = cells.element(boundBy: destinationIndex)
+        guard source.waitForExistence(timeout: 5), destination.waitForExistence(timeout: 5) else {
+            XCTFail("Pinned cells were missing for reorder.\n\nAccessibility tree:\n\(debugDescription)", file: file, line: line)
+            return
+        }
+        let start = source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = destination.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+        start.press(forDuration: 0.85, thenDragTo: end)
+    }
+
+    func waitForPinnedOrder(_ rowIDs: [AutomationID], timeout: TimeInterval) -> Bool {
+        waitForRowOrder(rowIDs, timeout: timeout)
+    }
+
+    func waitForRowOrder(_ rowIDs: [AutomationID], timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let rows = rowIDs.map { element(id: $0) }
+            if rows.allSatisfy(\.exists) {
+                let yPositions = rows.map { $0.frame.minY }
+                if zip(yPositions, yPositions.dropFirst()).allSatisfy({ $0 <= $1 }) {
+                    return true
+                }
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        return false
     }
 
     func waitForHittableButton(

@@ -13,10 +13,12 @@ public struct CodexDockRootView: View {
     @StateObject private var hostsStore: HostSettingsStore
     @StateObject private var connectivityStore: AppConnectivityStore
     @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
+    private let threadDetailFactory: any ThreadDetailSessionMaking
     @State private var foregroundResumeTask: Task<Void, Never>?
     @State private var selectedRootTab: AutomationID.RootTab = .dock
 
     public init(store: DockStore) {
+        self.threadDetailFactory = AppServerThreadDetailSessionFactory()
         _dockStore = StateObject(wrappedValue: store)
         if let host = store.hostConfiguration,
            let registry = try? HostRegistry(hosts: [host]) {
@@ -36,11 +38,13 @@ public struct CodexDockRootView: View {
         registry: HostRegistry,
         client: AppServerDockClient = AppServerDockClient(),
         streamClient: any DockStreamConnecting = AppServerDockStreamClient(),
+        threadDetailFactory: any ThreadDetailSessionMaking = AppServerThreadDetailSessionFactory(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         lifecycleCoordinator: AppLifecycleCoordinator = AppLifecycleCoordinator(),
         connectivityStore: AppConnectivityStore? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
+        self.threadDetailFactory = threadDetailFactory
         let connectivityStore = connectivityStore ?? AppConnectivityStore(registry: registry, now: now)
         _dockStore = StateObject(
             wrappedValue: DockStore(
@@ -72,6 +76,7 @@ public struct CodexDockRootView: View {
     }
 
     public init(configurationError error: Error) {
+        self.threadDetailFactory = AppServerThreadDetailSessionFactory()
         _dockStore = StateObject(wrappedValue: DockStore(configurationError: error))
         _archiveStore = StateObject(wrappedValue: ArchiveStore(configurationError: error))
         _hostsStore = StateObject(wrappedValue: HostSettingsStore(configurationError: error))
@@ -86,6 +91,7 @@ public struct CodexDockRootView: View {
                 lifecycleCoordinator: lifecycleCoordinator,
                 connectivityReporter: connectivityStore,
                 connectivityStore: connectivityStore,
+                threadDetailFactory: threadDetailFactory,
                 onOpenRelaySettings: {
                     selectedRootTab = .relay
                 },
@@ -203,23 +209,25 @@ public struct DockView: View {
     private let lifecycleCoordinator: AppLifecycleCoordinator?
     private let connectivityReporter: (any AppConnectivityReporting)?
     private let connectivityStore: AppConnectivityStore?
+    private let threadDetailFactory: any ThreadDetailSessionMaking
     private let onOpenRelaySettings: @MainActor () -> Void
     private let onArchiveSucceeded: @MainActor () async -> Void
     @State private var selectedLens: DockLensID = .newest
     @State private var searchText = ""
     @State private var filterState = DockFilterState.default
     @State private var isFilterSurfacePresented = false
-    @State private var isPinnedManagePresented = false
+    @State private var isPinnedCollapsed = false
     @State private var selectedDetailRow: DockRowViewModel?
     @State private var collapsedHostGroupIDs: Set<String> = []
     @State private var collapsedBranchGroupIDs: Set<String> = []
-    private let pinnedInlineLimit = 3
+    @FocusState private var isSearchFocused: Bool
 
     public init(
         store: DockStore,
         lifecycleCoordinator: AppLifecycleCoordinator? = nil,
         connectivityReporter: (any AppConnectivityReporting)? = nil,
         connectivityStore: AppConnectivityStore? = nil,
+        threadDetailFactory: any ThreadDetailSessionMaking = AppServerThreadDetailSessionFactory(),
         onOpenRelaySettings: @escaping @MainActor () -> Void = {},
         onArchiveSucceeded: @escaping @MainActor () async -> Void = {}
     ) {
@@ -227,6 +235,7 @@ public struct DockView: View {
         self.lifecycleCoordinator = lifecycleCoordinator
         self.connectivityReporter = connectivityReporter
         self.connectivityStore = connectivityStore
+        self.threadDetailFactory = threadDetailFactory
         self.onOpenRelaySettings = onOpenRelaySettings
         self.onArchiveSucceeded = onArchiveSucceeded
     }
@@ -256,16 +265,6 @@ public struct DockView: View {
             DockFilterSurfaceView(
                 filters: $filterState,
                 projection: currentProjection
-            )
-        }
-        .sheet(isPresented: $isPinnedManagePresented) {
-            PinnedThreadsManageView(
-                rows: currentProjection?.allPinnedRows ?? [],
-                onUnpin: { row in
-                    Task {
-                        await store.setPinned(false, for: row)
-                    }
-                }
             )
         }
     }
@@ -307,6 +306,7 @@ public struct DockView: View {
             if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Button {
                     searchText = ""
+                    isSearchFocused = false
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
@@ -395,6 +395,7 @@ public struct DockView: View {
         TextField("Search sessions, repo, branch, host", text: $searchText)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
+            .focused($isSearchFocused)
             .codexAutomationID(AutomationID.Dock.searchField)
         #else
         TextField("Search sessions, repo, branch, host", text: $searchText)
@@ -440,6 +441,7 @@ public struct DockView: View {
                 store: ThreadDetailStore(
                     host: host,
                     row: selectedDetailRow,
+                    factory: threadDetailFactory,
                     lifecycleCoordinator: lifecycleCoordinator,
                     connectivityReporter: connectivityReporter
                 )
@@ -506,7 +508,7 @@ public struct DockView: View {
 
             if let emptyReason = projection.emptyReason {
                 if shouldShowPinnedHiddenHint(projection) {
-                    pinnedHiddenHint(projection)
+                    DockPinnedHiddenHintView(projection: projection, searchText: searchText)
                 }
                 DockMessageView(
                     icon: "line.3.horizontal.decrease.circle",
@@ -531,9 +533,24 @@ public struct DockView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             if !projection.pinnedRows.isEmpty {
-                pinnedSection(projection)
+                DockPinnedSectionView(
+                    projection: projection,
+                    isCollapsed: $isPinnedCollapsed,
+                    onMove: { rows in Task { await store.reorderPinnedRows(rows) } },
+                    onUnpin: { row in Task { await store.setPinned(false, for: row) } },
+                    onOpen: { row in selectedDetailRow = row },
+                    rowContent: { row in dockPinnedRow(row) }
+                )
+                if shouldShowPinnedBodyDivider(projection, snapshot: snapshot) {
+                    Divider()
+                        .codexAutomationID(AutomationID.Dock.pinnedBodyDivider)
+                }
             } else if shouldShowPinnedHiddenHint(projection) {
-                pinnedHiddenHint(projection)
+                DockPinnedHiddenHintView(projection: projection, searchText: searchText)
+                if shouldShowPinnedBodyDivider(projection, snapshot: snapshot) {
+                    Divider()
+                        .codexAutomationID(AutomationID.Dock.pinnedBodyDivider)
+                }
             }
 
             switch selectedLens {
@@ -571,89 +588,23 @@ public struct DockView: View {
         }
     }
 
-    private func pinnedSection(_ projection: DockSessionProjection) -> some View {
-        let visiblePinnedRows = Array(projection.pinnedRows.prefix(pinnedInlineLimit))
-        let headerTitle = projection.pinnedSummary.totalCount > projection.pinnedSummary.visibleCount
-            ? "Pinned \(projection.pinnedSummary.visibleCount) of \(projection.pinnedSummary.totalCount)"
-            : "Pinned \(projection.pinnedSummary.visibleCount)"
-
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Label(headerTitle, systemImage: "pin.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .accessibilityAddTraits(.isHeader)
-                    .codexAutomationID(AutomationID.Dock.pinnedHeader)
-
-                Spacer(minLength: 8)
-
-                Button {
-                    isPinnedManagePresented = true
-                } label: {
-                    Label("Manage", systemImage: "slider.horizontal.3")
-                        .labelStyle(.titleAndIcon)
-                }
-                .font(.caption.weight(.semibold))
-                .buttonStyle(.plain)
-                .foregroundStyle(.blue)
-                .accessibilityLabel("Manage pinned threads")
-                .codexAutomationID(AutomationID.Dock.pinnedManageButton)
-            }
-
-            LazyVStack(spacing: 10) {
-                ForEach(visiblePinnedRows) { row in
-                    dockRow(row, showsPinIndicator: true)
-                }
-
-                if projection.pinnedRows.count > pinnedInlineLimit {
-                    Button {
-                        isPinnedManagePresented = true
-                    } label: {
-                        Label("Show all \(projection.pinnedSummary.totalCount) pinned", systemImage: "ellipsis.circle")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .accessibilityLabel("Show all pinned threads")
-                    .codexAutomationID(AutomationID.Dock.pinnedShowAllButton)
-                }
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityValue(headerTitle)
-        .codexAutomationID(AutomationID.Dock.pinnedSection)
-    }
-
-    private func pinnedHiddenHint(_ projection: DockSessionProjection) -> some View {
-        let title = normalizedQuery(searchText).isEmpty
-            ? "Pinned hidden by filters"
-            : "No pinned rows match search"
-
-        return HStack(spacing: 8) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            Spacer(minLength: 8)
-
-            Button {
-                isPinnedManagePresented = true
-            } label: {
-                Text("Manage")
-            }
-            .font(.caption.weight(.semibold))
-            .buttonStyle(.plain)
-            .foregroundStyle(.blue)
-            .accessibilityLabel("Manage pinned threads")
-            .codexAutomationID(AutomationID.Dock.pinnedManageButton)
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityValue("\(projection.pinnedSummary.hiddenByScopeCount) pinned hidden")
-        .codexAutomationID(AutomationID.Dock.pinnedHiddenHint)
-    }
-
     private func shouldShowPinnedHiddenHint(_ projection: DockSessionProjection) -> Bool {
         projection.pinnedRows.isEmpty && projection.pinnedSummary.hiddenByScopeCount > 0
+    }
+
+    private func shouldShowPinnedBodyDivider(
+        _ projection: DockSessionProjection,
+        snapshot: DockSnapshot
+    ) -> Bool {
+        if !contextualHostStates(in: snapshot).isEmpty {
+            return true
+        }
+        switch selectedLens {
+        case .newest:
+            return !projection.rows.isEmpty
+        case .host, .branch:
+            return projection.groups.contains { !$0.rows.isEmpty || $0.isUnavailable }
+        }
     }
 
     private func normalizedQuery(_ value: String) -> String {
@@ -713,12 +664,37 @@ public struct DockView: View {
         }
     }
 
+    private func dockPinnedRow(_ row: DockRowViewModel) -> some View {
+        dockRowContent(
+            row,
+            showsPinIndicator: true,
+            automationID: AutomationID.Dock.row(hostID: row.id.hostID, threadID: row.id.threadID),
+            showsContextMenu: false
+        )
+        .accessibilityAction(named: Text("Unpin thread")) {
+            Task {
+                await store.setPinned(false, for: row)
+            }
+        }
+    }
+
     @ViewBuilder
-    private func dockRowContent(_ row: DockRowViewModel, showsPinIndicator: Bool) -> some View {
-        DockRowView(row: row, showsPinIndicator: showsPinIndicator)
-        .accessibilityValue(row.automationValue)
-        .contextMenu {
-            rowContextMenu(row)
+    private func dockRowContent(
+        _ row: DockRowViewModel,
+        showsPinIndicator: Bool,
+        automationID: AutomationID? = nil,
+        showsContextMenu: Bool = true
+    ) -> some View {
+        let content = DockRowView(row: row, showsPinIndicator: showsPinIndicator, automationID: automationID)
+            .accessibilityValue(row.automationValue)
+
+        if showsContextMenu {
+            content
+                .contextMenu {
+                    rowContextMenu(row)
+                }
+        } else {
+            content
         }
     }
 
@@ -949,97 +925,4 @@ public struct DockView: View {
         )
     }
 
-}
-
-#Preview {
-    let host = try! DockHostConfiguration(host: "preview.invalid", port: 4500)
-    return CodexDockRootView(
-        store: DockStore(host: host, streamClient: PreviewDockStreamClient())
-    )
-}
-
-private struct PreviewDockStreamClient: DockStreamConnecting {
-    func connect(to host: DockHostConfiguration) async throws -> any DockStreamConnection {
-        PreviewDockStreamConnection(host: host)
-    }
-}
-
-private struct PreviewDockStreamConnection: DockStreamConnection {
-    let host: DockHostConfiguration
-
-    func subscribe() async throws -> DockStreamUpdateDTO {
-        snapshot()
-    }
-
-    func resync() async throws -> DockStreamUpdateDTO {
-        snapshot()
-    }
-
-    func updates() -> AsyncThrowingStream<DockStreamUpdateDTO, Error> {
-        AsyncThrowingStream { continuation in
-            continuation.finish()
-        }
-    }
-
-    func close() async {}
-
-    private func snapshot() -> DockStreamUpdateDTO {
-        DockStreamUpdateDTO(
-            kind: .snapshot,
-            epoch: "preview",
-            seq: 1,
-            freshness: DockStreamFreshnessDTO(status: .fresh),
-            hosts: [DockStreamHostDTO(id: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
-            sessions: [
-                DockStreamSessionDTO(
-                    id: "\(host.id)::preview-running",
-                    hostID: host.id,
-                    threadID: "preview-running",
-                    backendSessionID: "preview-session-running",
-                    title: "Wire the iPhone shell to the real host",
-                    status: .running,
-                    lane: .human,
-                    kindLabel: "Human",
-                    repository: "codex-client",
-                    workingDirectory: "/Users/aelaguiz/workspace/codex-client",
-                    branch: "main",
-                    updatedAt: Int64(Date(timeIntervalSinceNow: -180).timeIntervalSince1970),
-                    summary: "Generated the app target and Dock store.",
-                    source: DockStreamSourceDTO(kind: .human)
-                ),
-                DockStreamSessionDTO(
-                    id: "\(host.id)::preview-review",
-                    hostID: host.id,
-                    threadID: "preview-review",
-                    backendSessionID: "preview-session-review",
-                    title: "Review the live-host launch proof",
-                    status: .needsInput,
-                    lane: .human,
-                    kindLabel: "Human",
-                    repository: "codex",
-                    workingDirectory: "/Users/aelaguiz/workspace/codex",
-                    branch: "app-server",
-                    updatedAt: Int64(Date(timeIntervalSinceNow: -4_800).timeIntervalSince1970),
-                    summary: "The simulator is connected to a reachable app-server.",
-                    source: DockStreamSourceDTO(kind: .human)
-                ),
-                DockStreamSessionDTO(
-                    id: "\(host.id)::preview-agent",
-                    hostID: host.id,
-                    threadID: "preview-agent",
-                    backendSessionID: "preview-session-agent",
-                    title: "Audit the Dock snapshot model",
-                    status: .idle,
-                    lane: .agent,
-                    kindLabel: "Agent",
-                    repository: "codex-client",
-                    workingDirectory: "/Users/aelaguiz/workspace/codex-client",
-                    branch: "feature/agents",
-                    updatedAt: Int64(Date(timeIntervalSinceNow: -900).timeIntervalSince1970),
-                    summary: "Sub-agent returned a focused review.",
-                    source: DockStreamSourceDTO(kind: .automation)
-                )
-            ]
-        )
-    }
 }
