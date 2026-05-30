@@ -82,40 +82,6 @@
   - `home.fairy-salmon.ts.net:4510`: ready, 37 routes, app-critical
     `dock/subscribe` failure, self-test timed out.
 
-## 2026-05-30 Home `dock/subscribe` Fix
-
-- Root cause: home had a huge persisted Dock session table:
-  `.codex-dock/dock-session-table.json` was `493M`, with `5178` rows and
-  individual rows up to `2937665` bytes. `dock/subscribe` was blocked trying
-  to refresh and return that payload.
-- Fixed in `4eabd42 Bound Dock subscribe snapshots`.
-  - Dock session text fields are capped before persistence and before client
-    snapshots.
-  - `dock/subscribe` returns the last-good snapshot if the initial refresh does
-    not finish inside `DOCK_SESSION_INITIAL_REFRESH_TIMEOUT_MS`.
-  - Added relay tests for large-row persistence and slow-refresh snapshot
-    fallback.
-- Verification:
-  - `rtk npm run test:relay`: passed, 115 tests.
-  - `home` fast-forwarded to `4eabd42` and `systemd-user` services restarted.
-  - First home `dock/subscribe` after restart returned in `2221ms` with stale
-    last-good data instead of timing out.
-  - After background refresh, home
-    `.codex-dock/dock-session-table.json` shrank from `493M` to `8.7M`;
-    largest row dropped to `2893` bytes.
-  - Fresh home `dock/subscribe` returned in `2178ms`, `rowCount: 5190`,
-    `freshness.status: fresh`, `lastError: null`.
-  - Local `Amir-M5` services were brought back through `rtk make services`.
-  - Fresh local `dock/subscribe` returned in `1228ms`, `rowCount: 1599`,
-    `freshness.status: fresh`, `lastError: null`.
-  - Local `.codex-dock/dock-session-table.json` is `3.4M`, with `1599` rows
-    and largest row `2929` bytes.
-  - Multi-host compare artifact:
-    `/tmp/codex-client/relay-host-compare-homefix-20260530T144900Z.json`.
-    It reports both `amir-m5.fairy-salmon.ts.net:4510` and
-    `home.fairy-salmon.ts.net:4510` ready, status OK, self-test OK, no
-    app-critical failures, and fresh `dock/subscribe` rows.
-
 ## 2026-05-30 Host-Service Log Tail Fix
 
 - While recovering local services, `rtk make host-service-logs` failed because
