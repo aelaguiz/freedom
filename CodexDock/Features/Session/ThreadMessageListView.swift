@@ -73,16 +73,15 @@ struct MessageTypeFilterControl: View {
 }
 
 struct ThreadMessageListView: View {
-    let events: [ThreadEvent]
+    let rows: [ThreadEventRenderRow]
     let filter: ThreadDetailMessageFilter
     let hasUnfilteredEvents: Bool
-    let requestCards: [ServerRequestCard]
     let onRequestInputChange: (String, String) -> Void
     let onRequestAction: (String, ServerRequestCardAction) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if events.isEmpty {
+            if rows.isEmpty {
                 if hasUnfilteredEvents {
                     DetailMessageView(
                         icon: filter.systemImage,
@@ -99,10 +98,10 @@ struct ThreadMessageListView: View {
                     )
                 }
             } else {
-                ForEach(events) { event in
+                ForEach(rows) { row in
                     ThreadMessageCard(
-                        event: event,
-                        requestCard: requestCard(for: event),
+                        event: row.event,
+                        requestCard: row.requestCard,
                         onRequestInputChange: onRequestInputChange,
                         onRequestAction: onRequestAction
                     )
@@ -111,19 +110,7 @@ struct ThreadMessageListView: View {
         }
         .accessibilityElement(children: .contain)
         .codexAutomationID(AutomationID.Session.messageList)
-        .accessibilityValue("events=\(events.count); filter=\(filter.id)")
-    }
-
-    private func requestCard(for event: ThreadEvent) -> ServerRequestCard? {
-        guard event.kind == .request else {
-            return nil
-        }
-        return requestCards.first { card in
-            card.id == event.id
-                || ((event.turnID != nil || event.itemID != nil)
-                    && card.turnID == event.turnID
-                    && card.itemID == event.itemID)
-        }
+        .accessibilityValue("events=\(rows.count); filter=\(filter.id)")
     }
 }
 

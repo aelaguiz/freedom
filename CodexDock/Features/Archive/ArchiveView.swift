@@ -7,7 +7,8 @@ import AppKit
 #endif
 
 public struct ArchiveView: View {
-    @ObservedObject private var store: ArchiveStore
+    @ObservedObject private var screenStore: ArchiveScreenStore
+    private let store: ArchiveStore
     private let onRestoreSucceeded: @MainActor () async -> Void
 
     public init(
@@ -15,6 +16,7 @@ public struct ArchiveView: View {
         onRestoreSucceeded: @escaping @MainActor () async -> Void = {}
     ) {
         self.store = store
+        _screenStore = ObservedObject(wrappedValue: store.screenStore)
         self.onRestoreSucceeded = onRestoreSucceeded
     }
 
@@ -78,7 +80,7 @@ public struct ArchiveView: View {
 
     @ViewBuilder
     private var content: some View {
-        switch store.state {
+        switch screenStore.state {
         case let .configurationError(message):
             DockMessageView(
                 icon: "exclamationmark.triangle",
@@ -135,7 +137,7 @@ public struct ArchiveView: View {
                 )
             }
 
-            if let actionError = store.actionError {
+            if let actionError = screenStore.actionError {
                 ActionErrorBanner(
                     message: actionError,
                     automationID: AutomationID.Archive.state(.actionError)
@@ -203,7 +205,7 @@ public struct ArchiveView: View {
     }
 
     private var archiveScreenValue: String {
-        switch store.state {
+        switch screenStore.state {
         case .configurationError:
             return "configuration-error"
         case .idle(let hosts):

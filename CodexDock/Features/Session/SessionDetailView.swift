@@ -8,10 +8,11 @@ import AppKit
 
 public struct SessionDetailView: View {
     @StateObject private var store: ThreadDetailStore
-    @State private var selectedMessageFilter = ThreadDetailMessageFilter.default
+    @StateObject private var screenStore: ThreadDetailScreenStore
 
     public init(store: ThreadDetailStore) {
         _store = StateObject(wrappedValue: store)
+        _screenStore = StateObject(wrappedValue: store.screenStore)
     }
 
     public var body: some View {
@@ -41,7 +42,7 @@ public struct SessionDetailView: View {
 
     @ViewBuilder
     private var content: some View {
-        switch store.state {
+        switch screenStore.state {
         case let .idle(header):
             DetailHeaderView(header: header, liveState: .connecting)
         case let .loading(header):
@@ -49,8 +50,8 @@ public struct SessionDetailView: View {
             ProgressView()
                 .frame(maxWidth: .infinity, minHeight: 140)
                 .codexAutomationID(AutomationID.Session.state(.loading))
-        case let .loaded(snapshot):
-            loadedContent(snapshot)
+        case let .loaded(renderSnapshot):
+            loadedContent(renderSnapshot)
         case let .error(header, message):
             DetailHeaderView(header: header, liveState: .stale(message))
             DetailMessageView(
@@ -63,14 +64,14 @@ public struct SessionDetailView: View {
     }
 
     @ViewBuilder
-    private func loadedContent(_ snapshot: ThreadDetailSnapshot) -> some View {
-        let filter = selectedMessageFilter
+    private func loadedContent(_ renderSnapshot: ThreadDetailRenderSnapshot) -> some View {
+        let filter = renderSnapshot.options.filter
         DetailHeaderView(
-            header: snapshot.header,
-            liveState: snapshot.liveState
+            header: renderSnapshot.header,
+            liveState: renderSnapshot.liveState
         )
-        MessageTypeFilterControl(filter: $selectedMessageFilter)
-        if case let .stale(message) = snapshot.liveState {
+        MessageTypeFilterControl(filter: messageFilterBinding)
+        if case let .stale(message) = renderSnapshot.liveState {
             DetailMessageView(
                 icon: "wifi.exclamationmark",
                 title: "Live updates stopped",
@@ -78,12 +79,28 @@ public struct SessionDetailView: View {
                 automationID: AutomationID.Session.state(.stale)
             )
         }
-        ComposerView(store: store)
+        ComposerView(
+            screenStore: screenStore,
+            onUpdateDraft: { draft in
+                store.updateDraft(draft)
+            },
+            onSendDraft: {
+                await store.sendDraft()
+            },
+            onBeginVoiceCapture: {
+                await store.beginVoiceCapture()
+            },
+            onFinishVoiceCapture: {
+                await store.finishVoiceCapture()
+            },
+            onToggleTapVoiceCapture: {
+                await store.toggleTapVoiceCapture()
+            }
+        )
         ThreadMessageListView(
-            events: filter.visibleEvents(from: snapshot.events),
+            rows: renderSnapshot.rows,
             filter: filter,
-            hasUnfilteredEvents: !snapshot.events.isEmpty,
-            requestCards: store.requestCards,
+            hasUnfilteredEvents: renderSnapshot.hasUnfilteredEvents,
             onRequestInputChange: { cardID, draft in
                 store.updateRequestCardInput(cardID: cardID, draft: draft)
             },
@@ -106,16 +123,23 @@ public struct SessionDetailView: View {
     }
 
     private var sessionScreenValue: String {
-        switch store.state {
+        switch screenStore.state {
         case let .idle(header):
             return "idle; host=\(header.hostID); thread=\(header.threadID); live=connecting"
         case let .loading(header):
             return "loading; host=\(header.hostID); thread=\(header.threadID); live=connecting"
-        case let .loaded(snapshot):
-            return "loaded; host=\(snapshot.header.hostID); thread=\(snapshot.header.threadID); live=\(snapshot.liveState.label); events=\(snapshot.events.count)"
+        case let .loaded(renderSnapshot):
+            return "loaded; host=\(renderSnapshot.header.hostID); thread=\(renderSnapshot.header.threadID); live=\(renderSnapshot.liveState.label); events=\(renderSnapshot.rows.count)"
         case let .error(header, _):
             return "error; host=\(header.hostID); thread=\(header.threadID); live=stale"
         }
+    }
+
+    private var messageFilterBinding: Binding<ThreadDetailMessageFilter> {
+        Binding(
+            get: { screenStore.options.filter },
+            set: { screenStore.setFilter($0) }
+        )
     }
 
 }

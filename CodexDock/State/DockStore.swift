@@ -1,456 +1,6 @@
 import Combine
 import Foundation
 
-public enum DockRowStatusKind: String, Codable, Equatable, Sendable, CaseIterable {
-    case running
-    case needsInput
-    case needsApproval
-    case idle
-    case error
-    case dormant
-    case unknown
-
-    public var label: String {
-        switch self {
-        case .running:
-            return "Running"
-        case .needsInput:
-            return "Needs input"
-        case .needsApproval:
-            return "Needs approval"
-        case .idle:
-            return "Idle"
-        case .error:
-            return "Error"
-        case .dormant:
-            return "Not loaded"
-        case .unknown:
-            return "Unknown"
-        }
-    }
-
-    public var visibleBadgeLabel: String? {
-        switch self {
-        case .running, .needsInput, .needsApproval, .error:
-            return label
-        case .idle, .dormant, .unknown:
-            return nil
-        }
-    }
-}
-
-public enum DockLensID: String, CaseIterable, Identifiable, Equatable, Sendable {
-    case newest
-    case host
-    case branch
-
-    public var id: String { rawValue }
-
-    public var title: String {
-        switch self {
-        case .newest:
-            return "Newest"
-        case .host:
-            return "Host"
-        case .branch:
-            return "Branch"
-        }
-    }
-}
-
-public enum DockSortOrder: String, CaseIterable, Identifiable, Equatable, Sendable {
-    case newestActivity
-
-    public var id: String { rawValue }
-
-    public var label: String {
-        switch self {
-        case .newestActivity:
-            return "Newest activity"
-        }
-    }
-}
-
-public enum DockSourceFilter: String, CaseIterable, Identifiable, Equatable, Sendable {
-    case any
-    case human
-    case agents
-    case unknown
-
-    public var id: String { rawValue }
-
-    public var label: String {
-        switch self {
-        case .any:
-            return "Any"
-        case .human:
-            return "Human"
-        case .agents:
-            return "Agents"
-        case .unknown:
-            return "Unknown"
-        }
-    }
-
-    public func includes(_ origin: SessionOrigin) -> Bool {
-        switch self {
-        case .any:
-            return true
-        case .human:
-            return origin.kind == .humanInteractive
-        case .agents:
-            return origin.kind == .agentOrAutomation
-        case .unknown:
-            return origin.kind == .unknown
-        }
-    }
-}
-
-extension SessionOrigin {
-    var automationKind: String {
-        switch kind {
-        case .humanInteractive:
-            return "human"
-        case .agentOrAutomation:
-            return "automation"
-        case .unknown:
-            return "unknown"
-        }
-    }
-}
-
-public struct DockFilterState: Equatable, Sendable {
-    public var selectedHostIDs: Set<String>
-    public var selectedBranches: Set<String>
-    public var statusKinds: Set<DockRowStatusKind>
-    public var repositoryQuery: String
-    public var selectedRepositories: Set<String>
-    public var source: DockSourceFilter
-    public var showsIdle: Bool
-    public var sortOrder: DockSortOrder
-
-    public init(
-        selectedHostIDs: Set<String> = [],
-        selectedBranches: Set<String> = [],
-        statusKinds: Set<DockRowStatusKind> = Set(DockRowStatusKind.allCases),
-        repositoryQuery: String = "",
-        selectedRepositories: Set<String> = [],
-        source: DockSourceFilter = .any,
-        showsIdle: Bool = false,
-        sortOrder: DockSortOrder = .newestActivity
-    ) {
-        self.selectedHostIDs = selectedHostIDs
-        self.selectedBranches = selectedBranches
-        self.statusKinds = statusKinds
-        self.repositoryQuery = repositoryQuery
-        self.selectedRepositories = selectedRepositories
-        self.source = source
-        self.showsIdle = showsIdle
-        self.sortOrder = sortOrder
-    }
-
-    // Dock V1 deliberately defaults to all loaded source scopes and no archive facet.
-    public static let `default` = DockFilterState()
-
-    public var activeFilterCount: Int {
-        var count = 0
-        if !selectedHostIDs.isEmpty { count += 1 }
-        if !selectedBranches.isEmpty { count += 1 }
-        if statusKinds != Set(DockRowStatusKind.allCases) { count += 1 }
-        if !repositoryQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { count += 1 }
-        if !selectedRepositories.isEmpty { count += 1 }
-        if source != .any { count += 1 }
-        if showsIdle { count += 1 }
-        return count
-    }
-
-    public var isDefault: Bool {
-        self == .default
-    }
-}
-
-public enum DockRowRail: String, Codable, Equatable, Sendable, CaseIterable {
-    case blue
-    case green
-    case orange
-    case red
-    case violet
-}
-
-public struct DockRowViewModel: Equatable, Identifiable, Sendable {
-    public let id: HostScopedThreadID
-    public let backendSessionID: String
-    public let title: String
-    public let hostDisplayName: String
-    public let hostEndpoint: String
-    public let repository: String
-    public let branch: String
-    public let status: DockRowStatusKind
-    public let lastActivity: String
-    public let lastActivityDate: Date
-    public let summary: String
-    public let rail: DockRowRail
-    public let label: String?
-    public let origin: SessionOrigin
-    public let isPinned: Bool
-    public let pinnedAt: Date?
-    public let pinnedOrder: Int?
-
-    public init(
-        id: HostScopedThreadID,
-        backendSessionID: String,
-        title: String,
-        hostDisplayName: String,
-        hostEndpoint: String,
-        repository: String,
-        branch: String,
-        status: DockRowStatusKind,
-        lastActivity: String,
-        lastActivityDate: Date,
-        summary: String,
-        rail: DockRowRail,
-        label: String?,
-        origin: SessionOrigin,
-        isPinned: Bool = false,
-        pinnedAt: Date? = nil,
-        pinnedOrder: Int? = nil
-    ) {
-        self.id = id
-        self.backendSessionID = backendSessionID
-        self.title = title
-        self.hostDisplayName = hostDisplayName
-        self.hostEndpoint = hostEndpoint
-        self.repository = repository
-        self.branch = branch
-        self.status = status
-        self.lastActivity = lastActivity
-        self.lastActivityDate = lastActivityDate
-        self.summary = summary
-        self.rail = rail
-        self.label = label
-        self.origin = origin
-        self.isPinned = isPinned
-        self.pinnedAt = isPinned ? pinnedAt : nil
-        self.pinnedOrder = isPinned ? pinnedOrder : nil
-    }
-
-    public var metadataKey: LocalThreadMetadataKey {
-        LocalThreadMetadataKey(
-            hostID: id.hostID,
-            backendSessionID: backendSessionID,
-            threadID: id.threadID
-        )
-    }
-}
-
-public struct DockSectionViewModel: Equatable, Identifiable, Sendable {
-    public let id: String
-    public let title: String
-    public let rows: [DockRowViewModel]
-}
-
-public enum DockProjectionGroupKind: String, Equatable, Sendable {
-    case host
-    case branch
-}
-
-public struct DockProjectionGroupViewModel: Equatable, Identifiable, Sendable {
-    public let id: String
-    public let kind: DockProjectionGroupKind
-    public let title: String
-    public let subtitle: String
-    public let rows: [DockRowViewModel]
-    public let hostIDs: [String]
-    public let newestActivityDate: Date?
-    public let runningCount: Int
-    public let hiddenIdleCount: Int
-    public let isUnavailable: Bool
-    public let unavailableMessage: String?
-
-    public var count: Int { rows.count }
-}
-
-public struct DockProjectionHiddenCounts: Equatable, Sendable {
-    public let idle: Int
-}
-
-public struct DockPinnedSummary: Equatable, Sendable {
-    public let visibleCount: Int
-    public let totalCount: Int
-    public let hiddenByScopeCount: Int
-
-    public init(visibleCount: Int, totalCount: Int, hiddenByScopeCount: Int) {
-        self.visibleCount = visibleCount
-        self.totalCount = totalCount
-        self.hiddenByScopeCount = hiddenByScopeCount
-    }
-}
-
-public struct DockProjectionFacets: Equatable, Sendable {
-    public let hosts: [DockHostViewModel]
-    public let branches: [String]
-    public let statuses: [DockRowStatusKind]
-    public let repositories: [String]
-    public let sources: [DockSourceFilter]
-}
-
-public enum DockProjectionEmptyReason: Equatable, Sendable {
-    case noData
-    case noSearchMatches
-    case noFilterMatches
-    case idleHidden
-    case hostUnavailable
-
-    public var title: String {
-        switch self {
-        case .noData:
-            return "No sessions"
-        case .noSearchMatches:
-            return "No matches"
-        case .noFilterMatches:
-            return "No filtered sessions"
-        case .idleHidden:
-            return "Idle hidden"
-        case .hostUnavailable:
-            return "Host unavailable"
-        }
-    }
-
-    public var message: String {
-        switch self {
-        case .noData:
-            return "No sessions are loaded on reachable hosts."
-        case .noSearchMatches:
-            return "No sessions match this search."
-        case .noFilterMatches:
-            return "No sessions match the active filters."
-        case .idleHidden:
-            return "Show idle sessions to include matching idle threads."
-        case .hostUnavailable:
-            return "The selected host is unavailable."
-        }
-    }
-}
-
-public struct DockProjectionSummary: Equatable, Sendable {
-    public let text: String
-    public let activeFilterCount: Int
-    public let resultCount: Int
-}
-
-public struct DockHostViewModel: Equatable, Identifiable, Sendable {
-    public let id: String
-    public let displayName: String
-    public let endpoint: String
-
-    public init(host: DockHostConfiguration) {
-        self.id = host.id
-        self.displayName = host.displayName
-        self.endpoint = host.endpoint.displayEndpoint
-    }
-}
-
-public struct DockSnapshot: Equatable, Sendable {
-    public let host: DockHostViewModel
-    public let hosts: [DockHostViewModel]
-    public let hostStates: [DockHostStateViewModel]
-    public let rows: [DockRowViewModel]
-    public let mappingFailures: [SessionSummaryMappingFailure]
-    public let isPartial: Bool
-
-    public var rowCount: Int {
-        rows.count
-    }
-
-    public init(
-        host: DockHostViewModel,
-        hosts: [DockHostViewModel],
-        hostStates: [DockHostStateViewModel],
-        rows: [DockRowViewModel],
-        mappingFailures: [SessionSummaryMappingFailure],
-        isPartial: Bool = false
-    ) {
-        self.host = host
-        self.hosts = hosts
-        self.hostStates = hostStates
-        self.rows = rows
-        self.mappingFailures = mappingFailures
-        self.isPartial = isPartial
-    }
-}
-
-public enum DockHostLoadStatus: Equatable, Sendable {
-    case checking
-    case loaded(rowCount: Int)
-    case partial(rowCount: Int, message: String)
-    case empty
-    case offline(String)
-    case error(String)
-
-    public var subtitle: String {
-        switch self {
-        case .checking:
-            return "Checking"
-        case .loaded(let rowCount):
-            return "\(rowCount) sessions"
-        case .partial(let rowCount, let message):
-            return "\(rowCount) sessions, partial: \(message)"
-        case .empty:
-            return "Online, no sessions"
-        case .offline:
-            return "Offline"
-        case .error:
-            return "Error"
-        }
-    }
-
-    public var isUnavailable: Bool {
-        switch self {
-        case .offline, .error:
-            return true
-        case .checking, .loaded, .partial, .empty:
-            return false
-        }
-    }
-
-    public var isPartial: Bool {
-        if case .partial = self {
-            return true
-        }
-        return false
-    }
-
-    public var unavailableMessage: String? {
-        switch self {
-        case .offline(let message), .error(let message):
-            return message
-        case .checking, .loaded, .partial, .empty:
-            return nil
-        }
-    }
-}
-
-public struct DockHostStateViewModel: Equatable, Identifiable, Sendable {
-    public let id: String
-    public let host: DockHostViewModel
-    public let status: DockHostLoadStatus
-
-    public init(host: DockHostViewModel, status: DockHostLoadStatus) {
-        self.id = host.id
-        self.host = host
-        self.status = status
-    }
-}
-
-public enum DockStoreState: Equatable, Sendable {
-    case configurationError(String)
-    case idle([DockHostViewModel])
-    case loading([DockHostViewModel])
-    case loaded(DockSnapshot)
-    case offline(DockHostViewModel, String)
-    case error(DockHostViewModel, String)
-}
-
 @MainActor
 public final class DockStore: ObservableObject {
     public static let defaultAutoRefreshInterval: Duration = CodexDockConstants.Dock.autoRefreshInterval
@@ -458,18 +8,21 @@ public final class DockStore: ObservableObject {
     @Published public private(set) var state: DockStoreState
     @Published public private(set) var actionError: String?
 
+    let screenStore: DockScreenStore
+
     private var hosts: [DockHostConfiguration]
     private let streamClient: any DockStreamConnecting
-    private let archiver: any DockSessionArchiving
-    private let metadataStore: any LocalThreadMetadataStoring
+    private let commandEngine: ClientCommandEngine
+    private let metadataEngine: LocalMetadataEngine
     private let now: @Sendable () -> Date
     private let streamReconnectDelay: Duration
-    private var sessionTable = DockSessionTable()
+    private var dataEngine: DockDataEngine?
     private var streamConnections: [String: any DockStreamConnection] = [:]
     private var streamTasks: [String: Task<Void, Never>] = [:]
     private var isLoading = false
     private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
     private weak var connectivityReporter: (any AppConnectivityReporting)?
+    private let connectivityEventSink: ConnectivityEventSink?
 
     public var hostConfiguration: DockHostConfiguration? {
         hosts.first
@@ -485,16 +38,25 @@ public final class DockStore: ObservableObject {
         archiver: any DockSessionArchiving = AppServerDockClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval,
+        connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
+        let hostViewModels = [DockHostViewModel(host: host)]
         self.hosts = [host]
         self.streamClient = streamClient
-        self.archiver = archiver
-        self.metadataStore = metadataStore
+        self.commandEngine = ClientCommandEngine(archiver: archiver)
+        self.metadataEngine = LocalMetadataEngine(store: metadataStore, now: now)
         self.streamReconnectDelay = streamReconnectDelay
+        self.connectivityEventSink = connectivityEventSink
         self.now = now
-        self.sessionTable.reset(hosts: [host])
-        self.state = .idle([DockHostViewModel(host: host)])
+        self.screenStore = DockScreenStore(hosts: hostViewModels, now: now)
+        if let registry = try? HostRegistry(hosts: [host]) {
+            self.dataEngine = DockDataEngine(registry: registry)
+        } else {
+            self.dataEngine = nil
+        }
+        self.state = .idle(hostViewModels)
+        self.screenStore.start()
     }
 
     public init(
@@ -503,16 +65,21 @@ public final class DockStore: ObservableObject {
         archiver: any DockSessionArchiving = AppServerDockClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval,
+        connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
+        let hostViewModels = registry.hosts.map(DockHostViewModel.init)
         self.hosts = registry.hosts
         self.streamClient = streamClient
-        self.archiver = archiver
-        self.metadataStore = metadataStore
+        self.commandEngine = ClientCommandEngine(archiver: archiver)
+        self.metadataEngine = LocalMetadataEngine(store: metadataStore, now: now)
         self.streamReconnectDelay = streamReconnectDelay
+        self.connectivityEventSink = connectivityEventSink
         self.now = now
-        self.sessionTable.reset(hosts: registry.hosts)
-        self.state = .idle(registry.hosts.map(DockHostViewModel.init))
+        self.screenStore = DockScreenStore(hosts: hostViewModels, now: now)
+        self.dataEngine = DockDataEngine(registry: registry)
+        self.state = .idle(hostViewModels)
+        self.screenStore.start()
     }
 
     public init(
@@ -521,15 +88,21 @@ public final class DockStore: ObservableObject {
         archiver: any DockSessionArchiving = AppServerDockClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval,
+        connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
+        let message = error.localizedDescription
         self.hosts = []
         self.streamClient = streamClient
-        self.archiver = archiver
-        self.metadataStore = metadataStore
+        self.commandEngine = ClientCommandEngine(archiver: archiver)
+        self.metadataEngine = LocalMetadataEngine(store: metadataStore, now: now)
         self.streamReconnectDelay = streamReconnectDelay
+        self.connectivityEventSink = connectivityEventSink
         self.now = now
-        self.state = .configurationError(error.localizedDescription)
+        self.screenStore = DockScreenStore(configurationError: message)
+        self.dataEngine = nil
+        self.state = .configurationError(message)
+        self.screenStore.start()
     }
 
     deinit {
@@ -539,16 +112,30 @@ public final class DockStore: ObservableObject {
     public func updateRegistry(_ registry: HostRegistry) async {
         await closeStreams()
         hosts = registry.hosts
-        sessionTable.reset(hosts: registry.hosts)
-        actionError = nil
-        state = .idle(registry.hosts.map(DockHostViewModel.init))
-        connectivityReporter?.reportDockState(state)
+        if let dataEngine {
+            await dataEngine.updateRegistry(registry)
+        } else {
+            dataEngine = DockDataEngine(registry: registry)
+        }
+        setActionError(nil)
+        let hostViewModels = registry.hosts.map(DockHostViewModel.init)
+        state = .idle(hostViewModels)
+        screenStore.setIdle(hosts: hostViewModels)
+        publishConnectivity(for: state)
         await reload(showLoading: true)
     }
 
     public func setConnectivityReporter(_ reporter: (any AppConnectivityReporting)?) {
         connectivityReporter = reporter
+        guard connectivityEventSink == nil else {
+            return
+        }
         reporter?.reportDockState(state)
+    }
+
+    private func setActionError(_ message: String?) {
+        actionError = message
+        screenStore.setActionError(message)
     }
 
     public func load() async {
@@ -560,86 +147,63 @@ public final class DockStore: ObservableObject {
     }
 
     public func setLabel(_ label: String?, for row: DockRowViewModel) async {
-        var metadata = localMetadata[row.metadataKey] ?? LocalThreadMetadata()
-        metadata.label = label
-        await save(metadata: metadata, for: row.metadataKey)
+        await persistMetadataChange(
+            logLabel: "label",
+            hostID: row.id.hostID,
+            threadID: row.id.threadID
+        ) {
+            try await metadataEngine.setLabel(label, for: row.metadataKey)
+        }
     }
 
     public func setRail(_ rail: DockRowRail?, for row: DockRowViewModel) async {
-        var metadata = localMetadata[row.metadataKey] ?? LocalThreadMetadata()
-        metadata.rail = rail
-        await save(metadata: metadata, for: row.metadataKey)
+        await persistMetadataChange(
+            logLabel: "rail",
+            hostID: row.id.hostID,
+            threadID: row.id.threadID
+        ) {
+            try await metadataEngine.setRail(rail, for: row.metadataKey)
+        }
     }
 
     public func setPinned(_ isPinned: Bool, for row: DockRowViewModel) async {
-        var values = PinnedMetadataOrdering.normalized(localMetadata)
-        var metadata = values[row.metadataKey] ?? LocalThreadMetadata()
-        if isPinned {
-            let wasPinned = metadata.isPinned
-            metadata.isPinned = true
-            metadata.pinnedAt = metadata.pinnedAt ?? now()
-            if !wasPinned || metadata.pinnedOrder == nil {
-                metadata.pinnedOrder = PinnedMetadataOrdering.nextOrder(in: values, excluding: row.metadataKey)
-            }
-            metadata.lastKnownPinnedDisplay = LocalPinnedDisplaySnapshot(row: row)
-        } else {
-            metadata.isPinned = false
-            metadata.pinnedAt = nil
-            metadata.pinnedOrder = nil
-            metadata.lastKnownPinnedDisplay = nil
+        await persistMetadataChange(
+            logLabel: isPinned ? "pin" : "unpin",
+            hostID: row.id.hostID,
+            threadID: row.id.threadID
+        ) {
+            try await metadataEngine.setPinned(isPinned, for: row)
         }
-        values[row.metadataKey] = metadata
-        values = PinnedMetadataOrdering.normalized(values)
-        await save(metadataValues: values)
     }
 
     public func reorderPinnedRows(_ visibleRowsInNewOrder: [DockRowViewModel]) async {
-        var values = PinnedMetadataOrdering.normalized(localMetadata)
-        let visibleKeys = PinnedMetadataOrdering.uniqueKeys(
-            visibleRowsInNewOrder.map(\.metadataKey).filter { values[$0]?.isPinned == true }
-        )
-        guard visibleKeys.count > 1 else {
-            return
+        await persistMetadataChange(
+            logLabel: "reorder_pinned",
+            hostID: nil,
+            threadID: nil
+        ) {
+            try await metadataEngine.reorderPinnedRows(visibleRowsInNewOrder)
         }
-
-        let visibleKeySet = Set(visibleKeys)
-        let orderedPinnedKeys = PinnedMetadataOrdering.orderedKeys(in: values)
-        var reorderedVisibleKeys = visibleKeys.makeIterator()
-        let mergedKeys = orderedPinnedKeys.compactMap { key in
-            if visibleKeySet.contains(key) {
-                return reorderedVisibleKeys.next()
-            }
-            return key
-        }
-
-        for (index, key) in mergedKeys.enumerated() {
-            guard var metadata = values[key], metadata.isPinned else {
-                continue
-            }
-            metadata.pinnedOrder = index
-            values[key] = metadata
-        }
-        await save(metadataValues: values)
     }
 
     @discardableResult
     public func archive(_ row: DockRowViewModel) async -> Bool {
         guard let host = hostConfiguration(for: row.id.hostID) else {
             DockLog.dock.error("dock archive skipped missing host_id=\(row.id.hostID, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
-            actionError = "Host \(row.id.hostID) is no longer configured."
+            setActionError("Host \(row.id.hostID) is no longer configured.")
             return false
         }
 
         do {
             DockLog.dock.notice("dock archive action started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
-            try await archiver.archiveThread(row.id.threadID, on: host)
-            actionError = nil
+            try await commandEngine.archive(row, on: host)
+            setActionError(nil)
             await refresh()
             DockLog.dock.notice("dock archive action finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
             return true
         } catch {
             DockLog.dock.error("dock archive action failed host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-            actionError = error.localizedDescription
+            setActionError(error.localizedDescription)
             return false
         }
     }
@@ -666,20 +230,23 @@ public final class DockStore: ObservableObject {
         let hostViewModels = hosts.map(DockHostViewModel.init)
         if showLoading {
             state = .loading(hostViewModels)
-            connectivityReporter?.reportDockState(state)
+            screenStore.setLoading(hosts: hostViewModels)
+            publishConnectivity(for: state)
         }
 
         do {
-            localMetadata = try await metadataStore.load()
+            localMetadata = try await metadataEngine.load()
             DockLog.persistence.debug("dock metadata loaded entries=\(self.localMetadata.count, privacy: .public)")
         } catch {
             localMetadata = [:]
+            await metadataEngine.replace(localMetadata)
             DockLog.persistence.warning("dock metadata load failed error=\(DockLog.errorSummary(error), privacy: .public)")
         }
 
-        sessionTable.ensureHosts(hosts)
+        await dataEngine?.updateLocalMetadata(localMetadata)
+        await dataEngine?.ensureHosts()
         await synchronizeStreams()
-        publishSnapshot()
+        await publishSnapshot()
         if case let .loaded(snapshot) = state {
             DockLog.dock.notice("dock stream reload finished hosts=\(self.hosts.count, privacy: .public) rows=\(snapshot.rowCount, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
         }
@@ -704,8 +271,12 @@ public final class DockStore: ObservableObject {
     }
 
     private func openStream(host: DockHostConfiguration) async {
-        sessionTable.markChecking(host: host)
-        publishSnapshot()
+        guard let dataEngine else {
+            return
+        }
+
+        await dataEngine.markChecking(host: host)
+        await publishSnapshot()
         var openedConnection: (any DockStreamConnection)?
         do {
             let connection = try await streamClient.connect(to: host)
@@ -714,28 +285,33 @@ public final class DockStore: ObservableObject {
             let snapshot = try await connection.subscribe()
             try await applySubscribedSnapshot(snapshot, host: host, connection: connection)
             startUpdateTask(host: host, connection: connection)
-            publishSnapshot()
+            await publishSnapshot()
         } catch {
             streamTasks[host.id]?.cancel()
             streamTasks[host.id] = nil
             streamConnections[host.id] = nil
             await openedConnection?.close()
             DockLog.dock.warning("dock stream open failed host_id=\(host.id, privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-            sessionTable.markFailure(Self.mapLoadFailure(error), host: host)
-            publishSnapshot()
+            await dataEngine.markFailure(Self.mapLoadFailure(error), host: host)
+            await publishSnapshot()
         }
     }
 
     private func resync(host: DockHostConfiguration, connection: any DockStreamConnection) async {
+        guard let dataEngine else {
+            return
+        }
+
         do {
             let snapshot = try await connection.resync()
-            try applyResyncSnapshot(snapshot, host: host)
-            publishSnapshot()
-            DockLog.dock.notice("dock stream resync finished host_id=\(host.id, privacy: .public) seq=\(snapshot.seq, privacy: .public) rows=\(self.sessionTable.rowCount(for: host), privacy: .public)")
+            try await applyResyncSnapshot(snapshot, host: host)
+            await publishSnapshot()
+            let rowCount = await dataEngine.rowCount(for: host)
+            DockLog.dock.notice("dock stream resync finished host_id=\(host.id, privacy: .public) seq=\(snapshot.seq, privacy: .public) rows=\(rowCount, privacy: .public)")
         } catch {
             DockLog.dock.warning("dock stream resync failed host_id=\(host.id, privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-            sessionTable.markFailure(Self.mapLoadFailure(error), host: host)
-            publishSnapshot()
+            await dataEngine.markFailure(Self.mapLoadFailure(error), host: host)
+            await publishSnapshot()
         }
     }
 
@@ -766,13 +342,17 @@ public final class DockStore: ObservableObject {
         host: DockHostConfiguration,
         connection: any DockStreamConnection
     ) async {
-        let result = sessionTable.applyUpdate(update, host: host)
+        guard let dataEngine else {
+            return
+        }
+
+        let result = await dataEngine.applyUpdate(update, host: host)
         if case .needsResync(let reason) = result {
             DockLog.dock.warning("dock stream resync needed host_id=\(host.id, privacy: .public) reason=\(reason.rawValue, privacy: .public) update_kind=\(update.kind.rawValue, privacy: .public) seq=\(update.seq, privacy: .public)")
             await resync(host: host, connection: connection)
         } else {
-            publishSnapshot()
-            let rowCount = sessionTable.rowCount(for: host)
+            await publishSnapshot()
+            let rowCount = await dataEngine.rowCount(for: host)
             DockLog.dock.info("dock stream update applied host_id=\(host.id, privacy: .public) update_kind=\(update.kind.rawValue, privacy: .public) seq=\(update.seq, privacy: .public) rows=\(rowCount, privacy: .public)")
             if let freshness = update.freshness,
                freshness.status != .fresh,
@@ -787,21 +367,29 @@ public final class DockStore: ObservableObject {
         host: DockHostConfiguration,
         connection: any DockStreamConnection
     ) async throws {
-        switch sessionTable.applySnapshot(snapshot, host: host) {
+        guard let dataEngine else {
+            return
+        }
+
+        switch await dataEngine.applySnapshot(snapshot, host: host) {
         case .applied:
             return
         case .needsResync(let reason):
             DockLog.dock.warning("dock stream subscribe snapshot rejected host_id=\(host.id, privacy: .public) reason=\(reason.rawValue, privacy: .public) seq=\(snapshot.seq, privacy: .public)")
             let resynced = try await connection.resync()
-            try applyResyncSnapshot(resynced, host: host)
+            try await applyResyncSnapshot(resynced, host: host)
         }
     }
 
     private func applyResyncSnapshot(
         _ snapshot: DockStreamUpdateDTO,
         host: DockHostConfiguration
-    ) throws {
-        switch sessionTable.applySnapshot(snapshot, host: host) {
+    ) async throws {
+        guard let dataEngine else {
+            return
+        }
+
+        switch await dataEngine.applySnapshot(snapshot, host: host) {
         case .applied:
             return
         case .needsResync(let reason):
@@ -818,9 +406,9 @@ public final class DockStore: ObservableObject {
         streamConnections[host.id] = nil
         streamTasks[host.id] = nil
         await connection.close()
-        sessionTable.markFailure(Self.mapLoadFailure(error), host: host)
-        publishSnapshot()
-        let rowCount = sessionTable.rowCount(for: host)
+        await dataEngine?.markFailure(Self.mapLoadFailure(error), host: host)
+        await publishSnapshot()
+        let rowCount = await dataEngine?.rowCount(for: host) ?? 0
         if rowCount > 0 {
             DockLog.dock.notice("dock stream rows retained host_id=\(host.id, privacy: .public) freshness=offline rows=\(rowCount, privacy: .public)")
         }
@@ -851,17 +439,128 @@ public final class DockStore: ObservableObject {
         }
     }
 
-    private func publishSnapshot() {
+    private func publishSnapshot() async {
         guard !hosts.isEmpty else {
             return
         }
-        let snapshot = sessionTable.snapshot(
-            hosts: hosts,
-            localMetadata: localMetadata,
-            now: now
-        )
+        guard let snapshot = await dataEngine?.snapshot(now: now) else {
+            return
+        }
         state = .loaded(snapshot)
-        connectivityReporter?.reportDockState(state)
+        screenStore.publish(snapshot: snapshot)
+        publishConnectivity(for: state)
+    }
+
+    private func publishConnectivity(for state: DockStoreState) {
+        if connectivityEventSink == nil {
+            connectivityReporter?.reportDockState(state)
+        }
+        recordConnectivityFacts(for: state)
+    }
+
+    private func recordConnectivityFacts(for state: DockStoreState) {
+        guard let connectivityEventSink else {
+            return
+        }
+        let events = connectivityEvents(for: state)
+        guard !events.isEmpty else {
+            return
+        }
+        Task {
+            for event in events {
+                await connectivityEventSink.record(event)
+            }
+        }
+    }
+
+    private func connectivityEvents(for state: DockStoreState) -> [ConnectivityRuntimeEvent] {
+        switch state {
+        case .configurationError(let message):
+            return [
+                ConnectivityRuntimeEvent(
+                    source: .dock,
+                    hostID: nil,
+                    route: "dock/configuration",
+                    status: message,
+                    phase: .configurationError(message),
+                    recordedAt: now()
+                )
+            ]
+        case .idle(let hosts):
+            return hosts.map { host in
+                ConnectivityRuntimeEvent(
+                    source: .dock,
+                    hostID: host.id,
+                    route: "dock",
+                    status: "idle",
+                    phase: .unknown,
+                    recordedAt: now()
+                )
+            }
+        case .loading(let hosts):
+            return hosts.map { host in
+                ConnectivityRuntimeEvent(
+                    source: .dock,
+                    hostID: host.id,
+                    route: "dock/subscribe",
+                    status: "checking",
+                    phase: .checking,
+                    recordedAt: now()
+                )
+            }
+        case .offline(let host, let message):
+            return [
+                ConnectivityRuntimeEvent(
+                    source: .dock,
+                    hostID: host.id,
+                    route: "dock/subscribe",
+                    status: "offline: \(message)",
+                    phase: .offline(message),
+                    recordedAt: now()
+                )
+            ]
+        case .error(let host, let message):
+            return [
+                ConnectivityRuntimeEvent(
+                    source: .dock,
+                    hostID: host.id,
+                    route: "dock/subscribe",
+                    status: "error: \(message)",
+                    phase: .error(message),
+                    recordedAt: now()
+                )
+            ]
+        case .loaded(let snapshot):
+            return snapshot.hostStates.map { hostState in
+                ConnectivityRuntimeEvent(
+                    source: .dock,
+                    hostID: hostState.host.id,
+                    route: "dock/subscribe",
+                    status: hostState.status.subtitle,
+                    phase: Self.connectivityPhase(for: hostState.status),
+                    recordedAt: now()
+                )
+            }
+        }
+    }
+
+    private nonisolated static func connectivityPhase(
+        for status: DockHostLoadStatus
+    ) -> HostConnectivityPhase {
+        switch status {
+        case .checking:
+            return .checking
+        case .loaded(let rowCount):
+            return .online("\(rowCount) sessions")
+        case .partial(_, let message):
+            return .partial(message)
+        case .empty:
+            return .online("Online, no sessions")
+        case .offline(let message):
+            return .offline(message)
+        case .error(let message):
+            return .error(message)
+        }
     }
 
     private nonisolated static func mapLoadFailure(_ error: Error) -> DockLoadFailure {
@@ -885,34 +584,22 @@ public final class DockStore: ObservableObject {
         return .error(error.localizedDescription)
     }
 
-    private func save(metadata: LocalThreadMetadata, for key: LocalThreadMetadataKey) async {
+    private func persistMetadataChange(
+        logLabel: String,
+        hostID: String?,
+        threadID: String?,
+        _ operation: () async throws -> [LocalThreadMetadataKey: LocalThreadMetadata]
+    ) async {
         do {
-            DockLog.persistence.debug("dock metadata save started host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) has_metadata=\(!metadata.isEmpty, privacy: .public)")
-            localMetadata = try await metadataStore.save(metadata.isEmpty ? nil : metadata, for: key)
-            actionError = nil
-            publishSnapshot()
-            DockLog.persistence.debug("dock metadata save finished host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) entries=\(self.localMetadata.count, privacy: .public)")
+            DockLog.persistence.debug("dock metadata action started action=\(logLabel, privacy: .public) host_id=\(DockLog.publicID(hostID), privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")
+            localMetadata = try await operation()
+            await dataEngine?.updateLocalMetadata(localMetadata)
+            setActionError(nil)
+            await publishSnapshot()
+            DockLog.persistence.debug("dock metadata action finished action=\(logLabel, privacy: .public) entries=\(self.localMetadata.count, privacy: .public)")
         } catch {
-            DockLog.persistence.error("dock metadata save failed host_id=\(key.hostID, privacy: .public) thread_id=\(DockLog.publicID(key.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-            actionError = error.localizedDescription
-        }
-    }
-
-    private func save(metadataValues values: [LocalThreadMetadataKey: LocalThreadMetadata]) async {
-        let persistedValues = values.filter { !$0.value.isEmpty }
-        guard localMetadata != persistedValues else {
-            return
-        }
-
-        do {
-            DockLog.persistence.debug("dock metadata batch save started entries=\(persistedValues.count, privacy: .public)")
-            localMetadata = try await metadataStore.save(persistedValues)
-            actionError = nil
-            publishSnapshot()
-            DockLog.persistence.debug("dock metadata save finished entries=\(self.localMetadata.count, privacy: .public)")
-        } catch {
-            DockLog.persistence.error("dock metadata save failed error=\(DockLog.errorSummary(error), privacy: .public)")
-            actionError = error.localizedDescription
+            DockLog.persistence.error("dock metadata action failed action=\(logLabel, privacy: .public) host_id=\(DockLog.publicID(hostID), privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+            setActionError(error.localizedDescription)
         }
     }
 

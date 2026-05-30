@@ -226,30 +226,26 @@ struct DockSessionTable: Equatable, Sendable {
         localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata],
         now: @escaping @Sendable () -> Date
     ) -> DockSnapshot {
-        let summaries = hosts.flatMap { host in
-            sortedSessions(for: host).map { session in
-                summary(from: session, host: host)
-            }
-        }
-        let projector = SessionRowProjector(
-            hosts: hosts,
-            localMetadata: localMetadata,
-            now: now
+        DockRenderProjector(now: now).snapshot(
+            from: renderInput(hosts: hosts),
+            localMetadata: localMetadata
         )
-        let liveRows = projector.rows(from: summaries)
-        let loadedKeys = Set(liveRows.map(\.metadataKey))
-        let rows = liveRows + projector.cachedPinnedRows(excluding: loadedKeys)
-        return DockSnapshot(
-            host: DockHostViewModel(host: hosts[0]),
-            hosts: hosts.map(DockHostViewModel.init),
+    }
+
+    func renderInput(hosts: [DockHostConfiguration]) -> DockRenderInput {
+        DockRenderInput(
+            hosts: hosts,
             hostStates: hosts.map { host in
                 DockHostStateViewModel(
                     host: DockHostViewModel(host: host),
                     status: statesByHostID[host.id]?.status ?? .checking
                 )
             },
-            rows: rows,
-            mappingFailures: [],
+            sessionsByHostID: Dictionary(
+                uniqueKeysWithValues: hosts.map { host in
+                    (host.id, sortedSessions(for: host))
+                }
+            ),
             isPartial: hosts.contains(where: isCheckingOrPartial)
         )
     }
@@ -279,25 +275,6 @@ struct DockSessionTable: Equatable, Sendable {
             return true
         }
         return status?.isPartial == true
-    }
-
-    private func summary(from session: DockStreamSessionDTO, host: DockHostConfiguration) -> SessionSummary {
-        let threadID = nonEmpty(session.threadID) ?? session.id
-        return SessionSummary(
-            id: HostScopedThreadID(hostID: host.id, threadID: threadID),
-            backendSessionID: nonEmpty(session.backendSessionID) ?? threadID,
-            displayTitle: nonEmpty(session.title) ?? "Thread \(shortThreadID(threadID))",
-            status: sessionStatus(from: session.status),
-            repository: text(from: session.repository),
-            workingDirectory: text(from: session.workingDirectory),
-            branch: text(from: session.branch),
-            lastActivity: Date(timeIntervalSince1970: TimeInterval(session.updatedAt ?? 0)),
-            shortEventSummary: text(from: session.messageSummary),
-            messageActivityDate: session.messageUpdatedAt.map {
-                Date(timeIntervalSince1970: TimeInterval($0))
-            },
-            origin: origin(from: session)
-        )
     }
 
     private func hostStatus(
@@ -334,64 +311,4 @@ struct DockSessionTable: Equatable, Sendable {
         }
     }
 
-    private func sessionStatus(from status: DockStreamSessionStatus) -> SessionStatus {
-        switch status {
-        case .running:
-            return .active(activeFlags: [])
-        case .needsInput:
-            return .active(activeFlags: [.waitingOnUserInput])
-        case .needsApproval:
-            return .active(activeFlags: [.waitingOnApproval])
-        case .idle:
-            return .idle
-        case .error:
-            return .systemError
-        case .dormant:
-            return .notLoaded
-        case .unknown:
-            return .unknown
-        }
-    }
-
-    private func origin(from session: DockStreamSessionDTO) -> SessionOrigin {
-        switch session.lane {
-        case .human:
-            return .humanInteractive(subtype: .cli)
-        case .agent:
-            return .agentOrAutomation(subtype: .exec)
-        case .unknown:
-            return .unknown()
-        case nil:
-            switch session.source?.kind {
-            case .human:
-                return .humanInteractive(subtype: .cli)
-            case .automation:
-                return .agentOrAutomation(subtype: .exec)
-            case .unknown, nil:
-                return .unknown()
-            }
-        }
-    }
-
-    private func text(from value: String?) -> SessionSummaryText {
-        if let value = nonEmpty(value) {
-            return .known(value)
-        }
-        return .unknown
-    }
-
-    private func nonEmpty(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let trimmed, !trimmed.isEmpty {
-            return trimmed
-        }
-        return nil
-    }
-
-    private func shortThreadID(_ threadID: String) -> String {
-        if threadID.count <= 12 {
-            return threadID
-        }
-        return String(threadID.prefix(8))
-    }
 }

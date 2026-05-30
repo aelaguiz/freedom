@@ -7,13 +7,15 @@ import AppKit
 #endif
 
 public struct HostsView: View {
-    @ObservedObject private var store: HostSettingsStore
+    @ObservedObject private var screenStore: HostSettingsScreenStore
+    private let store: HostSettingsStore
     @State private var draft = HostDraft()
     @State private var editingHostID: String?
     @State private var validationMessage: String?
 
     public init(store: HostSettingsStore) {
         self.store = store
+        _screenStore = ObservedObject(wrappedValue: store.screenStore)
     }
 
     public var body: some View {
@@ -53,7 +55,7 @@ public struct HostsView: View {
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(.bordered)
-            .disabled(store.rows.isEmpty)
+            .disabled(screenStore.rows.isEmpty)
             .accessibilityLabel("Test relay connections")
             .codexAutomationID(AutomationID.Relay.testAllButton)
         }
@@ -71,7 +73,7 @@ public struct HostsView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let configurationError = store.configurationError {
+        if let configurationError = screenStore.configurationError {
             DockMessageView(
                 icon: "exclamationmark.triangle",
                 title: "Relay not configured",
@@ -86,7 +88,7 @@ public struct HostsView: View {
 
     private var hostRows: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(store.rows) { row in
+            ForEach(screenStore.rows) { row in
                 HostSettingsRow(
                     row: row,
                     onTest: {
@@ -193,10 +195,10 @@ public struct HostsView: View {
     }
 
     private var relayScreenValue: String {
-        if store.configurationError != nil {
+        if screenStore.configurationError != nil {
             return "configuration-error"
         }
-        return "loaded; hosts=\(store.rows.count); editor=\(editingHostID == nil ? "add" : "edit")"
+        return "loaded; hosts=\(screenStore.rows.count); editor=\(editingHostID == nil ? "add" : "edit")"
     }
 }
 

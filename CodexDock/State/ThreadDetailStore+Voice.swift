@@ -33,6 +33,26 @@ public struct ComposerState: Equatable, Sendable {
     }
 }
 
+public struct ComposerRenderState: Equatable, Sendable {
+    public let draft: String
+    public let isSending: Bool
+    public let lastError: String?
+    public let voice: ComposerVoiceRenderState
+    public let canSend: Bool
+    public let canEditDraft: Bool
+    public let canStartVoiceCapture: Bool
+
+    public init(composer: ComposerState) {
+        self.draft = composer.draft
+        self.isSending = composer.isSending
+        self.lastError = composer.lastError
+        self.voice = ComposerVoiceRenderState(voice: composer.voice)
+        self.canSend = composer.canSend
+        self.canEditDraft = composer.canEditDraft
+        self.canStartVoiceCapture = composer.canStartVoiceCapture
+    }
+}
+
 public enum ComposerVoicePhase: Equatable, Sendable {
     case idle
     case starting
@@ -90,6 +110,26 @@ public struct ComposerVoiceState: Equatable, Sendable {
     }
 }
 
+public struct ComposerVoiceRenderState: Equatable, Sendable {
+    public let phase: ComposerVoicePhase
+    public let interactionMode: ComposerVoiceInteractionMode?
+    public let sessionID: String?
+    public let activeSegmentID: String?
+    public let provisionalTranscript: String?
+    public let finalTranscript: String?
+    public let lastError: String?
+
+    public init(voice: ComposerVoiceState) {
+        self.phase = voice.phase
+        self.interactionMode = voice.interactionMode
+        self.sessionID = voice.sessionID
+        self.activeSegmentID = voice.activeSegmentID
+        self.provisionalTranscript = voice.provisionalTranscript
+        self.finalTranscript = voice.finalTranscript
+        self.lastError = voice.lastError
+    }
+}
+
 struct ActiveDictationSegment {
     let id: String
     let baseDraft: String
@@ -108,15 +148,13 @@ struct VoiceForwardingSummary {
     }
 }
 
-@MainActor
 struct SilentLiveVoiceCaptureController: LiveVoiceCaptureControlling {
     func startCapture() async throws -> any LiveVoiceCaptureSession {
         SilentLiveVoiceCaptureSession()
     }
 }
 
-@MainActor
-private final class SilentLiveVoiceCaptureSession: LiveVoiceCaptureSession {
+private final class SilentLiveVoiceCaptureSession: @unchecked Sendable, LiveVoiceCaptureSession {
     let chunks: AsyncStream<VoiceAudioChunk>
 
     private let continuation: AsyncStream<VoiceAudioChunk>.Continuation
@@ -165,7 +203,9 @@ extension ThreadDetailStore {
         var startedSession: (any RealtimeTranscriptionSession)?
         var startedCaptureSession: (any LiveVoiceCaptureSession)?
         do {
-            let captureSession = try await liveVoiceCaptureController.startCapture()
+            let captureSession = try await voiceCaptureEngine.startCapture(
+                using: liveVoiceCaptureController
+            )
             startedCaptureSession = captureSession
             DockLog.voice.notice("voice capture stream started thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
             guard activeDictationSegment?.id == segment.id else {
@@ -280,7 +320,7 @@ extension ThreadDetailStore {
 
     func startTranscriptionObservation(session: any RealtimeTranscriptionSession) {
         transcriptionTask?.cancel()
-        transcriptionTask = Task { @MainActor [weak self] in
+        transcriptionTask = Task { [weak self] in
             for await event in session.events {
                 guard let self else {
                     return
@@ -298,32 +338,38 @@ extension ThreadDetailStore {
         transcriptionSession: any RealtimeTranscriptionSession
     ) {
         voiceCaptureTask?.cancel()
-        voiceCaptureTask = Task { @MainActor [weak self, captureSession, transcriptionSession] in
+        let voiceCaptureEngine = voiceCaptureEngine
+        voiceCaptureTask = Task.detached(priority: .userInitiated) { [weak self, captureSession, transcriptionSession, voiceCaptureEngine] in
             let startedAt = Date()
-            var summary = VoiceForwardingSummary()
-            for await chunk in captureSession.chunks {
-                guard !Task.isCancelled else {
-                    return
-                }
-                do {
-                    try await transcriptionSession.appendAudio(
-                        chunk.audio,
-                        sequence: chunk.sequence
-                    )
-                    summary.record(chunk)
-                    DockLog.transcription.debug("transcription audio appended session_id=\(DockLog.publicID(transcriptionSession.id), privacy: .public) sequence=\(chunk.sequence, privacy: .public) bytes=\(chunk.audio.count, privacy: .public)")
-                } catch {
-                    await self?.handleVoiceCaptureAppendFailure(
-                        error,
-                        sessionID: transcriptionSession.id,
-                        summary: summary,
-                        failedSequence: chunk.sequence,
-                        failedBytes: chunk.audio.count
-                    )
-                    return
-                }
+            guard let self else {
+                return
             }
-            await self?.handleVoiceCaptureStreamEnded(
+            let summary: VoiceForwardingSummary
+            do {
+                summary = try await voiceCaptureEngine.forwardAudio(
+                    from: captureSession,
+                    to: transcriptionSession
+                )
+            } catch let failure as VoiceCaptureForwardingFailure {
+                await self.handleVoiceCaptureAppendFailure(
+                    failure.error,
+                    sessionID: transcriptionSession.id,
+                    summary: failure.summary,
+                    failedSequence: failure.failedSequence,
+                    failedBytes: failure.failedBytes
+                )
+                return
+            } catch {
+                await self.handleVoiceCaptureAppendFailure(
+                    error,
+                    sessionID: transcriptionSession.id,
+                    summary: VoiceForwardingSummary(),
+                    failedSequence: -1,
+                    failedBytes: 0
+                )
+                return
+            }
+            await self.handleVoiceCaptureStreamEnded(
                 sessionID: transcriptionSession.id,
                 summary: summary,
                 durationMS: DockLog.milliseconds(since: startedAt)
@@ -375,7 +421,7 @@ extension ThreadDetailStore {
         let captureSession = activeVoiceCaptureSession
         DockLog.voice.debug("voice capture stop requested session_id=\(DockLog.publicID(self.composer.voice.sessionID), privacy: .public) active_capture=\((captureSession != nil), privacy: .public) phase=\(self.composer.voice.phase.logDescription, privacy: .public)")
         activeVoiceCaptureSession = nil
-        await captureSession?.stop()
+        await voiceCaptureEngine.stop(captureSession)
         await voiceCaptureTask?.value
         voiceCaptureTask = nil
     }
@@ -386,7 +432,7 @@ extension ThreadDetailStore {
         activeVoiceCaptureSession = nil
         voiceCaptureTask?.cancel()
         voiceCaptureTask = nil
-        await captureSession?.cancel()
+        await voiceCaptureEngine.cancel(captureSession)
     }
 
     private func handleTranscriptionEventStreamEnded(sessionID: String) async {
@@ -417,11 +463,11 @@ extension ThreadDetailStore {
             return false
         case .delta(_, _, let sequence, _, let partialText):
             DockLog.transcription.debug("transcription event delta session_id=\(DockLog.publicID(event.sessionID), privacy: .public) sequence=\(sequence ?? -1, privacy: .public) partial_characters=\(partialText.count, privacy: .public)")
-            replaceActiveDictation(with: partialText)
+            await scheduleActiveDictationReplacement(with: partialText)
             return false
         case .completed(_, _, let text):
             await stopActiveVoiceCapture()
-            completeActiveDictation(with: text)
+            await completeActiveDictation(with: text)
             DockLog.transcription.notice("transcription event completed session_id=\(DockLog.publicID(event.sessionID), privacy: .public) characters=\(text.count, privacy: .public)")
             return true
         case .failed(_, let code, let message):
@@ -448,32 +494,70 @@ extension ThreadDetailStore {
         }
     }
 
-    private func replaceActiveDictation(with transcript: String) {
+    private func scheduleActiveDictationReplacement(with transcript: String) async {
         guard var segment = activeDictationSegment else {
             return
         }
 
-        segment.transcript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        segment.transcript = await transcriptionEngine.normalizedTranscript(transcript)
         activeDictationSegment = segment
-        // Only the active provisional segment may be replaced by transcript updates.
-        composer.draft = draft(base: segment.baseDraft, transcript: segment.transcript)
         composer.lastError = nil
         composer.voice.provisionalTranscript = segment.transcript
+        let segmentID = segment.id
+        voiceTranscriptPublishTask?.cancel()
+        voiceTranscriptPublishTask = Task { [weak self] in
+            do {
+                try await Task.sleep(
+                    for: .milliseconds(CodexDockConstants.Rendering.voiceTranscriptPublishDebounceMilliseconds)
+                )
+            } catch {
+                return
+            }
+            await self?.publishActiveDictationDraft(segmentID: segmentID)
+        }
     }
 
-    private func completeActiveDictation(with transcript: String) {
+    private func publishActiveDictationDraft(segmentID: String) async {
+        guard let segment = activeDictationSegment,
+              segment.id == segmentID else {
+            return
+        }
+        // Only the active provisional segment may be replaced by transcript updates.
+        composer.draft = await transcriptionEngine.draft(
+            base: segment.baseDraft,
+            transcript: segment.transcript
+        )
+        voiceTranscriptPublishTask = nil
+    }
+
+    private func flushActiveDictationDraft() {
+        voiceTranscriptPublishTask?.cancel()
+        voiceTranscriptPublishTask = nil
+        guard let segment = activeDictationSegment else {
+            return
+        }
+        composer.draft = draft(base: segment.baseDraft, transcript: segment.transcript)
+    }
+
+    private func completeActiveDictation(with transcript: String) async {
         guard var segment = activeDictationSegment else {
             return
         }
 
-        let finalTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        if finalTranscript.isEmpty {
+        voiceTranscriptPublishTask?.cancel()
+        voiceTranscriptPublishTask = nil
+
+        do {
+            composer.draft = try await transcriptionEngine.finalDraft(
+                base: segment.baseDraft,
+                transcript: transcript
+            )
+            segment.transcript = await transcriptionEngine.normalizedTranscript(transcript)
+        } catch {
             failActiveDictation(message: TranscriptionServiceError.emptyTranscript.localizedDescription)
             return
         }
 
-        segment.transcript = finalTranscript
-        composer.draft = draft(base: segment.baseDraft, transcript: finalTranscript)
         activeDictationSegment = nil
         activeTranscriptionSession = nil
         composer.voice = ComposerVoiceState()
@@ -481,6 +565,8 @@ extension ThreadDetailStore {
     }
 
     private func cancelActiveDictation(cancelObservation: Bool = true) {
+        voiceTranscriptPublishTask?.cancel()
+        voiceTranscriptPublishTask = nil
         if let segment = activeDictationSegment {
             composer.draft = segment.baseDraft
         }
@@ -494,8 +580,12 @@ extension ThreadDetailStore {
     }
 
     func failActiveDictation(message: String, cancelObservation: Bool = true) {
+        voiceTranscriptPublishTask?.cancel()
+        voiceTranscriptPublishTask = nil
         if let segment = activeDictationSegment, segment.transcript.isEmpty {
             composer.draft = segment.baseDraft
+        } else {
+            flushActiveDictationDraft()
         }
         activeDictationSegment = nil
         activeTranscriptionSession = nil

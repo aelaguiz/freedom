@@ -29,7 +29,6 @@ public extension RealtimeTranscriptionEvent {
     }
 }
 
-@MainActor
 public protocol RealtimeTranscriptionSession: Sendable {
     var id: String { get }
     var events: AsyncStream<RealtimeTranscriptionEvent> { get }
@@ -39,7 +38,6 @@ public protocol RealtimeTranscriptionSession: Sendable {
     func cancel() async
 }
 
-@MainActor
 public protocol RealtimeTranscriptionServicing: Sendable {
     func startSession() async throws -> any RealtimeTranscriptionSession
 }
@@ -60,7 +58,6 @@ public enum VoiceAudioFormat: Equatable, Sendable {
     case pcm16Mono24k
 }
 
-@MainActor
 public protocol LiveVoiceCaptureSession: Sendable {
     var chunks: AsyncStream<VoiceAudioChunk> { get }
 
@@ -68,7 +65,6 @@ public protocol LiveVoiceCaptureSession: Sendable {
     func cancel() async
 }
 
-@MainActor
 public protocol LiveVoiceCaptureControlling: Sendable {
     func startCapture() async throws -> any LiveVoiceCaptureSession
 }
@@ -90,7 +86,6 @@ public enum TranscriptionServiceError: Error, Equatable, LocalizedError, Sendabl
     }
 }
 
-@MainActor
 public struct UnavailableRealtimeTranscriptionService: RealtimeTranscriptionServicing {
     public init() {}
 

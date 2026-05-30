@@ -8,6 +8,7 @@ private let dockPinnedRowCellReuseID = "DockPinnedRowCell"
 struct DockSwipeActionRow<Content: View>: View {
     let row: DockRowViewModel
     let actionID: AutomationID
+    let resetToken: RenderRevision
     let onTogglePinned: () -> Void
     let canOpen: Bool
     let onOpen: () -> Void
@@ -36,6 +37,16 @@ struct DockSwipeActionRow<Content: View>: View {
             handleTap()
         }
         .codexAutomationID(AutomationID.Dock.row(hostID: row.id.hostID, threadID: row.id.threadID))
+        .id(row.id)
+        .onChange(of: row.id) { _, _ in
+            closeAction()
+        }
+        .onChange(of: row.isPinned) { _, _ in
+            closeAction()
+        }
+        .onChange(of: resetToken) { _, _ in
+            closeAction()
+        }
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
@@ -186,8 +197,9 @@ struct DockPinnedRowsList<RowContent: View>: View {
     let onUnpin: (DockRowViewModel) -> Void
     let onOpen: (DockRowViewModel) -> Void
     @ViewBuilder let rowContent: (DockRowViewModel) -> RowContent
+    @State private var measuredListHeight: CGFloat = 0
 
-    private let rowHeight: CGFloat = 170
+    private let estimatedRowHeight: CGFloat = 130
     private let rowSpacing: CGFloat = 10
 
     var body: some View {
@@ -199,9 +211,10 @@ struct DockPinnedRowsList<RowContent: View>: View {
                 onReorder: onReorder,
                 onUnpin: onUnpin,
                 onOpen: onOpen,
+                onHeightChange: updateMeasuredListHeight,
                 rowContent: rowContent
             )
-            .frame(minHeight: listHeight, maxHeight: listHeight)
+            .frame(height: listHeight)
             #else
             VStack(alignment: .leading, spacing: rowSpacing) {
                 ForEach(rows) { row in
@@ -214,7 +227,22 @@ struct DockPinnedRowsList<RowContent: View>: View {
     }
 
     private var listHeight: CGFloat {
-        max(rowHeight, (CGFloat(rows.count) * rowHeight) + (CGFloat(max(0, rows.count - 1)) * rowSpacing))
+        max(1, measuredListHeight > 0 ? measuredListHeight : estimatedListHeight)
+    }
+
+    private var estimatedListHeight: CGFloat {
+        guard !rows.isEmpty else {
+            return 1
+        }
+        return (CGFloat(rows.count) * estimatedRowHeight) + (CGFloat(max(0, rows.count - 1)) * rowSpacing)
+    }
+
+    private func updateMeasuredListHeight(_ height: CGFloat) {
+        let nextHeight = max(1, ceil(height))
+        guard nextHeight.isFinite, abs(measuredListHeight - nextHeight) > 0.5 else {
+            return
+        }
+        measuredListHeight = nextHeight
     }
 }
 
@@ -225,6 +253,7 @@ private struct DockPinnedReorderCollectionView<RowContent: View>: UIViewRepresen
     let onReorder: ([DockRowViewModel]) -> Void
     let onUnpin: (DockRowViewModel) -> Void
     let onOpen: (DockRowViewModel) -> Void
+    let onHeightChange: (CGFloat) -> Void
     @ViewBuilder let rowContent: (DockRowViewModel) -> RowContent
 
     func makeCoordinator() -> Coordinator {
@@ -241,7 +270,7 @@ private struct DockPinnedReorderCollectionView<RowContent: View>: UIViewRepresen
         }
         let layout = UICollectionViewCompositionalLayout.list(using: configuration)
 
-        let collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        let collectionView = PinnedCollectionView(frame: .zero, collectionViewLayout: layout)
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = false
         collectionView.isScrollEnabled = false
@@ -251,6 +280,9 @@ private struct DockPinnedReorderCollectionView<RowContent: View>: UIViewRepresen
         collectionView.delegate = context.coordinator
         collectionView.register(UICollectionViewListCell.self, forCellWithReuseIdentifier: dockPinnedRowCellReuseID)
         collectionView.accessibilityIdentifier = AutomationID.Dock.pinnedRowsList.rawValue
+        collectionView.onContentHeightChange = { [weak coordinator] height in
+            coordinator?.reportMeasuredHeight(height)
+        }
 
         let longPress = UILongPressGestureRecognizer(
             target: context.coordinator,
@@ -271,16 +303,46 @@ private struct DockPinnedReorderCollectionView<RowContent: View>: UIViewRepresen
         }
         context.coordinator.workingRows = rows
         collectionView.reloadData()
+        collectionView.collectionViewLayout.invalidateLayout()
+        collectionView.setNeedsLayout()
+        collectionView.layoutIfNeeded()
+        context.coordinator.reportMeasuredHeight(collectionView.collectionViewLayout.collectionViewContentSize.height)
+    }
+
+    final class PinnedCollectionView: UICollectionView {
+        var onContentHeightChange: ((CGFloat) -> Void)?
+        private var lastContentHeight: CGFloat = 0
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            let height = collectionViewLayout.collectionViewContentSize.height
+            guard height.isFinite, abs(height - lastContentHeight) > 0.5 else {
+                return
+            }
+            lastContentHeight = height
+            onContentHeightChange?(height)
+        }
     }
 
     final class Coordinator: NSObject, UICollectionViewDataSource, UICollectionViewDelegate, UIGestureRecognizerDelegate {
         var parent: DockPinnedReorderCollectionView
         var workingRows: [DockRowViewModel]
         var isMoving = false
+        private var lastReportedHeight: CGFloat = 0
 
         init(_ parent: DockPinnedReorderCollectionView) {
             self.parent = parent
             self.workingRows = parent.rows
+        }
+
+        func reportMeasuredHeight(_ height: CGFloat) {
+            guard height.isFinite, abs(height - lastReportedHeight) > 0.5 else {
+                return
+            }
+            lastReportedHeight = height
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.onHeightChange(height)
+            }
         }
 
         func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
@@ -311,7 +373,7 @@ private struct DockPinnedReorderCollectionView<RowContent: View>: UIViewRepresen
             cell.contentConfiguration = UIHostingConfiguration {
                 parent.rowContent(row)
                     .padding(.vertical, parent.rowSpacing / 2)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .margins(.all, 0)
             return cell

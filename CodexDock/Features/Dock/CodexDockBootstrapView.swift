@@ -84,7 +84,7 @@ public struct CodexDockBootstrapView: View {
             )
         case .ready(let registry):
             CodexDockRootView(
-                registry: registry,
+                runtime: ClientRuntime(registry: registry),
                 streamClient: streamClient,
                 threadDetailFactory: threadDetailFactory,
                 lifecycleCoordinator: lifecycleCoordinator,

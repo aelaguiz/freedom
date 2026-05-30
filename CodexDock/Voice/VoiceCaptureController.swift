@@ -154,7 +154,6 @@ private struct NotificationObserverToken: @unchecked Sendable {
     let value: NSObjectProtocol
 }
 
-@MainActor
 private final class AVAudioEngineLiveVoiceCaptureSession: @unchecked Sendable, LiveVoiceCaptureSession {
     let chunks: AsyncStream<VoiceAudioChunk>
 
@@ -193,7 +192,7 @@ private final class AVAudioEngineLiveVoiceCaptureSession: @unchecked Sendable, L
                     return
                 }
                 DockLog.voice.warning("voice capture interruption stopping kind=\(kind?.logDescription ?? "unknown", privacy: .public)")
-                Task { @MainActor [weak self] in
+                Task { [weak self] in
                     self?.finish(reason: "interruption_\(kind?.logDescription ?? "unknown")")
                 }
             }
@@ -219,7 +218,7 @@ private final class AVAudioEngineLiveVoiceCaptureSession: @unchecked Sendable, L
                     return
                 }
                 DockLog.voice.warning("voice capture route change stopping kind=\(kind.logDescription, privacy: .public) raw_reason=\(reasonValue, privacy: .public)")
-                Task { @MainActor [weak self] in
+                Task { [weak self] in
                     self?.finish(reason: "route_change_\(kind.logDescription)")
                 }
             }
@@ -237,20 +236,18 @@ private final class AVAudioEngineLiveVoiceCaptureSession: @unchecked Sendable, L
         let continuation = continuation
         let emitter = emitter
         let startedAt = startedAt
-        Task { @MainActor in
-            if let interruptionObserver {
-                NotificationCenter.default.removeObserver(interruptionObserver.value)
-            }
-            if let routeChangeObserver {
-                NotificationCenter.default.removeObserver(routeChangeObserver.value)
-            }
-            emitter.close()
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-            continuation.finish()
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            DockLog.voice.notice("voice capture session deinitialized chunks=\(emitter.emittedChunkCount, privacy: .public) bytes=\(emitter.emittedByteCount, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver.value)
         }
+        if let routeChangeObserver {
+            NotificationCenter.default.removeObserver(routeChangeObserver.value)
+        }
+        emitter.close()
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        continuation.finish()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        DockLog.voice.notice("voice capture session deinitialized chunks=\(emitter.emittedChunkCount, privacy: .public) bytes=\(emitter.emittedByteCount, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
     }
 
     func stop() async {

@@ -26,7 +26,6 @@ public enum RelayRealtimeTranscriptionClientError: Error, Equatable, LocalizedEr
     }
 }
 
-@MainActor
 public final class RelayRealtimeTranscriptionClient: RealtimeTranscriptionServicing {
     private let host: DockHostConfiguration
     private let completionTimeout: Duration
@@ -76,7 +75,7 @@ public final class RelayRealtimeTranscriptionClient: RealtimeTranscriptionServic
             let connection = retained.connection
             let response = retained.value
             DockLog.transcription.notice("relay transcription session started host_id=\(hostID, privacy: .public) endpoint=\(DockLog.endpoint(connection.endpoint.webSocketURL), privacy: .public) session_id=\(DockLog.publicID(response.sessionId), privacy: .public) model=\(DockLog.publicID(response.model), privacy: .public) language=\(DockLog.publicID(response.language), privacy: .public) delay=\(DockLog.publicID(response.delay), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
-            return RelayRealtimeTranscriptionSession(
+            let session = RelayRealtimeTranscriptionSession(
                 client: connection.client,
                 configuredHostID: hostID,
                 startResponse: response,
@@ -84,6 +83,8 @@ public final class RelayRealtimeTranscriptionClient: RealtimeTranscriptionServic
                 maxChunkBytes: maxChunkBytes,
                 observabilityStore: observabilityStore
             )
+            await session.start()
+            return session
         } catch {
             DockLog.transcription.error("relay transcription session start failed host_id=\(hostID, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             throw error
@@ -91,10 +92,9 @@ public final class RelayRealtimeTranscriptionClient: RealtimeTranscriptionServic
     }
 }
 
-@MainActor
-private final class RelayRealtimeTranscriptionSession: RealtimeTranscriptionSession {
-    let id: String
-    let events: AsyncStream<RealtimeTranscriptionEvent>
+private actor RelayRealtimeTranscriptionSession: RealtimeTranscriptionSession {
+    nonisolated let id: String
+    nonisolated let events: AsyncStream<RealtimeTranscriptionEvent>
 
     private let client: AppServerClient
     private let configuredHostID: String
@@ -128,7 +128,6 @@ private final class RelayRealtimeTranscriptionSession: RealtimeTranscriptionSess
         self.events = stream.stream
         self.continuation = stream.continuation
         self.continuation.yield(.started(sessionID: startResponse.sessionId))
-        startNotificationObservation()
     }
 
     deinit {
@@ -138,6 +137,10 @@ private final class RelayRealtimeTranscriptionSession: RealtimeTranscriptionSess
         Task {
             await client.disconnect()
         }
+    }
+
+    func start() {
+        startNotificationObservation()
     }
 
     func appendAudio(_ chunk: Data, sequence: Int) async throws {

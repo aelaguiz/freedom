@@ -233,6 +233,14 @@ public final class AppConnectivityStore: ObservableObject, AppConnectivityReport
         publish()
     }
 
+    public func applyRuntimeSnapshot(_ snapshot: ConnectivityRenderSnapshot) {
+        bootstrapStatus = nil
+        hosts = snapshot.hosts
+        overallStatus = snapshot.overallStatus
+        logHostPhasesIfNeeded(snapshot.hosts)
+        logOverallStatusIfNeeded(snapshot.overallStatus)
+    }
+
     public func recordConfigurationError(_ message: String) {
         bootstrapStatus = nil
         hostConfigurations = [:]

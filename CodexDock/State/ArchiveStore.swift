@@ -37,28 +37,35 @@ public final class ArchiveStore: ObservableObject {
     @Published public private(set) var state: ArchiveStoreState
     @Published public private(set) var actionError: String?
 
+    public let screenStore: ArchiveScreenStore
+
     private var hosts: [DockHostConfiguration]
-    private let loader: any DockSessionLoading
-    private let archiver: any DockSessionArchiving
-    private let metadataStore: any LocalThreadMetadataStoring
-    private let now: @Sendable () -> Date
+    private let commandEngine: ClientCommandEngine
+    private var dataEngine: ArchiveDataEngine?
     private var isLoading = false
-    private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
     private weak var connectivityReporter: (any AppConnectivityReporting)?
+    private let connectivityEventSink: ConnectivityEventSink?
 
     public init(
         registry: HostRegistry,
         loader: any DockSessionLoading = AppServerDockClient(),
         archiver: any DockSessionArchiving = AppServerDockClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
+        connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.hosts = registry.hosts
-        self.loader = loader
-        self.archiver = archiver
-        self.metadataStore = metadataStore
-        self.now = now
-        self.state = .idle(registry.hosts.map(DockHostViewModel.init))
+        self.commandEngine = ClientCommandEngine(archiver: archiver)
+        self.connectivityEventSink = connectivityEventSink
+        self.dataEngine = ArchiveDataEngine(
+            registry: registry,
+            loader: loader,
+            metadataStore: metadataStore,
+            now: now
+        )
+        let initialState = ArchiveStoreState.idle(registry.hosts.map(DockHostViewModel.init))
+        self.state = initialState
+        self.screenStore = ArchiveScreenStore(state: initialState)
     }
 
     public init(
@@ -66,26 +73,34 @@ public final class ArchiveStore: ObservableObject {
         loader: any DockSessionLoading = AppServerDockClient(),
         archiver: any DockSessionArchiving = AppServerDockClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
+        connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.hosts = []
-        self.loader = loader
-        self.archiver = archiver
-        self.metadataStore = metadataStore
-        self.now = now
-        self.state = .configurationError(error.localizedDescription)
+        self.commandEngine = ClientCommandEngine(archiver: archiver)
+        self.connectivityEventSink = connectivityEventSink
+        self.dataEngine = nil
+        let initialState = ArchiveStoreState.configurationError(error.localizedDescription)
+        self.state = initialState
+        self.screenStore = ArchiveScreenStore(state: initialState)
     }
 
     public func updateRegistry(_ registry: HostRegistry) async {
         hosts = registry.hosts
-        actionError = nil
-        state = .idle(registry.hosts.map(DockHostViewModel.init))
-        connectivityReporter?.reportArchiveState(state)
+        if let dataEngine {
+            await dataEngine.updateRegistry(registry)
+        }
+        setActionError(nil)
+        setState(.idle(registry.hosts.map(DockHostViewModel.init)))
+        publishConnectivity(for: state)
         await reload(showLoading: true)
     }
 
     public func setConnectivityReporter(_ reporter: (any AppConnectivityReporting)?) {
         connectivityReporter = reporter
+        guard connectivityEventSink == nil else {
+            return
+        }
         reporter?.reportArchiveState(state)
     }
 
@@ -101,20 +116,20 @@ public final class ArchiveStore: ObservableObject {
     public func restore(_ row: DockRowViewModel) async -> Bool {
         guard let host = hosts.first(where: { $0.id == row.id.hostID }) else {
             DockLog.archive.error("archive restore skipped missing host_id=\(row.id.hostID, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
-            actionError = "Host \(row.id.hostID) is no longer configured."
+            setActionError("Host \(row.id.hostID) is no longer configured.")
             return false
         }
 
         do {
             DockLog.archive.notice("archive restore action started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
-            try await archiver.unarchiveThread(row.id.threadID, on: host)
-            actionError = nil
+            try await commandEngine.unarchive(row, on: host)
+            setActionError(nil)
             await refresh()
             DockLog.archive.notice("archive restore action finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
             return true
         } catch {
             DockLog.archive.error("archive restore action failed host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-            actionError = error.localizedDescription
+            setActionError(error.localizedDescription)
             return false
         }
     }
@@ -139,118 +154,118 @@ public final class ArchiveStore: ObservableObject {
         }
 
         if showLoading {
-            state = .loading(hosts.map(DockHostViewModel.init))
-            connectivityReporter?.reportArchiveState(state)
+            setState(.loading(hosts.map(DockHostViewModel.init)))
+            publishConnectivity(for: state)
         }
 
-        do {
-            localMetadata = try await metadataStore.load()
-            DockLog.persistence.debug("archive metadata loaded entries=\(self.localMetadata.count, privacy: .public)")
-        } catch {
-            localMetadata = [:]
-            DockLog.persistence.warning("archive metadata load failed error=\(DockLog.errorSummary(error), privacy: .public)")
+        guard let dataEngine else {
+            DockLog.archive.warning("archive reload skipped reason=no_data_engine")
+            return
         }
 
-        let results = await loadAllHosts()
-        let snapshot = makeSnapshot(results: results)
+        let snapshot = await dataEngine.loadSnapshot()
         if snapshot.rowCount == 0, let message = snapshot.unavailableMessage {
-            state = .unavailable(snapshot, message)
+            setState(.unavailable(snapshot, message))
         } else {
-            state = snapshot.rowCount == 0 ? .empty(snapshot) : .loaded(snapshot)
+            setState(snapshot.rowCount == 0 ? .empty(snapshot) : .loaded(snapshot))
         }
-        connectivityReporter?.reportArchiveState(state)
+        publishConnectivity(for: state)
         DockLog.archive.notice("archive reload finished hosts=\(self.hosts.count, privacy: .public) rows=\(snapshot.rowCount, privacy: .public) mapping_failures=\(snapshot.mappingFailures.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
     }
 
-    private struct HostLoadOutcome: Sendable {
-        let host: DockHostConfiguration
-        let result: Result<DockLoadResult, DockLoadFailure>
+    private func setState(_ state: ArchiveStoreState) {
+        self.state = state
+        screenStore.setState(state)
     }
 
-    private func loadAllHosts() async -> [HostLoadOutcome] {
-        await withTaskGroup(of: HostLoadOutcome.self) { group in
-            for host in hosts {
-                group.addTask { [loader] in
-                    let startedAt = Date()
-                    DockLog.archive.debug("archive host load started host_id=\(host.id, privacy: .public)")
-                    do {
-                        let result = try await loader.loadSessions(for: host, query: .archivedHuman)
-                        DockLog.archive.debug("archive host load finished host_id=\(host.id, privacy: .public) rows=\(result.summaries.count, privacy: .public) mapping_failures=\(result.mappingFailures.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
-                        return HostLoadOutcome(
-                            host: host,
-                            result: .success(result)
-                        )
-                    } catch {
-                        DockLog.archive.warning("archive host load failed host_id=\(host.id, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-                        return HostLoadOutcome(
-                            host: host,
-                            result: .failure(Self.mapLoadFailure(error))
-                        )
-                    }
-                }
-            }
+    private func setActionError(_ message: String?) {
+        actionError = message
+        screenStore.setActionError(message)
+    }
 
-            var outcomes: [HostLoadOutcome] = []
-            for await outcome in group {
-                outcomes.append(outcome)
-            }
-            return outcomes.sorted { lhs, rhs in
-                hostIndex(lhs.host.id) < hostIndex(rhs.host.id)
+    private func publishConnectivity(for state: ArchiveStoreState) {
+        if connectivityEventSink == nil {
+            connectivityReporter?.reportArchiveState(state)
+        }
+        recordConnectivityFacts(for: state)
+    }
+
+    private func recordConnectivityFacts(for state: ArchiveStoreState) {
+        guard let connectivityEventSink else {
+            return
+        }
+        let events = connectivityEvents(for: state)
+        guard !events.isEmpty else {
+            return
+        }
+        Task {
+            for event in events {
+                await connectivityEventSink.record(event)
             }
         }
     }
 
-    private nonisolated static func mapLoadFailure(_ error: Error) -> DockLoadFailure {
-        if let failure = error as? DockLoadFailure {
-            return failure
-        }
-        return .error(error.localizedDescription)
-    }
-
-    private func makeSnapshot(results: [HostLoadOutcome]) -> ArchiveSnapshot {
-        var summaries: [SessionSummary] = []
-        var mappingFailures: [SessionSummaryMappingFailure] = []
-        var hostStates: [DockHostStateViewModel] = []
-
-        for outcome in results {
-            let host = DockHostViewModel(host: outcome.host)
-            switch outcome.result {
-            case .success(let result):
-                summaries.append(contentsOf: result.summaries)
-                mappingFailures.append(contentsOf: result.mappingFailures)
-                hostStates.append(
-                    DockHostStateViewModel(
-                        host: host,
-                        status: result.summaries.isEmpty
-                            ? .empty
-                            : .loaded(rowCount: result.summaries.count)
-                    )
+    private func connectivityEvents(for state: ArchiveStoreState) -> [ConnectivityRuntimeEvent] {
+        switch state {
+        case .configurationError(let message):
+            return [
+                ConnectivityRuntimeEvent(
+                    source: .archive,
+                    hostID: nil,
+                    route: "archive/configuration",
+                    status: message,
+                    phase: .configurationError(message)
                 )
-            case .failure(let failure):
-                switch failure {
-                case .offline(let message):
-                    hostStates.append(DockHostStateViewModel(host: host, status: .offline(message)))
-                case .error(let message):
-                    hostStates.append(DockHostStateViewModel(host: host, status: .error(message)))
-                }
+            ]
+        case .idle(let hosts):
+            return hosts.map { host in
+                ConnectivityRuntimeEvent(
+                    source: .archive,
+                    hostID: host.id,
+                    route: "archive",
+                    status: "idle",
+                    phase: .unknown
+                )
+            }
+        case .loading(let hosts):
+            return hosts.map { host in
+                ConnectivityRuntimeEvent(
+                    source: .archive,
+                    hostID: host.id,
+                    route: "archive/list",
+                    status: "checking",
+                    phase: .checking
+                )
+            }
+        case .loaded(let snapshot), .empty(let snapshot), .unavailable(let snapshot, _):
+            return snapshot.hostStates.map { hostState in
+                ConnectivityRuntimeEvent(
+                    source: .archive,
+                    hostID: hostState.host.id,
+                    route: "archive/list",
+                    status: hostState.status.subtitle,
+                    phase: Self.connectivityPhase(for: hostState.status)
+                )
             }
         }
-
-        let sections = ArchiveSessionProjector(
-            hosts: hosts,
-            localMetadata: localMetadata,
-            now: now
-        ).sections(from: summaries)
-
-        return ArchiveSnapshot(
-            hosts: hosts.map(DockHostViewModel.init),
-            hostStates: hostStates,
-            sections: sections,
-            mappingFailures: mappingFailures
-        )
     }
 
-    private func hostIndex(_ hostID: String) -> Int {
-        hosts.firstIndex { $0.id == hostID } ?? Int.max
+    private nonisolated static func connectivityPhase(
+        for status: DockHostLoadStatus
+    ) -> HostConnectivityPhase {
+        switch status {
+        case .checking:
+            return .checking
+        case .loaded(let rowCount):
+            return .online("\(rowCount) sessions")
+        case .partial(_, let message):
+            return .partial(message)
+        case .empty:
+            return .online("Online, no sessions")
+        case .offline(let message):
+            return .offline(message)
+        case .error(let message):
+            return .error(message)
+        }
     }
 }

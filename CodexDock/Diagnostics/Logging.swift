@@ -18,6 +18,8 @@ public enum DockLog {
     public static let transcription = logger("transcription")
     public static let persistence = logger("persistence")
     public static let metrics = logger("metrics")
+    public static let rendering = logger("rendering")
+    public static let runtime = logger("runtime")
 
     public static func logger(_ category: String) -> Logger {
         Logger(subsystem: subsystem, category: category)
@@ -100,4 +102,19 @@ public enum DockSignpost {
     public static let voice = OSSignposter(logger: DockLog.voice)
     public static let transcription = OSSignposter(logger: DockLog.transcription)
     public static let hostConfiguration = OSSignposter(logger: DockLog.hostConfiguration)
+    public static let rendering = OSSignposter(logger: DockLog.rendering)
+}
+
+public enum RenderSignpostName {
+    public static let dockModelApply: StaticString = "dock.model.apply"
+    public static let dockRenderProject: StaticString = "dock.render.project"
+    public static let dockRenderCoalesce: StaticString = "dock.render.coalesce"
+    public static let dockMainPublish: StaticString = "dock.main.publish"
+    public static let threadModelPage: StaticString = "thread.model.page"
+    public static let threadModelNormalize: StaticString = "thread.model.normalize"
+    public static let threadRenderProject: StaticString = "thread.render.project"
+    public static let threadMainPublish: StaticString = "thread.main.publish"
+    public static let connectivityRenderProject: StaticString = "connectivity.render.project"
+    public static let commandIntentToRender: StaticString = "command.intent.to.render"
+    public static let voiceTranscriptPublish: StaticString = "voice.transcript.publish"
 }

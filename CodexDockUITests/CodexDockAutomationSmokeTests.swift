@@ -142,12 +142,16 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         )
         XCTAssertFalse(app.element(id: AutomationID.Dock.pinnedSection).exists)
 
+        XCTAssertTrue(
+            app.scrollUntilElementIsInComfortableSwipeArea(id: rowID, maxSwipes: 4),
+            "Dock row was not in a stable swipe area before pin. id=\(rowID.rawValue)\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
         let row = app.element(id: rowID)
         XCTAssertTrue(
             row.waitForExistence(timeout: 10),
             "Scripted running row did not render.\n\nAccessibility tree:\n\(app.debugDescription)"
         )
-        row.swipeLeft()
+        app.swipeElementLeft(row)
         let pinButton = app.element(id: pinActionID)
         XCTAssertTrue(
             pinButton.waitForExistence(timeout: 5),
@@ -159,6 +163,7 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         app.assertElementExists(id: AutomationID.Dock.pinnedSection.rawValue, timeout: 10)
         app.assertElementExists(id: AutomationID.Dock.pinnedRowsList.rawValue, timeout: 10)
         app.assertElementExists(id: AutomationID.Dock.pinnedBodyDivider.rawValue, timeout: 5)
+        app.assertPinnedDividerGapIsTight(rowID: rowID)
         XCTAssertFalse(app.buttons["Manage"].exists)
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Show all")).firstMatch.exists)
         XCTAssertTrue(app.element(id: rowID).waitForStringValue(containing: "Pinned", timeout: 5))
@@ -195,13 +200,17 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
             "Pinned section stayed visible after inline unpin.\n\nAccessibility tree:\n\(app.debugDescription)"
         )
 
+        XCTAssertTrue(
+            app.scrollUntilElementIsInComfortableSwipeArea(id: rowID, maxSwipes: 4),
+            "Dock row was not in a stable swipe area before repin. id=\(rowID.rawValue)\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
         let repinRow = app.element(id: rowID)
         XCTAssertTrue(repinRow.waitForExistence(timeout: 10))
-        repinRow.swipeLeft()
+        repinRow.press(forDuration: 0.8)
         let repinButton = app.element(id: pinActionID)
         XCTAssertTrue(
             repinButton.waitForExistence(timeout: 5),
-            "Swipe did not expose Pin after inline unpin.\n\nAccessibility tree:\n\(app.debugDescription)"
+            "Context menu did not expose Pin after inline unpin.\n\nAccessibility tree:\n\(app.debugDescription)"
         )
         repinButton.tap()
         XCTAssertTrue(root.waitForStringValue(containing: "pinned=1", timeout: 10))
@@ -422,7 +431,7 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         let app = launchRelayBackedApp()
         XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
 
-        guard let row = app.waitForHittableButton(
+        guard let row = app.waitForVisibleButton(
             identifierPrefix: "codexdock.dock.row.",
             excludedIdentifierParts: [".action.", ".actions"],
             timeout: 25
@@ -431,7 +440,10 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
             return
         }
 
-        row.tap()
+        XCTAssertTrue(
+            app.tapVisibleButton(id: row.identifier, timeout: 10),
+            "Relay-backed Dock row disappeared or stopped being visibly tappable before tap. id=\(row.identifier)\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
         XCTAssertTrue(app.waitForElement(identifierPrefix: "codexdock.session.root.", timeout: 15) != nil)
         XCTAssertTrue(app.element(id: AutomationID.Session.header).waitForExistence(timeout: 10))
         XCTAssertTrue(app.element(id: AutomationID.Session.messageFilter).waitForStringValue(containing: "messages", timeout: 10))
@@ -575,9 +587,56 @@ private extension XCUIApplication {
             XCTFail("Pinned collection cell was missing.\n\nAccessibility tree:\n\(debugDescription)", file: file, line: line)
             return
         }
-        let start = cell.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5))
-        let end = cell.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5))
-        start.press(forDuration: 0.05, thenDragTo: end)
+        for _ in 0..<3 {
+            let start = cell.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.5))
+            let end = cell.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5))
+            start.press(forDuration: 0.18, thenDragTo: end)
+            let unpinButton = buttons["Unpin"].firstMatch
+            if unpinButton.waitForExistence(timeout: 0.8) {
+                unpinButton.tap()
+                return
+            }
+            if !collectionViews[AutomationID.Dock.pinnedRowsList.rawValue].exists {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+    }
+
+    func assertPinnedDividerGapIsTight(
+        rowID: AutomationID,
+        maxGap: CGFloat = 32,
+        timeout: TimeInterval = 5,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let row = element(id: rowID)
+        let divider = element(id: AutomationID.Dock.pinnedBodyDivider)
+        guard row.waitForExistence(timeout: timeout),
+              divider.waitForExistence(timeout: timeout) else {
+            XCTFail(
+                "Pinned row or divider was missing before gap check. rowID=\(rowID.rawValue)\n\nAccessibility tree:\n\(debugDescription)",
+                file: file,
+                line: line
+            )
+            return
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastGap = CGFloat.greatestFiniteMagnitude
+        while Date() < deadline {
+            lastGap = divider.frame.minY - row.frame.maxY
+            if lastGap <= maxGap {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+
+        XCTFail(
+            "Pinned row left \(lastGap)pt before the divider; expected <= \(maxGap)pt. rowFrame=\(row.frame) dividerFrame=\(divider.frame)",
+            file: file,
+            line: line
+        )
     }
 
     func pinDockRow(
@@ -615,7 +674,7 @@ private extension XCUIApplication {
     func scrollUntilElementIsInComfortableSwipeArea(id: AutomationID, maxSwipes: Int) -> Bool {
         for _ in 0...maxSwipes {
             let candidate = element(id: id)
-            if candidate.waitForExistence(timeout: 1), candidate.isHittable {
+            if candidate.waitForExistence(timeout: 1), isVisibleForTap(candidate.frame) {
                 if isComfortableSwipeFrame(candidate.frame) {
                     return true
                 }
@@ -631,7 +690,29 @@ private extension XCUIApplication {
         return false
     }
 
-    private func swipeElementLeft(_ element: XCUIElement) {
+    func tapVisibleButton(id: String, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        let predicate = NSPredicate(format: "identifier == %@", id)
+        let query = descendants(matching: .any).matching(predicate)
+        while Date() < deadline {
+            if query.firstMatch.waitForExistence(timeout: 1) {
+                for index in 0..<20 {
+                    let element = query.element(boundBy: index)
+                    guard element.exists else {
+                        break
+                    }
+                    if isVisibleForTap(element.frame) {
+                        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                        return true
+                    }
+                }
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        return false
+    }
+
+    func swipeElementLeft(_ element: XCUIElement) {
         let start = element.coordinate(withNormalizedOffset: CGVector(dx: 0.90, dy: 0.5))
         let end = element.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.5))
         start.press(forDuration: 0.05, thenDragTo: end)
@@ -651,19 +732,33 @@ private extension XCUIApplication {
         frame.midY >= primaryWindowFrame(defaultingTo: frame).midY
     }
 
+    private func isVisibleForTap(_ frame: CGRect) -> Bool {
+        guard frame.width > 1, frame.height > 1 else {
+            return false
+        }
+        let visibleFrame = primaryWindowFrame(defaultingTo: frame)
+        let bottomLimit = tabBars.firstMatch.exists
+            ? tabBars.firstMatch.frame.minY - 1
+            : visibleFrame.maxY - 1
+        return frame.midY >= visibleFrame.minY + 1
+            && frame.midY <= bottomLimit
+            && frame.maxX > visibleFrame.minX
+            && frame.minX < visibleFrame.maxX
+    }
+
     private func primaryWindowFrame(defaultingTo frame: CGRect) -> CGRect {
         let window = windows.firstMatch
         return window.exists ? window.frame : frame
     }
 
     func scrollUntilElementIsHittable(id: AutomationID, maxSwipes: Int) -> Bool {
-        if element(id: id).waitForExistence(timeout: 1), element(id: id).isHittable {
+        if element(id: id).waitForExistence(timeout: 1), isVisibleForTap(element(id: id).frame) {
             return true
         }
         for _ in 0..<maxSwipes {
             swipeUp()
             let candidate = element(id: id)
-            if candidate.waitForExistence(timeout: 1), candidate.isHittable {
+            if candidate.waitForExistence(timeout: 1), isVisibleForTap(candidate.frame) {
                 return true
             }
         }
@@ -707,7 +802,7 @@ private extension XCUIApplication {
         return false
     }
 
-    func waitForHittableButton(
+    func waitForVisibleButton(
         identifierPrefix: String,
         excludedIdentifierParts: [String],
         timeout: TimeInterval
@@ -724,7 +819,7 @@ private extension XCUIApplication {
                 guard !excludedIdentifierParts.contains(where: { element.identifier.contains($0) }) else {
                     continue
                 }
-                if element.isHittable {
+                if isVisibleForTap(element.frame) {
                     return element
                 }
             }

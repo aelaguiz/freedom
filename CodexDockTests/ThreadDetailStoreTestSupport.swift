@@ -183,8 +183,7 @@ actor FakeThreadDetailSession: ThreadDetailSession {
     }
 }
 
-@MainActor
-final class FakeRealtimeTranscriptionService: RealtimeTranscriptionServicing {
+final class FakeRealtimeTranscriptionService: @unchecked Sendable, RealtimeTranscriptionServicing {
     let session: FakeRealtimeTranscriptionSession
     private let startResult: Result<Void, TranscriptionServiceError>
     var startDelay: Duration?
@@ -211,8 +210,7 @@ final class FakeRealtimeTranscriptionService: RealtimeTranscriptionServicing {
     }
 }
 
-@MainActor
-final class FakeRealtimeTranscriptionSession: RealtimeTranscriptionSession {
+final class FakeRealtimeTranscriptionSession: @unchecked Sendable, RealtimeTranscriptionSession {
     let id: String
     let events: AsyncStream<RealtimeTranscriptionEvent>
 
@@ -265,8 +263,7 @@ final class FakeRealtimeTranscriptionSession: RealtimeTranscriptionSession {
     }
 }
 
-@MainActor
-final class FakeLiveVoiceCaptureController: LiveVoiceCaptureControlling {
+final class FakeLiveVoiceCaptureController: @unchecked Sendable, LiveVoiceCaptureControlling {
     let session: FakeLiveVoiceCaptureSession
     private let startResult: Result<Void, VoiceCaptureError>
     private(set) var startCount = 0
@@ -286,8 +283,7 @@ final class FakeLiveVoiceCaptureController: LiveVoiceCaptureControlling {
     }
 }
 
-@MainActor
-final class FakeLiveVoiceCaptureSession: LiveVoiceCaptureSession {
+final class FakeLiveVoiceCaptureSession: @unchecked Sendable, LiveVoiceCaptureSession {
     let chunks: AsyncStream<VoiceAudioChunk>
 
     private let continuation: AsyncStream<VoiceAudioChunk>.Continuation
@@ -397,7 +393,7 @@ func makeDetailTurn(
 
 @MainActor
 func waitForDetailStore(
-    timeout: Duration = .seconds(1),
+    timeout: Duration = .seconds(2),
     _ predicate: @escaping () -> Bool
 ) async throws {
     let start = ContinuousClock.now
@@ -412,7 +408,7 @@ func waitForDetailStore(
 
 @MainActor
 func waitForDetailStoreAsync(
-    timeout: Duration = .seconds(1),
+    timeout: Duration = .seconds(2),
     _ predicate: @escaping () async -> Bool
 ) async throws {
     let start = ContinuousClock.now

@@ -81,10 +81,13 @@ public final class HostSettingsStore: ObservableObject {
     @Published public private(set) var configurationError: String?
     @Published private var statuses: [String: HostConnectionTestStatus] = [:]
 
+    public let screenStore: HostSettingsScreenStore
+
     private let tester: any DockSessionLoading
     private let configurationStore: any LocalDockConfigurationStoring
     private let now: @Sendable () -> Date
     private weak var connectivityReporter: (any AppConnectivityReporting)?
+    private let connectivityEventSink: ConnectivityEventSink?
 
     public var rows: [HostSettingsRowViewModel] {
         registry?.hosts.map { host in
@@ -99,25 +102,39 @@ public final class HostSettingsStore: ObservableObject {
         registry: HostRegistry,
         tester: any DockSessionLoading = AppServerDockClient(),
         configurationStore: any LocalDockConfigurationStoring = FileLocalDockConfigurationStore(),
+        connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.registry = registry
         self.tester = tester
         self.configurationStore = configurationStore
+        self.connectivityEventSink = connectivityEventSink
         self.now = now
+        self.screenStore = HostSettingsScreenStore(
+            registry: registry,
+            configurationError: nil,
+            rows: registry.hosts.map { HostSettingsRowViewModel(host: $0, status: .notChecked) }
+        )
     }
 
     public init(
         configurationError error: Error,
         tester: any DockSessionLoading = AppServerDockClient(),
         configurationStore: any LocalDockConfigurationStoring = FileLocalDockConfigurationStore(),
+        connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.registry = nil
         self.configurationError = error.localizedDescription
         self.tester = tester
         self.configurationStore = configurationStore
+        self.connectivityEventSink = connectivityEventSink
         self.now = now
+        self.screenStore = HostSettingsScreenStore(
+            registry: nil,
+            configurationError: error.localizedDescription,
+            rows: []
+        )
     }
 
     public func testAll() async {
@@ -128,6 +145,9 @@ public final class HostSettingsStore: ObservableObject {
 
     public func setConnectivityReporter(_ reporter: (any AppConnectivityReporting)?) {
         connectivityReporter = reporter
+        guard connectivityEventSink == nil else {
+            return
+        }
         for row in rows {
             reporter?.reportHostTest(host: row.host, status: row.status)
         }
@@ -143,7 +163,8 @@ public final class HostSettingsStore: ObservableObject {
         let signpostState = DockSignpost.hostConfiguration.beginInterval("host.test")
         DockLog.hostConfiguration.notice("host test started host_id=\(host.id, privacy: .public) endpoint=\(DockLog.endpoint(host.webSocketURL), privacy: .public)")
         statuses[hostID] = .testing
-        connectivityReporter?.reportHostTest(host: host, status: .testing)
+        publishScreen()
+        publishConnectivity(host: host, status: .testing)
         defer {
             DockSignpost.hostConfiguration.endInterval("host.test", signpostState)
         }
@@ -152,7 +173,8 @@ public final class HostSettingsStore: ObservableObject {
             let result = try await tester.loadSessions(for: host, query: .activeHuman)
             let status = HostConnectionTestStatus.online(rowCount: result.summaries.count, checkedAt: now())
             statuses[hostID] = status
-            connectivityReporter?.reportHostTest(host: host, status: status)
+            publishScreen()
+            publishConnectivity(host: host, status: status)
             DockLog.hostConfiguration.notice("host test finished host_id=\(host.id, privacy: .public) rows=\(result.summaries.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
         } catch let failure as DockLoadFailure {
             let status: HostConnectionTestStatus
@@ -163,12 +185,14 @@ public final class HostSettingsStore: ObservableObject {
                 status = .error(message, checkedAt: now())
             }
             statuses[hostID] = status
-            connectivityReporter?.reportHostTest(host: host, status: status)
+            publishScreen()
+            publishConnectivity(host: host, status: status)
             DockLog.hostConfiguration.warning("host test failed host_id=\(host.id, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(failure), privacy: .public)")
         } catch {
             let status = HostConnectionTestStatus.error(error.localizedDescription, checkedAt: now())
             statuses[hostID] = status
-            connectivityReporter?.reportHostTest(host: host, status: status)
+            publishScreen()
+            publishConnectivity(host: host, status: status)
             DockLog.hostConfiguration.error("host test failed host_id=\(host.id, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
         }
     }
@@ -230,6 +254,7 @@ public final class HostSettingsStore: ObservableObject {
         try await persist(newRegistry)
         self.registry = newRegistry
         configurationError = nil
+        publishScreen()
         DockLog.hostConfiguration.notice("host save finished endpoint=\(endpoint.id, privacy: .public) hosts=\(newRegistry.hosts.count, privacy: .public)")
     }
 
@@ -244,6 +269,7 @@ public final class HostSettingsStore: ObservableObject {
             statuses.removeValue(forKey: hostID)
             self.registry = nil
             configurationError = nil
+            publishScreen()
             DockLog.hostConfiguration.notice("host remove finished endpoint=\(hostID, privacy: .public) hosts=0")
             return
         }
@@ -252,11 +278,57 @@ public final class HostSettingsStore: ObservableObject {
         statuses.removeValue(forKey: hostID)
         self.registry = newRegistry
         configurationError = nil
+        publishScreen()
         DockLog.hostConfiguration.notice("host remove finished endpoint=\(hostID, privacy: .public) hosts=\(newRegistry.hosts.count, privacy: .public)")
     }
 
     private func persist(_ registry: HostRegistry) async throws {
         try await configurationStore.save(LocalRelayHostList(hosts: registry.hosts))
+    }
+
+    private func publishScreen() {
+        screenStore.publish(
+            registry: registry,
+            configurationError: configurationError,
+            rows: rows
+        )
+    }
+
+    private func publishConnectivity(host: DockHostConfiguration, status: HostConnectionTestStatus) {
+        if connectivityEventSink == nil {
+            connectivityReporter?.reportHostTest(host: host, status: status)
+        }
+        guard let connectivityEventSink else {
+            return
+        }
+        let event = ConnectivityRuntimeEvent(
+            source: .hosts,
+            hostID: host.id,
+            route: "hosts/test",
+            status: status.title,
+            phase: Self.connectivityPhase(for: status),
+            recordedAt: now()
+        )
+        Task {
+            await connectivityEventSink.record(event)
+        }
+    }
+
+    private nonisolated static func connectivityPhase(
+        for status: HostConnectionTestStatus
+    ) -> HostConnectivityPhase {
+        switch status {
+        case .notChecked:
+            return .unknown
+        case .testing:
+            return .checking
+        case .online(let rowCount, _):
+            return .online("\(rowCount) sessions")
+        case .offline(let message, _):
+            return .offline(message)
+        case .error(let message, _):
+            return .error(message)
+        }
     }
 
     private func conflictingEndpointID(

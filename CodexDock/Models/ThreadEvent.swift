@@ -146,37 +146,46 @@ public enum ThreadEventDisplayOrder {
             IndexedEvent(offset: offset, event: event)
         }
 
-        return indexed.sorted { left, right in
-            if let dateOrder = orderedByDateDescending(left.eventDate, right.eventDate) {
-                return dateOrder
-            }
+        return indexed.sorted(by: areInNewestFirstOrder).map(\.event)
+    }
 
-            let leftTurn = left.event.turnSequence ?? Int.min
-            let rightTurn = right.event.turnSequence ?? Int.min
-            if leftTurn != rightTurn {
-                return leftTurn > rightTurn
-            }
+    static func shouldPrecedeInNewestFirstOrder(_ left: ThreadEvent, _ right: ThreadEvent) -> Bool {
+        areInNewestFirstOrder(
+            IndexedEvent(offset: 0, event: left),
+            IndexedEvent(offset: 1, event: right)
+        )
+    }
 
-            let leftItem = left.event.itemSequence ?? Int.max
-            let rightItem = right.event.itemSequence ?? Int.max
-            if leftItem != rightItem {
-                return leftItem < rightItem
-            }
-            if left.itemKey != right.itemKey {
-                return left.itemKey < right.itemKey
-            }
+    private static func areInNewestFirstOrder(_ left: IndexedEvent, _ right: IndexedEvent) -> Bool {
+        if let dateOrder = orderedByDateDescending(left.eventDate, right.eventDate) {
+            return dateOrder
+        }
 
-            let leftEvent = left.event.eventSequence ?? Int.max
-            let rightEvent = right.event.eventSequence ?? Int.max
-            if leftEvent != rightEvent {
-                return leftEvent < rightEvent
-            }
-            if left.event.id != right.event.id {
-                return left.event.id < right.event.id
-            }
+        let leftTurn = left.event.turnSequence ?? Int.min
+        let rightTurn = right.event.turnSequence ?? Int.min
+        if leftTurn != rightTurn {
+            return leftTurn > rightTurn
+        }
 
-            return left.offset < right.offset
-        }.map(\.event)
+        let leftItem = left.event.itemSequence ?? Int.max
+        let rightItem = right.event.itemSequence ?? Int.max
+        if leftItem != rightItem {
+            return leftItem < rightItem
+        }
+        if left.itemKey != right.itemKey {
+            return left.itemKey < right.itemKey
+        }
+
+        let leftEvent = left.event.eventSequence ?? Int.max
+        let rightEvent = right.event.eventSequence ?? Int.max
+        if leftEvent != rightEvent {
+            return leftEvent < rightEvent
+        }
+        if left.event.id != right.event.id {
+            return left.event.id < right.event.id
+        }
+
+        return left.offset < right.offset
     }
 
     private static func orderedByDateDescending(_ left: Date?, _ right: Date?) -> Bool? {

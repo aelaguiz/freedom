@@ -33,6 +33,18 @@ public enum CodexDockConstants {
         public static let tapBufferFrameCount: UInt32 = 2_048
     }
 
+    public enum Rendering {
+        public static let mainPublishWarningBudgetMilliseconds = 2
+        public static let mainPublishCriticalBudgetMilliseconds = 4
+        public static let dockRenderDropsSupersededRevisions = true
+        public static let searchDebounceMilliseconds = 80
+        public static let voiceTranscriptPublishDebounceMilliseconds = 50
+        public static let threadInitialVisibleWindowRows = 240
+        public static let threadPaginationPrefetchThresholdRows = 60
+        public static let maxDockRowsPerMainPublish = 600
+        public static let renderStreamBufferNewest = 1
+    }
+
     public enum Ports {
         public static let rawAppServer = 4_500
         public static let dockRelay = 4_510
