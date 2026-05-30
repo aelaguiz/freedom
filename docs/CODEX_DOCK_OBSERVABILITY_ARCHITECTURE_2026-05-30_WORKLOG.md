@@ -51,7 +51,33 @@
 
 ## Remaining Operational Proof
 
-- Commit the observability change set with explicit paths only.
-- Restart and verify the local relay from the committed code.
-- Push/pull/deploy as needed, then restart and verify the home relay from the
-  committed code.
+- None for the observability implementation.
+
+## 2026-05-30 Deployment Verification
+
+- Committed and pushed final relay observability code through
+  `b7d13be Surface stuck relay route operations`.
+- Local `Amir-M5` relay restarted from `b7d13be`.
+  - `rtk make relay-doctor`: passed.
+  - `/statusz`: 37 routes, no app-critical failures.
+  - `/selftestz`: passed, 6 safe diagnostic routes.
+  - Relay debug bundle:
+    `/tmp/codex-client/local-relay-debug-bundle-20260530T143900Z.json`.
+- `home` repo fast-forwarded to `b7d13be` and `systemd-user` services restarted.
+  - `readyz`, `statusz`, and `routesz` answer from `http://100.66.11.7:4510`.
+  - `/statusz`: 37 routes.
+  - `/selftestz`: reports `dock/subscribe self-test timed out after 5000ms`.
+  - A real WebSocket `dock/subscribe` probe to
+    `ws://home.fairy-salmon.ts.net:4510` timed out after 35002ms.
+  - `/statusz`, `/tracesz/recent`, and on-disk
+    `.codex-dock/observability/route-health.json` now agree that
+    `dock/subscribe` is app-critical failed with
+    `failed:in-flight-timeout`.
+  - `rtk make host-service-doctor ...` now fails for the right reason:
+    `relay-statusz app-critical route dock/subscribe is failed`.
+- Multi-host compare artifact:
+  `/tmp/codex-client/relay-host-compare-20260530T143800Z.json`.
+  - `amir-m5.fairy-salmon.ts.net:4510`: ready, 37 routes, no app-critical
+    failures, self-test passed.
+  - `home.fairy-salmon.ts.net:4510`: ready, 37 routes, app-critical
+    `dock/subscribe` failure, self-test timed out.
