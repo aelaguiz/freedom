@@ -252,9 +252,6 @@ private struct DockSessionProjectionProjector {
         if !normalizedQuery(options.searchText).isEmpty, searchedRows.isEmpty {
             return .noSearchMatches
         }
-        if options.filters.statusKinds == [.notLoaded] {
-            return .notLoadedOnly
-        }
         if selectedHostsAreUnavailable {
             return .hostUnavailable
         }

@@ -158,6 +158,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         XCTAssertEqual(event?.visibilityCategory, .message)
         XCTAssertEqual(event?.body, "hello")
         XCTAssertEqual(event?.isLive, true)
+        XCTAssertEqual(event?.isStreamingDelta, true)
         XCTAssertEqual(event?.turnID, "turn-1")
         XCTAssertEqual(event?.itemID, "agent-1")
         XCTAssertEqual(event?.displayGroupDate, Date(timeIntervalSince1970: 2_000))
@@ -287,7 +288,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             .unknown,
         ])
         XCTAssertEqual(
-            ThreadDetailMessageFilter(kind: nil).visibleEvents(from: events).map(\.body),
+            ThreadDetailMessageFilter.all.visibleEvents(from: events).map(\.body),
             [
                 "Run the tests",
                 "I am checking the suite.",
@@ -302,7 +303,14 @@ final class ThreadEventNormalizerTests: XCTestCase {
             ]
         )
         XCTAssertEqual(
-            ThreadDetailMessageFilter(kind: .agentMessage).visibleEvents(from: events).map(\.body),
+            ThreadDetailMessageFilter.default.visibleEvents(from: events).map(\.body),
+            [
+                "Run the tests",
+                "I am checking the suite.",
+            ]
+        )
+        XCTAssertEqual(
+            ThreadDetailMessageFilter.kind(.agentMessage).visibleEvents(from: events).map(\.body),
             [
                 "I am checking the suite.",
                 "Run the model tests first.",
@@ -310,7 +318,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             ]
         )
         XCTAssertEqual(
-            ThreadDetailMessageFilter(kind: .request).visibleEvents(from: events).map(\.body),
+            ThreadDetailMessageFilter.kind(.request).visibleEvents(from: events).map(\.body),
             ["File changes are available on desktop."]
         )
     }
@@ -360,11 +368,15 @@ final class ThreadEventNormalizerTests: XCTestCase {
 
         XCTAssertEqual(events.map(\.visibilityCategory), [.message, .thinking, .tooling, .system])
         XCTAssertEqual(
-            ThreadDetailMessageFilter(kind: .agentMessage).visibleEvents(from: events).map(\.body),
+            ThreadDetailMessageFilter.default.visibleEvents(from: events).map(\.body),
+            ["message delta"]
+        )
+        XCTAssertEqual(
+            ThreadDetailMessageFilter.kind(.agentMessage).visibleEvents(from: events).map(\.body),
             ["message delta", "reasoning delta"]
         )
         XCTAssertEqual(
-            ThreadDetailMessageFilter(kind: .output).visibleEvents(from: events).map(\.body),
+            ThreadDetailMessageFilter.kind(.output).visibleEvents(from: events).map(\.body),
             ["output delta"]
         )
     }
@@ -409,6 +421,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         XCTAssertEqual(reasoningEvent?.kind, .agentMessage)
         XCTAssertEqual(reasoningEvent?.visibilityCategory, .thinking)
         XCTAssertEqual(reasoningEvent?.body, "Reason through the failure.")
+        XCTAssertEqual(reasoningEvent?.isStreamingDelta, false)
         XCTAssertEqual(commandEvent?.kind, .command)
         XCTAssertEqual(commandEvent?.visibilityCategory, .tooling)
         XCTAssertEqual(commandEvent?.body, "swift test")
@@ -451,7 +464,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             newerMessage,
             hiddenRequestOnOldTurn,
         ])
-        let messages = ThreadDetailMessageFilter(kind: .userMessage).visibleEvents(from: fullTranscript)
+        let messages = ThreadDetailMessageFilter.kind(.userMessage).visibleEvents(from: fullTranscript)
 
         XCTAssertEqual(fullTranscript.map(\.turnID), ["turn-old", "turn-new", "turn-old"])
         XCTAssertEqual(messages.map(\.body), ["Newer visible message", "Older visible message"])
@@ -481,7 +494,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         )
 
         let once = ThreadEventDisplayOrder.newestFirst([first, second])
-        let twice = ThreadDetailMessageFilter(kind: .agentMessage).visibleEvents(from: once)
+        let twice = ThreadDetailMessageFilter.kind(.agentMessage).visibleEvents(from: once)
 
         XCTAssertEqual(twice.map(\.id), once.map(\.id))
     }

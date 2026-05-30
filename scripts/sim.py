@@ -50,6 +50,13 @@ def resolve_device(selector):
         sys.exit(1)
 
     if len(matches) > 1 and not UUID_RE.match(selector):
+        for preferred_state in ("Booted", "Booting"):
+            preferred_matches = [
+                device for device in matches if device["state"] == preferred_state
+            ]
+            if len(preferred_matches) == 1:
+                return preferred_matches[0]
+
         print(
             f"Simulator {selector!r} matched multiple devices; use one of these IDs:",
             file=sys.stderr,
@@ -69,15 +76,41 @@ def boot_device(selector):
     device = resolve_device(selector)
     udid = device["udid"]
 
-    if device["state"] != "Booted":
-        subprocess.run(["xcrun", "simctl", "boot", udid], check=True)
+    if device["state"] == "Booted":
+        print(f"booted {device['name']} ({udid})")
+        return
 
+    if device["state"] != "Booting":
+        subprocess.run(["xcrun", "simctl", "boot", udid], check=True)
     subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True)
+    print(f"booted {device['name']} ({udid})")
+
+
+def open_device(selector):
+    device = resolve_device(selector)
+    boot_device(selector)
     subprocess.run(
-        ["open", "-a", "Simulator", "--args", "-CurrentDeviceUDID", udid],
+        ["open", "-a", "Simulator", "--args", "-CurrentDeviceUDID", device["udid"]],
         check=True,
     )
-    print(f"booted {device['name']} ({udid})")
+    print(f"opened {device['name']} ({device['udid']})")
+
+
+def app_is_running(selector, bundle_id):
+    device = resolve_device(selector)
+    if device["state"] != "Booted":
+        return False
+
+    result = subprocess.run(
+        ["xcrun", "simctl", "spawn", device["udid"], "launchctl", "list"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return False
+
+    app_prefix = f"UIKitApplication:{bundle_id}"
+    return any(app_prefix in line for line in result.stdout.splitlines())
 
 
 def terminate_app_on_other_booted_devices(selector, bundle_id):
@@ -96,9 +129,10 @@ def terminate_app_on_other_booted_devices(selector, bundle_id):
 
 
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in {"list", "boot", "resolve", "terminate-others"}:
+    commands = {"list", "boot", "open", "resolve", "app-running", "terminate-others"}
+    if len(sys.argv) < 2 or sys.argv[1] not in commands:
         print(
-            "Usage: sim.py list | boot <sim-name-or-udid> | resolve <sim-name-or-udid> | terminate-others <sim-name-or-udid> <bundle-id>",
+            "Usage: sim.py list | boot <sim-name-or-udid> | open <sim-name-or-udid> | resolve <sim-name-or-udid> | app-running <sim-name-or-udid> <bundle-id> | terminate-others <sim-name-or-udid> <bundle-id>",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -114,6 +148,18 @@ def main():
         terminate_app_on_other_booted_devices(sys.argv[2].strip(), sys.argv[3].strip())
         return
 
+    if sys.argv[1] == "app-running":
+        if len(sys.argv) != 4 or not sys.argv[2].strip() or not sys.argv[3].strip():
+            print("Usage: sim.py app-running <sim-name-or-udid> <bundle-id>", file=sys.stderr)
+            sys.exit(2)
+        selector = sys.argv[2].strip()
+        bundle_id = sys.argv[3].strip()
+        device = resolve_device(selector)
+        if app_is_running(selector, bundle_id):
+            print(f"running {bundle_id} on {device['name']} ({device['udid']})")
+            return
+        sys.exit(1)
+
     if len(sys.argv) != 3 or not sys.argv[2].strip():
         print("Usage: rtk make sim SIM='iPhone 17'", file=sys.stderr)
         sys.exit(2)
@@ -121,6 +167,10 @@ def main():
     selector = sys.argv[2].strip()
     if sys.argv[1] == "resolve":
         print(resolve_device(selector)["udid"])
+        return
+
+    if sys.argv[1] == "open":
+        open_device(selector)
         return
 
     boot_device(selector)

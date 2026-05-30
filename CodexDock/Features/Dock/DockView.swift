@@ -35,6 +35,7 @@ public struct CodexDockRootView: View {
     public init(
         registry: HostRegistry,
         client: AppServerDockClient = AppServerDockClient(),
+        streamClient: any DockStreamConnecting = AppServerDockStreamClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         lifecycleCoordinator: AppLifecycleCoordinator = AppLifecycleCoordinator(),
         connectivityStore: AppConnectivityStore? = nil,
@@ -44,7 +45,7 @@ public struct CodexDockRootView: View {
         _dockStore = StateObject(
             wrappedValue: DockStore(
                 registry: registry,
-                loader: client,
+                streamClient: streamClient,
                 archiver: client,
                 metadataStore: metadataStore,
                 now: now
@@ -156,19 +157,6 @@ public struct CodexDockRootView: View {
         }
 
         await dockStore.load()
-
-        while !Task.isCancelled {
-            do {
-                try await Task.sleep(for: DockStore.defaultAutoRefreshInterval)
-            } catch {
-                return
-            }
-
-            guard lifecycleCoordinator.allowsForegroundWork else {
-                continue
-            }
-            await dockStore.refresh()
-        }
     }
 
     private func handleScenePhase(_ scenePhase: ScenePhase) {
@@ -466,26 +454,6 @@ public struct DockView: View {
                 )
             }
 
-            ForEach(snapshot.scopeConflicts) { conflict in
-                ScopeConflictBanner(
-                    conflict: conflict,
-                    automationID: AutomationID.Dock.scopeConflict(
-                        hostID: conflict.threadID.hostID,
-                        threadID: conflict.threadID.threadID
-                    )
-                )
-            }
-
-            ForEach(snapshot.scopeLoadFailures) { failure in
-                ScopeLoadFailureBanner(
-                    failure: failure,
-                    automationID: AutomationID.Dock.scopeLoadFailure(
-                        hostID: failure.host.id,
-                        scopeID: failure.scope.rawValue
-                    )
-                )
-            }
-
             if let emptyReason = projection.emptyReason {
                 DockMessageView(
                     icon: "line.3.horizontal.decrease.circle",
@@ -658,7 +626,7 @@ public struct DockView: View {
 
     private func contextualHostStates(in snapshot: DockSnapshot) -> [DockHostStateViewModel] {
         snapshot.hostStates.filter { hostState in
-            hostState.status == .checking || hostState.status.isUnavailable
+            hostState.status == .checking || hostState.status.isPartial || hostState.status.isUnavailable
         }
     }
 
@@ -819,64 +787,90 @@ public struct DockView: View {
 #Preview {
     let host = try! DockHostConfiguration(host: "preview.invalid", port: 4500)
     return CodexDockRootView(
-        store: DockStore(host: host, loader: PreviewDockSessionLoader())
+        store: DockStore(host: host, streamClient: PreviewDockStreamClient())
     )
 }
 
-private struct PreviewDockSessionLoader: DockSessionLoading {
-    func loadSessions(
-        for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult {
-        if query.archived {
-            return DockLoadResult(summaries: [])
+private struct PreviewDockStreamClient: DockStreamConnecting {
+    func connect(to host: DockHostConfiguration) async throws -> any DockStreamConnection {
+        PreviewDockStreamConnection(host: host)
+    }
+}
+
+private struct PreviewDockStreamConnection: DockStreamConnection {
+    let host: DockHostConfiguration
+
+    func subscribe() async throws -> DockStreamUpdateDTO {
+        snapshot()
+    }
+
+    func resync() async throws -> DockStreamUpdateDTO {
+        snapshot()
+    }
+
+    func updates() -> AsyncThrowingStream<DockStreamUpdateDTO, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish()
         }
-        if query == .activeAgents {
-            return DockLoadResult(
-                summaries: [
-                    SessionSummary(
-                        id: HostScopedThreadID(hostID: host.id, threadID: "preview-agent"),
-                        backendSessionID: "preview-session-agent",
-                        displayTitle: "Audit the Dock snapshot model",
-                        status: .idle,
-                        repository: .known("codex-client"),
-                        workingDirectory: .known("/Users/aelaguiz/workspace/codex-client"),
-                        branch: .known("feature/agents"),
-                        lastActivity: Date(timeIntervalSinceNow: -900),
-                        shortEventSummary: .known("Sub-agent returned a focused review."),
-                        origin: .agentOrAutomation(
-                            subtype: .subAgentReview,
-                            evidence: SessionOriginEvidence(sourceKind: .subAgentReview)
-                        )
-                    )
-                ]
-            )
-        }
-        return DockLoadResult(
-            summaries: [
-                SessionSummary(
-                    id: HostScopedThreadID(hostID: host.id, threadID: "preview-running"),
+    }
+
+    func close() async {}
+
+    private func snapshot() -> DockStreamUpdateDTO {
+        DockStreamUpdateDTO(
+            kind: .snapshot,
+            epoch: "preview",
+            seq: 1,
+            freshness: DockStreamFreshnessDTO(status: .fresh),
+            hosts: [DockStreamHostDTO(id: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
+            sessions: [
+                DockStreamSessionDTO(
+                    id: "\(host.id)::preview-running",
+                    hostID: host.id,
+                    threadID: "preview-running",
                     backendSessionID: "preview-session-running",
-                    displayTitle: "Wire the iPhone shell to the real host",
-                    status: .active(activeFlags: []),
-                    repository: .known("codex-client"),
-                    workingDirectory: .known("/Users/aelaguiz/workspace/codex-client"),
-                    branch: .known("main"),
-                    lastActivity: Date(timeIntervalSinceNow: -180),
-                    shortEventSummary: .known("Generated the app target and Dock store."),
-                    origin: .humanInteractive(subtype: .cli)
+                    title: "Wire the iPhone shell to the real host",
+                    status: .running,
+                    lane: .human,
+                    kindLabel: "Human",
+                    repository: "codex-client",
+                    workingDirectory: "/Users/aelaguiz/workspace/codex-client",
+                    branch: "main",
+                    updatedAt: Int64(Date(timeIntervalSinceNow: -180).timeIntervalSince1970),
+                    summary: "Generated the app target and Dock store.",
+                    source: DockStreamSourceDTO(kind: .human)
                 ),
-                SessionSummary(
-                    id: HostScopedThreadID(hostID: host.id, threadID: "preview-review"),
+                DockStreamSessionDTO(
+                    id: "\(host.id)::preview-review",
+                    hostID: host.id,
+                    threadID: "preview-review",
                     backendSessionID: "preview-session-review",
-                    displayTitle: "Review the live-host launch proof",
-                    status: .active(activeFlags: [.waitingOnUserInput]),
-                    repository: .known("codex"),
-                    workingDirectory: .known("/Users/aelaguiz/workspace/codex"),
-                    branch: .known("app-server"),
-                    lastActivity: Date(timeIntervalSinceNow: -4_800),
-                    shortEventSummary: .known("The simulator is connected to a reachable app-server."),
-                    origin: .humanInteractive(subtype: .cli)
+                    title: "Review the live-host launch proof",
+                    status: .needsInput,
+                    lane: .human,
+                    kindLabel: "Human",
+                    repository: "codex",
+                    workingDirectory: "/Users/aelaguiz/workspace/codex",
+                    branch: "app-server",
+                    updatedAt: Int64(Date(timeIntervalSinceNow: -4_800).timeIntervalSince1970),
+                    summary: "The simulator is connected to a reachable app-server.",
+                    source: DockStreamSourceDTO(kind: .human)
+                ),
+                DockStreamSessionDTO(
+                    id: "\(host.id)::preview-agent",
+                    hostID: host.id,
+                    threadID: "preview-agent",
+                    backendSessionID: "preview-session-agent",
+                    title: "Audit the Dock snapshot model",
+                    status: .idle,
+                    lane: .agent,
+                    kindLabel: "Agent",
+                    repository: "codex-client",
+                    workingDirectory: "/Users/aelaguiz/workspace/codex-client",
+                    branch: "feature/agents",
+                    updatedAt: Int64(Date(timeIntervalSinceNow: -900).timeIntervalSince1970),
+                    summary: "Sub-agent returned a focused review.",
+                    source: DockStreamSourceDTO(kind: .automation)
                 )
             ]
         )

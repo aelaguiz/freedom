@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct MessageTypeFilterControl: View {
-    @Binding var selectedKind: ThreadEventKind?
+    @Binding var filter: ThreadDetailMessageFilter
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -16,7 +16,13 @@ struct MessageTypeFilterControl: View {
         HStack(spacing: 8) {
             Menu {
                 Button {
-                    selectedKind = nil
+                    filter = .messages
+                } label: {
+                    Label("Messages", systemImage: ThreadDetailMessageFilter.messages.systemImage)
+                }
+
+                Button {
+                    filter = .all
                 } label: {
                     Label("All", systemImage: ThreadDetailMessageFilter.all.systemImage)
                 }
@@ -25,7 +31,7 @@ struct MessageTypeFilterControl: View {
 
                 ForEach(ThreadEventKind.allCases, id: \.self) { kind in
                     Button {
-                        selectedKind = kind
+                        filter = .kind(kind)
                     } label: {
                         Label(kind.label, systemImage: kind.systemImage)
                     }
@@ -37,12 +43,12 @@ struct MessageTypeFilterControl: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .font(.caption.weight(.semibold))
-            .accessibilityValue(ThreadDetailMessageFilter(kind: selectedKind).id)
+            .accessibilityValue(filter.id)
             .codexAutomationID(AutomationID.Session.messageFilter)
 
-            if selectedKind != nil {
+            if filter != .default {
                 Button {
-                    selectedKind = nil
+                    filter = .default
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                 }
@@ -50,19 +56,19 @@ struct MessageTypeFilterControl: View {
                 .controlSize(.small)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .accessibilityLabel("Clear message type filter")
-                .help("Clear filter")
+                .accessibilityLabel("Reset message type filter")
+                .help("Reset filter")
                 .codexAutomationID(AutomationID.Session.clearMessageFilter)
             }
         }
     }
 
     private var currentLabel: String {
-        selectedKind?.label ?? "All"
+        filter.label
     }
 
     private var currentImage: String {
-        selectedKind?.systemImage ?? ThreadDetailMessageFilter.all.systemImage
+        filter.systemImage
     }
 }
 
@@ -77,22 +83,22 @@ struct ThreadMessageListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if events.isEmpty {
-            if hasUnfilteredEvents {
-                DetailMessageView(
-                    icon: filter.systemImage,
-                    title: filter.emptyStateTitle,
-                    message: "No rows match this filter.",
-                    automationID: AutomationID.Session.state(.noRowsMatch)
-                )
+                if hasUnfilteredEvents {
+                    DetailMessageView(
+                        icon: filter.systemImage,
+                        title: filter.emptyStateTitle,
+                        message: "No rows match this filter.",
+                        automationID: AutomationID.Session.state(.noRowsMatch)
+                    )
+                } else {
+                    DetailMessageView(
+                        icon: "text.bubble",
+                        title: "No transcript",
+                        message: "This thread returned no readable events.",
+                        automationID: AutomationID.Session.state(.noTranscript)
+                    )
+                }
             } else {
-                DetailMessageView(
-                    icon: "text.bubble",
-                    title: "No transcript",
-                    message: "This thread returned no readable events.",
-                    automationID: AutomationID.Session.state(.noTranscript)
-                )
-            }
-        } else {
                 ForEach(events) { event in
                     ThreadMessageCard(
                         event: event,
@@ -320,12 +326,32 @@ private struct ThreadMessageCard: View {
 }
 
 private extension ThreadDetailMessageFilter {
+    var label: String {
+        switch self {
+        case .messages:
+            return "Messages"
+        case .all:
+            return "All"
+        case .kind(let kind):
+            return kind.label
+        }
+    }
+
     var systemImage: String {
-        selectedKind?.systemImage ?? "line.3.horizontal.decrease.circle"
+        switch self {
+        case .messages:
+            return "text.bubble"
+        case .all:
+            return "line.3.horizontal.decrease.circle"
+        case .kind(let kind):
+            return kind.systemImage
+        }
     }
 
     var emptyStateTitle: String {
         switch self {
+        case .messages:
+            return "No messages"
         case .all:
             return "No transcript"
         case .kind(let kind):

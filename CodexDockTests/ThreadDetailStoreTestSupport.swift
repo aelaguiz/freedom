@@ -342,7 +342,11 @@ func makeDetailHost() -> DockHostConfiguration {
     try! DockHostConfiguration(host: "192.168.50.117", port: 4510)
 }
 
-func makeDetailRow(hostID: String, threadID: String) -> DockRowViewModel {
+func makeDetailRow(
+    hostID: String,
+    threadID: String,
+    status: DockRowStatusKind = .running
+) -> DockRowViewModel {
     DockRowViewModel(
         id: HostScopedThreadID(hostID: hostID, threadID: threadID),
         backendSessionID: "\(threadID)-session",
@@ -351,7 +355,7 @@ func makeDetailRow(hostID: String, threadID: String) -> DockRowViewModel {
         hostEndpoint: "\(hostID):4510",
         repository: "codex-client",
         branch: "main",
-        status: .running,
+        status: status,
         lastActivity: "now",
         lastActivityDate: Date(timeIntervalSince1970: 2_000),
         summary: "Open a real thread",

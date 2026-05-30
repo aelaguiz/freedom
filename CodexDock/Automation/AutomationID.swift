@@ -33,8 +33,6 @@ public extension AutomationID {
         case configurationError = "configuration-error"
         case validationError = "validation-error"
         case mappingFailure = "mapping-failure"
-        case scopeConflict = "scope-conflict"
-        case scopeLoadFailure = "scope-load-failure"
         case actionError = "action-error"
         case unavailable
         case noRowsMatch = "no-rows-match"
@@ -106,7 +104,6 @@ public extension AutomationID {
         public static let filterRepoQuery = AutomationID("codexdock.dock.filters.repo.query")
         public static let filterSourcePicker = AutomationID("codexdock.dock.filters.source")
         public static let filterIdleToggle = AutomationID("codexdock.dock.filters.idle")
-        public static let notLoadedExplanation = AutomationID("codexdock.dock.filters.not-loaded.explanation")
 
         public static func state(_ kind: StateKind) -> AutomationID {
             AutomationID("codexdock.dock.state.\(kind.rawValue)")
@@ -162,14 +159,6 @@ public extension AutomationID {
 
         public static func section(_ sectionID: String) -> AutomationID {
             AutomationID("codexdock.dock.section.\(safeSegment(sectionID))")
-        }
-
-        public static func scopeConflict(hostID: String, threadID: String) -> AutomationID {
-            AutomationID("codexdock.dock.state.scope-conflict.\(safeSegment(hostID)).\(safeSegment(threadID))")
-        }
-
-        public static func scopeLoadFailure(hostID: String, scopeID: String) -> AutomationID {
-            AutomationID("codexdock.dock.state.scope-load-failure.\(safeSegment(hostID)).\(safeSegment(scopeID))")
         }
 
         public static func row(hostID: String, threadID: String) -> AutomationID {

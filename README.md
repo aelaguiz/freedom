@@ -108,13 +108,14 @@ It starts/reuses two real services and leaves them running:
 - Raw Codex app-server on loopback `ws://127.0.0.1:4500`
 - Dock relay on `ws://<APP_SERVER_HOST>:4510`
 
-The raw app-server provides stored history. The relay is the app endpoint. Its
-dashboard `thread/list` path uses stored history for row membership, order, and
-pagination. Live Codex app-server discovery is cached background status used to
-decorate rows and route focused session detail, not to reorder or page the
-dashboard list. This matters because active Codex sessions can be attached to
-private `ws://127.0.0.1:<port>` app-servers, and an iPhone cannot reach the
-Mac's loopback addresses directly.
+The raw app-server provides stored history. The relay is the app endpoint. Dock
+Home subscribes to relay-owned `dock/*` methods: `dock/subscribe` returns the
+first normalized snapshot, `dock/update` pushes deltas and heartbeats, and
+`dock/resync` returns a replacement snapshot if the client detects a sequence
+gap. The relay keeps the current session table warm, persists the last good
+table under `.codex-dock/`, and keeps stale rows visible when a refresh fails.
+Raw `thread/list` remains available for archive, detail support, and host
+settings diagnostics; it is no longer the Dock Home list contract.
 
 Row text has two separate meanings. Raw history `preview` is preserved as the
 app-server's stored preview and may be the opening message. Dock overview rows
@@ -134,12 +135,12 @@ name, repository or working directory, branch, status, last activity, local
 label, and latest summary. `Host` and `Branch` are Dock lenses, not app-level
 tabs or a separate sort picker; both preserve newest-first ordering inside
 their groups. `Filters` opens one shared filter surface for host, branch,
-status including `Not loaded`, repository or working directory, source, idle
+canonical Dock status, repository or working directory, source, idle
 visibility, and the fixed `Newest activity` sort. Search is full-width and
 matches session title, label, repository or working directory, branch, summary,
-status, host display name, host id, source, and thread id. `Not loaded` means
-Dock has a list row but does not have loaded thread detail for it; it does not
-mean rate limited.
+status, host display name, host id, source, and thread id. Codex runtime
+`notLoaded` is normalized by the relay to Dock `dormant`; Dock Home does not
+spend row-badge space on that background state.
 
 The app has one root connectivity indicator. It appears above Dock, Archive,
 Hosts, and pushed Session detail screens. The labels are `Unconfigured`,
@@ -284,7 +285,7 @@ rtk make dock-relay-logs
 
 ## Simulator Commands
 
-Build, install, and launch the app in a specific simulator:
+Start the simulator app path for a specific simulator:
 
 ```sh
 rtk make app SIM='iPhone 17'
@@ -296,10 +297,19 @@ Or use a simulator ID:
 rtk make app SIM=DEF1631B-7125-43C6-BFA3-4423BF103C91
 ```
 
-That command starts/reuses the persistent services, boots the simulator,
-builds the app, installs it, and launches it with generated app config from
-`.codex-dock/host.env`. It does not pass an OpenAI key or app-server bearer
-token into the app.
+That command starts/reuses the persistent services and boots the simulator in
+the background. If `com.aelaguiz.CodexDockApp` is already running on that
+simulator, it leaves the app alone and skips build/install/launch so Simulator
+does not keep stealing focus.
+
+Force a replacement build and launch only when you actually need it:
+
+```sh
+FORCE_LAUNCH=1 rtk make app SIM=DEF1631B-7125-43C6-BFA3-4423BF103C91
+```
+
+When it does launch, it uses generated app config from `.codex-dock/host.env`.
+It does not pass an OpenAI key or app-server bearer token into the app.
 
 Run the generated-project app tests through the same Makefile-owned path:
 
@@ -313,8 +323,8 @@ Verify the generated app-safe relay config used by simulator launches:
 rtk make sim-config-verify SIM='iPhone 17'
 ```
 
-Both targets stamp debug builds with `APP_BUILD_NUMBER` so stale simulator
-artifacts fail verification instead of silently launching.
+When these targets build, they stamp debug builds with `APP_BUILD_NUMBER` so
+stale simulator artifacts fail verification instead of silently launching.
 
 Start all local services the app currently needs:
 
@@ -356,7 +366,7 @@ List available simulators:
 rtk make sims
 ```
 
-Boot and open one simulator:
+Boot and open one simulator explicitly:
 
 ```sh
 rtk make sim SIM='iPhone 17'

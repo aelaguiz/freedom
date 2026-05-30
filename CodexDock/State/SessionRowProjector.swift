@@ -59,10 +59,16 @@ struct SessionRowProjector {
         switch summary.status {
         case .idle:
             return .idle
-        case .active:
+        case .active(let activeFlags):
+            if activeFlags.contains(.waitingOnApproval) {
+                return .needsApproval
+            }
+            if activeFlags.contains(.waitingOnUserInput) {
+                return .needsInput
+            }
             return .running
         case .notLoaded:
-            return .notLoaded
+            return .dormant
         case .systemError:
             return .error
         case .unknown:

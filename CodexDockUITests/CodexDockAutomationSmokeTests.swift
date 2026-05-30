@@ -69,17 +69,111 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         app.assertElementExists(id: AutomationID.Dock.filterHostAny.rawValue)
         app.assertElementExists(id: AutomationID.Dock.filterBranchSearch.rawValue)
         XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.filterStatusAny, maxSwipes: 3))
-        let notLoadedFilterID = AutomationID.Dock.filterStatus(DockRowStatusKind.notLoaded.rawValue).rawValue
-        XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.filterStatus(DockRowStatusKind.notLoaded.rawValue), maxSwipes: 3))
-        app.element(id: notLoadedFilterID).tap()
-        XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.notLoadedExplanation, maxSwipes: 2))
-        let explanation = app.element(id: AutomationID.Dock.notLoadedExplanation).stringValue
-        XCTAssertFalse(explanation.localizedCaseInsensitiveContains("rate"))
-        XCTAssertFalse(explanation.localizedCaseInsensitiveContains("limit"))
+        XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.filterStatus(DockRowStatusKind.running.rawValue), maxSwipes: 3))
+        XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.filterStatus(DockRowStatusKind.needsInput.rawValue), maxSwipes: 3))
+        XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.filterStatus(DockRowStatusKind.needsApproval.rawValue), maxSwipes: 3))
+        XCTAssertFalse(app.element(id: AutomationID.Dock.filterStatus("notLoaded")).exists)
+        XCTAssertFalse(app.element(id: AutomationID.Dock.filterSurface).stringValue.localizedCaseInsensitiveContains("limited"))
         XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.filterRepoQuery, maxSwipes: 2))
         XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.filterSourcePicker, maxSwipes: 2))
         XCTAssertTrue(app.scrollUntilElementExists(id: AutomationID.Dock.filterIdleToggle, maxSwipes: 2))
         app.assertElementExists(id: AutomationID.Dock.clearFiltersButton.rawValue)
+    }
+
+    func testScriptedDockStreamRetainsRowsThroughStaleGapResyncAndOffline() throws {
+        let hosts = "scripted-m5.local:4510,scripted-home.local:4510"
+        let app = launchRelayBackedApp(
+            hosts: hosts,
+            dockStreamScenario: "retention"
+        )
+        XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
+
+        let root = app.element(id: AutomationID.Dock.root)
+        XCTAssertTrue(
+            root.waitForAnyStringValue(containing: ["rows=4", "rows=6"], timeout: 5),
+            "Scripted stream did not publish the initial retained rows. Root value: \(root.stringValue)"
+        )
+        XCTAssertTrue(
+            root.waitForStringValue(containing: "rows=6", timeout: 10),
+            "Scripted stream did not publish resynced rows. Root value: \(root.stringValue)"
+        )
+        XCTAssertFalse(root.stringValue.localizedCaseInsensitiveContains("Limited"))
+        XCTAssertFalse(app.visibleStaticText("History").exists)
+        XCTAssertFalse(app.visibleStaticText("Limited").exists)
+
+        guard let row = app.waitForElement(identifierPrefix: "codexdock.dock.row.", timeout: 5) else {
+            XCTFail("Scripted stream did not expose a Dock row.\n\nAccessibility tree:\n\(app.debugDescription)")
+            return
+        }
+        XCTAssertFalse(row.stringValue.localizedCaseInsensitiveContains("History"))
+        XCTAssertFalse(row.stringValue.localizedCaseInsensitiveContains("Not loaded"))
+
+        app.element(id: AutomationID.Dock.lensButton(DockLensID.host.rawValue)).tap()
+        let firstHostID = try DockRelayEndpoint.parse("scripted-m5.local:4510").id
+        let hostGroup = app.buttons[AutomationID.Dock.hostGroup("host::\(firstHostID)").rawValue]
+        XCTAssertTrue(
+            hostGroup.waitForLabel(containing: "Offline", timeout: 10),
+            "Scripted stream did not keep host rows visible while reporting offline/stale freshness.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+    }
+
+    func testScriptedDormantRowDetailDoesNotShowNotLoadedStatus() throws {
+        let app = launchRelayBackedApp(
+            hosts: "scripted-m5.local:4510",
+            dockStreamScenario: "retention"
+        )
+        XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
+
+        let root = app.element(id: AutomationID.Dock.root)
+        XCTAssertTrue(
+            root.waitForAnyStringValue(containing: ["rows=2", "rows=3"], timeout: 5),
+            "Scripted stream did not publish rows. Root value: \(root.stringValue)"
+        )
+
+        let dormantRow = app.buttons
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", "Scripted background"))
+            .firstMatch
+        XCTAssertTrue(
+            dormantRow.waitForExistence(timeout: 10),
+            "Scripted dormant row did not render.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+        XCTAssertFalse(dormantRow.stringValue.localizedCaseInsensitiveContains("Not loaded"))
+
+        dormantRow.tap()
+        XCTAssertNotNil(app.waitForElement(identifierPrefix: "codexdock.session.root.", timeout: 10))
+        XCTAssertTrue(app.element(id: AutomationID.Session.header).waitForExistence(timeout: 10))
+        XCTAssertFalse(app.element(id: AutomationID.Session.header).stringValue.localizedCaseInsensitiveContains("Not loaded"))
+        XCTAssertFalse(app.element(id: AutomationID.Session.statusPill).exists)
+    }
+
+    func testScriptedDockStreamResyncsSchemaMismatch() throws {
+        let hosts = "scripted-m5.local:4510,scripted-home.local:4510"
+        let app = launchRelayBackedApp(
+            hosts: hosts,
+            dockStreamScenario: "schemaMismatch"
+        )
+        XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
+
+        let root = app.element(id: AutomationID.Dock.root)
+        XCTAssertTrue(
+            root.waitForAnyStringValue(containing: ["rows=4", "rows=6"], timeout: 5),
+            "Scripted schema stream did not publish initial rows. Root value: \(root.stringValue)"
+        )
+        XCTAssertTrue(
+            root.waitForStringValue(containing: "rows=6", timeout: 10),
+            "Scripted schema mismatch did not resync to the expected row count. Root value: \(root.stringValue)"
+        )
+
+        let recoveredRow = app.buttons
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", "Scripted schema recovered"))
+            .firstMatch
+        XCTAssertTrue(
+            recoveredRow.waitForExistence(timeout: 10),
+            "Scripted schema mismatch did not render a recovered row.\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+        XCTAssertFalse(root.stringValue.localizedCaseInsensitiveContains("Limited"))
+        XCTAssertFalse(app.visibleStaticText("History").exists)
+        XCTAssertFalse(app.visibleStaticText("Limited").exists)
     }
 
     func testRelaySettingsFormIsDrivableByIdentifier() throws {
@@ -118,7 +212,7 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         row.tap()
         XCTAssertTrue(app.waitForElement(identifierPrefix: "codexdock.session.root.", timeout: 15) != nil)
         XCTAssertTrue(app.element(id: AutomationID.Session.header).waitForExistence(timeout: 10))
-        XCTAssertTrue(app.element(id: AutomationID.Session.messageFilter).exists)
+        XCTAssertTrue(app.element(id: AutomationID.Session.messageFilter).waitForStringValue(containing: "messages", timeout: 10))
         XCTAssertTrue(app.element(id: AutomationID.Composer.root).exists)
         let messageField = app.element(id: AutomationID.Composer.messageField)
         XCTAssertTrue(messageField.exists)
@@ -127,10 +221,17 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         XCTAssertTrue(app.element(id: AutomationID.Composer.sendButton).waitForExistence(timeout: 5))
     }
 
-    private func launchRelayBackedApp() -> XCUIApplication {
+    private func launchRelayBackedApp(
+        hosts: String? = nil,
+        dockStreamScenario: String? = nil
+    ) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchEnvironment["CODEX_DOCK_HOSTS"] = ProcessInfo.processInfo.environment["CODEX_DOCK_UI_TEST_HOSTS"]
+        app.launchEnvironment["CODEX_DOCK_HOSTS"] = hosts
+            ?? ProcessInfo.processInfo.environment["CODEX_DOCK_UI_TEST_HOSTS"]
             ?? "amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510"
+        if let dockStreamScenario {
+            app.launchEnvironment["CODEX_DOCK_UI_DOCK_STREAM_SCENARIO"] = dockStreamScenario
+        }
         app.launch()
         return app
     }
@@ -256,6 +357,10 @@ private extension XCUIApplication {
         }
         return nil
     }
+
+    func visibleStaticText(_ label: String) -> XCUIElement {
+        staticTexts.matching(NSPredicate(format: "label ==[c] %@", label)).firstMatch
+    }
 }
 
 private extension AutomationID.RootTab {
@@ -284,6 +389,28 @@ private extension XCUIElement {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if stringValue.contains(expected) {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
+    }
+
+    func waitForAnyStringValue(containing expectedValues: [String], timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if expectedValues.contains(where: { stringValue.contains($0) }) {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
+    }
+
+    func waitForLabel(containing expected: String, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if label.contains(expected) {
                 return true
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))

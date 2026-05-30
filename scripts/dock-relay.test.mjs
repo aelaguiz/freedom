@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { WebSocketServer } from "ws";
 
@@ -15,6 +18,13 @@ import {
 } from "./dock-relay.mjs";
 import { createRelayLogger } from "./dock-relay-logger.mjs";
 import { liveOverlayForSnapshot } from "./dock-relay-live-status-cache.mjs";
+import {
+  bufferedDockUpdateIsAfterSnapshot,
+  DockSessionAggregator,
+  DockSessionTable,
+  dockUpdateForSubscriber,
+  normalizedStatus,
+} from "./dock-relay-session-table.mjs";
 import { ThreadSummaryCache } from "./dock-relay-thread-summary-cache.mjs";
 import {
   clampThreadListParams,
@@ -28,6 +38,7 @@ import {
   onceListening,
   openWebSocket,
 } from "./dock-relay-test-helpers.mjs";
+import { DOCK_SESSION_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
 
 test("relay logger redacts credentials and payload fields", () => {
   const lines = [];
@@ -138,6 +149,221 @@ test("active attention outranks plain active when deduping live rows", () => {
 
   assert.equal(statusPriority(needsAttention), 0);
   assert.equal(preferThread(plain, needsAttention), needsAttention);
+});
+
+test("dock stream status normalization has product-facing names", () => {
+  assert.equal(normalizedStatus({ status: { type: "notLoaded" } }), "dormant");
+  assert.equal(normalizedStatus({ status: { type: "idle" } }), "idle");
+  assert.equal(normalizedStatus({ status: { type: "systemError" } }), "error");
+  assert.equal(normalizedStatus({ status: { type: "active", activeFlags: [] } }), "running");
+  assert.equal(
+    normalizedStatus({
+      status: {
+        type: "active",
+        activeFlags: ["waitingOnUserInput"],
+      },
+    }),
+    "needsInput",
+  );
+  assert.equal(
+    normalizedStatus({
+      status: {
+        type: "active",
+        activeFlags: ["waitingOnApproval", "waitingOnUserInput"],
+      },
+    }),
+    "needsApproval",
+  );
+});
+
+test("dock session table emits deltas and keeps last-good rows on refresh failure", () => {
+  const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
+  const table = new DockSessionTable({ hostId: host.id, hostName: host.displayName });
+  const session = {
+    id: "Amir-M5::thread-1",
+    hostID: "Amir-M5",
+    threadID: "thread-1",
+    backendSessionID: "session-1",
+    title: "Build Dock",
+    status: "running",
+    repository: "codex-client",
+    workingDirectory: "/Users/aelaguiz/workspace/codex-client",
+    branch: "main",
+    updatedAt: 10,
+    summary: "Working",
+    source: { kind: "human" },
+  };
+
+  const firstUpdate = table.applySuccessfulRefresh({
+    host,
+    sessions: [session],
+    asOf: "2026-05-29T10:00:00.000Z",
+  });
+  assert.equal(firstUpdate.kind, "delta");
+  assert.equal(firstUpdate.baseSeq, 0);
+  assert.equal(firstUpdate.seq, 1);
+  assert.deepEqual(firstUpdate.upsertSessions.map((row) => row.threadID), ["thread-1"]);
+
+  const heartbeat = table.applySuccessfulRefresh({
+    host,
+    sessions: [session],
+    asOf: "2026-05-29T10:00:01.000Z",
+  });
+  assert.equal(heartbeat.kind, "heartbeat");
+  assert.equal(heartbeat.seq, 1);
+
+  const failed = table.applyFailedRefresh(new Error("upstream unavailable"));
+  assert.equal(failed.kind, "heartbeat");
+  assert.equal(failed.seq, 1);
+  assert.equal(failed.freshness.status, "stale");
+  assert.match(failed.freshness.lastError, /upstream unavailable/);
+  assert.deepEqual(table.snapshot().sessions.map((row) => row.threadID), ["thread-1"]);
+});
+
+test("dock session aggregator uses provider boundary and loads persisted rows stale-on-boot", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-session-table-"));
+  const persistedPath = path.join(tempDir, "session-table.json");
+  const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
+  const session = {
+    id: "Amir-M5::thread-1",
+    hostID: "Amir-M5",
+    threadID: "thread-1",
+    backendSessionID: "session-1",
+    title: "Build Dock",
+    status: "running",
+    lane: "human",
+    kindLabel: "Human",
+    repository: "codex-client",
+    workingDirectory: "/Users/aelaguiz/workspace/codex-client",
+    branch: "main",
+    updatedAt: 10,
+    summary: "Working",
+    source: { kind: "human" },
+  };
+  const provider = {
+    async listSessions() {
+      return { host, sessions: [session] };
+    },
+  };
+
+  try {
+    const aggregator = new DockSessionAggregator(
+      { hostId: host.id, hostName: host.displayName },
+      { provider, persistencePath: persistedPath, refreshIntervalMs: 60_000 },
+    );
+    await aggregator.refreshNow({ notify: false });
+    aggregator.stop();
+
+    const persisted = JSON.parse(fs.readFileSync(persistedPath, "utf8"));
+    assert.equal(persisted.schemaVersion, DOCK_SESSION_SCHEMA_VERSION);
+    assert.deepEqual(persisted.sessions.map((row) => row.threadID), ["thread-1"]);
+
+    const restarted = new DockSessionAggregator(
+      { hostId: host.id, hostName: host.displayName },
+      {
+        provider: {
+          async listSessions() {
+            throw new Error("provider offline");
+          },
+        },
+        persistencePath: persistedPath,
+        refreshIntervalMs: 60_000,
+      },
+    );
+    assert.equal(restarted.currentSnapshot().freshness.status, "stale");
+    assert.deepEqual(restarted.currentSnapshot().sessions.map((row) => row.threadID), ["thread-1"]);
+
+    const snapshot = await restarted.snapshot();
+    assert.equal(snapshot.freshness.status, "stale");
+    assert.match(snapshot.freshness.lastError, /provider offline/);
+    assert.deepEqual(snapshot.sessions.map((row) => row.threadID), ["thread-1"]);
+    restarted.stop();
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dock session aggregator ignores persisted rows with incompatible schema", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-session-schema-"));
+  const persistedPath = path.join(tempDir, "session-table.json");
+  try {
+    fs.writeFileSync(
+      persistedPath,
+      JSON.stringify({
+        schemaVersion: DOCK_SESSION_SCHEMA_VERSION + 1,
+        hosts: [{ id: "old-host" }],
+        sessions: [{ id: "old-host::thread-1", threadID: "thread-1" }],
+      }),
+    );
+    const aggregator = new DockSessionAggregator(
+      { hostId: "Amir-M5", hostName: "Amir M5" },
+      {
+        provider: {
+          async listSessions() {
+            throw new Error("provider offline");
+          },
+        },
+        persistencePath: persistedPath,
+        refreshIntervalMs: 60_000,
+      },
+    );
+
+    const snapshot = aggregator.currentSnapshot();
+    assert.equal(snapshot.schemaVersion, DOCK_SESSION_SCHEMA_VERSION);
+    assert.equal(snapshot.freshness.status, "unknown");
+    assert.deepEqual(snapshot.sessions, []);
+    assert.deepEqual(snapshot.hosts.map((host) => host.id), ["Amir-M5"]);
+    aggregator.stop();
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dock stream coalesces slow subscriber deltas to snapshots", () => {
+  const delta = { kind: "delta", seq: 2 };
+  const snapshot = { kind: "snapshot", seq: 3 };
+  const aggregator = {
+    currentSnapshot() {
+      return snapshot;
+    },
+  };
+
+  assert.equal(dockUpdateForSubscriber(aggregator, { bufferedAmount: 0 }, delta), delta);
+  assert.equal(
+    dockUpdateForSubscriber(aggregator, { bufferedAmount: 2 * 1024 * 1024 }, delta),
+    snapshot
+  );
+});
+
+test("dock subscribe drops buffered updates already covered by snapshot", () => {
+  const snapshot = {
+    epoch: "epoch-1",
+    seq: 10,
+  };
+
+  assert.equal(bufferedDockUpdateIsAfterSnapshot(snapshot, {
+    kind: "delta",
+    epoch: "epoch-1",
+    baseSeq: 9,
+    seq: 10,
+  }), false);
+  assert.equal(bufferedDockUpdateIsAfterSnapshot(snapshot, {
+    kind: "heartbeat",
+    epoch: "epoch-1",
+    seq: 10,
+  }), false);
+  assert.equal(bufferedDockUpdateIsAfterSnapshot(snapshot, {
+    kind: "delta",
+    epoch: "epoch-1",
+    baseSeq: 10,
+    seq: 11,
+  }), true);
+  assert.equal(bufferedDockUpdateIsAfterSnapshot(snapshot, {
+    kind: "delta",
+    epoch: "older-epoch",
+    baseSeq: 10,
+    seq: 11,
+  }), false);
 });
 
 test("thread/list params clamp to Codex's 250 row page cap", () => {
@@ -451,5 +677,117 @@ test("relay keeps the raw history app-server token on the Mac side", async () =>
     ws.close();
     await relay.close();
     await closeWebSocketServer(historyServer);
+  }
+});
+
+test("dock/subscribe returns a normalized relay-owned session snapshot", async () => {
+  let observedAuthorization = null;
+  const observedThreadListParams = [];
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-test-"));
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  historyServer.on("connection", (ws, request) => {
+    observedAuthorization = request.headers.authorization;
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "codex-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/list") {
+        observedThreadListParams.push(message.params || {});
+        const isAgentRequest = Array.isArray(message.params?.sourceKinds);
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            data: isAgentRequest ? [
+              {
+                id: "agent-thread",
+                sessionId: "agent-session",
+                preview: "Agent thread",
+                updatedAt: 1_780_000_200,
+                status: {
+                  type: "active",
+                  activeFlags: ["waitingOnApproval"],
+                },
+                cwd: "/Users/aelaguiz/workspace/codex-client",
+                gitInfo: {
+                  branch: "feature/relay-table",
+                  originUrl: "codex-client",
+                },
+                source: "exec",
+                dockRelaySource: {
+                  bearerToken: "must-not-leak",
+                },
+              },
+            ] : [
+              {
+                id: "history-thread",
+                sessionId: "history-session",
+                preview: "History thread",
+                latestSummary: "Stored history row",
+                updatedAt: 1_780_000_100,
+                status: {
+                  type: "notLoaded",
+                },
+                cwd: "/Users/aelaguiz/workspace/codex-client",
+                gitInfo: {
+                  branch: "main",
+                  originUrl: "codex-client",
+                },
+                source: "cli",
+              },
+            ],
+            nextCursor: null,
+            backwardsCursor: null,
+          },
+        }));
+      }
+    });
+  });
+
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    hostId: "Amir-M5",
+    hostName: "Amir M5",
+    advertiseBonjour: false,
+    dockSessionPersistencePath: path.join(tempDir, "session-table.json"),
+    dockSessionRefreshIntervalMs: 60_000,
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const response = await jsonRpcRequest(ws, "dock/subscribe");
+
+    assert.equal(observedAuthorization, "Bearer history-token");
+    assert.equal(observedThreadListParams.length, 2);
+    assert.equal(response.error, undefined);
+    assert.equal(response.result.kind, "snapshot");
+    assert.equal(response.result.hosts[0].id, "Amir-M5");
+    assert.deepEqual(
+      response.result.sessions.map((row) => [row.threadID, row.status, row.lane, row.kindLabel, row.source.kind]),
+      [
+        ["agent-thread", "needsApproval", "agent", "exec", "automation"],
+        ["history-thread", "dormant", "human", "cli", "human"],
+      ],
+    );
+    assert.equal(JSON.stringify(response.result).includes("notLoaded"), false);
+    assert.equal(JSON.stringify(response.result).includes("must-not-leak"), false);
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeWebSocketServer(historyServer);
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });

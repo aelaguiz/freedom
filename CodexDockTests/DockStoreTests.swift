@@ -26,7 +26,9 @@ final class DockStoreTests: XCTestCase {
         ]
         let store = DockStore(
             host: host,
-            loader: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: summaries))),
+            streamClient: LoaderBackedDockStreamClient(
+                loader: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: summaries)))
+            ),
             now: { now }
         )
 
@@ -38,7 +40,7 @@ final class DockStoreTests: XCTestCase {
 
         XCTAssertEqual(snapshot.host.displayName, host.displayName)
         XCTAssertEqual(snapshot.rowCount, 2)
-        XCTAssertEqual(snapshot.rows.map(\.status), [.running, .running])
+        XCTAssertEqual(snapshot.rows.map(\.status), [.running, .needsInput])
         let branchProjection = snapshot.project(options: .init(lens: .branch))
         XCTAssertEqual(branchProjection.groups.map(\.title), ["feature/dock", "main"])
         XCTAssertEqual(branchProjection.groups[0].rows[0].lastActivity, "2m ago")
@@ -67,7 +69,9 @@ final class DockStoreTests: XCTestCase {
         ]
         let store = DockStore(
             host: host,
-            loader: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: summaries))),
+            streamClient: LoaderBackedDockStreamClient(
+                loader: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: summaries)))
+            ),
             now: { Date(timeIntervalSince1970: 2_000) }
         )
 
@@ -79,7 +83,7 @@ final class DockStoreTests: XCTestCase {
 
         let projection = snapshot.project(options: .init(lens: .newest))
         XCTAssertEqual(projection.rows.map(\.id.threadID), ["old-history", "live-running"])
-        XCTAssertEqual(projection.rows.map(\.status), [.notLoaded, .running])
+        XCTAssertEqual(projection.rows.map(\.status), [.dormant, .running])
     }
 
     @MainActor
@@ -107,7 +111,7 @@ final class DockStoreTests: XCTestCase {
                 )
             ]))
         ])
-        let store = DockStore(host: host, loader: loader)
+        let store = DockStore(host: host, streamClient: LoaderBackedDockStreamClient(loader: loader))
 
         await store.load()
         await store.refresh()
@@ -130,11 +134,54 @@ final class DockStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testFailedSubscribeResyncDropsConnectionSoRefreshCanReconnect() async throws {
+        let host = makeHost()
+        let badConnection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "bad-epoch",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: host, threadID: "bad-row", title: "Bad row", updatedAt: 1_000)
+                ],
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion + 1
+            )
+        )
+        let goodConnection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "good-epoch",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: host, threadID: "recovered-row", title: "Recovered row", updatedAt: 1_200)
+                ]
+            )
+        )
+        let streamClient = SequencedManualDockStreamClient(connections: [badConnection, goodConnection])
+        let store = DockStore(host: host, streamClient: streamClient)
+
+        await store.load()
+        await store.refresh()
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.id.threadID) == ["recovered-row"] }
+        ) else {
+            return XCTFail("Expected refresh to reconnect after failed subscribe resync, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.hostStates.map(\.status), [.loaded(rowCount: 1)])
+        let connectCount = await streamClient.connectCount()
+        XCTAssertEqual(connectCount, 2)
+    }
+
+    @MainActor
     func testEmptyHostPublishesEmptyState() async {
         let host = makeHost()
         let store = DockStore(
             host: host,
-            loader: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [])))
+            streamClient: LoaderBackedDockStreamClient(
+                loader: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [])))
+            )
         )
 
         await store.load()
@@ -152,11 +199,13 @@ final class DockStoreTests: XCTestCase {
         let host = makeHost()
         let store = DockStore(
             host: host,
-            loader: FakeDockSessionLoader(
-                mode: .success(
-                    DockLoadResult(
-                        summaries: [],
-                        liveOverlay: ThreadListLiveOverlayDTO(ok: false, state: "disabled")
+            streamClient: LoaderBackedDockStreamClient(
+                loader: FakeDockSessionLoader(
+                    mode: .success(
+                        DockLoadResult(
+                            summaries: [],
+                            liveOverlay: ThreadListLiveOverlayDTO(ok: false, state: "disabled")
+                        )
                     )
                 )
             )
@@ -169,7 +218,7 @@ final class DockStoreTests: XCTestCase {
         }
         XCTAssertEqual(
             snapshot.hostStates.map(\.status),
-            [.partial(rowCount: 0, message: "Live status disabled")]
+            [.empty]
         )
     }
 
@@ -178,15 +227,17 @@ final class DockStoreTests: XCTestCase {
         let host = makeHost()
         let store = DockStore(
             host: host,
-            loader: FakeDockSessionLoader(mode: .failure(.offline("Connection refused")))
+            streamClient: LoaderBackedDockStreamClient(
+                loader: FakeDockSessionLoader(mode: .failure(.offline("Connection refused")))
+            )
         )
 
         await store.load()
 
-        XCTAssertEqual(
-            store.state,
-            .offline(DockHostViewModel(host: host), "Connection refused")
-        )
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected loaded offline snapshot, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.hostStates.map(\.status), [.offline("Connection refused")])
     }
 
     @MainActor
@@ -194,22 +245,23 @@ final class DockStoreTests: XCTestCase {
         let host = makeHost()
         let store = DockStore(
             host: host,
-            loader: FakeDockSessionLoader(mode: .failure(.error("Invalid response")))
+            streamClient: LoaderBackedDockStreamClient(
+                loader: FakeDockSessionLoader(mode: .failure(.error("Invalid response")))
+            )
         )
 
         await store.load()
 
-        XCTAssertEqual(
-            store.state,
-            .error(DockHostViewModel(host: host), "Invalid response")
-        )
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected loaded error snapshot, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.hostStates.map(\.status), [.error("Invalid response")])
     }
 
     @MainActor
     func testConfigurationErrorDoesNotLoad() async {
         let store = DockStore(
-            configurationError: DockHostConfigurationError.missingEndpoint,
-            loader: FakeDockSessionLoader(mode: .failure(.error("Should not load")))
+            configurationError: DockHostConfigurationError.missingEndpoint
         )
 
         await store.load()
@@ -238,7 +290,7 @@ final class DockStoreTests: XCTestCase {
             ])),
             home.id: .failure(.offline("Home unreachable"))
         ])
-        let store = DockStore(registry: registry, loader: loader)
+        let store = DockStore(registry: registry, streamClient: LoaderBackedDockStreamClient(loader: loader))
 
         await store.load()
 
@@ -285,7 +337,7 @@ final class DockStoreTests: XCTestCase {
                 ]))
             ]
         )
-        let store = DockStore(registry: registry, loader: loader)
+        let store = DockStore(registry: registry, streamClient: LoaderBackedDockStreamClient(loader: loader))
 
         let loadTask = Task { await store.load() }
         await loader.waitForDelayedRequests(2)
@@ -347,7 +399,7 @@ final class DockStoreTests: XCTestCase {
                 )
             ]))
         ])
-        let store = DockStore(registry: registry, loader: loader)
+        let store = DockStore(registry: registry, streamClient: LoaderBackedDockStreamClient(loader: loader))
 
         await store.load()
 
@@ -362,15 +414,21 @@ final class DockStoreTests: XCTestCase {
         let branchProjection = snapshot.project(options: .init(lens: .branch, filters: DockFilterState(showsIdle: true)))
         XCTAssertEqual(branchProjection.groups.map(\.title), ["main"])
         XCTAssertEqual(branchProjection.groups[0].rows.map(\.hostDisplayName), [home.displayName, amir.displayName])
-        XCTAssertEqual(branchProjection.groups[0].rows.map(\.status), [.notLoaded, .idle])
+        XCTAssertEqual(branchProjection.groups[0].rows.map(\.status), [.dormant, .idle])
 
         let hostProjection = snapshot.project(options: .init(lens: .host, filters: DockFilterState(showsIdle: true)))
         XCTAssertEqual(hostProjection.groups.map(\.title), [home.displayName, amir.displayName])
     }
 
     func testDockStatusVocabularyAndSourceFiltersUseNormalizedRows() {
-        XCTAssertEqual(DockRowStatusKind.notLoaded.label, "Not loaded")
-        XCTAssertEqual(DockRowStatusKind.allCases, [.running, .idle, .notLoaded, .error, .unknown])
+        XCTAssertEqual(DockRowStatusKind.dormant.label, "Not loaded")
+        XCTAssertNil(DockRowStatusKind.dormant.visibleBadgeLabel)
+        XCTAssertNil(DockRowStatusKind.idle.visibleBadgeLabel)
+        XCTAssertEqual(DockRowStatusKind.running.visibleBadgeLabel, "Running")
+        XCTAssertEqual(DockRowStatusKind.needsInput.visibleBadgeLabel, "Needs input")
+        XCTAssertEqual(DockRowStatusKind.needsApproval.visibleBadgeLabel, "Needs approval")
+        XCTAssertEqual(DockRowStatusKind.error.visibleBadgeLabel, "Error")
+        XCTAssertEqual(DockRowStatusKind.allCases, [.running, .needsInput, .needsApproval, .idle, .error, .dormant, .unknown])
         XCTAssertEqual(DockLensID.allCases, [.newest, .host, .branch])
         XCTAssertTrue(DockSourceFilter.any.includes(makeRow(status: .idle).origin))
         XCTAssertTrue(DockSourceFilter.human.includes(makeRow(status: .running).origin))
@@ -393,7 +451,11 @@ final class DockStoreTests: XCTestCase {
                 prompt: "Metadata row"
             )
         ])))
-        let store = DockStore(host: host, loader: loader, metadataStore: metadataStore)
+        let store = DockStore(
+            host: host,
+            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            metadataStore: metadataStore
+        )
         await store.load()
 
         guard case let .loaded(initialSnapshot) = store.state else {
@@ -404,7 +466,11 @@ final class DockStoreTests: XCTestCase {
         await store.setLabel("Watch", for: row)
         await store.setRail(.red, for: row)
 
-        let reloaded = DockStore(host: host, loader: loader, metadataStore: metadataStore)
+        let reloaded = DockStore(
+            host: host,
+            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            metadataStore: metadataStore
+        )
         await reloaded.load()
 
         guard case let .loaded(snapshot) = reloaded.state else {
@@ -472,7 +538,11 @@ final class DockStoreTests: XCTestCase {
             .success(DockLoadResult(summaries: []))
         ])
         let archiver = RecordingDockArchiver()
-        let store = DockStore(host: host, loader: loader, archiver: archiver)
+        let store = DockStore(
+            host: host,
+            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            archiver: archiver
+        )
 
         await store.load()
         guard case let .loaded(initialSnapshot) = store.state else {
@@ -506,7 +576,11 @@ final class DockStoreTests: XCTestCase {
             )
         ])))
         let archiver = RecordingDockArchiver(mode: .failure(.error("archive failed")))
-        let store = DockStore(host: host, loader: loader, archiver: archiver)
+        let store = DockStore(
+            host: host,
+            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            archiver: archiver
+        )
 
         await store.load()
         guard case let .loaded(initialSnapshot) = store.state else {

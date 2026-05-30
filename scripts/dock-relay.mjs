@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import fs from "node:fs";
 import crypto from "node:crypto";
 import http from "node:http";
 import os from "node:os";
@@ -44,6 +43,17 @@ import {
   classifyRelayRequestError,
   createRelayStatusTracker,
 } from "./dock-relay-status.mjs";
+import {
+  DOCK_RESYNC_METHOD,
+  DOCK_SUBSCRIBE_METHOD,
+  dockSessionAggregatorForConfig,
+  handleDockSubscribe,
+} from "./dock-relay-session-table.mjs";
+import {
+  loadDotEnvFile,
+  parsePhoneAuthMode,
+  readToken,
+} from "./dock-relay-env.mjs";
 import {
   aggregateLoadedList,
   aggregateThreadList,
@@ -93,56 +103,6 @@ function parseArgs(argv) {
 
 function relayLogger(config) {
   return config?.logger || defaultRelayLogger;
-}
-
-function readToken(path) {
-  const value = fs.readFileSync(path, "utf8").trim();
-  if (!value) {
-    throw new Error(`token file is empty: ${path}`);
-  }
-  return value;
-}
-
-function loadDotEnvFile(path = ".env", environment = process.env) {
-  if (!fs.existsSync(path)) {
-    return {};
-  }
-
-  const loaded = {};
-  const text = fs.readFileSync(path, "utf8");
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-
-    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (!match) {
-      continue;
-    }
-
-    const key = match[1];
-    let value = match[2].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"'))
-      || (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    loaded[key] = value;
-    if (environment[key] === undefined) {
-      environment[key] = value;
-    }
-  }
-  return loaded;
-}
-
-function parsePhoneAuthMode(value) {
-  const mode = String(value || DEFAULT_PHONE_AUTH).toLowerCase();
-  if (mode !== "none" && mode !== "bearer") {
-    throw new Error("--phone-auth must be none or bearer");
-  }
-  return mode;
 }
 
 function jsonRpcError(id, code, message, data = undefined) {
@@ -459,6 +419,10 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       };
     case "thread/list":
       return aggregateThreadList(config, params || {});
+    case DOCK_SUBSCRIBE_METHOD:
+      return handleDockSubscribe({ config, session, downstreamWs, sendJson });
+    case DOCK_RESYNC_METHOD:
+      return dockSessionAggregatorForConfig(config).resync();
     case "thread/loaded/list":
       return aggregateLoadedList(config, params || {});
     case "thread/read":
@@ -707,6 +671,7 @@ function startServer(config) {
       generation: 0,
       pendingServerRequests: new Map(),
       realtimeTranscription: null,
+      dockUnsubscribe: null,
     };
     sessions.add(session);
     session.realtimeTranscription = new RealtimeTranscriptionManager(config, {
@@ -720,6 +685,8 @@ function startServer(config) {
       downstreamSockets.delete(ws);
       sessions.delete(session);
       session.closing = true;
+      session.dockUnsubscribe?.();
+      session.dockUnsubscribe = null;
       session.realtimeTranscription?.closeAll("downstream_closed");
       session.upstream?.close();
       session.upstream = null;
@@ -872,6 +839,7 @@ function startServer(config) {
         activeConnections: downstreamSockets.size,
       });
       advertisement?.kill();
+      config.dockSessionAggregator?.stop?.();
       config.liveStatusCache?.stop?.();
       for (const ws of downstreamSockets) {
         ws.close(1001, "relay shutting down");

@@ -8,7 +8,7 @@ import AppKit
 
 public struct SessionDetailView: View {
     @StateObject private var store: ThreadDetailStore
-    @State private var selectedMessageKind: ThreadEventKind?
+    @State private var selectedMessageFilter = ThreadDetailMessageFilter.default
 
     public init(store: ThreadDetailStore) {
         _store = StateObject(wrappedValue: store)
@@ -64,12 +64,12 @@ public struct SessionDetailView: View {
 
     @ViewBuilder
     private func loadedContent(_ snapshot: ThreadDetailSnapshot) -> some View {
-        let filter = ThreadDetailMessageFilter(kind: selectedMessageKind)
+        let filter = selectedMessageFilter
         DetailHeaderView(
             header: snapshot.header,
             liveState: snapshot.liveState
         )
-        MessageTypeFilterControl(selectedKind: $selectedMessageKind)
+        MessageTypeFilterControl(filter: $selectedMessageFilter)
         if case let .stale(message) = snapshot.liveState {
             DetailMessageView(
                 icon: "wifi.exclamationmark",
@@ -161,7 +161,7 @@ private struct DetailHeaderView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
         .accessibilityElement(children: .contain)
-        .accessibilityValue("host=\(header.hostID); thread=\(header.threadID); live=\(liveState.label); status=\(header.statusLabel)")
+        .accessibilityValue("host=\(header.hostID); thread=\(header.threadID); live=\(liveState.label); status=\(header.statusLabel ?? "none")")
         .codexAutomationID(AutomationID.Session.header)
     }
 
@@ -211,10 +211,13 @@ private struct DetailHeaderView: View {
             .codexAutomationID(AutomationID.Session.livePill)
     }
 
+    @ViewBuilder
     private var statusPill: some View {
-        DetailPill(label: header.statusLabel, systemImage: "circle.dashed", color: .secondary)
-            .accessibilityValue(header.statusLabel)
-            .codexAutomationID(AutomationID.Session.statusPill)
+        if let statusLabel = header.statusLabel {
+            DetailPill(label: statusLabel, systemImage: "circle.dashed", color: .secondary)
+                .accessibilityValue(statusLabel)
+                .codexAutomationID(AutomationID.Session.statusPill)
+        }
     }
 
     private var liveIcon: String {

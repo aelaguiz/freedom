@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 #if os(iOS)
@@ -84,6 +85,7 @@ public struct CodexDockBootstrapView: View {
         case .ready(let registry):
             CodexDockRootView(
                 registry: registry,
+                streamClient: streamClient,
                 lifecycleCoordinator: lifecycleCoordinator,
                 connectivityStore: connectivityStore
             )
@@ -111,6 +113,17 @@ public struct CodexDockBootstrapView: View {
             return true
         }
         return false
+    }
+
+    private var streamClient: any DockStreamConnecting {
+        #if DEBUG
+        if let rawScenario = ProcessInfo.processInfo.environment["CODEX_DOCK_UI_DOCK_STREAM_SCENARIO"],
+           let scenario = ScriptedDockStreamScenario(rawValue: rawScenario) {
+            DockLog.dock.notice("dock scripted stream enabled scenario=\(scenario.rawValue, privacy: .public)")
+            return ScriptedDockStreamClient(scenario: scenario)
+        }
+        #endif
+        return AppServerDockStreamClient()
     }
 
     private func appScenePhase(from scenePhase: ScenePhase) -> AppScenePhase {

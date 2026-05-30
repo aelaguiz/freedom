@@ -52,7 +52,7 @@ struct DockGroupHeaderView: View {
     }
 
     private var accessibilityValue: String {
-        var parts = ["\(group.count) sessions", "running \(group.runningCount)"]
+        var parts = [group.subtitle, "\(group.count) sessions", "running \(group.runningCount)"]
         if group.hiddenIdleCount > 0 {
             parts.append(hiddenIdleText)
         }

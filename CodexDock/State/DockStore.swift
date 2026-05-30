@@ -3,23 +3,38 @@ import Foundation
 
 public enum DockRowStatusKind: String, Equatable, Sendable, CaseIterable {
     case running
+    case needsInput
+    case needsApproval
     case idle
-    case notLoaded
     case error
+    case dormant
     case unknown
 
     public var label: String {
         switch self {
         case .running:
             return "Running"
+        case .needsInput:
+            return "Needs input"
+        case .needsApproval:
+            return "Needs approval"
         case .idle:
             return "Idle"
-        case .notLoaded:
-            return "Not loaded"
         case .error:
             return "Error"
+        case .dormant:
+            return "Not loaded"
         case .unknown:
             return "Unknown"
+        }
+    }
+
+    public var visibleBadgeLabel: String? {
+        switch self {
+        case .running, .needsInput, .needsApproval, .error:
+            return label
+        case .idle, .dormant, .unknown:
+            return nil
         }
     }
 }
@@ -231,7 +246,6 @@ public enum DockProjectionEmptyReason: Equatable, Sendable {
     case noSearchMatches
     case noFilterMatches
     case idleHidden
-    case notLoadedOnly
     case hostUnavailable
 
     public var title: String {
@@ -244,8 +258,6 @@ public enum DockProjectionEmptyReason: Equatable, Sendable {
             return "No filtered sessions"
         case .idleHidden:
             return "Idle hidden"
-        case .notLoadedOnly:
-            return "No not-loaded sessions"
         case .hostUnavailable:
             return "Host unavailable"
         }
@@ -261,8 +273,6 @@ public enum DockProjectionEmptyReason: Equatable, Sendable {
             return "No sessions match the active filters."
         case .idleHidden:
             return "Show idle sessions to include matching idle threads."
-        case .notLoadedOnly:
-            return "These sessions exist in the list, but Dock does not have loaded thread detail for them."
         case .hostUnavailable:
             return "The selected host is unavailable."
         }
@@ -292,8 +302,6 @@ public struct DockSnapshot: Equatable, Sendable {
     public let hosts: [DockHostViewModel]
     public let hostStates: [DockHostStateViewModel]
     public let rows: [DockRowViewModel]
-    public let scopeLoadFailures: [DockScopeLoadFailureViewModel]
-    public let scopeConflicts: [DockScopeConflictViewModel]
     public let mappingFailures: [SessionSummaryMappingFailure]
     public let isPartial: Bool
 
@@ -306,8 +314,6 @@ public struct DockSnapshot: Equatable, Sendable {
         hosts: [DockHostViewModel],
         hostStates: [DockHostStateViewModel],
         rows: [DockRowViewModel],
-        scopeLoadFailures: [DockScopeLoadFailureViewModel],
-        scopeConflicts: [DockScopeConflictViewModel],
         mappingFailures: [SessionSummaryMappingFailure],
         isPartial: Bool = false
     ) {
@@ -315,8 +321,6 @@ public struct DockSnapshot: Equatable, Sendable {
         self.hosts = hosts
         self.hostStates = hostStates
         self.rows = rows
-        self.scopeLoadFailures = scopeLoadFailures
-        self.scopeConflicts = scopeConflicts
         self.mappingFailures = mappingFailures
         self.isPartial = isPartial
     }
@@ -356,6 +360,13 @@ public enum DockHostLoadStatus: Equatable, Sendable {
         }
     }
 
+    public var isPartial: Bool {
+        if case .partial = self {
+            return true
+        }
+        return false
+    }
+
     public var unavailableMessage: String? {
         switch self {
         case .offline(let message), .error(let message):
@@ -378,61 +389,6 @@ public struct DockHostStateViewModel: Equatable, Identifiable, Sendable {
     }
 }
 
-public enum DockSessionScope: String, CaseIterable, Hashable, Sendable {
-    case human
-    case agents
-
-    public var label: String {
-        switch self {
-        case .human:
-            return "Dock"
-        case .agents:
-            return "Agents"
-        }
-    }
-
-    public var query: DockSessionQuery {
-        switch self {
-        case .human:
-            return .activeHuman
-        case .agents:
-            return .activeAgents
-        }
-    }
-}
-
-public struct DockScopeLoadFailureViewModel: Equatable, Identifiable, Sendable {
-    public let id: String
-    public let host: DockHostViewModel
-    public let scope: DockSessionScope
-    public let message: String
-
-    public init(host: DockHostViewModel, scope: DockSessionScope, message: String) {
-        self.id = "\(host.id)::\(scope.rawValue)"
-        self.host = host
-        self.scope = scope
-        self.message = message
-    }
-}
-
-public struct DockScopeConflictViewModel: Equatable, Identifiable, Sendable {
-    public let id: String
-    public let threadID: HostScopedThreadID
-    public let backendThreadID: String
-    public let winningScope: DockSessionScope
-
-    public init(
-        threadID: HostScopedThreadID,
-        backendThreadID: String,
-        winningScope: DockSessionScope
-    ) {
-        self.id = "\(threadID.hostID)::\(threadID.threadID)"
-        self.threadID = threadID
-        self.backendThreadID = backendThreadID
-        self.winningScope = winningScope
-    }
-}
-
 public enum DockStoreState: Equatable, Sendable {
     case configurationError(String)
     case idle([DockHostViewModel])
@@ -450,10 +406,14 @@ public final class DockStore: ObservableObject {
     @Published public private(set) var actionError: String?
 
     private var hosts: [DockHostConfiguration]
-    private let loader: any DockSessionLoading
+    private let streamClient: any DockStreamConnecting
     private let archiver: any DockSessionArchiving
     private let metadataStore: any LocalThreadMetadataStoring
     private let now: @Sendable () -> Date
+    private let streamReconnectDelay: Duration
+    private var sessionTable = DockSessionTable()
+    private var streamConnections: [String: any DockStreamConnection] = [:]
+    private var streamTasks: [String: Task<Void, Never>] = [:]
     private var isLoading = false
     private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
     private weak var connectivityReporter: (any AppConnectivityReporting)?
@@ -468,51 +428,65 @@ public final class DockStore: ObservableObject {
 
     public init(
         host: DockHostConfiguration,
-        loader: any DockSessionLoading = AppServerDockClient(),
+        streamClient: any DockStreamConnecting = AppServerDockStreamClient(),
         archiver: any DockSessionArchiving = AppServerDockClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
+        streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.hosts = [host]
-        self.loader = loader
+        self.streamClient = streamClient
         self.archiver = archiver
         self.metadataStore = metadataStore
+        self.streamReconnectDelay = streamReconnectDelay
         self.now = now
+        self.sessionTable.reset(hosts: [host])
         self.state = .idle([DockHostViewModel(host: host)])
     }
 
     public init(
         registry: HostRegistry,
-        loader: any DockSessionLoading = AppServerDockClient(),
+        streamClient: any DockStreamConnecting = AppServerDockStreamClient(),
         archiver: any DockSessionArchiving = AppServerDockClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
+        streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.hosts = registry.hosts
-        self.loader = loader
+        self.streamClient = streamClient
         self.archiver = archiver
         self.metadataStore = metadataStore
+        self.streamReconnectDelay = streamReconnectDelay
         self.now = now
+        self.sessionTable.reset(hosts: registry.hosts)
         self.state = .idle(registry.hosts.map(DockHostViewModel.init))
     }
 
     public init(
         configurationError error: Error,
-        loader: any DockSessionLoading = AppServerDockClient(),
+        streamClient: any DockStreamConnecting = AppServerDockStreamClient(),
         archiver: any DockSessionArchiving = AppServerDockClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
+        streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.hosts = []
-        self.loader = loader
+        self.streamClient = streamClient
         self.archiver = archiver
         self.metadataStore = metadataStore
+        self.streamReconnectDelay = streamReconnectDelay
         self.now = now
         self.state = .configurationError(error.localizedDescription)
     }
 
+    deinit {
+        streamTasks.values.forEach { $0.cancel() }
+    }
+
     public func updateRegistry(_ registry: HostRegistry) async {
+        await closeStreams()
         hosts = registry.hosts
+        sessionTable.reset(hosts: registry.hosts)
         actionError = nil
         state = .idle(registry.hosts.map(DockHostViewModel.init))
         connectivityReporter?.reportDockState(state)
@@ -578,7 +552,7 @@ public final class DockStore: ObservableObject {
 
         let startedAt = Date()
         let signpostState = DockSignpost.dock.beginInterval("dock.reload")
-        DockLog.dock.notice("dock reload started hosts=\(self.hosts.count, privacy: .public) show_loading=\(showLoading, privacy: .public)")
+        DockLog.dock.notice("dock stream reload started hosts=\(self.hosts.count, privacy: .public) show_loading=\(showLoading, privacy: .public)")
         isLoading = true
         defer {
             DockSignpost.dock.endInterval("dock.reload", signpostState)
@@ -586,7 +560,6 @@ public final class DockStore: ObservableObject {
         }
 
         let hostViewModels = hosts.map(DockHostViewModel.init)
-        let primaryHostViewModel = hostViewModels[0]
         if showLoading {
             state = .loading(hostViewModels)
             connectivityReporter?.reportDockState(state)
@@ -600,352 +573,212 @@ public final class DockStore: ObservableObject {
             DockLog.persistence.warning("dock metadata load failed error=\(DockLog.errorSummary(error), privacy: .public)")
         }
 
-        let results = await loadAllHostsPublishingPartial()
-        let snapshot = makeSnapshot(results: results)
+        sessionTable.ensureHosts(hosts)
+        await synchronizeStreams()
+        publishSnapshot()
+        if case let .loaded(snapshot) = state {
+            DockLog.dock.notice("dock stream reload finished hosts=\(self.hosts.count, privacy: .public) rows=\(snapshot.rowCount, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+        }
+    }
 
-        if hosts.count == 1, let first = results.first {
-            if let failure = first.completeFailure {
-                switch failure {
-                case .offline(let message):
-                    state = .offline(primaryHostViewModel, message)
-                case .error(let message):
-                    state = .error(primaryHostViewModel, message)
-                }
+    private func synchronizeStreams() async {
+        let validHostIDs = Set(hosts.map(\.id))
+        for hostID in streamConnections.keys where !validHostIDs.contains(hostID) {
+            streamTasks[hostID]?.cancel()
+            streamTasks[hostID] = nil
+            let connection = streamConnections.removeValue(forKey: hostID)
+            await connection?.close()
+        }
+
+        for host in hosts {
+            if let connection = streamConnections[host.id] {
+                await resync(host: host, connection: connection)
             } else {
-                state = .loaded(snapshot)
-            }
-        } else {
-            state = .loaded(snapshot)
-        }
-        connectivityReporter?.reportDockState(state)
-        DockLog.dock.notice("dock reload finished hosts=\(self.hosts.count, privacy: .public) rows=\(snapshot.rowCount, privacy: .public) mapping_failures=\(snapshot.mappingFailures.count, privacy: .public) scope_failures=\(snapshot.scopeLoadFailures.count, privacy: .public) conflicts=\(snapshot.scopeConflicts.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
-    }
-
-    private struct ScopedHostLoadOutcome: Sendable {
-        let scope: DockSessionScope
-        let result: Result<DockLoadResult, DockLoadFailure>
-    }
-
-    private struct ScopedSessionSummary: Sendable {
-        let scope: DockSessionScope
-        let summary: SessionSummary
-    }
-
-    private struct DeduplicatedSummaries: Sendable {
-        let summaries: [SessionSummary]
-        let conflicts: [DockScopeConflictViewModel]
-    }
-
-    private struct HostLoadOutcome: Sendable {
-        let host: DockHostConfiguration
-        let scopedResults: [ScopedHostLoadOutcome]
-
-        var completeFailure: DockLoadFailure? {
-            let failures = scopedResults.compactMap { outcome -> DockLoadFailure? in
-                if case .failure(let failure) = outcome.result {
-                    return failure
-                }
-                return nil
-            }
-            guard !scopedResults.isEmpty, failures.count == scopedResults.count else {
-                return nil
-            }
-            if let error = failures.first(where: { failure in
-                if case .error = failure {
-                    return true
-                }
-                return false
-            }) {
-                return error
-            }
-            return failures[0]
-        }
-    }
-
-    private func loadAllHostsPublishingPartial() async -> [HostLoadOutcome] {
-        await withTaskGroup(of: HostLoadOutcome.self) { group in
-            for host in hosts {
-                group.addTask { [loader] in
-                    let scopedResults = await Self.loadActiveScopes(loader: loader, host: host)
-                    return HostLoadOutcome(host: host, scopedResults: scopedResults)
-                }
-            }
-
-            var outcomes: [HostLoadOutcome] = []
-            var checkingHostIDs = Set(hosts.map(\.id))
-            for await outcome in group {
-                outcomes.append(outcome)
-                checkingHostIDs.remove(outcome.host.id)
-                outcomes.sort { lhs, rhs in
-                    hostIndex(lhs.host.id) < hostIndex(rhs.host.id)
-                }
-                if !checkingHostIDs.isEmpty {
-                    state = .loaded(makeSnapshot(results: outcomes, checkingHostIDs: checkingHostIDs))
-                    connectivityReporter?.reportDockState(state)
-                }
-            }
-            return outcomes.sorted { lhs, rhs in
-                hostIndex(lhs.host.id) < hostIndex(rhs.host.id)
+                await openStream(host: host)
             }
         }
     }
 
-    private nonisolated static func loadActiveScopes(
-        loader: any DockSessionLoading,
-        host: DockHostConfiguration
-    ) async -> [ScopedHostLoadOutcome] {
-        await withTaskGroup(of: ScopedHostLoadOutcome.self) { group in
-            for scope in DockSessionScope.allCases {
-                group.addTask { [loader] in
-                    ScopedHostLoadOutcome(
-                        scope: scope,
-                        result: await Self.loadScope(
-                            loader: loader,
-                            host: host,
-                            query: scope.query
-                        )
+    private func openStream(host: DockHostConfiguration) async {
+        sessionTable.markChecking(host: host)
+        publishSnapshot()
+        var openedConnection: (any DockStreamConnection)?
+        do {
+            let connection = try await streamClient.connect(to: host)
+            openedConnection = connection
+            streamConnections[host.id] = connection
+            let snapshot = try await connection.subscribe()
+            try await applySubscribedSnapshot(snapshot, host: host, connection: connection)
+            startUpdateTask(host: host, connection: connection)
+            publishSnapshot()
+        } catch {
+            streamTasks[host.id]?.cancel()
+            streamTasks[host.id] = nil
+            streamConnections[host.id] = nil
+            await openedConnection?.close()
+            DockLog.dock.warning("dock stream open failed host_id=\(host.id, privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+            sessionTable.markFailure(Self.mapLoadFailure(error), host: host)
+            publishSnapshot()
+        }
+    }
+
+    private func resync(host: DockHostConfiguration, connection: any DockStreamConnection) async {
+        do {
+            let snapshot = try await connection.resync()
+            try applyResyncSnapshot(snapshot, host: host)
+            publishSnapshot()
+            DockLog.dock.notice("dock stream resync finished host_id=\(host.id, privacy: .public) seq=\(snapshot.seq, privacy: .public) rows=\(self.sessionTable.rowCount(for: host), privacy: .public)")
+        } catch {
+            DockLog.dock.warning("dock stream resync failed host_id=\(host.id, privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+            sessionTable.markFailure(Self.mapLoadFailure(error), host: host)
+            publishSnapshot()
+        }
+    }
+
+    private func startUpdateTask(host: DockHostConfiguration, connection: any DockStreamConnection) {
+        streamTasks[host.id]?.cancel()
+        streamTasks[host.id] = Task { [weak self, host, connection] in
+            do {
+                for try await update in connection.updates() {
+                    await self?.handleStreamUpdate(update, host: host, connection: connection)
+                }
+                if !Task.isCancelled {
+                    await self?.handleStreamFailure(
+                        DockLoadFailure.offline("Relay stream closed"),
+                        host: host,
+                        connection: connection
                     )
                 }
-            }
-
-            var outcomes: [ScopedHostLoadOutcome] = []
-            for await outcome in group {
-                outcomes.append(outcome)
-            }
-            return outcomes.sorted { lhs, rhs in
-                Self.scopeIndex(lhs.scope) < Self.scopeIndex(rhs.scope)
+            } catch is CancellationError {
+                return
+            } catch {
+                await self?.handleStreamFailure(error, host: host, connection: connection)
             }
         }
     }
 
-    private nonisolated static func loadScope(
-        loader: any DockSessionLoading,
+    private func handleStreamUpdate(
+        _ update: DockStreamUpdateDTO,
         host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async -> Result<DockLoadResult, DockLoadFailure> {
-        let startedAt = Date()
-        let scope = DockSessionScope.allCases.first { $0.query == query }?.rawValue ?? "custom"
-        DockLog.dock.debug("dock scope load started host_id=\(host.id, privacy: .public) scope=\(scope, privacy: .public)")
-        do {
-            let result = try await loader.loadSessions(for: host, query: query)
-            DockLog.dock.debug("dock scope load finished host_id=\(host.id, privacy: .public) scope=\(scope, privacy: .public) rows=\(result.summaries.count, privacy: .public) mapping_failures=\(result.mappingFailures.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
-            return .success(result)
-        } catch {
-            DockLog.dock.warning("dock scope load failed host_id=\(host.id, privacy: .public) scope=\(scope, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-            return .failure(mapLoadFailure(error))
+        connection: any DockStreamConnection
+    ) async {
+        let result = sessionTable.applyUpdate(update, host: host)
+        if case .needsResync(let reason) = result {
+            DockLog.dock.warning("dock stream resync needed host_id=\(host.id, privacy: .public) reason=\(reason.rawValue, privacy: .public) update_kind=\(update.kind.rawValue, privacy: .public) seq=\(update.seq, privacy: .public)")
+            await resync(host: host, connection: connection)
+        } else {
+            publishSnapshot()
+            let rowCount = sessionTable.rowCount(for: host)
+            DockLog.dock.info("dock stream update applied host_id=\(host.id, privacy: .public) update_kind=\(update.kind.rawValue, privacy: .public) seq=\(update.seq, privacy: .public) rows=\(rowCount, privacy: .public)")
+            if let freshness = update.freshness,
+               freshness.status != .fresh,
+               rowCount > 0 {
+                DockLog.dock.notice("dock stream rows retained host_id=\(host.id, privacy: .public) freshness=\(freshness.status.rawValue, privacy: .public) rows=\(rowCount, privacy: .public)")
+            }
         }
+    }
+
+    private func applySubscribedSnapshot(
+        _ snapshot: DockStreamUpdateDTO,
+        host: DockHostConfiguration,
+        connection: any DockStreamConnection
+    ) async throws {
+        switch sessionTable.applySnapshot(snapshot, host: host) {
+        case .applied:
+            return
+        case .needsResync(let reason):
+            DockLog.dock.warning("dock stream subscribe snapshot rejected host_id=\(host.id, privacy: .public) reason=\(reason.rawValue, privacy: .public) seq=\(snapshot.seq, privacy: .public)")
+            let resynced = try await connection.resync()
+            try applyResyncSnapshot(resynced, host: host)
+        }
+    }
+
+    private func applyResyncSnapshot(
+        _ snapshot: DockStreamUpdateDTO,
+        host: DockHostConfiguration
+    ) throws {
+        switch sessionTable.applySnapshot(snapshot, host: host) {
+        case .applied:
+            return
+        case .needsResync(let reason):
+            throw DockLoadFailure.error("Dock stream resync returned incompatible data (\(reason.rawValue)).")
+        }
+    }
+
+    private func handleStreamFailure(
+        _ error: Error,
+        host: DockHostConfiguration,
+        connection: any DockStreamConnection
+    ) async {
+        DockLog.dock.warning("dock stream update failed host_id=\(host.id, privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+        streamConnections[host.id] = nil
+        streamTasks[host.id] = nil
+        await connection.close()
+        sessionTable.markFailure(Self.mapLoadFailure(error), host: host)
+        publishSnapshot()
+        let rowCount = sessionTable.rowCount(for: host)
+        if rowCount > 0 {
+            DockLog.dock.notice("dock stream rows retained host_id=\(host.id, privacy: .public) freshness=offline rows=\(rowCount, privacy: .public)")
+        }
+        scheduleReconnect(host: host)
+    }
+
+    private func scheduleReconnect(host: DockHostConfiguration) {
+        guard hosts.contains(where: { $0.id == host.id }) else {
+            return
+        }
+        streamTasks[host.id] = Task { [weak self, host] in
+            do {
+                try await Task.sleep(for: self?.streamReconnectDelay ?? CodexDockConstants.Dock.autoRefreshInterval)
+            } catch {
+                return
+            }
+            await self?.openStream(host: host)
+        }
+    }
+
+    private func closeStreams() async {
+        streamTasks.values.forEach { $0.cancel() }
+        streamTasks = [:]
+        let connections = streamConnections
+        streamConnections = [:]
+        for connection in connections.values {
+            await connection.close()
+        }
+    }
+
+    private func publishSnapshot() {
+        guard !hosts.isEmpty else {
+            return
+        }
+        let snapshot = sessionTable.snapshot(
+            hosts: hosts,
+            localMetadata: localMetadata,
+            now: now
+        )
+        state = .loaded(snapshot)
+        connectivityReporter?.reportDockState(state)
     }
 
     private nonisolated static func mapLoadFailure(_ error: Error) -> DockLoadFailure {
         if let failure = error as? DockLoadFailure {
             return failure
         }
+        if let clientError = error as? AppServerClientError {
+            switch clientError {
+            case .disconnected, .notConnected, .requestTimedOut, .transport:
+                return .offline(clientError.localizedDescription)
+            case .duplicateRequestID,
+                 .malformedMessage,
+                 .requestCancelled,
+                 .responseDecoding,
+                 .server,
+                 .unexpectedServerRequest,
+                 .unmatchedResponse:
+                return .error(clientError.localizedDescription)
+            }
+        }
         return .error(error.localizedDescription)
-    }
-
-    private func makeSnapshot(
-        results: [HostLoadOutcome],
-        checkingHostIDs: Set<String> = []
-    ) -> DockSnapshot {
-        var summaries: [SessionSummary] = []
-        var mappingFailures: [SessionSummaryMappingFailure] = []
-        var hostStatesByID: [String: DockHostStateViewModel] = [:]
-        var scopeLoadFailures: [DockScopeLoadFailureViewModel] = []
-        var scopeConflicts: [DockScopeConflictViewModel] = []
-
-        for outcome in results {
-            let host = DockHostViewModel(host: outcome.host)
-            let hostSummaries = successfulScopedSummaries(from: outcome)
-            let deduplicated = deduplicated(hostSummaries)
-            let hostDedupedSummaries = deduplicated.summaries
-            let overlayMessages = successfulLiveOverlayMessages(from: outcome)
-            summaries.append(contentsOf: hostDedupedSummaries)
-            scopeConflicts.append(contentsOf: deduplicated.conflicts)
-            mappingFailures.append(contentsOf: successfulMappingFailures(from: outcome))
-
-            for scopedOutcome in outcome.scopedResults {
-                if case .failure(let failure) = scopedOutcome.result {
-                    scopeLoadFailures.append(
-                        DockScopeLoadFailureViewModel(
-                            host: host,
-                            scope: scopedOutcome.scope,
-                            message: failure.localizedDescription
-                        )
-                    )
-                }
-            }
-
-            if let failure = outcome.completeFailure {
-                switch failure {
-                case .offline(let message):
-                    hostStatesByID[host.id] = DockHostStateViewModel(host: host, status: .offline(message))
-                case .error(let message):
-                    hostStatesByID[host.id] = DockHostStateViewModel(host: host, status: .error(message))
-                }
-            } else if scopeLoadFailures.contains(where: { $0.host.id == host.id }) {
-                var messages = scopeLoadFailures
-                    .filter { $0.host.id == host.id }
-                    .map { "\($0.scope.label): \($0.message)" }
-                messages.append(contentsOf: overlayMessages)
-                hostStatesByID[host.id] =
-                    DockHostStateViewModel(
-                        host: host,
-                        status: .partial(rowCount: hostDedupedSummaries.count, message: messages.joined(separator: "; "))
-                    )
-            } else if !overlayMessages.isEmpty {
-                hostStatesByID[host.id] =
-                    DockHostStateViewModel(
-                        host: host,
-                        status: .partial(
-                            rowCount: hostDedupedSummaries.count,
-                            message: overlayMessages.joined(separator: "; ")
-                        )
-                    )
-            } else {
-                hostStatesByID[host.id] =
-                    DockHostStateViewModel(
-                        host: host,
-                        status: hostDedupedSummaries.isEmpty
-                            ? .empty
-                            : .loaded(rowCount: hostDedupedSummaries.count)
-                    )
-            }
-        }
-
-        for host in hosts where checkingHostIDs.contains(host.id) {
-            let hostViewModel = DockHostViewModel(host: host)
-            hostStatesByID[host.id] = DockHostStateViewModel(host: hostViewModel, status: .checking)
-        }
-
-        let projector = SessionRowProjector(
-            hosts: hosts,
-            localMetadata: localMetadata,
-            now: now
-        )
-        let rows = projector.rows(from: summaries)
-
-        return DockSnapshot(
-            host: DockHostViewModel(host: hosts[0]),
-            hosts: hosts.map(DockHostViewModel.init),
-            hostStates: hosts.compactMap { hostStatesByID[$0.id] },
-            rows: rows,
-            scopeLoadFailures: scopeLoadFailures,
-            scopeConflicts: scopeConflicts,
-            mappingFailures: mappingFailures,
-            isPartial: !checkingHostIDs.isEmpty
-        )
-    }
-
-    private func successfulScopedSummaries(from outcome: HostLoadOutcome) -> [ScopedSessionSummary] {
-        var summaries: [ScopedSessionSummary] = []
-        for scopedOutcome in outcome.scopedResults {
-            if case .success(let result) = scopedOutcome.result {
-                summaries.append(
-                    contentsOf: result.summaries.map { summary in
-                        ScopedSessionSummary(scope: scopedOutcome.scope, summary: summary)
-                    }
-                )
-            }
-        }
-        return summaries
-    }
-
-    private func successfulLiveOverlayMessages(from outcome: HostLoadOutcome) -> [String] {
-        var messages: [String] = []
-        for scopedOutcome in outcome.scopedResults {
-            guard case .success(let result) = scopedOutcome.result,
-                  let message = result.liveOverlay?.degradedMessage,
-                  !messages.contains(message) else {
-                continue
-            }
-            messages.append(message)
-        }
-        return messages
-    }
-
-    private func successfulMappingFailures(from outcome: HostLoadOutcome) -> [SessionSummaryMappingFailure] {
-        var failures: [SessionSummaryMappingFailure] = []
-        for scopedOutcome in outcome.scopedResults {
-            if case .success(let result) = scopedOutcome.result {
-                failures.append(contentsOf: result.mappingFailures)
-            }
-        }
-        return failures
-    }
-
-    private func deduplicated(_ summaries: [ScopedSessionSummary]) -> DeduplicatedSummaries {
-        var orderedIDs: [HostScopedThreadID] = []
-        var summariesByID: [HostScopedThreadID: SessionSummary] = [:]
-        var scopesByID: [HostScopedThreadID: Set<DockSessionScope>] = [:]
-        var conflictIDs: Set<HostScopedThreadID> = []
-        var conflicts: [DockScopeConflictViewModel] = []
-
-        for scopedSummary in summaries {
-            let summary = scopedSummary.summary
-            if summariesByID[summary.id] == nil {
-                orderedIDs.append(summary.id)
-                summariesByID[summary.id] = summary
-                scopesByID[summary.id] = [scopedSummary.scope]
-                continue
-            }
-
-            guard let existing = summariesByID[summary.id] else {
-                continue
-            }
-            var scopes = scopesByID[summary.id] ?? []
-            if !scopes.contains(scopedSummary.scope), !conflictIDs.contains(summary.id) {
-                conflictIDs.insert(summary.id)
-                let winningScope = preferredScope(candidate: summary, existing: existing)
-                conflicts.append(
-                    DockScopeConflictViewModel(
-                        threadID: summary.id,
-                        backendThreadID: summary.backendThreadID,
-                        winningScope: winningScope
-                    )
-                )
-            }
-            scopes.insert(scopedSummary.scope)
-            scopesByID[summary.id] = scopes
-
-            if shouldPrefer(summary, over: existing) {
-                summariesByID[summary.id] = summary
-            }
-        }
-
-        return DeduplicatedSummaries(
-            summaries: orderedIDs.compactMap { summariesByID[$0] },
-            conflicts: conflicts
-        )
-    }
-
-    private func shouldPrefer(_ candidate: SessionSummary, over existing: SessionSummary) -> Bool {
-        if existing.origin.kind == .humanInteractive,
-           candidate.origin.kind != .humanInteractive {
-            return true
-        }
-        if existing.origin.kind == .unknown,
-           candidate.origin.kind == .agentOrAutomation {
-            return true
-        }
-        return false
-    }
-
-    private func preferredScope(candidate: SessionSummary, existing: SessionSummary) -> DockSessionScope {
-        shouldPrefer(candidate, over: existing)
-            ? scope(for: candidate.origin)
-            : scope(for: existing.origin)
-    }
-
-    private func scope(for origin: SessionOrigin) -> DockSessionScope {
-        origin.kind == .humanInteractive ? .human : .agents
-    }
-
-    private func hostIndex(_ hostID: String) -> Int {
-        hosts.firstIndex { $0.id == hostID } ?? Int.max
-    }
-
-    private nonisolated static func scopeIndex(_ scope: DockSessionScope) -> Int {
-        DockSessionScope.allCases.firstIndex(of: scope) ?? Int.max
     }
 
     private func save(metadata: LocalThreadMetadata, for key: LocalThreadMetadataKey) async {

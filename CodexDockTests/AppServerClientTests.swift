@@ -189,6 +189,85 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(notification?.params, .object(["ok": .bool(true)]))
     }
 
+    func testDockStreamConnectionSubscribesAndDecodesUpdates() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+        let host = makeHost()
+        let connection = AppServerDockStreamConnection(client: client, host: host)
+
+        let subscribeTask = Task {
+            try await connection.subscribe()
+        }
+        let subscribeRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(subscribeRequest.method, AppServerMethods.dockSubscribe)
+        let snapshot = DockStreamUpdateDTO(
+            kind: .snapshot,
+            schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            epoch: "epoch-1",
+            seq: 1,
+            freshness: DockStreamFreshnessDTO(status: .fresh),
+            hosts: [DockStreamHostDTO(id: "Amir-M5")],
+            sessions: [
+                DockStreamSessionDTO(
+                    id: "Amir-M5::thread-1",
+                    threadID: "thread-1",
+                    status: .dormant,
+                    updatedAt: 1_780_000_000,
+                    source: DockStreamSourceDTO(kind: .human)
+                )
+            ]
+        )
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: subscribeRequest.id,
+                    result: try JSONValue.encoded(snapshot)
+                )
+            )
+        )
+
+        let subscribed = try await subscribeTask.value
+        XCTAssertEqual(subscribed.kind, .snapshot)
+        XCTAssertEqual(subscribed.sessions?.map(\.status), [.dormant])
+
+        let updateTask = Task {
+            var iterator = connection.updates().makeAsyncIterator()
+            return try await iterator.next()
+        }
+        let delta = DockStreamUpdateDTO(
+            kind: .delta,
+            schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            epoch: "epoch-1",
+            baseSeq: 1,
+            seq: 2,
+            upsertSessions: [
+                DockStreamSessionDTO(
+                    id: "Amir-M5::thread-1",
+                    threadID: "thread-1",
+                    status: .needsApproval,
+                    updatedAt: 1_780_000_001,
+                    source: DockStreamSourceDTO(kind: .human)
+                )
+            ]
+        )
+        await transport.enqueue(
+            .notification(
+                JSONRPCNotification(
+                    method: AppServerMethods.dockUpdate,
+                    params: try JSONValue.encoded(delta)
+                )
+            )
+        )
+
+        let update = try await valueWithinOneSecond {
+            try await updateTask.value
+        }
+        XCTAssertEqual(update?.kind, .delta)
+        XCTAssertEqual(update?.upsertSessions?.map(\.status), [.needsApproval])
+        await connection.close()
+    }
+
     func testOfflineAndMalformedResponsePathsSurfaceExplicitState() async throws {
         let offlineTransport = ScriptedAppServerTransport(connectError: TestTransportError.offline)
         let offlineClient = AppServerClient(transport: offlineTransport)

@@ -1,0 +1,580 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import {
+  DOCK_SESSION_CLIENT_BUFFER_LIMIT_BYTES,
+  DOCK_SESSION_PERSISTENCE_FILE,
+  DOCK_SESSION_REFRESH_INTERVAL_MS,
+  DOCK_SESSION_SCHEMA_VERSION,
+  THREAD_LIST_MAX_LIMIT,
+} from "./dock-relay-constants.mjs";
+import { aggregateThreadList, preferThread } from "./dock-relay-thread-data.mjs";
+
+const DOCK_SUBSCRIBE_METHOD = "dock/subscribe";
+const DOCK_RESYNC_METHOD = "dock/resync";
+const DOCK_UPDATE_METHOD = "dock/update";
+
+const AGENT_SOURCE_KINDS = Object.freeze([
+  "exec",
+  "appServer",
+  "subAgentReview",
+  "subAgentCompact",
+  "subAgentThreadSpawn",
+  "subAgentOther",
+  "unknown",
+]);
+
+function nowISOString() {
+  return new Date().toISOString();
+}
+
+function nonEmpty(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function sortedJSONString(value) {
+  return JSON.stringify(sortJSON(value));
+}
+
+function sortJSON(value) {
+  if (Array.isArray(value)) {
+    return value.map(sortJSON);
+  }
+  if (value && typeof value === "object") {
+    return Object.keys(value).sort().reduce((result, key) => {
+      result[key] = sortJSON(value[key]);
+      return result;
+    }, {});
+  }
+  return value;
+}
+
+function publicHostFromConfig(config) {
+  return {
+    id: config.hostId || os.hostname(),
+    displayName: config.hostName || config.hostId || os.hostname(),
+    endpoint: config.hostEndpoint || null,
+  };
+}
+
+function persistencePath(config) {
+  if (config.dockSessionPersistencePath) {
+    return config.dockSessionPersistencePath;
+  }
+  return path.resolve(process.cwd(), DOCK_SESSION_PERSISTENCE_FILE);
+}
+
+function readLastGood(pathname) {
+  if (!pathname || !fs.existsSync(pathname)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(pathname, "utf8"));
+    if (parsed?.schemaVersion !== DOCK_SESSION_SCHEMA_VERSION) {
+      return null;
+    }
+    if (!Array.isArray(parsed?.hosts) || !Array.isArray(parsed?.sessions)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeLastGoodAtomic(pathname, snapshot) {
+  if (!pathname) {
+    return;
+  }
+  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  const tempPath = `${pathname}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  fs.renameSync(tempPath, pathname);
+}
+
+function laneForScope(scope) {
+  return scope === "automation" ? "agent" : "human";
+}
+
+function kindLabelForThread(thread, scope) {
+  return nonEmpty(thread?.sourceKind)
+    || nonEmpty(thread?.source)
+    || (scope === "automation" ? "Agent" : "Human");
+}
+
+function sourceKindFromThread(thread, scope) {
+  if (scope === "automation") {
+    return "automation";
+  }
+  if (scope === "human") {
+    return "human";
+  }
+  return "unknown";
+}
+
+function normalizedStatus(thread) {
+  const status = thread?.status;
+  if (status?.type === "active") {
+    const flags = new Set(status.activeFlags || []);
+    if (flags.has("waitingOnApproval")) {
+      return "needsApproval";
+    }
+    if (flags.has("waitingOnUserInput")) {
+      return "needsInput";
+    }
+    return "running";
+  }
+  switch (status?.type) {
+    case "idle":
+      return "idle";
+    case "systemError":
+      return "error";
+    case "notLoaded":
+      return "dormant";
+    default:
+      return "unknown";
+  }
+}
+
+function titleForThread(thread) {
+  return nonEmpty(thread?.name)
+    || nonEmpty(thread?.preview)
+    || nonEmpty(thread?.cwd?.split("/").filter(Boolean).at(-1))
+    || (nonEmpty(thread?.id) ? `Thread ${thread.id.slice(0, 8)}` : "Thread");
+}
+
+function repositoryForThread(thread) {
+  const originURL = nonEmpty(thread?.gitInfo?.originUrl);
+  if (originURL) {
+    const pieces = originURL.split(/[/:]/).filter(Boolean);
+    const last = pieces.at(-1);
+    if (last) {
+      return last.endsWith(".git") ? last.slice(0, -4) : last;
+    }
+  }
+  return nonEmpty(thread?.cwd?.split("/").filter(Boolean).at(-1));
+}
+
+function normalizeThread(thread, host, scope) {
+  const threadID = nonEmpty(thread?.id);
+  if (!threadID) {
+    return null;
+  }
+  const sessionID = nonEmpty(thread?.sessionId) || threadID;
+  const updatedAt = Number(thread?.updatedAt ?? thread?.createdAt ?? 0);
+  const sourceKind = sourceKindFromThread(thread, scope);
+  return {
+    id: `${host.id}::${threadID}`,
+    hostID: host.id,
+    threadID,
+    backendSessionID: sessionID,
+    title: titleForThread(thread),
+    status: normalizedStatus(thread),
+    lane: laneForScope(scope),
+    kindLabel: kindLabelForThread(thread, scope),
+    repository: repositoryForThread(thread),
+    workingDirectory: nonEmpty(thread?.cwd) || nonEmpty(thread?.path),
+    branch: nonEmpty(thread?.gitInfo?.branch),
+    updatedAt,
+    summary: nonEmpty(thread?.latestSummary) || nonEmpty(thread?.preview) || titleForThread(thread),
+    source: {
+      kind: sourceKind,
+    },
+  };
+}
+
+function sortedSessions(sessions) {
+  return [...sessions].sort((lhs, rhs) => {
+    const lhsUpdated = Number(lhs.updatedAt || 0);
+    const rhsUpdated = Number(rhs.updatedAt || 0);
+    if (lhsUpdated !== rhsUpdated) {
+      return rhsUpdated - lhsUpdated;
+    }
+    return String(lhs.id).localeCompare(String(rhs.id));
+  });
+}
+
+async function fetchDockSessionRows(config) {
+  const baseParams = {
+    archived: false,
+    limit: THREAD_LIST_MAX_LIMIT,
+    sortKey: "updated_at",
+    sortDirection: "desc",
+    modelProviders: [],
+  };
+  const [human, automation] = await Promise.all([
+    aggregateThreadList(config, baseParams),
+    aggregateThreadList(config, {
+      ...baseParams,
+      sourceKinds: AGENT_SOURCE_KINDS,
+    }),
+  ]);
+  const byThreadID = new Map();
+  for (const [response, lane] of [[human, "human"], [automation, "automation"]]) {
+    const rows = Array.isArray(response?.data) ? response.data : [];
+    for (const row of rows) {
+      if (!row?.id) {
+        continue;
+      }
+      const existing = byThreadID.get(row.id);
+      byThreadID.set(row.id, {
+        lane,
+        row: preferThread(row, existing?.row),
+      });
+    }
+  }
+  return [...byThreadID.values()];
+}
+
+class CodexDockSessionProvider {
+  constructor(config) {
+    this.config = config;
+  }
+
+  async listSessions() {
+    const host = publicHostFromConfig(this.config);
+    const rows = await fetchDockSessionRows(this.config);
+    const sessions = rows
+      .map(({ row, lane }) => normalizeThread(row, host, lane))
+      .filter(Boolean);
+    return { host, sessions };
+  }
+}
+
+class DockSessionTable {
+  constructor(config, options = {}) {
+    this.schemaVersion = DOCK_SESSION_SCHEMA_VERSION;
+    this.epoch = options.epoch || crypto.randomUUID();
+    this.seq = 0;
+    this.asOf = null;
+    this.hostsByID = new Map();
+    this.sessionsByID = new Map();
+    this.freshness = {
+      status: "unknown",
+      lastAttemptAt: null,
+      lastSyncAt: null,
+      lastError: null,
+    };
+
+    const loaded = options.lastGood || null;
+    if (loaded) {
+      this.asOf = loaded.asOf || null;
+      for (const host of loaded.hosts || []) {
+        if (host?.id) {
+          this.hostsByID.set(host.id, host);
+        }
+      }
+      for (const session of loaded.sessions || []) {
+        if (session?.id) {
+          this.sessionsByID.set(session.id, session);
+        }
+      }
+      this.freshness = {
+        status: "stale",
+        lastAttemptAt: null,
+        lastSyncAt: loaded.asOf || null,
+        lastError: null,
+      };
+    }
+
+    const host = publicHostFromConfig(config);
+    this.hostsByID.set(host.id, {
+      ...(this.hostsByID.get(host.id) || {}),
+      ...host,
+    });
+  }
+
+  snapshot() {
+    return {
+      kind: "snapshot",
+      schemaVersion: this.schemaVersion,
+      epoch: this.epoch,
+      seq: this.seq,
+      asOf: this.asOf,
+      freshness: this.freshness,
+      hosts: [...this.hostsByID.values()].sort((lhs, rhs) => String(lhs.id).localeCompare(String(rhs.id))),
+      sessions: sortedSessions(this.sessionsByID.values()),
+    };
+  }
+
+  applySuccessfulRefresh({ host, sessions, asOf = nowISOString() }) {
+    const previousSeq = this.seq;
+    const previousSessions = new Map(this.sessionsByID);
+    const previousHosts = new Map(this.hostsByID);
+    const normalizedSessions = sortedSessions(sessions);
+    const nextSessions = new Map(normalizedSessions.map((session) => [session.id, session]));
+    const nextHosts = new Map([[host.id, host]]);
+    const upsertHosts = [];
+    const upsertSessions = [];
+    const deleteSessionIDs = [];
+
+    for (const [id, value] of nextHosts) {
+      if (sortedJSONString(previousHosts.get(id)) !== sortedJSONString(value)) {
+        upsertHosts.push(value);
+      }
+    }
+
+    for (const [id, value] of nextSessions) {
+      if (sortedJSONString(previousSessions.get(id)) !== sortedJSONString(value)) {
+        upsertSessions.push(value);
+      }
+    }
+
+    for (const id of previousSessions.keys()) {
+      if (!nextSessions.has(id)) {
+        deleteSessionIDs.push(id);
+      }
+    }
+
+    this.hostsByID = nextHosts;
+    this.sessionsByID = nextSessions;
+    this.asOf = asOf;
+    this.freshness = {
+      status: "fresh",
+      lastAttemptAt: asOf,
+      lastSyncAt: asOf,
+      lastError: null,
+    };
+
+    if (upsertHosts.length === 0 && upsertSessions.length === 0 && deleteSessionIDs.length === 0) {
+      return this.heartbeat();
+    }
+
+    this.seq += 1;
+    return {
+      kind: "delta",
+      schemaVersion: this.schemaVersion,
+      epoch: this.epoch,
+      baseSeq: previousSeq,
+      seq: this.seq,
+      asOf,
+      freshness: this.freshness,
+      upsertHosts,
+      upsertSessions,
+      deleteSessionIDs,
+    };
+  }
+
+  applyFailedRefresh(error) {
+    const attemptedAt = nowISOString();
+    this.freshness = {
+      status: "stale",
+      lastAttemptAt: attemptedAt,
+      lastSyncAt: this.freshness.lastSyncAt,
+      lastError: error?.message || String(error),
+    };
+    return this.heartbeat();
+  }
+
+  heartbeat() {
+    return {
+      kind: "heartbeat",
+      schemaVersion: this.schemaVersion,
+      epoch: this.epoch,
+      seq: this.seq,
+      asOf: this.asOf,
+      freshness: this.freshness,
+    };
+  }
+}
+
+class DockSessionAggregator {
+  constructor(config, options = {}) {
+    this.config = config;
+    this.logger = config.logger;
+    this.provider = options.provider
+      ?? config.dockSessionProvider
+      ?? new CodexDockSessionProvider(config);
+    this.refreshIntervalMs = options.refreshIntervalMs
+      ?? config.dockSessionRefreshIntervalMs
+      ?? DOCK_SESSION_REFRESH_INTERVAL_MS;
+    this.persistencePath = options.persistencePath ?? persistencePath(config);
+    this.table = new DockSessionTable(config, {
+      lastGood: readLastGood(this.persistencePath),
+    });
+    this.subscribers = new Set();
+    this.refreshTimer = null;
+    this.refreshPromise = null;
+    this.started = false;
+  }
+
+  start() {
+    if (this.started) {
+      return;
+    }
+    this.started = true;
+    this.refreshPromise = this.refreshNow({ notify: true });
+    this.refreshTimer = setInterval(() => {
+      this.refreshNow({ notify: true }).catch((error) => {
+        this.logger?.warn?.("dock.session_refresh_failed", { error });
+      });
+    }, this.refreshIntervalMs);
+    this.refreshTimer.unref?.();
+  }
+
+  stop() {
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+    this.subscribers.clear();
+    this.started = false;
+  }
+
+  subscribe(listener) {
+    this.subscribers.add(listener);
+    this.start();
+    return () => {
+      this.subscribers.delete(listener);
+    };
+  }
+
+  async snapshot() {
+    this.start();
+    if (this.refreshPromise) {
+      await this.refreshPromise.catch(() => {});
+    }
+    return this.table.snapshot();
+  }
+
+  currentSnapshot() {
+    return this.table.snapshot();
+  }
+
+  async resync() {
+    await this.refreshNow({ notify: false });
+    return this.table.snapshot();
+  }
+
+  async refreshNow({ notify }) {
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+    this.refreshPromise = this.performRefresh({ notify }).finally(() => {
+      this.refreshPromise = null;
+    });
+    return this.refreshPromise;
+  }
+
+  async performRefresh({ notify }) {
+    let update;
+    try {
+      const { host, sessions } = await this.provider.listSessions();
+      update = this.table.applySuccessfulRefresh({
+        host,
+        sessions,
+        asOf: nowISOString(),
+      });
+      writeLastGoodAtomic(this.persistencePath, this.table.snapshot());
+      this.logger?.info?.("dock.session_refresh_succeeded", {
+        hostId: host.id,
+        rows: sessions.length,
+        updateKind: update.kind,
+        seq: update.seq,
+      });
+    } catch (error) {
+      update = this.table.applyFailedRefresh(error);
+      this.logger?.warn?.("dock.session_refresh_failed", {
+        error,
+        seq: update.seq,
+      });
+    }
+
+    if (notify) {
+      this.notify(update);
+    }
+    return update;
+  }
+
+  notify(update) {
+    for (const listener of this.subscribers) {
+      try {
+        listener(update);
+      } catch (error) {
+        this.logger?.warn?.("dock.session_subscriber_failed", { error });
+      }
+    }
+  }
+}
+
+function dockUpdateForSubscriber(aggregator, downstreamWs, update) {
+  if (Number(downstreamWs?.bufferedAmount || 0) > DOCK_SESSION_CLIENT_BUFFER_LIMIT_BYTES) {
+    return aggregator.currentSnapshot();
+  }
+  return update;
+}
+
+function bufferedDockUpdateIsAfterSnapshot(snapshot, update) {
+  if (!snapshot || !update) {
+    return false;
+  }
+  if (update.epoch !== snapshot.epoch) {
+    return false;
+  }
+  return Number(update.seq || 0) > Number(snapshot.seq || 0);
+}
+
+async function handleDockSubscribe({ config, session, downstreamWs, sendJson }) {
+  session.dockUnsubscribe?.();
+  session.dockUnsubscribe = null;
+  const aggregator = dockSessionAggregatorForConfig(config);
+  let subscriptionReady = false;
+  const bufferedUpdates = [];
+  const sendDockUpdate = (update) => {
+    sendJson(downstreamWs, {
+      jsonrpc: "2.0",
+      method: DOCK_UPDATE_METHOD,
+      params: dockUpdateForSubscriber(aggregator, downstreamWs, update),
+    });
+  };
+  session.dockUnsubscribe = aggregator.subscribe((update) => {
+    if (!subscriptionReady) {
+      bufferedUpdates.push(update);
+      return;
+    }
+    sendDockUpdate(update);
+  });
+  try {
+    const snapshot = await aggregator.snapshot();
+    subscriptionReady = true;
+    for (const update of bufferedUpdates) {
+      if (bufferedDockUpdateIsAfterSnapshot(snapshot, update)) {
+        sendDockUpdate(update);
+      }
+    }
+    bufferedUpdates.length = 0;
+    return snapshot;
+  } catch (error) {
+    session.dockUnsubscribe?.();
+    session.dockUnsubscribe = null;
+    throw error;
+  }
+}
+
+function dockSessionAggregatorForConfig(config) {
+  if (!config.dockSessionAggregator) {
+    config.dockSessionAggregator = new DockSessionAggregator(config);
+  }
+  return config.dockSessionAggregator;
+}
+
+export {
+  DOCK_RESYNC_METHOD,
+  DOCK_SUBSCRIBE_METHOD,
+  DOCK_UPDATE_METHOD,
+  CodexDockSessionProvider,
+  DockSessionAggregator,
+  DockSessionTable,
+  bufferedDockUpdateIsAfterSnapshot,
+  dockSessionAggregatorForConfig,
+  dockUpdateForSubscriber,
+  handleDockSubscribe,
+  normalizeThread,
+  normalizedStatus,
+};

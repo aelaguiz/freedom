@@ -21,7 +21,7 @@ final class DockStoreScopeTests: XCTestCase {
                 DockLoadResult(summaries: [])
             )
         ])
-        let store = DockStore(registry: registry, loader: loader)
+        let store = DockStore(registry: registry, streamClient: LoaderBackedDockStreamClient(loader: loader))
 
         await store.load()
 
@@ -97,7 +97,7 @@ final class DockStoreScopeTests: XCTestCase {
                 ])
             )
         ])
-        let store = DockStore(host: host, loader: loader)
+        let store = DockStore(host: host, streamClient: LoaderBackedDockStreamClient(loader: loader))
 
         await store.load()
 
@@ -107,7 +107,8 @@ final class DockStoreScopeTests: XCTestCase {
 
         XCTAssertEqual(snapshot.rowCount, 4)
         XCTAssertFalse(snapshot.rows.contains { $0.status.label == "Needs me" })
-        XCTAssertEqual(snapshot.rows.first { $0.id.threadID == "human-waiting" }?.status, .running)
+        XCTAssertEqual(snapshot.rows.first { $0.id.threadID == "human-waiting" }?.status, .needsInput)
+        XCTAssertEqual(snapshot.rows.first { $0.id.threadID == "human-not-loaded" }?.status, .dormant)
 
         let humanProjection = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .human)))
         let agentsProjection = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .agents)))
@@ -160,7 +161,7 @@ final class DockStoreScopeTests: XCTestCase {
                 ])
             )
         ])
-        let store = DockStore(host: host, loader: loader)
+        let store = DockStore(host: host, streamClient: LoaderBackedDockStreamClient(loader: loader))
 
         await store.load()
 
@@ -171,13 +172,6 @@ final class DockStoreScopeTests: XCTestCase {
         let agentRows = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .agents))).rows
         XCTAssertEqual(snapshot.rowCount, 1)
         XCTAssertEqual(snapshot.mappingFailures, [])
-        XCTAssertEqual(snapshot.scopeConflicts, [
-            DockScopeConflictViewModel(
-                threadID: HostScopedThreadID(hostID: host.id, threadID: "shared-thread"),
-                backendThreadID: "shared-thread",
-                winningScope: .agents
-            )
-        ])
         XCTAssertEqual(agentRows.map(\.title), ["Agent copy"])
         XCTAssertEqual(agentRows.map(\.origin.kind), [.agentOrAutomation])
         XCTAssertTrue(snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .human))).rows.isEmpty)
@@ -203,7 +197,7 @@ final class DockStoreScopeTests: XCTestCase {
                 .offline("Agents unreachable")
             )
         ])
-        let store = DockStore(host: host, loader: loader)
+        let store = DockStore(host: host, streamClient: LoaderBackedDockStreamClient(loader: loader))
 
         await store.load()
 
@@ -215,8 +209,6 @@ final class DockStoreScopeTests: XCTestCase {
         XCTAssertEqual(snapshot.hostStates.map(\.status), [
             .partial(rowCount: 1, message: "Agents: Agents unreachable")
         ])
-        XCTAssertEqual(snapshot.scopeLoadFailures.map(\.scope), [.agents])
-        XCTAssertEqual(snapshot.scopeLoadFailures.map(\.message), ["Agents unreachable"])
     }
 
     @MainActor
@@ -240,7 +232,7 @@ final class DockStoreScopeTests: XCTestCase {
                 ])
             )
         ])
-        let store = DockStore(host: host, loader: loader)
+        let store = DockStore(host: host, streamClient: LoaderBackedDockStreamClient(loader: loader))
 
         await store.load()
 
@@ -252,8 +244,6 @@ final class DockStoreScopeTests: XCTestCase {
         XCTAssertEqual(snapshot.hostStates.map(\.status), [
             .partial(rowCount: 1, message: "Dock: Dock unreachable")
         ])
-        XCTAssertEqual(snapshot.scopeLoadFailures.map(\.scope), [.human])
-        XCTAssertEqual(snapshot.scopeLoadFailures.map(\.message), ["Dock unreachable"])
         XCTAssertEqual(snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .agents))).rows.count, 1)
         XCTAssertEqual(snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .human))).rows.count, 0)
     }

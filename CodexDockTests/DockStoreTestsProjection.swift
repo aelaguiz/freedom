@@ -5,12 +5,12 @@ final class DockStoreTestsProjection: XCTestCase {
     func testNewestProjectionOrdersRowsByActivityBeforeStatus() {
         let snapshot = makeSnapshot(rows: [
             makeRow(threadID: "old-running", title: "Old running", branch: "main", status: .running, lastActivity: 100),
-            makeRow(threadID: "new-not-loaded", title: "New not loaded", branch: "main", status: .notLoaded, lastActivity: 300)
+            makeRow(threadID: "new-history", title: "New history", branch: "main", status: .dormant, lastActivity: 300)
         ])
 
         let projection = snapshot.project(options: .init(lens: .newest))
 
-        XCTAssertEqual(projection.rows.map(\.id.threadID), ["new-not-loaded", "old-running"])
+        XCTAssertEqual(projection.rows.map(\.id.threadID), ["new-history", "old-running"])
         XCTAssertEqual(projection.groups, [])
     }
 
@@ -125,7 +125,7 @@ final class DockStoreTestsProjection: XCTestCase {
             rows: [
                 makeRow(host: amir, threadID: "human-running", title: "Human running", branch: "main", status: .running, lastActivity: 300),
                 makeRow(host: home, threadID: "agent-idle", title: "Agent idle", branch: "feature/dock", status: .idle, lastActivity: 200, origin: .agentOrAutomation(subtype: .exec)),
-                makeRow(host: home, threadID: "human-not-loaded", title: "Human not loaded", branch: "feature/dock", status: .notLoaded, lastActivity: 100)
+                makeRow(host: home, threadID: "human-history", title: "Human history", branch: "feature/dock", status: .dormant, lastActivity: 100)
             ],
             hosts: [amir, home]
         )
@@ -133,14 +133,14 @@ final class DockStoreTestsProjection: XCTestCase {
         let filtered = DockFilterState(
             selectedHostIDs: [home.id],
             selectedBranches: ["feature/dock"],
-            statusKinds: [.notLoaded],
+            statusKinds: [.dormant],
             source: .human,
             showsIdle: false
         )
 
         let projection = snapshot.project(options: .init(lens: .newest, filters: filtered))
 
-        XCTAssertEqual(projection.rows.map(\.id.threadID), ["human-not-loaded"])
+        XCTAssertEqual(projection.rows.map(\.id.threadID), ["human-history"])
         XCTAssertEqual(projection.summary.resultCount, 1)
         XCTAssertEqual(projection.summary.activeFilterCount, 4)
         XCTAssertTrue(projection.summary.text.contains("Host: Home"))
@@ -183,7 +183,7 @@ final class DockStoreTestsProjection: XCTestCase {
         XCTAssertEqual(visible.rows.map(\.id.threadID), ["idle", "running"])
     }
 
-    func testNotLoadedOnlyEmptyReasonUsesProductCopy() {
+    func testDormantOnlyEmptyReasonUsesNormalFilterCopy() {
         let snapshot = makeSnapshot(rows: [
             makeRow(threadID: "running", title: "Running", branch: "main", status: .running, lastActivity: 300)
         ])
@@ -191,15 +191,12 @@ final class DockStoreTestsProjection: XCTestCase {
         let projection = snapshot.project(
             options: .init(
                 lens: .newest,
-                filters: DockFilterState(statusKinds: [.notLoaded])
+                filters: DockFilterState(statusKinds: [.dormant])
             )
         )
 
-        XCTAssertEqual(projection.emptyReason, .notLoadedOnly)
-        XCTAssertEqual(
-            projection.emptyReason?.message,
-            "These sessions exist in the list, but Dock does not have loaded thread detail for them."
-        )
+        XCTAssertEqual(projection.emptyReason, .noFilterMatches)
+        XCTAssertEqual(projection.emptyReason?.message, "No sessions match the active filters.")
     }
 }
 
@@ -217,8 +214,6 @@ private func makeSnapshot(
             DockHostStateViewModel(host: DockHostViewModel(host: host), status: .loaded(rowCount: rows.filter { $0.id.hostID == host.id }.count))
         },
         rows: rows,
-        scopeLoadFailures: [],
-        scopeConflicts: [],
         mappingFailures: [],
         isPartial: isPartial
     )

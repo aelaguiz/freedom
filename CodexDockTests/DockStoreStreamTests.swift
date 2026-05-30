@@ -1,0 +1,322 @@
+import XCTest
+@testable import CodexDock
+
+final class DockStoreStreamTests: XCTestCase {
+    @MainActor
+    func testSequenceGapRequestsResyncAndKeepsHostRows() async throws {
+        let host = makeHost()
+        let connection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
+                ]
+            ),
+            resyncSnapshots: [
+                dockStreamSnapshot(
+                    host: host,
+                    epoch: "epoch-1",
+                    seq: 3,
+                    sessions: [
+                        dockStreamSession(host: host, threadID: "thread-resynced", title: "Resynced row", updatedAt: 1_100)
+                    ]
+                )
+            ]
+        )
+        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+
+        await store.load()
+        await connection.send(
+            DockStreamUpdateDTO(
+                kind: .delta,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                epoch: "epoch-1",
+                baseSeq: 99,
+                seq: 100,
+                upsertSessions: [
+                    dockStreamSession(host: host, threadID: "bad-delta", title: "Bad delta", updatedAt: 1_200)
+                ]
+            )
+        )
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.id.threadID) == ["thread-resynced"] }
+        ) else {
+            return XCTFail("Expected sequence gap to resync, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.rows.map(\.title), ["Resynced row"])
+    }
+
+    @MainActor
+    func testSchemaMismatchRequestsResyncAndKeepsHostRows() async throws {
+        let host = makeHost()
+        let connection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
+                ]
+            ),
+            resyncSnapshots: [
+                dockStreamSnapshot(
+                    host: host,
+                    epoch: "epoch-1",
+                    seq: 3,
+                    sessions: [
+                        dockStreamSession(host: host, threadID: "thread-resynced", title: "Schema resynced row", updatedAt: 1_100)
+                    ]
+                )
+            ]
+        )
+        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+
+        await store.load()
+        await connection.send(
+            DockStreamUpdateDTO(
+                kind: .delta,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion + 1,
+                epoch: "epoch-1",
+                baseSeq: 1,
+                seq: 2,
+                upsertSessions: [
+                    dockStreamSession(host: host, threadID: "bad-schema", title: "Bad schema delta", updatedAt: 1_200)
+                ]
+            )
+        )
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.id.threadID) == ["thread-resynced"] }
+        ) else {
+            return XCTFail("Expected schema mismatch to resync, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.rows.map(\.title), ["Schema resynced row"])
+        XCTAssertEqual(snapshot.hostStates.map(\.status), [.loaded(rowCount: 1)])
+    }
+
+    @MainActor
+    func testMissingSchemaRequestsResync() async throws {
+        let host = makeHost()
+        let connection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
+                ]
+            ),
+            resyncSnapshots: [
+                dockStreamSnapshot(
+                    host: host,
+                    epoch: "epoch-1",
+                    seq: 3,
+                    sessions: [
+                        dockStreamSession(host: host, threadID: "thread-resynced", title: "Missing schema resynced row", updatedAt: 1_100)
+                    ]
+                )
+            ]
+        )
+        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+
+        await store.load()
+        await connection.send(
+            DockStreamUpdateDTO(
+                kind: .delta,
+                epoch: "epoch-1",
+                baseSeq: 1,
+                seq: 2,
+                upsertSessions: [
+                    dockStreamSession(host: host, threadID: "missing-schema", title: "Missing schema delta", updatedAt: 1_200)
+                ]
+            )
+        )
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.id.threadID) == ["thread-resynced"] }
+        ) else {
+            return XCTFail("Expected missing schema to resync, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.rows.map(\.title), ["Missing schema resynced row"])
+    }
+
+    @MainActor
+    func testHostResyncDoesNotClearOtherHostRows() async throws {
+        let amir = makeHost()
+        let home = makeHost(url: "ws://100.66.11.7:4510")
+        let registry = try HostRegistry(hosts: [amir, home])
+        let amirConnection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: amir,
+                epoch: "amir-epoch",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: amir, threadID: "amir-initial", title: "Amir initial", updatedAt: 1_000)
+                ]
+            ),
+            resyncSnapshots: [
+                dockStreamSnapshot(
+                    host: amir,
+                    epoch: "amir-epoch",
+                    seq: 3,
+                    sessions: [
+                        dockStreamSession(host: amir, threadID: "amir-resynced", title: "Amir resynced", updatedAt: 1_300)
+                    ]
+                )
+            ]
+        )
+        let homeConnection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: home,
+                epoch: "home-epoch",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: home, threadID: "home-row", title: "Home row", updatedAt: 1_200)
+                ]
+            )
+        )
+        let streamClient = SequencedManualDockStreamClient(connections: [amirConnection, homeConnection])
+        let store = DockStore(registry: registry, streamClient: streamClient)
+
+        await store.load()
+        await amirConnection.send(
+            DockStreamUpdateDTO(
+                kind: .delta,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion + 1,
+                epoch: "amir-epoch",
+                baseSeq: 1,
+                seq: 2,
+                upsertSessions: [
+                    dockStreamSession(host: amir, threadID: "bad-schema", title: "Bad schema delta", updatedAt: 1_400)
+                ]
+            )
+        )
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.id.threadID) == ["amir-resynced", "home-row"] }
+        ) else {
+            return XCTFail("Expected one host resync to retain the other host rows, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.hostStates.map(\.status), [
+            .loaded(rowCount: 1),
+            .loaded(rowCount: 1)
+        ])
+        XCTAssertEqual(snapshot.rows.map(\.hostDisplayName), [amir.displayName, home.displayName])
+    }
+
+    @MainActor
+    func testStaleHeartbeatRetainsLastGoodRows() async throws {
+        let host = makeHost()
+        let connection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: host, threadID: "thread-a", title: "Last good", updatedAt: 1_000)
+                ]
+            )
+        )
+        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+
+        await store.load()
+        await connection.send(
+            DockStreamUpdateDTO(
+                kind: .heartbeat,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                epoch: "epoch-1",
+                seq: 1,
+                freshness: DockStreamFreshnessDTO(status: .stale, lastError: "refresh failed")
+            )
+        )
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.hostStates.map(\.status) == [.partial(rowCount: 1, message: "refresh failed")] }
+        ) else {
+            return XCTFail("Expected stale heartbeat to retain rows, got \(store.state)")
+        }
+        XCTAssertTrue(snapshot.isPartial)
+        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["thread-a"])
+    }
+
+    @MainActor
+    func testClosedStreamMarksHostOfflineAndRetainsRows() async throws {
+        let host = makeHost()
+        let connection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: host, threadID: "thread-a", title: "Last good", updatedAt: 1_000)
+                ]
+            )
+        )
+        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+
+        await store.load()
+        await connection.finish()
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.hostStates.map(\.status) == [.partial(rowCount: 1, message: "Offline: Relay stream closed")] }
+        ) else {
+            return XCTFail("Expected closed stream to retain rows and mark host offline, got \(store.state)")
+        }
+        XCTAssertTrue(snapshot.isPartial)
+        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["thread-a"])
+    }
+
+    @MainActor
+    func testClosedStreamReconnectsAndReplacesHostRows() async throws {
+        let host = makeHost()
+        let firstConnection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: host, threadID: "thread-a", title: "Last good", updatedAt: 1_000)
+                ]
+            )
+        )
+        let secondConnection = ManualDockStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-2",
+                seq: 1,
+                sessions: [
+                    dockStreamSession(host: host, threadID: "thread-b", title: "Reconnected row", updatedAt: 1_200)
+                ]
+            )
+        )
+        let streamClient = SequencedManualDockStreamClient(connections: [firstConnection, secondConnection])
+        let store = DockStore(
+            host: host,
+            streamClient: streamClient,
+            streamReconnectDelay: .milliseconds(10)
+        )
+
+        await store.load()
+        await firstConnection.finish()
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.id.threadID) == ["thread-b"] }
+        ) else {
+            return XCTFail("Expected closed stream to reconnect and replace rows, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.hostStates.map(\.status), [.loaded(rowCount: 1)])
+        XCTAssertEqual(snapshot.rows.map(\.title), ["Reconnected row"])
+        let connectCount = await streamClient.connectCount()
+        XCTAssertEqual(connectCount, 2)
+    }
+}

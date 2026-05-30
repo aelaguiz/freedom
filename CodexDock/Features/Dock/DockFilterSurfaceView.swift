@@ -100,12 +100,6 @@ struct DockFilterSurfaceView: View {
                     toggleStatus(status)
                 }
             }
-            if filters.statusKinds == [.notLoaded] {
-                Text("These sessions exist in the list, but Dock does not have loaded thread detail for them.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .codexAutomationID(AutomationID.Dock.notLoadedExplanation)
-            }
         }
     }
 
@@ -178,7 +172,7 @@ struct DockFilterSurfaceView: View {
     private var statusOptions: [DockRowStatusKind] {
         let present = Set(projection?.availableFacets.statuses ?? DockRowStatusKind.allCases)
         let selected = filters.statusKinds == Set(DockRowStatusKind.allCases) ? [] : filters.statusKinds
-        let alwaysAvailable: [DockRowStatusKind] = [.running, .idle, .notLoaded]
+        let alwaysAvailable: [DockRowStatusKind] = [.running, .needsInput, .needsApproval, .idle]
         return orderedUnique(alwaysAvailable + DockRowStatusKind.allCases.filter { present.contains($0) } + selected)
     }
 

@@ -101,50 +101,6 @@ struct ActionErrorBanner: View {
     }
 }
 
-struct ScopeLoadFailureBanner: View {
-    let failure: DockScopeLoadFailureViewModel
-    var automationID: AutomationID? = nil
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
-                .foregroundStyle(.orange)
-            Text("\(failure.host.displayName) \(failure.scope.label) load failed: \(failure.message)")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-            Spacer()
-        }
-        .padding(12)
-        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .accessibilityElement(children: .combine)
-        .accessibilityValue("\(failure.host.id); \(failure.scope.rawValue); \(failure.message)")
-        .codexAutomationID(automationID)
-    }
-}
-
-struct ScopeConflictBanner: View {
-    let conflict: DockScopeConflictViewModel
-    var automationID: AutomationID? = nil
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "arrow.triangle.branch")
-                .foregroundStyle(.orange)
-            Text("Thread \(conflict.backendThreadID) appeared in multiple source scopes; showing it in \(conflict.winningScope.label).")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-            Spacer()
-        }
-        .padding(12)
-        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .accessibilityElement(children: .combine)
-        .accessibilityValue("\(conflict.threadID.hostID); \(conflict.threadID.threadID); \(conflict.winningScope.rawValue)")
-        .codexAutomationID(automationID)
-    }
-}
-
 struct DockMessageView: View {
     let icon: String
     let title: String
@@ -190,12 +146,14 @@ struct DockRowView: View {
 
                     Spacer(minLength: 8)
 
-                    Text(row.status.label)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(statusColor)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 4)
-                        .background(statusColor.opacity(0.12), in: Capsule())
+                    if let statusLabel = row.status.visibleBadgeLabel {
+                        Text(statusLabel)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(statusColor)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(statusColor.opacity(0.12), in: Capsule())
+                    }
                 }
 
                 Text("\(row.hostDisplayName) · \(row.repository) · \(row.branch)")
@@ -253,12 +211,16 @@ struct DockRowView: View {
         switch row.status {
         case .running:
             return .green
+        case .needsInput:
+            return .orange
+        case .needsApproval:
+            return .orange
         case .idle:
             return .blue
-        case .notLoaded:
-            return .secondary
         case .error:
             return .red
+        case .dormant:
+            return .secondary
         case .unknown:
             return .secondary
         }

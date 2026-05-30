@@ -65,7 +65,7 @@ public struct ThreadDetailHeader: Equatable, Sendable {
     public let title: String
     public let repository: String
     public let branch: String
-    public let statusLabel: String
+    public let statusLabel: String?
     public let lastActivity: String
     public let lastActivityDate: Date
 
@@ -76,7 +76,7 @@ public struct ThreadDetailHeader: Equatable, Sendable {
         self.title = row.title
         self.repository = row.repository
         self.branch = row.branch
-        self.statusLabel = row.status.label
+        self.statusLabel = row.status.visibleBadgeLabel
         self.lastActivity = row.lastActivity
         self.lastActivityDate = row.lastActivityDate
     }
@@ -100,6 +100,29 @@ public final class ThreadDetailStore: ObservableObject {
     private struct FullThreadRead {
         let thread: ThreadDTO
         let turns: [JSONValue]
+    }
+
+    private struct StreamItemMergeKey: Equatable {
+        let turnID: String
+        let itemID: String
+        let kind: ThreadEventKind
+        let visibility: ThreadEventVisibilityCategory
+
+        init?(_ event: ThreadEvent) {
+            guard let turnID = event.turnID,
+                  let itemID = event.itemID else {
+                return nil
+            }
+            switch event.visibilityCategory {
+            case .message, .thinking, .tooling:
+                self.turnID = turnID
+                self.itemID = itemID
+                self.kind = event.kind
+                self.visibility = event.visibilityCategory
+            case .request, .system, .unknown:
+                return nil
+            }
+        }
     }
 
     private static let turnPageLimit = CodexDockConstants.Dock.turnPageLimit
@@ -709,14 +732,31 @@ public final class ThreadDetailStore: ObservableObject {
 
     private func appendOrMerge(_ event: ThreadEvent) {
         guard let index = events.firstIndex(where: { $0.id == event.id }) else {
+            appendOrMergeByStreamItem(event)
+            return
+        }
+
+        if events[index].isStreamingDelta, event.isStreamingDelta, events[index].kind == event.kind {
+            events[index].body += event.body
+        } else {
+            events[index] = event
+        }
+    }
+
+    private func appendOrMergeByStreamItem(_ event: ThreadEvent) {
+        guard let mergeKey = StreamItemMergeKey(event),
+              let index = events.firstIndex(where: { StreamItemMergeKey($0) == mergeKey }) else {
             events.append(event)
             return
         }
 
-        if events[index].isLive, event.isLive, events[index].kind == event.kind {
+        let existing = events[index]
+        if existing.isStreamingDelta, event.isStreamingDelta, existing.kind == event.kind {
             events[index].body += event.body
-        } else {
+        } else if existing.isStreamingDelta || !event.isStreamingDelta {
             events[index] = event
+        } else {
+            // Ignore late deltas after a full item snapshot has already arrived.
         }
     }
 

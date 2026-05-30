@@ -1,6 +1,29 @@
 import Foundation
 @testable import CodexDock
 
+private enum DockSessionTestScope: String, CaseIterable, Hashable, Sendable {
+    case human
+    case agents
+
+    var label: String {
+        switch self {
+        case .human:
+            return "Dock"
+        case .agents:
+            return "Agents"
+        }
+    }
+
+    var query: DockSessionQuery {
+        switch self {
+        case .human:
+            return .activeHuman
+        case .agents:
+            return .activeAgents
+        }
+    }
+}
+
 @MainActor
 func waitForLoadedSnapshot(
     from store: DockStore,
@@ -20,6 +43,293 @@ func waitForLoadedSnapshot(
 enum FakeMode: Sendable {
     case success(DockLoadResult)
     case failure(DockLoadFailure)
+}
+
+struct LoaderBackedDockStreamClient: DockStreamConnecting {
+    let loader: any DockSessionLoading
+
+    func connect(to host: DockHostConfiguration) async throws -> any DockStreamConnection {
+        LoaderBackedDockStreamConnection(host: host, loader: loader)
+    }
+}
+
+final class ManualDockStreamClient: DockStreamConnecting, @unchecked Sendable {
+    let connection: ManualDockStreamConnection
+
+    init(connection: ManualDockStreamConnection) {
+        self.connection = connection
+    }
+
+    func connect(to host: DockHostConfiguration) async throws -> any DockStreamConnection {
+        connection
+    }
+}
+
+actor SequencedManualDockStreamClient: DockStreamConnecting {
+    private var connections: [ManualDockStreamConnection]
+    private var count = 0
+
+    init(connections: [ManualDockStreamConnection]) {
+        self.connections = connections
+    }
+
+    func connect(to host: DockHostConfiguration) async throws -> any DockStreamConnection {
+        guard !connections.isEmpty else {
+            throw DockLoadFailure.offline("No scripted stream connection")
+        }
+        count += 1
+        return connections.removeFirst()
+    }
+
+    func connectCount() -> Int {
+        count
+    }
+}
+
+actor ManualDockStreamConnection: DockStreamConnection {
+    private var subscribeSnapshot: DockStreamUpdateDTO
+    private var resyncSnapshots: [DockStreamUpdateDTO]
+    private let updateStream: AsyncThrowingStream<DockStreamUpdateDTO, Error>
+    private let updateContinuation: AsyncThrowingStream<DockStreamUpdateDTO, Error>.Continuation
+
+    init(
+        subscribeSnapshot: DockStreamUpdateDTO,
+        resyncSnapshots: [DockStreamUpdateDTO] = []
+    ) {
+        self.subscribeSnapshot = subscribeSnapshot
+        self.resyncSnapshots = resyncSnapshots
+        let stream = AsyncThrowingStream<DockStreamUpdateDTO, Error>.makeStream()
+        self.updateStream = stream.stream
+        self.updateContinuation = stream.continuation
+    }
+
+    func subscribe() async throws -> DockStreamUpdateDTO {
+        subscribeSnapshot
+    }
+
+    func resync() async throws -> DockStreamUpdateDTO {
+        if resyncSnapshots.isEmpty {
+            return subscribeSnapshot
+        }
+        return resyncSnapshots.removeFirst()
+    }
+
+    nonisolated func updates() -> AsyncThrowingStream<DockStreamUpdateDTO, Error> {
+        updateStream
+    }
+
+    func send(_ update: DockStreamUpdateDTO) {
+        updateContinuation.yield(update)
+    }
+
+    func finish() {
+        updateContinuation.finish()
+    }
+
+    func close() async {
+        updateContinuation.finish()
+    }
+}
+
+actor LoaderBackedDockStreamConnection: DockStreamConnection {
+    private let host: DockHostConfiguration
+    private let loader: any DockSessionLoading
+    private var seq: Int64 = 0
+
+    init(host: DockHostConfiguration, loader: any DockSessionLoading) {
+        self.host = host
+        self.loader = loader
+    }
+
+    func subscribe() async throws -> DockStreamUpdateDTO {
+        try await snapshot()
+    }
+
+    func resync() async throws -> DockStreamUpdateDTO {
+        try await snapshot()
+    }
+
+    nonisolated func updates() -> AsyncThrowingStream<DockStreamUpdateDTO, Error> {
+        AsyncThrowingStream { _ in }
+    }
+
+    func close() async {}
+
+    private func snapshot() async throws -> DockStreamUpdateDTO {
+        seq += 1
+        let scopedResults = await loadScopes()
+        let successes = scopedResults.compactMap { scope, result -> (DockSessionTestScope, DockLoadResult)? in
+            if case .success(let value) = result {
+                return (scope, value)
+            }
+            return nil
+        }
+        let failures = scopedResults.compactMap { scope, result -> (DockSessionTestScope, DockLoadFailure)? in
+            if case .failure(let value) = result {
+                return (scope, value)
+            }
+            return nil
+        }
+
+        guard !successes.isEmpty else {
+            throw failures.first?.1 ?? DockLoadFailure.error("No stream rows loaded")
+        }
+
+        let sessions = deduplicated(successes.flatMap { scope, result in
+            result.summaries.map { summary in
+                (scope, summary)
+            }
+        })
+        let freshness: DockStreamFreshnessDTO
+        if failures.isEmpty {
+            freshness = DockStreamFreshnessDTO(status: .fresh)
+        } else {
+            let message = failures.map { scope, failure in
+                "\(scope.label): \(failure.localizedDescription)"
+            }.joined(separator: "; ")
+            freshness = DockStreamFreshnessDTO(status: .stale, lastError: message)
+        }
+
+        return DockStreamUpdateDTO(
+            kind: .snapshot,
+            schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            epoch: host.id,
+            seq: seq,
+            freshness: freshness,
+            hosts: [DockStreamHostDTO(id: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
+            sessions: sessions.map { streamSession(from: $0) }
+        )
+    }
+
+    private func loadScopes() async -> [(DockSessionTestScope, Result<DockLoadResult, DockLoadFailure>)] {
+        let host = self.host
+        let loader = self.loader
+        return await withTaskGroup(of: (DockSessionTestScope, Result<DockLoadResult, DockLoadFailure>).self) { group in
+            for scope in DockSessionTestScope.allCases {
+                group.addTask {
+                    do {
+                        let result = try await loader.loadSessions(for: host, query: scope.query)
+                        return (scope, .success(result))
+                    } catch {
+                        if let failure = error as? DockLoadFailure {
+                            return (scope, .failure(failure))
+                        }
+                        return (scope, .failure(.error(error.localizedDescription)))
+                    }
+                }
+            }
+            var results: [(DockSessionTestScope, Result<DockLoadResult, DockLoadFailure>)] = []
+            for await result in group {
+                results.append(result)
+            }
+            return results.sorted { lhs, rhs in
+                let lhsIndex = DockSessionTestScope.allCases.firstIndex(of: lhs.0) ?? Int.max
+                let rhsIndex = DockSessionTestScope.allCases.firstIndex(of: rhs.0) ?? Int.max
+                return lhsIndex < rhsIndex
+            }
+        }
+    }
+
+    private func deduplicated(_ summaries: [(DockSessionTestScope, SessionSummary)]) -> [SessionSummary] {
+        var orderedIDs: [HostScopedThreadID] = []
+        var summariesByID: [HostScopedThreadID: SessionSummary] = [:]
+        for (scope, summary) in summaries {
+            if summariesByID[summary.id] == nil {
+                orderedIDs.append(summary.id)
+                summariesByID[summary.id] = summary
+                continue
+            }
+            guard let existing = summariesByID[summary.id] else {
+                continue
+            }
+            if scope == .agents || existing.origin.kind == .unknown {
+                summariesByID[summary.id] = summary
+            }
+        }
+        return orderedIDs.compactMap { summariesByID[$0] }
+    }
+
+    private func streamSession(from summary: SessionSummary) -> DockStreamSessionDTO {
+        DockStreamSessionDTO(
+            id: "\(host.id)::\(summary.id.threadID)",
+            hostID: host.id,
+            threadID: summary.id.threadID,
+            backendSessionID: summary.backendSessionID,
+            title: summary.displayTitle,
+            status: streamStatus(from: summary.status),
+            lane: streamLane(from: summary.origin),
+            kindLabel: streamKindLabel(from: summary.origin),
+            repository: string(from: summary.repository),
+            workingDirectory: string(from: summary.workingDirectory),
+            branch: string(from: summary.branch),
+            updatedAt: Int64(summary.lastActivity.timeIntervalSince1970),
+            summary: string(from: summary.shortEventSummary),
+            source: DockStreamSourceDTO(kind: streamSource(from: summary.origin))
+        )
+    }
+
+    private func streamStatus(from status: SessionStatus) -> DockStreamSessionStatus {
+        switch status {
+        case .unknown:
+            return .unknown
+        case .notLoaded:
+            return .dormant
+        case .idle:
+            return .idle
+        case .systemError:
+            return .error
+        case .active(let activeFlags):
+            if activeFlags.contains(.waitingOnApproval) {
+                return .needsApproval
+            }
+            if activeFlags.contains(.waitingOnUserInput) {
+                return .needsInput
+            }
+            return .running
+        }
+    }
+
+    private func streamSource(from origin: SessionOrigin) -> DockStreamSourceKind {
+        switch origin.kind {
+        case .humanInteractive:
+            return .human
+        case .agentOrAutomation:
+            return .automation
+        case .unknown:
+            return .unknown
+        }
+    }
+
+    private func streamLane(from origin: SessionOrigin) -> DockStreamLane {
+        switch origin.kind {
+        case .humanInteractive:
+            return .human
+        case .agentOrAutomation:
+            return .agent
+        case .unknown:
+            return .unknown
+        }
+    }
+
+    private func streamKindLabel(from origin: SessionOrigin) -> String {
+        switch origin.kind {
+        case .humanInteractive:
+            return "Human"
+        case .agentOrAutomation:
+            return "Agent"
+        case .unknown:
+            return "Unknown"
+        }
+    }
+
+    private func string(from text: SessionSummaryText) -> String? {
+        switch text {
+        case .known(let value):
+            return value
+        case .unknown:
+            return nil
+        }
+    }
 }
 
 struct FakeDockSessionLoader: DockSessionLoading {
@@ -418,5 +728,49 @@ func makeSummary(
         lastActivity: lastActivity,
         shortEventSummary: .known("Assistant update for \(prompt)"),
         origin: origin
+    )
+}
+
+func dockStreamSnapshot(
+    host: DockHostConfiguration,
+    epoch: String,
+    seq: Int64,
+    sessions: [DockStreamSessionDTO],
+    schemaVersion: Int? = CodexDockConstants.Dock.streamSchemaVersion,
+    freshness: DockStreamFreshnessDTO = DockStreamFreshnessDTO(status: .fresh)
+) -> DockStreamUpdateDTO {
+    DockStreamUpdateDTO(
+        kind: .snapshot,
+        schemaVersion: schemaVersion,
+        epoch: epoch,
+        seq: seq,
+        freshness: freshness,
+        hosts: [DockStreamHostDTO(id: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
+        sessions: sessions
+    )
+}
+
+func dockStreamSession(
+    host: DockHostConfiguration,
+    threadID: String,
+    title: String,
+    status: DockStreamSessionStatus = .running,
+    updatedAt: Int64
+) -> DockStreamSessionDTO {
+    DockStreamSessionDTO(
+        id: "\(host.id)::\(threadID)",
+        hostID: host.id,
+        threadID: threadID,
+        backendSessionID: "\(threadID)-session",
+        title: title,
+        status: status,
+        lane: .human,
+        kindLabel: "Human",
+        repository: "codex-client",
+        workingDirectory: "/Users/aelaguiz/workspace/codex-client",
+        branch: "main",
+        updatedAt: updatedAt,
+        summary: "Summary for \(title)",
+        source: DockStreamSourceDTO(kind: .human)
     )
 }

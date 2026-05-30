@@ -52,6 +52,7 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
     public let itemSequence: Int?
     public let eventSequence: Int?
     public let displayGroupDate: Date?
+    public let isStreamingDelta: Bool
 
     public init(
         id: String,
@@ -66,7 +67,8 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
         turnSequence: Int? = nil,
         itemSequence: Int? = nil,
         eventSequence: Int? = nil,
-        displayGroupDate: Date? = nil
+        displayGroupDate: Date? = nil,
+        isStreamingDelta: Bool = false
     ) {
         self.id = id
         self.kind = kind
@@ -81,27 +83,25 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
         self.itemSequence = itemSequence
         self.eventSequence = eventSequence
         self.displayGroupDate = displayGroupDate ?? date
+        self.isStreamingDelta = isStreamingDelta
     }
 }
 
 public enum ThreadDetailMessageFilter: Equatable, Sendable, Identifiable, CaseIterable {
+    case messages
     case all
     case kind(ThreadEventKind)
 
     public static var allCases: [ThreadDetailMessageFilter] {
-        [.all] + ThreadEventKind.allCases.map(ThreadDetailMessageFilter.kind)
+        [.messages, .all] + ThreadEventKind.allCases.map(ThreadDetailMessageFilter.kind)
     }
 
-    public init(kind: ThreadEventKind?) {
-        if let kind {
-            self = .kind(kind)
-        } else {
-            self = .all
-        }
-    }
+    public static let `default`: ThreadDetailMessageFilter = .messages
 
     public var id: String {
         switch self {
+        case .messages:
+            return "messages"
         case .all:
             return "all"
         case .kind(let kind):
@@ -109,17 +109,11 @@ public enum ThreadDetailMessageFilter: Equatable, Sendable, Identifiable, CaseIt
         }
     }
 
-    public var selectedKind: ThreadEventKind? {
-        switch self {
-        case .all:
-            return nil
-        case .kind(let kind):
-            return kind
-        }
-    }
-
     public func includes(_ event: ThreadEvent) -> Bool {
         switch self {
+        case .messages:
+            return event.visibilityCategory == .message
+                && (event.kind == .userMessage || event.kind == .agentMessage)
         case .all:
             return true
         case .kind(let kind):
@@ -519,7 +513,8 @@ public enum ThreadEventNormalizer {
             isLive: true,
             turnID: turnID,
             itemID: itemID,
-            displayGroupDate: now
+            displayGroupDate: now,
+            isStreamingDelta: true
         )
     }
 

@@ -38,6 +38,7 @@ APP_DERIVED_DATA ?= $(APP_SERVER_ABS_DIR)/DerivedData
 APP_PATH := $(APP_DERIVED_DATA)/Build/Products/Debug-iphonesimulator/$(APP_SCHEME).app
 APP_BUILD_NUMBER ?= $(shell date -u +%Y%m%d%H%M%S)
 APP_FRESH_BUILD ?= 1
+FORCE_LAUNCH ?= 0
 DEVICE ?=
 DEVICE_NAME ?= iPhone 14
 DEVELOPMENT_TEAM ?= R6B8KXF3QW
@@ -61,17 +62,18 @@ LOG_STYLE ?= compact
 LOG_PREDICATE ?= subsystem == "com.aelaguiz.CodexDock"
 LOG_LAST ?= 10m
 DEVICE_LOG_OUTPUT ?= /tmp/codex-client/codex-dock-device-$(shell date -u +%Y%m%dT%H%M%SZ).logarchive
+THREAD_FIDELITY_REPORT ?= /tmp/codex-client/relay-thread-fidelity-$(shell date -u +%Y%m%dT%H%M%SZ).json
 APP_BUILD_LOG_DIR := $(APP_SERVER_ABS_DIR)/logs
 HOST_SERVICE_ARGS = --platform "$(HOST_SERVICE_PLATFORM)" --runtime-dir "$(APP_SERVER_DIR)" --host-id "$(CODEX_DOCK_REAL_HOST_ID)" --host-name "$(CODEX_DOCK_REAL_HOST_NAME)" --network-profile "$(HOST_SERVICE_NETWORK_PROFILE)" --public-host "$(APP_SERVER_HOST)" --raw-app-server-listen "$(APP_SERVER_LISTEN)" --relay-history-url "$(DOCK_RELAY_HISTORY_WS)" --relay-public-url "$(DOCK_RELAY_WS)" --relay-listen-host "$(DOCK_RELAY_LISTEN_HOST)" --relay-port "$(DOCK_RELAY_PORT)" --phone-auth "none" --service-env-file "$(CURDIR)/$(ENV_FILE)" --host-env-file "$(CURDIR)/$(HOST_ENV_FILE)" --raw-token-file "$(APP_SERVER_TOKEN)" --codex-bin "$(CODEX_BIN)" --node-bin "$(NODE_BIN)" --app-server-label "$(APP_SERVER_LABEL)" --relay-label "$(DOCK_RELAY_LABEL)" --relay-script "$(CURDIR)/scripts/dock-relay.mjs"
 
 .DEFAULT_GOAL := help
 
-.PHONY: help app app-test sim-config-verify device-install device-install-iphone-17-pro device-install-iphone-14 iphone-17-pro iphone-14 device-install-all device-config device-config-verify device-config-verify-all device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart relay-probe relay-leak-check relay-doctor app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
+.PHONY: help app app-test sim-config-verify device-install device-install-iphone-17-pro device-install-iphone-14 iphone-17-pro iphone-14 device-install-all device-config device-config-verify device-config-verify-all device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart relay-probe relay-thread-fidelity relay-leak-check relay-doctor app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
 
 help:
 	@printf "%s\n" "Codex Dock commands:"
-	@printf "%s\n" "  rtk make app SIM='iPhone 17' Build/install/launch the app in a simulator"
-	@printf "%s\n" "  rtk make app SIM=<UDID>    Build/install/launch the app by simulator ID"
+	@printf "%s\n" "  rtk make app SIM='iPhone 17' Reuse a running simulator app; otherwise build/install/launch"
+	@printf "%s\n" "  FORCE_LAUNCH=1 rtk make app SIM=<UDID> Fresh build/install/relaunch by simulator ID"
 	@printf "%s\n" "  rtk make app-test SIM='iPhone 17' Run generated-project app tests in a simulator"
 	@printf "%s\n" "  rtk make sim-config-verify SIM='iPhone 17' Verify generated simulator relay config"
 	@printf "%s\n" "  rtk make device-install    Fresh build/install/configure/launch the default physical iPhone"
@@ -89,6 +91,7 @@ help:
 	@printf "%s\n" "  rtk make app-server-status Check host service bundle status"
 	@printf "%s\n" "  rtk make dock-relay-status Check host service bundle status"
 	@printf "%s\n" "  rtk make relay-probe      Compare raw history and relay thread/list cursor/top row"
+	@printf "%s\n" "  rtk make relay-thread-fidelity Cross-check relay sessions against Codex disk/SQLite"
 	@printf "%s\n" "  rtk make relay-leak-check Repeat relay thread/list and verify upstream socket count is flat"
 	@printf "%s\n" "  rtk make relay-doctor     Print relay-focused redacted diagnostics"
 	@printf "%s\n" "  rtk make app-server-env    Print env for raw dev smoke tests"
@@ -156,6 +159,9 @@ dock-relay-restart: host-service-restart
 relay-probe:
 	@CODEX_DOCK_RELAY_WS="$(DOCK_RELAY_PROBE_WS)" CODEX_DOCK_HISTORY_APP_SERVER_WS="$(DOCK_RELAY_HISTORY_WS)" CODEX_DOCK_HISTORY_TOKEN_FILE="$(APP_SERVER_TOKEN)" rtk node -- scripts/dock-relay-probe.mjs
 
+relay-thread-fidelity:
+	@CODEX_DOCK_RELAY_WS="$(DOCK_RELAY_PROBE_WS)" rtk node -- scripts/dock-relay-thread-fidelity.mjs --json-out "$(THREAD_FIDELITY_REPORT)" --summary-only
+
 relay-leak-check:
 	@CODEX_DOCK_RELAY_WS="$(DOCK_RELAY_PROBE_WS)" CODEX_DOCK_LEAK_CHECK_ITERATIONS="$(DOCK_RELAY_LEAK_CHECK_ITERATIONS)" rtk node -- scripts/dock-relay-leak-check.mjs
 
@@ -174,10 +180,7 @@ device-logs:
 	@rtk sh -c 'set -eu; device="$(DEVICE)"; if [ -z "$$device" ]; then device="$$(python3 scripts/device.py resolve "$(DEVICE_NAME)")"; fi; output="$(DEVICE_LOG_OUTPUT)"; mkdir -p "$$(dirname "$$output")"; xcrun log collect --device-udid "$$device" --last "$(LOG_LAST)" --predicate '\''$(LOG_PREDICATE)'\'' --output "$$output"; echo "wrote $$output"'
 
 app: services
-	@rtk python3 scripts/sim.py boot "$(SIM)"
-	@rtk python3 scripts/sim.py terminate-others "$(SIM)" "$(APP_BUNDLE_ID)"
-	@rtk xcodegen generate --spec project.yml
-	@rtk sh -c 'set -eu; udid="$$(python3 scripts/sim.py resolve "$(SIM)")"; host_env="$(HOST_ENV_FILE)"; log_dir="$(APP_BUILD_LOG_DIR)"; build_log="$$log_dir/app-sim-build-$(APP_BUILD_NUMBER).log"; install_log="$$log_dir/app-sim-install-$(APP_BUILD_NUMBER).log"; mkdir -p "$$log_dir"; if [ ! -f "$$host_env" ]; then echo "missing generated app host env $$host_env" >&2; exit 2; fi; action="build"; if [ "$(APP_FRESH_BUILD)" = "1" ]; then action="clean build"; fi; echo "building $(APP_SCHEME) for simulator $$udid build $(APP_BUILD_NUMBER)"; if ! xcodebuild -quiet -project CodexDock.xcodeproj -scheme "$(APP_SCHEME)" -destination "id=$$udid" -derivedDataPath "$(APP_DERIVED_DATA)" $$action CURRENT_PROJECT_VERSION="$(APP_BUILD_NUMBER)" > "$$build_log" 2>&1; then echo "simulator build failed; see $$build_log" >&2; tail -n 80 "$$build_log" >&2; exit 1; fi; echo "installing simulator build $(APP_BUILD_NUMBER)"; if ! xcrun simctl install "$$udid" "$(APP_PATH)" > "$$install_log" 2>&1; then echo "simulator install failed; see $$install_log" >&2; tail -n 80 "$$install_log" >&2; exit 1; fi; installed_app="$$(xcrun simctl get_app_container "$$udid" "$(APP_BUNDLE_ID)" app)"; installed_build="$$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$$installed_app/Info.plist")"; if [ "$$installed_build" != "$(APP_BUILD_NUMBER)" ]; then echo "installed simulator build $$installed_build did not match expected $(APP_BUILD_NUMBER)" >&2; exit 1; fi; launch_hosts=""; while IFS= read -r line || [ -n "$$line" ]; do case "$$line" in ""|\#*) continue;; esac; case "$$line" in *=*) key="$${line%%=*}"; value="$${line#*=}";; *) continue;; esac; case "$$key" in CODEX_DOCK_*) export "SIMCTL_CHILD_$$key=$$value";; *) continue;; esac; if [ "$$key" = CODEX_DOCK_HOSTS ]; then launch_hosts="$$value"; fi; done < "$$host_env"; echo "launch host env: $$host_env"; echo "launch hosts: $$launch_hosts"; xcrun simctl launch --terminate-running-process "$$udid" "$(APP_BUNDLE_ID)" > "$$install_log" 2>&1; echo "launched $(APP_BUNDLE_ID) on simulator $$udid build $(APP_BUILD_NUMBER)"'
+	@rtk sh -c 'set -eu; python3 scripts/sim.py boot "$(SIM)"; udid="$$(python3 scripts/sim.py resolve "$(SIM)")"; if [ "$(FORCE_LAUNCH)" != "1" ] && python3 scripts/sim.py app-running "$(SIM)" "$(APP_BUNDLE_ID)" >/dev/null; then echo "$(APP_BUNDLE_ID) is already running on simulator $$udid; skipped build/install/launch. Use FORCE_LAUNCH=1 to replace it."; exit 0; fi; python3 scripts/sim.py terminate-others "$(SIM)" "$(APP_BUNDLE_ID)"; rtk xcodegen generate --spec project.yml; host_env="$(HOST_ENV_FILE)"; log_dir="$(APP_BUILD_LOG_DIR)"; build_log="$$log_dir/app-sim-build-$(APP_BUILD_NUMBER).log"; install_log="$$log_dir/app-sim-install-$(APP_BUILD_NUMBER).log"; mkdir -p "$$log_dir"; if [ ! -f "$$host_env" ]; then echo "missing generated app host env $$host_env" >&2; exit 2; fi; action="build"; if [ "$(APP_FRESH_BUILD)" = "1" ]; then action="clean build"; fi; echo "building $(APP_SCHEME) for simulator $$udid build $(APP_BUILD_NUMBER)"; if ! xcodebuild -quiet -project CodexDock.xcodeproj -scheme "$(APP_SCHEME)" -destination "id=$$udid" -derivedDataPath "$(APP_DERIVED_DATA)" $$action CURRENT_PROJECT_VERSION="$(APP_BUILD_NUMBER)" > "$$build_log" 2>&1; then echo "simulator build failed; see $$build_log" >&2; tail -n 80 "$$build_log" >&2; exit 1; fi; echo "installing simulator build $(APP_BUILD_NUMBER)"; if ! xcrun simctl install "$$udid" "$(APP_PATH)" > "$$install_log" 2>&1; then echo "simulator install failed; see $$install_log" >&2; tail -n 80 "$$install_log" >&2; exit 1; fi; installed_app="$$(xcrun simctl get_app_container "$$udid" "$(APP_BUNDLE_ID)" app)"; installed_build="$$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$$installed_app/Info.plist")"; if [ "$$installed_build" != "$(APP_BUILD_NUMBER)" ]; then echo "installed simulator build $$installed_build did not match expected $(APP_BUILD_NUMBER)" >&2; exit 1; fi; launch_hosts=""; while IFS= read -r line || [ -n "$$line" ]; do case "$$line" in ""|\#*) continue;; esac; case "$$line" in *=*) key="$${line%%=*}"; value="$${line#*=}";; *) continue;; esac; case "$$key" in CODEX_DOCK_*) export "SIMCTL_CHILD_$$key=$$value";; *) continue;; esac; if [ "$$key" = CODEX_DOCK_HOSTS ]; then launch_hosts="$$value"; fi; done < "$$host_env"; echo "launch host env: $$host_env"; echo "launch hosts: $$launch_hosts"; xcrun simctl launch --terminate-running-process "$$udid" "$(APP_BUNDLE_ID)" > "$$install_log" 2>&1; echo "launched $(APP_BUNDLE_ID) on simulator $$udid build $(APP_BUILD_NUMBER)"'
 
 app-test: services
 	@rtk python3 scripts/sim.py boot "$(SIM)"
@@ -227,7 +230,7 @@ sims:
 	@rtk python3 scripts/sim.py list
 
 sim:
-	@rtk python3 scripts/sim.py boot "$(SIM)"
+	@rtk python3 scripts/sim.py open "$(SIM)"
 
 sim-list: sims
 

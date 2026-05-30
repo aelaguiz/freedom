@@ -27,8 +27,6 @@ final class AppConnectivityStoreTests: XCTestCase {
                         DockHostStateViewModel(host: hostViewModel, status: .loaded(rowCount: 2)),
                     ],
                     rows: [],
-                    scopeLoadFailures: [],
-                    scopeConflicts: [],
                     mappingFailures: []
                 )
             )
@@ -68,8 +66,6 @@ final class AppConnectivityStoreTests: XCTestCase {
                         DockHostStateViewModel(host: homeViewModel, status: .checking),
                     ],
                     rows: [],
-                    scopeLoadFailures: [],
-                    scopeConflicts: [],
                     mappingFailures: [],
                     isPartial: true
                 )
@@ -81,7 +77,7 @@ final class AppConnectivityStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDockScopedFailureRollsUpToPartial() throws {
+    func testDockPartialHostStateRollsUpToPartial() throws {
         let host = makeConnectivityHost()
         let store = AppConnectivityStore(hosts: [host])
         let hostViewModel = DockHostViewModel(host: host)
@@ -98,14 +94,6 @@ final class AppConnectivityStoreTests: XCTestCase {
                         ),
                     ],
                     rows: [],
-                    scopeLoadFailures: [
-                        DockScopeLoadFailureViewModel(
-                            host: hostViewModel,
-                            scope: .agents,
-                            message: "offline"
-                        ),
-                    ],
-                    scopeConflicts: [],
                     mappingFailures: []
                 )
             )
@@ -174,8 +162,6 @@ final class AppConnectivityStoreTests: XCTestCase {
                         DockHostStateViewModel(host: hostViewModel, status: .loaded(rowCount: 2)),
                     ],
                     rows: [],
-                    scopeLoadFailures: [],
-                    scopeConflicts: [],
                     mappingFailures: []
                 )
             )
@@ -229,8 +215,6 @@ final class AppConnectivityStoreTests: XCTestCase {
                 DockHostStateViewModel(host: hostViewModel, status: .loaded(rowCount: 2)),
             ],
             rows: [],
-            scopeLoadFailures: [],
-            scopeConflicts: [],
             mappingFailures: []
         )
         store.reportDockState(.loaded(snapshot))
