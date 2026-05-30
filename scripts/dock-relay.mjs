@@ -21,6 +21,7 @@ import {
   RELAY_SHUTDOWN_PROCESS_TIMEOUT_MS,
   RELAY_SHUTDOWN_SOCKET_TIMEOUT_MS,
   RELAY_VERSION,
+  SELFTEST_ROUTE_TIMEOUT_MS,
   UPSTREAM_POOL_LIMITS,
   UPSTREAM_RECONNECT_ATTEMPTS,
   UPSTREAM_RECONNECT_DELAY_MS,
@@ -31,6 +32,7 @@ import {
   installRelayFatalHandlers,
 } from "./dock-relay-logger.mjs";
 import {
+  FAILURE_CATEGORY,
   ROUTE_NAMES,
   autoProbeSafeRoutes,
 } from "./dock-relay-observability-contract.mjs";
@@ -601,12 +603,35 @@ function semanticRouteOutcome(method, result) {
   };
 }
 
+function withSelfTestTimeout(promise, routeName, timeoutMs) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`${routeName} self-test timed out after ${timeoutMs}ms`);
+      error.code = "SELFTEST_ROUTE_TIMEOUT";
+      error.timeoutMs = timeoutMs;
+      reject(error);
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+}
+
 async function runSelfTest(config) {
+  const routeTimeoutMs = config.selftestRouteTimeoutMs || SELFTEST_ROUTE_TIMEOUT_MS;
   const safeRoutes = [];
   for (const route of autoProbeSafeRoutes()) {
     if (route.name === ROUTE_NAMES.dockSubscribe) {
       try {
-        const snapshot = await dockSessionAggregatorForConfig(config).snapshot();
+        const snapshot = await withSelfTestTimeout(
+          dockSessionAggregatorForConfig(config).snapshot(),
+          route.name,
+          routeTimeoutMs,
+        );
         safeRoutes.push({
           route: route.name,
           probeSafety: route.probeSafety,
@@ -620,6 +645,10 @@ async function runSelfTest(config) {
           probeSafety: route.probeSafety,
           ok: false,
           error: error?.message || String(error),
+          failureCategory: error?.code === "SELFTEST_ROUTE_TIMEOUT"
+            ? FAILURE_CATEGORY.TIMEOUT
+            : FAILURE_CATEGORY.RELAY,
+          timeoutMs: error?.timeoutMs || null,
         });
       }
       continue;

@@ -222,3 +222,39 @@ test("selftest lists only safe diagnostics and never includes passive mutating r
     await relay.close();
   }
 });
+
+test("selftest reports dock subscribe timeout instead of hanging", async () => {
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: "ws://127.0.0.1:1",
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+    observabilityDir: false,
+    selftestRouteTimeoutMs: 20,
+    dockSessionProvider: {
+      async listSessions() {
+        await new Promise(() => {});
+      },
+    },
+  });
+  await relay.listening;
+  const baseURL = `http://127.0.0.1:${relay.server.address().port}`;
+
+  try {
+    const selftest = await Promise.race([
+      httpGetJson(`${baseURL}/selftestz`),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("selftest hung")), 500)),
+    ]);
+    const dockSubscribe = selftest.routes.find((route) => route.route === ROUTE_NAMES.dockSubscribe);
+
+    assert.equal(selftest.ok, false);
+    assert.equal(dockSubscribe.ok, false);
+    assert.equal(dockSubscribe.failureCategory, "timeout");
+    assert.equal(dockSubscribe.timeoutMs, 20);
+    assert.match(dockSubscribe.error, /dock\/subscribe self-test timed out after 20ms/);
+  } finally {
+    await relay.close();
+  }
+});
