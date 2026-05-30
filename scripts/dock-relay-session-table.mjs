@@ -5,12 +5,9 @@ import path from "node:path";
 
 import {
   DOCK_SESSION_CLIENT_BUFFER_LIMIT_BYTES,
-  DOCK_SESSION_INITIAL_REFRESH_TIMEOUT_MS,
   DOCK_SESSION_PERSISTENCE_FILE,
   DOCK_SESSION_REFRESH_INTERVAL_MS,
   DOCK_SESSION_SCHEMA_VERSION,
-  DOCK_SESSION_TEXT_MAX_BYTES,
-  DOCK_SESSION_TITLE_MAX_BYTES,
   THREAD_LIST_MAX_LIMIT,
 } from "./dock-relay-constants.mjs";
 import { ROUTE_NAMES } from "./dock-relay-observability-contract.mjs";
@@ -59,31 +56,6 @@ function optionalNumber(value) {
   }
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
-}
-
-function truncateText(value, maxBytes) {
-  const text = nonEmpty(value);
-  if (!text) {
-    return null;
-  }
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
-    return text;
-  }
-  const suffix = " [truncated]";
-  const suffixBytes = Buffer.byteLength(suffix, "utf8");
-  const budget = Math.max(0, maxBytes - suffixBytes);
-  const chars = Array.from(text);
-  let low = 0;
-  let high = chars.length;
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    if (Buffer.byteLength(chars.slice(0, mid).join(""), "utf8") <= budget) {
-      low = mid;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return `${chars.slice(0, low).join("")}${suffix}`;
 }
 
 function sortedJSONString(value) {
@@ -221,7 +193,7 @@ function normalizeThread(thread, host, scope) {
   const sessionID = nonEmpty(thread?.sessionId) || threadID;
   const updatedAt = optionalNumber(thread?.updatedAt ?? thread?.createdAt) ?? 0;
   const sourceKind = sourceKindFromThread(thread, scope);
-  return sanitizeDockSession({
+  return {
     id: `${host.id}::${threadID}`,
     hostID: host.id,
     threadID,
@@ -240,70 +212,7 @@ function normalizeThread(thread, host, scope) {
     source: {
       kind: sourceKind,
     },
-  });
-}
-
-function sanitizeDockSession(session) {
-  if (!session || typeof session !== "object" || Array.isArray(session)) {
-    return null;
-  }
-  const id = nonEmpty(session.id);
-  const hostID = nonEmpty(session.hostID);
-  const threadID = nonEmpty(session.threadID);
-  const backendSessionID = nonEmpty(session.backendSessionID) || threadID;
-  if (!id || !hostID || !threadID || !backendSessionID) {
-    return null;
-  }
-  const sourceKind = nonEmpty(session.source?.kind) || "unknown";
-  return {
-    id,
-    hostID,
-    threadID,
-    backendSessionID,
-    title: truncateText(session.title, DOCK_SESSION_TITLE_MAX_BYTES) || `Thread ${threadID.slice(0, 8)}`,
-    status: nonEmpty(session.status) || "unknown",
-    lane: nonEmpty(session.lane) || "agent",
-    kindLabel: truncateText(session.kindLabel, DOCK_SESSION_TITLE_MAX_BYTES),
-    repository: truncateText(session.repository, DOCK_SESSION_TITLE_MAX_BYTES),
-    workingDirectory: truncateText(session.workingDirectory, DOCK_SESSION_TEXT_MAX_BYTES),
-    branch: truncateText(session.branch, DOCK_SESSION_TITLE_MAX_BYTES),
-    updatedAt: optionalNumber(session.updatedAt) ?? 0,
-    summary: truncateText(session.summary, DOCK_SESSION_TEXT_MAX_BYTES),
-    messageSummary: truncateText(session.messageSummary, DOCK_SESSION_TEXT_MAX_BYTES),
-    messageUpdatedAt: optionalNumber(session.messageUpdatedAt),
-    source: {
-      kind: sourceKind,
-    },
   };
-}
-
-function waitForRefreshOrTimeout(promise, timeoutMs) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        resolve(false);
-      }
-    }, timeoutMs);
-    timer.unref?.();
-    promise.then(
-      () => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          resolve(true);
-        }
-      },
-      () => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          resolve(true);
-        }
-      },
-    );
-  });
 }
 
 function normalizedSourceName(value) {
@@ -479,9 +388,8 @@ class DockSessionTable {
         }
       }
       for (const session of loaded.sessions || []) {
-        const sanitized = sanitizeDockSession(session);
-        if (sanitized?.id) {
-          this.sessionsByID.set(sanitized.id, sanitized);
+        if (session?.id) {
+          this.sessionsByID.set(session.id, session);
         }
       }
       this.freshness = {
@@ -516,7 +424,7 @@ class DockSessionTable {
     const previousSeq = this.seq;
     const previousSessions = new Map(this.sessionsByID);
     const previousHosts = new Map(this.hostsByID);
-    const normalizedSessions = sessions.map(sanitizeDockSession).filter(Boolean);
+    const normalizedSessions = [...sessions];
     const nextSessions = new Map(normalizedSessions.map((session) => [session.id, session]));
     const nextHosts = new Map([[host.id, host]]);
     const upsertHosts = [];
@@ -646,18 +554,7 @@ class DockSessionAggregator {
 
   async snapshot() {
     this.start();
-    const refresh = this.refreshNow({ notify: false }).catch(() => {});
-    const refreshCompleted = await waitForRefreshOrTimeout(
-      refresh,
-      this.config.dockSessionInitialRefreshTimeoutMs ?? DOCK_SESSION_INITIAL_REFRESH_TIMEOUT_MS,
-    );
-    if (!refreshCompleted) {
-      this.logger?.warn?.("dock.session_snapshot_refresh_timeout", {
-        timeoutMs: this.config.dockSessionInitialRefreshTimeoutMs ?? DOCK_SESSION_INITIAL_REFRESH_TIMEOUT_MS,
-        rows: this.table.snapshot().sessions.length,
-        freshness: this.table.snapshot().freshness.status,
-      });
-    }
+    await this.refreshNow({ notify: false }).catch(() => {});
     return this.table.snapshot();
   }
 
