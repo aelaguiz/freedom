@@ -17,11 +17,33 @@ related:
 
 # TL;DR
 
-- Outcome: Codex Dock app-facing surfaces show, cache, route, archive, resume, and monitor only base/root threads that Amir started through an interactive human-facing source.
+- Outcome: Codex Dock app-facing surfaces show, cache, route, archive, resume, and monitor only threads Amir started through an interactive human-facing source, including manual forks.
 - Problem: current relay state mixes human rows with sub-agent, exec, unknown, and other machine-created rows, so non-human work dominates list paging, live leases, stream state, archive state, Swift filtering, and detail routing.
 - Approach: make the relay the canonical human-only gate, use one shared classifier for every app-facing state and route path, clean stale non-human relay state, then keep a Swift defensive guard so bad payloads fail closed.
 - Plan: prove the classifier first, cut over Dock and Archive state to human-only inputs, gate raw/detail/live routes, add Swift rejection defenses, then update contracts, fixtures, simulator proof, and live proof.
 - Non-negotiables: no app-facing non-human cards, no all-source Dock hot-path paging, no treating unknown as human, no archive/detail/live-routing back doors, no prompt text or raw payload logging, and no runtime fallback that silently reintroduces non-human rows.
+
+## Manual Fork Amendment
+
+Implemented on 2026-05-31 after the `Flutter tests` failure.
+
+The current rule is: fork is a relationship, not an origin. A manual fork whose
+authoritative `thread/read includeTurns:false` row has source `cli`, `vscode`,
+custom `atlas`, or custom `chatgpt` is app-facing human-started work and gets
+`relationship: "forked"` plus `forkedFromID` on the Dock card. Agent-spawned,
+`exec`, app-server/API, MCP, memory/internal, unknown, missing-source, and
+contradictory-source rows remain rejected, even when they also have
+`forkedFromId`.
+
+Older sections in this historical plan that say "base/root only" should now be
+read as "human-started only, including manual forks." The implementation uses
+self-documenting `HumanStarted` helper names so this boundary is visible in
+code.
+
+If `thread/list` misses a readable manual fork, the relay may supplement from
+`session_index.jsonl`; that index is only a candidate source. The relay must
+still call authoritative `thread/read includeTurns:false` and classify the row
+as human-started before publishing it to Dock.
 
 <!-- arch_skill:block:implementation_audit:start -->
 # Implementation Audit (authoritative)
@@ -70,12 +92,25 @@ Manual QA: complete (non-blocking)
 - Live JSON-RPC proof on 2026-05-31 showed 186 Dock cards and 1 Archive card;
   all sampled app-facing cards had `lane: human` and `sourceKind: human`, and
   `state/query` reported `visibility.mode:
-  app_facing_human_base_threads_only`.
+  app_facing_human_started_threads_only`.
 - Live diagnostic proof on 2026-05-31 sampled rejected thread
   `019e7de1-161d-79f0-b10d-551eb0890a4e`; both `thread/read` and
   `thread/resume` rejected it with `-32043`.
 - Live SQLite proof on 2026-05-31 showed 186 active human cards, 1 archived
   human card, 0 rejected cards, 10 live leases, and 0 rejected live leases.
+- Manual-fork live proof on 2026-05-31 showed `Flutter tests`
+  (`019e7e1c-0f7a-7051-90bc-22c71490a9c8`) succeeds through `thread/read` as
+  `source: "vscode"` with
+  `forkedFromId: "019e7da2-9dbe-79f2-b084-7ff7113b59e3"`. It is archived, so
+  it correctly stays out of active Dock and appears in Archive with
+  `relationship: "forked"`, matching `forkedFromID`, `lane: "human"`,
+  `sourceKind: "human"`, and `archiveState: "archived"`.
+- iPhone 17 simulator build `20260531141919` showed `Flutter tests` in Archive
+  with the visible `Fork` badge and `relationship=forked`; tapping the Archive
+  row opened Thread Detail with a `Fork` header pill and did not show
+  `Thread unavailable.`
+- The manual-fork pass extended the Dock card contract and regenerated the
+  Swift DTO with optional `relationship` and `forkedFromID` fields.
 - Thermo-nuclear line-count check kept `scripts/dock-relay-state-store.mjs` at
   995 lines and `CodexDock/State/ThreadDetailStore.swift` at 993 lines by
   extracting focused policy helpers.
@@ -93,8 +128,8 @@ Implemented on 2026-05-31. Worklog:
 
 The relay now uses self-documenting policy names in
 `scripts/dock-relay-human-thread-filter.mjs`:
-`classifyThreadOrigin`, `isHumanBaseThread`, `filterHumanBaseThreads`,
-`assertHumanBaseThread`, `humanThreadRejectedError`, and
+`classifyThreadOrigin`, `isHumanStartedThread`, `filterHumanStartedThreads`,
+`assertHumanStartedThread`, `humanThreadRejectedError`, and
 `threadSpawnParentIDFromSource`. Store cleanup and counts use
 `scripts/dock-relay-state-store-human-filter.mjs`, whose exported SQL helpers
 make the persisted app-facing invariant explicit without pushing
@@ -105,7 +140,9 @@ guard mirrors the app-card boundary with `isAppFacingHumanThreadCard` and
 App-facing relay behavior is human-only by default:
 
 - Dock reconciliation drains only the default interactive active scope, then
-  filters with `filterHumanBaseThreads` before state persistence.
+  enriches candidate rows with authoritative `thread/read includeTurns:false`
+  metadata and filters with `filterHumanStartedThreads` before state
+  persistence.
 - The state store lists, counts, archives, live-leases, and card lookups only
   where `lane == "human"` and `source_kind == "human"`.
 - Raw app-facing routes strip caller-supplied source-kind broadening and reject
@@ -116,7 +153,7 @@ App-facing relay behavior is human-only by default:
   turn forwarding also requires the active session to have an accepted human
   thread ID.
 - `relay/state/snapshot` defaults to
-  `app_facing_human_base_threads_only`; rejected rows require
+  `app_facing_human_started_threads_only`; rejected rows require
   `includeRejectedThreads: true` and are labeled
   `diagnostic_includes_rejected_threads`.
 - Swift stream ingestion drops non-human stream cards, one-shot snapshot
@@ -147,12 +184,18 @@ Verification completed on 2026-05-31:
 - Live JSON-RPC proof showed 186 Dock cards and 1 Archive card; all sampled
   app-facing cards had `lane: human` and `sourceKind: human`, and
   `state/query` reported `visibility.mode:
-  app_facing_human_base_threads_only`.
+  app_facing_human_started_threads_only`.
 - Live diagnostic proof sampled rejected thread
   `019e7de1-161d-79f0-b10d-551eb0890a4e`; both `thread/read` and
   `thread/resume` rejected it with `-32043`.
 - Live SQLite proof showed 186 active human cards, 1 archived human card, 0
   rejected cards, 10 live leases, and 0 rejected live leases.
+- Manual-fork live proof showed archived thread `Flutter tests`
+  (`019e7e1c-0f7a-7051-90bc-22c71490a9c8`) opens through relay `thread/read`
+  as a human-source manual fork and appears in Archive with
+  `relationship: "forked"` plus its parent `forkedFromID`.
+- iPhone 17 simulator proof showed the Archive row opens Thread Detail with a
+  `Fork` pill and no `Thread unavailable.` failure.
 - Thermo-nuclear line-count check kept `scripts/dock-relay-state-store.mjs` at
   995 lines and `CodexDock/State/ThreadDetailStore.swift` at 993 lines by
   extracting focused policy helpers.
@@ -172,10 +215,11 @@ reviewing the final working tree, including the Thread Detail follow-up,
 `state/query` visibility marker, worklog, self-documenting policy helpers, and
 thermo-nuclear maintainability evidence.
 
-No contract files, generated DTO files, app target settings, assets,
-Makefile targets, README runbook text, or physical-device paths changed in
-this implementation. `contract:check` and simulator/device Makefile checks were
-not required for the touched surfaces.
+The manual-fork pass changed the Dock card contract and generated Swift DTO.
+`contract:generate`, `contract:check`, relay tests, targeted Swift tests, and
+the iPhone 17 simulator app build were run for that surface. App target
+settings, assets, Makefile targets, README runbook text, and physical-device
+paths did not change.
 
 <!-- arch_skill:block:planning_passes:start -->
 <!--
@@ -252,10 +296,10 @@ note: This block tracks stage order only. It never overrides readiness blockers 
 ## 0.1 The claim (falsifiable)
 
 After this change, every ordinary Codex Dock app-facing path is human-only: a
-base/root thread with source `cli`, `vscode`, custom `atlas`, or custom
-`chatgpt` may appear; `exec`, app-server/API, MCP, sub-agent, memory/internal,
-unknown, missing-source, contradictory-source, forked, and spawned child
-threads may not appear or be routed.
+thread with source `cli`, `vscode`, custom `atlas`, or custom `chatgpt` may
+appear, including a manual fork; `exec`, app-server/API, MCP, sub-agent,
+memory/internal, unknown, missing-source, contradictory-source, and spawned
+child threads may not appear or be routed.
 
 The claim is false if any normal Dock, Archive, live routing, detail, resume,
 turn, raw client route, Swift state, or controlled UI proof exposes a rejected
@@ -289,8 +333,8 @@ thread.
 - Deleting non-human Codex sessions from Codex storage.
 - Removing the underlying raw thread taxonomy reference.
 - Removing existing enum values from DTOs in the first cut.
-- Treating spawned child threads, forks, or unknown-source rows as human in
-  this implementation.
+- Treating spawned child threads, machine-created forks, or unknown-source rows
+  as human in this implementation.
 - Adding a second UI mode for agents or machine-created threads.
 - Building a new product feature around rejected-row analytics beyond the
   minimal diagnostic proof needed to validate this migration.
@@ -322,8 +366,9 @@ thread.
 - The relay is the source of truth for app-facing human-only filtering.
 - Swift is a defensive guard, not the performance or correctness owner.
 - Unknown, missing, and contradictory source evidence is rejected.
-- Forked and spawned child rows are rejected because this plan means base/root
-  threads only.
+- Fork alone is not a rejection reason. Human-source forks are app-facing
+  human-started rows with `relationship=forked`; spawned child rows are still
+  rejected.
 - Archive, detail, loaded-list, resume, live lease, and turn forwarding cannot
   bypass the same classifier used by Dock state.
 - Diagnostic all-source data must never feed Dock, Archive, client UI, live
@@ -374,8 +419,9 @@ thread.
   `scripts/dock-relay-human-thread-filter.mjs`, and route every relay
   app-facing decision through it.
 - Make the code self-documenting first: use explicit names such as
-  `isHumanBaseThread`, `classifyThreadOrigin`, `filterHumanBaseThreads`,
-  `assertHumanBaseThread`, `deleteRejectedThreadCards`, and
+  `isHumanStartedThread`, `classifyThreadOrigin`,
+  `filterHumanStartedThreads`, `assertHumanStartedThread`,
+  `deleteRejectedThreadCards`, and
   `humanOnly`/`diagnosticAllSource` where that distinction matters. Avoid vague
   names like `filterRows`, `allowed`, or `specialCase` at the policy boundary.
 - Filter before storing, leasing, routing, or publishing whenever possible;
@@ -387,9 +433,10 @@ thread.
   `data: { threadId, reason }`.
 - The Swift client drops rejected stream cards and logs only redacted
   diagnostics with `DockLog`.
-- Add comments sparingly and only where names are not enough: the base/root
-  exclusion, unknown-fails-closed stance, diagnostic all-source separation, and
-  direct-ID route assertion are the likely comment-worthy edges.
+- Add comments sparingly and only where names are not enough: fork as
+  relationship rather than origin, unknown-fails-closed stance, diagnostic
+  all-source separation, and direct-ID route assertion are the likely
+  comment-worthy edges.
 - Update necessary docs when touched behavior changes public or developer truth.
   Required docs updates are limited to this plan, the thread type/state
   reference, README/runbook sections or Makefile help touched by a new proof
@@ -398,8 +445,8 @@ thread.
 
 ## 1.4 Known tradeoffs (explicit)
 
-- Human-created forks are excluded for now. If product behavior later wants
-  them, revise the base/root clause and tests deliberately.
+- Human-created forks are included now. They are marked as
+  `relationship=forked` and badged in the UI.
 - `sourceKind: automation` and `lane: agent` stay in schemas for compatibility,
   but normal app-facing stream cards must not use them.
 - Diagnostic all-source counts may still require all-source paging, so they
@@ -826,8 +873,10 @@ Dock reconciliation future:
 RelayStateEngine.reconcileDock
   -> refresh human-only live leases
   -> drain default interactive active scope only
-  -> filterHumanBaseThreads(default rows)
-  -> orderedDockRows(accepted human rows, accepted human rows, human live rows)
+  -> enrich human-started candidates with thread/read includeTurns:false
+  -> supplement bounded session_index.jsonl candidates through thread/read
+  -> filterHumanStartedThreads(default rows)
+  -> orderedDockRows([], accepted+supplemented human rows, human live rows)
   -> normalizeThread(... lane="human")
   -> cleanup rejected stale cards/leases
   -> store/app-facing stream contains human rows only
@@ -867,7 +916,7 @@ Relay classifier contract:
 ```text
 classifyThreadOrigin(row) -> {
   allowed: boolean,
-  category: "human_base" | "rejected",
+  category: "human_started" | "rejected",
   reason:
     | "human_cli"
     | "human_vscode"
@@ -882,15 +931,16 @@ classifyThreadOrigin(row) -> {
     | "unknown"
     | "missing_source"
     | "contradictory_source"
-    | "forked"
     | "not_base_level",
-  sourceKind?: string
+  sourceKind?: string,
+  relationship?: "root" | "forked" | "spawned",
+  forkedFromID?: string
 }
 
-isHumanBaseThread(row) -> boolean
-filterHumanBaseThreads(rows) -> { acceptedRows, rejectedCounts }
+isHumanStartedThread(row) -> boolean
+filterHumanStartedThreads(rows) -> { acceptedRows, rejectedCounts }
 threadSpawnParentIDFromSource(source) -> string | null
-assertHumanBaseThread(rowOrThreadIDContext) -> row or throws -32043
+assertHumanStartedThread(rowOrThreadIDContext) -> row or throws -32043
 ```
 
 Classifier rules:
@@ -899,11 +949,13 @@ Classifier rules:
   `atlas`, and custom `chatgpt`.
 - Reject missing source, unknown source, internal source, contradictory source,
   any automation source, any sub-agent source, `threadSource: subagent`,
-  `threadSource: memory_consolidation`, non-empty `forkedFromId` /
-  `forked_from_id`, and source shapes with thread-spawn parent evidence.
+  `threadSource: memory_consolidation`, and source shapes with thread-spawn
+  parent evidence.
+- Classify non-empty `forkedFromId` / `forked_from_id` as
+  `relationship=forked`. Do not treat it as origin evidence by itself.
 - When a route only has a thread ID, resolve metadata through the same route
-  family before returning app-facing data. If metadata cannot prove human-base,
-  reject.
+  family before returning app-facing data. If metadata cannot prove
+  human-started origin, reject.
 - `threadSpawnParentIDFromSource` already exists in diagnostic scripts such as
   `scripts/dock-relay-state-parity.mjs` and
   `scripts/dock-relay-sync-audit.mjs`. The implementation should move the
@@ -983,7 +1035,7 @@ Rejected deep link / restored ID
 | Area | File | Symbol / Call site | Current behavior | Required change | Why | New API / contract | Tests impacted |
 | ---- | ---- | ------------------ | ---------------- | --------------- | --- | ------------------ | -------------- |
 | Relay source policy | `scripts/dock-relay-source-filter.mjs` | `normalizedThreadSource`, `threadMatchesSourceKinds` | Normalizes raw source and matches interactive/agent scopes, but exports only `threadMatchesSourceKinds` | Export/reuse normalization needed by a human-base classifier; keep `threadMatchesSourceKinds` as a source-scope helper | Avoid a second parser and preserve existing tested source semantics | normalizer consumed by `dock-relay-human-thread-filter.mjs` | `scripts/dock-relay.test.mjs` source tests |
-| Relay source policy | `scripts/dock-relay-human-thread-filter.mjs` | new module | Missing | Add `classifyThreadOrigin`, `isHumanBaseThread`, `filterHumanBaseThreads`, `threadSpawnParentIDFromSource`, and rejection error helper | One app-facing policy owner | accepted/rejected reason contract | new classifier tests |
+| Relay source policy | `scripts/dock-relay-human-thread-filter.mjs` | new module | Missing | Add `classifyThreadOrigin`, `isHumanStartedThread`, `filterHumanStartedThreads`, `threadSpawnParentIDFromSource`, and rejection error helper | One app-facing policy owner | accepted/rejected reason contract | new classifier tests |
 | Thread-spawn parsing | `scripts/dock-relay-state-parity.mjs`, `scripts/dock-relay-sync-audit.mjs`, `scripts/dock-relay-thread-fidelity.mjs` | local thread-spawn/source helpers | Diagnostic scripts duplicate source parsing and parent extraction | Move reusable parent extraction into the classifier/source-policy layer and import it | Prevent diagnostic and app-facing parsing drift | shared helper | parity/sync/fidelity tests |
 | Dock reconciliation | `scripts/dock-relay-state-engine.mjs` | `ACTIVE_ALL_SOURCE_SCOPE`, `reconcileDock` | Drains all-source and default interactive active scopes | Remove all-source Dock fetch; drain default interactive only; defensively filter accepted rows | Main performance win and invariant owner | human-only cards/scopes | relay state tests |
 | Dock reconciliation error path | `scripts/dock-relay-state-engine.mjs` | `markScopeStale("active:allSourceKinds")` | Treats all-source as normal Dock scope | Replace with human/default scope semantics | Avoid stale app-facing scope truth | no app-facing all-source scope | relay failure tests |
@@ -1083,7 +1135,8 @@ Rejected deep link / restored ID
   - Export or expose the existing source normalization needed from
     `scripts/dock-relay-source-filter.mjs`.
   - Add `scripts/dock-relay-human-thread-filter.mjs` with
-    `classifyThreadOrigin`, `isHumanBaseThread`, `filterHumanBaseThreads`, and
+    `classifyThreadOrigin`, `isHumanStartedThread`,
+    `filterHumanStartedThreads`, and
     `threadSpawnParentIDFromSource`.
   - Cover accepted sources: `cli`, `vscode`, custom `atlas`, and custom
     `chatgpt`.
@@ -1097,7 +1150,7 @@ Rejected deep link / restored ID
   - Change Dock reconciliation so it does not call `ACTIVE_ALL_SOURCE_SCOPE`
     or equivalent explicit agent sourceKinds for normal Dock state.
   - Filter default interactive active rows defensively with
-    `isHumanBaseThread`.
+    `isHumanStartedThread`.
   - Ensure normalized Dock cards from this slice have `lane: "human"` and
     `sourceKind: "human"`.
   - Use self-documenting helper, fixture, and test names that say `humanBase`,
@@ -1465,11 +1518,10 @@ Rejected deep link / restored ID
 
 # 10) Decision Log (append-only)
 
-- 2026-05-31 - User intent: classify "I started" as base/root interactive
+- 2026-05-31 - User intent: classify "I started" as interactive
   human-created threads and classify everything else holistically as not
-  user-started for the Dock UX. The plan therefore rejects fresh-consult,
-  model-consensus, sub-agent, exec, API, machine, missing, contradictory,
-  forked, and spawned-child rows from app-facing surfaces.
+  user-started for the Dock UX. The original plan rejected forks because it
+  mixed origin with relationship.
 - 2026-05-31 - Compatibility posture: preserve existing DTO enum values in the
   first implementation, but cleanly cut over app-facing stream behavior to
   `sourceKind == "human"` and `lane == "human"`.
@@ -1491,11 +1543,13 @@ Rejected deep link / restored ID
   high`. Non-blocking notes about `state/query` / `relay/state/snapshot`
   diagnostic labeling and early live-row classification were folded into the
   plan before implementation.
-- 2026-05-31 - Implementation completed: the relay enforces
-  `isHumanBaseThread` across Dock state, Archive state, live leases, raw thread
-  list/search/read/loaded/goal/turn/archive routes, resume, and focused turn
-  forwarding. Swift now defensively drops non-human stream cards and refuses
-  cached pinned rows without human display evidence.
+- 2026-05-31 - Manual-fork correction completed: the relay enforces
+  `isHumanStartedThread` across Dock state, Archive state, live leases, raw
+  thread list/search/read/loaded/goal/turn/archive routes, resume, and focused
+  turn forwarding. Human-source manual forks are included as
+  `relationship=forked`; spawned children and automation remain rejected.
+  Swift now defensively drops non-human stream cards and refuses cached pinned
+  rows without human display evidence.
 
 # Appendix A) Classification Reference
 
@@ -1521,12 +1575,13 @@ Rejected sources:
 - missing source
 - contradictory source metadata
 
-Base-level means the thread is not a spawned child and not a fork.
+Human-started means the thread has an accepted interactive source and is not a
+spawned child. Fork is a relationship, not an origin.
 
 Initial allow predicate:
 
 ```text
-isHumanBaseThread(row) =
+isHumanStartedThread(row) =
   normalizedSource(row) is cli, vscode, custom:atlas, or custom:chatgpt
   AND normalizedSource(row) is not unknown
   AND normalizedSource(row) is not internal
@@ -1535,7 +1590,6 @@ isHumanBaseThread(row) =
   AND row.threadSource/thread_source is not subagent
   AND row.threadSource/thread_source is not memory_consolidation
   AND row.source does not contain subAgent/thread_spawn evidence
-  AND row.forkedFromId/forked_from_id is empty
 ```
 
 # Appendix B) Conversion Notes

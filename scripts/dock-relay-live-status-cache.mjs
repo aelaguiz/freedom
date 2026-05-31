@@ -3,10 +3,10 @@ import {
   LIVE_STATUS_MAX_AGE_MS,
   LIVE_STATUS_REFRESH_INTERVAL_MS,
 } from "./dock-relay-constants.mjs";
-import { isHumanBaseThread } from "./dock-relay-human-thread-filter.mjs";
+import { isHumanStartedThread } from "./dock-relay-human-thread-filter.mjs";
 
 function humanLiveRows(rows = []) {
-  return rows.filter(isHumanBaseThread);
+  return rows.filter(isHumanStartedThread);
 }
 
 function liveOverlayForSnapshot(snapshot, maxAgeMs = LIVE_STATUS_MAX_AGE_MS) {

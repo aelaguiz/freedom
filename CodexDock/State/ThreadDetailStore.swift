@@ -68,6 +68,7 @@ public struct ThreadDetailHeader: Equatable, Sendable {
     public let statusLabel: String?
     public let lastActivity: String
     public let lastActivityDate: Date
+    public let relationship: DockRowThreadRelationship
 
     public init(host: DockHostConfiguration, row: DockRowViewModel) {
         self.hostID = host.id
@@ -79,6 +80,7 @@ public struct ThreadDetailHeader: Equatable, Sendable {
         self.statusLabel = row.status.visibleBadgeLabel
         self.lastActivity = row.lastActivity
         self.lastActivityDate = row.lastActivityDate
+        self.relationship = row.relationship
     }
 }
 

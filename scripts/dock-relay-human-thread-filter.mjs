@@ -65,8 +65,32 @@ function threadSpawnParentIDFromSource(source) {
   return nonEmpty(parentID);
 }
 
-function hasForkParent(row) {
-  return Boolean(nonEmpty(row?.forkedFromId) || nonEmpty(row?.forked_from_id));
+function forkParentIDFromRow(row) {
+  return nonEmpty(row?.forkedFromId) || nonEmpty(row?.forked_from_id);
+}
+
+function threadRelationship(row) {
+  const spawnParentID = threadSpawnParentIDFromSource(row?.source);
+  if (spawnParentID) {
+    return {
+      relationship: "spawned",
+      parentThreadID: spawnParentID,
+      forkedFromID: forkParentIDFromRow(row),
+    };
+  }
+  const forkedFromID = forkParentIDFromRow(row);
+  if (forkedFromID) {
+    return {
+      relationship: "forked",
+      parentThreadID: null,
+      forkedFromID,
+    };
+  }
+  return {
+    relationship: "root",
+    parentThreadID: null,
+    forkedFromID: null,
+  };
 }
 
 function sourceIsMissing(row) {
@@ -117,76 +141,82 @@ function sourceHasContradictorySignals(row) {
   return kinds.size > 1;
 }
 
-function rejected(reason, sourceKind = "unknown") {
+function rejected(reason, sourceKind = "unknown", row = null) {
+  const relationship = threadRelationship(row);
   return {
     allowed: false,
     category: "rejected",
     reason,
     sourceKind,
+    relationship: relationship.relationship,
+    parentThreadID: relationship.parentThreadID,
+    forkedFromID: relationship.forkedFromID,
   };
 }
 
-function accepted(reason) {
+function accepted(reason, row) {
+  const relationship = threadRelationship(row);
   return {
     allowed: true,
-    category: "human_base",
+    category: "human_started",
     reason,
     sourceKind: "human",
+    relationship: relationship.relationship,
+    parentThreadID: relationship.parentThreadID,
+    forkedFromID: relationship.forkedFromID,
   };
 }
 
 function classifyThreadOrigin(row) {
-  if (hasForkParent(row)) {
-    return rejected("forked");
-  }
   if (threadSpawnParentIDFromSource(row?.source)) {
-    return rejected("not_base_level", "automation");
+    return rejected("not_base_level", "automation", row);
   }
 
   const threadSource = canonicalSourceName(row?.threadSource ?? row?.thread_source);
   if (threadSource === "subagent") {
-    return rejected("sub_agent", "automation");
+    return rejected("sub_agent", "automation", row);
   }
   if (threadSource === "memoryconsolidation") {
-    return rejected("memory_internal", "internal");
+    return rejected("memory_internal", "internal", row);
   }
   if (sourceIsMissing(row)) {
-    return rejected("missing_source");
+    return rejected("missing_source", "unknown", row);
   }
 
   const source = normalizedThreadSource(row);
   switch (source.kind) {
   case "cli":
-    return accepted("human_cli");
+    return accepted("human_cli", row);
   case "vscode":
-    return accepted("human_vscode");
+    return accepted("human_vscode", row);
   case "custom":
     if (HUMAN_CUSTOM_SOURCES.has(source.name)) {
-      return accepted(`human_custom_${source.name}`);
+      return accepted(`human_custom_${source.name}`, row);
     }
-    return rejected("unknown");
+    return rejected("unknown", "unknown", row);
   case "exec":
-    return rejected("exec", "automation");
+    return rejected("exec", "automation", row);
   case "appServer":
-    return rejected(hasRawSourceName(row?.source, "mcp") ? "mcp" : "app_server", "automation");
+    return rejected(hasRawSourceName(row?.source, "mcp") ? "mcp" : "app_server", "automation", row);
   case "subAgent":
     return rejected(
       source.variant === "threadSpawn" ? "sub_agent_thread_spawn" : "sub_agent",
       "automation",
+      row,
     );
   case "internal":
-    return rejected("memory_internal", "internal");
+    return rejected("memory_internal", "internal", row);
   case "unknown":
   default:
-    return rejected(sourceHasContradictorySignals(row) ? "contradictory_source" : "unknown");
+    return rejected(sourceHasContradictorySignals(row) ? "contradictory_source" : "unknown", "unknown", row);
   }
 }
 
-function isHumanBaseThread(row) {
+function isHumanStartedThread(row) {
   return classifyThreadOrigin(row).allowed;
 }
 
-function filterHumanBaseThreads(rows = []) {
+function filterHumanStartedThreads(rows = []) {
   const acceptedRows = [];
   const rejectedCounts = {};
   for (const row of rows) {
@@ -210,7 +240,7 @@ function humanThreadRejectedError(threadId, reason) {
   return error;
 }
 
-function assertHumanBaseThread(row) {
+function assertHumanStartedThread(row) {
   const classification = classifyThreadOrigin(row);
   if (!classification.allowed) {
     throw humanThreadRejectedError(row?.id || row?.threadId || row?.threadID, classification.reason);
@@ -223,11 +253,13 @@ function isHumanAppFacingCard(card) {
 }
 
 export {
-  assertHumanBaseThread,
+  assertHumanStartedThread,
   classifyThreadOrigin,
-  filterHumanBaseThreads,
+  filterHumanStartedThreads,
+  forkParentIDFromRow,
   humanThreadRejectedError,
   isHumanAppFacingCard,
-  isHumanBaseThread,
+  isHumanStartedThread,
+  threadRelationship,
   threadSpawnParentIDFromSource,
 };

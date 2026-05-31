@@ -176,6 +176,16 @@ public enum DockRowRail: String, Codable, Equatable, Sendable, CaseIterable {
     case violet
 }
 
+public enum DockRowThreadRelationship: String, Codable, Equatable, Sendable {
+    case root
+    case forked
+    case unknown
+
+    public var isForked: Bool {
+        self == .forked
+    }
+}
+
 public struct DockRowViewModel: Equatable, Identifiable, Sendable {
     public let id: HostScopedThreadID
     public let sourceHostID: String?
@@ -193,6 +203,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
     public let rail: DockRowRail
     public let label: String?
     public let origin: SessionOrigin
+    public let relationship: DockRowThreadRelationship
     public let isPinned: Bool
     public let pinnedAt: Date?
     public let pinnedOrder: Int?
@@ -214,6 +225,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
         rail: DockRowRail,
         label: String?,
         origin: SessionOrigin,
+        relationship: DockRowThreadRelationship = .root,
         isPinned: Bool = false,
         pinnedAt: Date? = nil,
         pinnedOrder: Int? = nil
@@ -234,6 +246,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
         self.rail = rail
         self.label = label
         self.origin = origin
+        self.relationship = relationship
         self.isPinned = isPinned
         self.pinnedAt = isPinned ? pinnedAt : nil
         self.pinnedOrder = isPinned ? pinnedOrder : nil

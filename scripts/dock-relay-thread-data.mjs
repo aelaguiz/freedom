@@ -1,5 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
+
 import { defaultRelayLogger } from "./dock-relay-logger.mjs";
 import {
+  HUMAN_THREAD_INDEX_SUPPLEMENT_LIMIT,
+  HUMAN_THREAD_READ_ENRICHMENT_CONCURRENCY,
   LIVE_LOADED_LIST_LIMIT,
   LIVE_STATUS_UPSTREAM_TIMEOUT_MS,
   RELAY_VERSION,
@@ -12,9 +17,8 @@ import { ThreadSummaryCache } from "./dock-relay-thread-summary-cache.mjs";
 import { HistoryClient, UpstreamConnectionPool } from "./dock-relay-upstream-pool.mjs";
 import {
   classifyThreadOrigin,
-  filterHumanBaseThreads,
   humanThreadRejectedError,
-  isHumanBaseThread,
+  isHumanStartedThread,
 } from "./dock-relay-human-thread-filter.mjs";
 
 function relayLogger(config) {
@@ -219,6 +223,96 @@ function clampThreadListParams(params = {}) {
 function humanOnlyThreadListParams(params = {}) {
   const { sourceKind: _sourceKind, sourceKinds: _sourceKinds, ...rest } = params || {};
   return clampThreadListParams(rest);
+}
+
+function nonEmpty(value) {
+  const text = String(value ?? "").trim();
+  return text.length > 0 ? text : null;
+}
+
+function codexHomeForConfig(config) {
+  return config?.codexHome || process.env.CODEX_HOME || null;
+}
+
+function parseSessionIndexTimestamp(value) {
+  const ms = Date.parse(String(value || ""));
+  if (!Number.isFinite(ms)) {
+    return 0;
+  }
+  return ms;
+}
+
+function readSessionIndexCandidates(config, { existingThreadIDs = new Set(), limit = HUMAN_THREAD_INDEX_SUPPLEMENT_LIMIT } = {}) {
+  const codexHome = codexHomeForConfig(config);
+  if (!codexHome) {
+    return [];
+  }
+  const indexPath = path.join(codexHome, "session_index.jsonl");
+  let contents;
+  try {
+    contents = fs.readFileSync(indexPath, "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      relayLogger(config).warn("human_started_thread.session_index_unavailable", {
+        path: indexPath,
+        error,
+      });
+    }
+    return [];
+  }
+
+  const latestByID = new Map();
+  for (const line of contents.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    let row;
+    try {
+      row = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const id = nonEmpty(row?.id);
+    if (!id || existingThreadIDs.has(id)) {
+      continue;
+    }
+    const updatedAtMs = parseSessionIndexTimestamp(row?.updated_at || row?.updatedAt);
+    const existing = latestByID.get(id);
+    if (!existing || updatedAtMs >= existing.updatedAtMs) {
+      latestByID.set(id, {
+        id,
+        name: nonEmpty(row?.thread_name) || nonEmpty(row?.name) || null,
+        updatedAt: updatedAtMs > 0 ? updatedAtMs / 1000 : undefined,
+        updatedAtMs,
+      });
+    }
+  }
+
+  return [...latestByID.values()]
+    .sort((lhs, rhs) => rhs.updatedAtMs - lhs.updatedAtMs)
+    .slice(0, Math.max(0, Math.min(HUMAN_THREAD_INDEX_SUPPLEMENT_LIMIT, Number(limit) || HUMAN_THREAD_INDEX_SUPPLEMENT_LIMIT)));
+}
+
+function threadArchiveMatchesParams(thread, params = {}) {
+  const archived = params.archived === true;
+  const threadPath = String(thread?.path || "");
+  const isArchivedThread = threadPath.split(path.sep).includes("archived_sessions");
+  if (archived) {
+    return isArchivedThread;
+  }
+  return !isArchivedThread;
+}
+
+function mergeSessionIndexCandidate(candidate, readThread) {
+  const merged = mergeAuthoritativeThreadRead(candidate, readThread);
+  if (!nonEmpty(merged.name) && nonEmpty(candidate?.name)) {
+    merged.name = candidate.name;
+  }
+  if (!merged.updatedAt && candidate?.updatedAt) {
+    merged.updatedAt = candidate.updatedAt;
+  }
+  return merged;
 }
 
 function disabledLiveOverlay() {
@@ -526,21 +620,235 @@ function threadRowFromSearchResult(result) {
   return result;
 }
 
-function filterHumanSearchResults(results = []) {
-  const acceptedResults = [];
+function mergeAuthoritativeThreadRead(listRow, readThread) {
+  if (!readThread || typeof readThread !== "object") {
+    return listRow;
+  }
+  const merged = { ...listRow };
+  for (const [key, value] of Object.entries(readThread)) {
+    if (value !== undefined) {
+      merged[key] = value;
+    }
+  }
+  if (!merged.id && listRow?.id) {
+    merged.id = listRow.id;
+  }
+  delete merged.turns;
+  return merged;
+}
+
+async function enrichHumanStartedRows(config, rows = [], {
+  route = "thread_list",
+  readThread = (threadId) => readHistoryThread(config, { threadId, includeTurns: false }),
+} = {}) {
+  const logger = relayLogger(config);
+  const candidates = [];
   const rejectedCounts = {};
-  for (const result of results) {
-    const classification = classifyThreadOrigin(threadRowFromSearchResult(result));
+
+  for (const row of rows) {
+    const classification = classifyThreadOrigin(row);
     if (classification.allowed) {
-      acceptedResults.push(result);
+      candidates.push(row);
       continue;
     }
     rejectedCounts[classification.reason] = Number(rejectedCounts[classification.reason] || 0) + 1;
   }
-  return { acceptedResults, rejectedCounts };
+
+  const results = await allSettledInBatches(
+    candidates,
+    HUMAN_THREAD_READ_ENRICHMENT_CONCURRENCY,
+    async (row) => {
+      if (!row?.id) {
+        throw new Error("thread row missing id");
+      }
+      const response = await readThread(row.id);
+      if (!response?.thread || typeof response.thread !== "object") {
+        throw new Error("thread/read returned no thread");
+      }
+      const authoritative = mergeAuthoritativeThreadRead(row, response?.thread);
+      const classification = classifyThreadOrigin(authoritative);
+      return { row, authoritative, classification };
+    },
+  );
+
+  const acceptedRows = [];
+  let validationFailures = 0;
+  for (let index = 0; index < results.length; index += 1) {
+    const result = results[index];
+    const candidate = candidates[index];
+    if (result.status === "rejected") {
+      validationFailures += 1;
+      logger.warn("human_started_thread.enrichment_failed", {
+        route,
+        threadId: candidate?.id || null,
+        error: result.reason,
+      });
+      continue;
+    }
+    if (result.value.classification.allowed) {
+      acceptedRows.push(result.value.authoritative);
+      continue;
+    }
+    const reason = result.value.classification.reason || "unknown";
+    rejectedCounts[reason] = Number(rejectedCounts[reason] || 0) + 1;
+  }
+
+  return {
+    acceptedRows,
+    rejectedCounts,
+    validationFailures,
+    requestedRows: rows.length,
+    candidateRows: candidates.length,
+  };
 }
 
-function assertRouteHumanBaseThread(row, threadId) {
+async function readSessionIndexHumanStartedSupplements(config, existingRows = [], {
+  route = "thread_list",
+  params = {},
+  limit = HUMAN_THREAD_INDEX_SUPPLEMENT_LIMIT,
+  readThread = (threadId) => readHistoryThread(config, { threadId, includeTurns: false }),
+} = {}) {
+  const logger = relayLogger(config);
+  const existingThreadIDs = new Set(existingRows.map((row) => row?.id).filter(Boolean));
+  const candidates = readSessionIndexCandidates(config, { existingThreadIDs, limit });
+  if (candidates.length === 0) {
+    return {
+      acceptedRows: [],
+      rejectedCounts: {},
+      validationFailures: 0,
+      candidateRows: 0,
+    };
+  }
+
+  const rejectedCounts = {};
+  const results = await allSettledInBatches(
+    candidates,
+    HUMAN_THREAD_READ_ENRICHMENT_CONCURRENCY,
+    async (candidate) => {
+      const response = await readThread(candidate.id);
+      const thread = mergeSessionIndexCandidate(candidate, response?.thread);
+      if (!threadArchiveMatchesParams(thread, params)) {
+        return { accepted: false, reason: "archive_scope_mismatch" };
+      }
+      const classification = classifyThreadOrigin(thread);
+      if (!classification.allowed) {
+        return { accepted: false, reason: classification.reason };
+      }
+      return { accepted: true, row: thread };
+    },
+  );
+
+  const acceptedRows = [];
+  let validationFailures = 0;
+  for (const result of results) {
+    if (result.status === "rejected") {
+      validationFailures += 1;
+      logger.warn("human_started_thread.session_index_validation_failed", {
+        route,
+        error: result.reason,
+      });
+      continue;
+    }
+    if (result.value?.accepted) {
+      acceptedRows.push(result.value.row);
+      continue;
+    }
+    const reason = result.value?.reason || "unknown";
+    rejectedCounts[reason] = Number(rejectedCounts[reason] || 0) + 1;
+  }
+
+  logger.info("human_started_thread.session_index_supplement", {
+    route,
+    candidates: candidates.length,
+    acceptedRows: acceptedRows.length,
+    rejectedCounts,
+    validationFailures,
+  });
+
+  return {
+    acceptedRows,
+    rejectedCounts,
+    validationFailures,
+    candidateRows: candidates.length,
+  };
+}
+
+function mergeHumanStartedRowsWithSupplements(rows = [], supplements = []) {
+  if (supplements.length === 0) {
+    return rows;
+  }
+  const originalOrder = new Map();
+  const byID = new Map();
+  for (const row of rows) {
+    if (!row?.id || byID.has(row.id)) {
+      continue;
+    }
+    originalOrder.set(row.id, originalOrder.size);
+    byID.set(row.id, row);
+  }
+  for (const row of supplements) {
+    if (!row?.id || byID.has(row.id)) {
+      continue;
+    }
+    originalOrder.set(row.id, originalOrder.size);
+    byID.set(row.id, row);
+  }
+  return [...byID.values()].sort((lhs, rhs) => {
+    const timestampDelta = rowTimestamp(rhs) - rowTimestamp(lhs);
+    if (timestampDelta !== 0) {
+      return timestampDelta;
+    }
+    return (originalOrder.get(lhs.id) ?? 0) - (originalOrder.get(rhs.id) ?? 0);
+  });
+}
+
+async function enrichHumanStartedSearchResults(config, results = []) {
+  const rowsWithResult = [];
+  const rejectedCounts = {};
+  for (const result of results) {
+    const row = threadRowFromSearchResult(result);
+    const classification = classifyThreadOrigin(row);
+    if (classification.allowed) {
+      rowsWithResult.push({ result, row });
+      continue;
+    }
+    rejectedCounts[classification.reason] = Number(rejectedCounts[classification.reason] || 0) + 1;
+  }
+
+  const enriched = await enrichHumanStartedRows(
+    config,
+    rowsWithResult.map((entry) => entry.row),
+    { route: "thread_search" },
+  );
+  for (const [reason, count] of Object.entries(enriched.rejectedCounts)) {
+    rejectedCounts[reason] = Number(rejectedCounts[reason] || 0) + Number(count || 0);
+  }
+
+  const enrichedByID = new Map(enriched.acceptedRows.map((row) => [row?.id, row]).filter(([id]) => id));
+  const acceptedResults = [];
+  for (const entry of rowsWithResult) {
+    const row = enrichedByID.get(entry.row?.id);
+    if (!row) {
+      continue;
+    }
+    if (entry.result?.thread && typeof entry.result.thread === "object") {
+      acceptedResults.push({
+        ...entry.result,
+        thread: row,
+      });
+    } else {
+      acceptedResults.push(row);
+    }
+  }
+
+  return {
+    acceptedResults,
+    rejectedCounts,
+    validationFailures: enriched.validationFailures,
+  };
+}
+
+function assertRouteHumanStartedThread(row, threadId) {
   const classification = classifyThreadOrigin(row);
   if (!classification.allowed) {
     throw humanThreadRejectedError(threadId || row?.id || row?.threadId || row?.threadID, classification.reason);
@@ -551,10 +859,10 @@ function assertRouteHumanBaseThread(row, threadId) {
 async function readHumanThreadForRoute(config, threadId) {
   const liveRow = await sessionRouterForConfig(config).rowForThread(threadId);
   if (liveRow) {
-    return assertRouteHumanBaseThread(liveRow, threadId);
+    return assertRouteHumanStartedThread(liveRow, threadId);
   }
   const history = await readHistoryThread(config, { threadId, includeTurns: false });
-  return assertRouteHumanBaseThread(history?.thread, threadId);
+  return assertRouteHumanStartedThread(history?.thread, threadId);
 }
 
 async function assertHumanThreadID(config, threadId) {
@@ -566,19 +874,34 @@ async function aggregateThreadList(config, params = {}) {
   const historyParams = humanOnlyThreadListParams(params);
   const history = await readHistoryThreadList(config, historyParams);
   const data = Array.isArray(history.data) ? history.data : [];
-  const { acceptedRows, rejectedCounts } = filterHumanBaseThreads(data);
+  const { acceptedRows, rejectedCounts, validationFailures } = await enrichHumanStartedRows(
+    config,
+    data,
+    { route: "thread_list" },
+  );
+  const supplements = await readSessionIndexHumanStartedSupplements(config, acceptedRows, {
+    route: "thread_list",
+    params: historyParams,
+    limit: historyParams.limit,
+  });
+  for (const [reason, count] of Object.entries(supplements.rejectedCounts)) {
+    rejectedCounts[reason] = Number(rejectedCounts[reason] || 0) + Number(count || 0);
+  }
+  const returnedRows = mergeHumanStartedRowsWithSupplements(acceptedRows, supplements.acceptedRows);
   const liveOverlay = history.liveOverlay || liveStatusCacheForConfig(config).liveOverlay();
   logger.info("thread_list.loaded", {
     historyRows: data.length,
     requestedLimit: params.limit,
     effectiveLimit: historyParams.limit,
-    returnedRows: acceptedRows.length,
+    returnedRows: returnedRows.length,
+    supplementedRows: supplements.acceptedRows.length,
     rejectedCounts,
+    validationFailures: validationFailures + supplements.validationFailures,
     liveOverlayState: liveOverlay?.state || (liveOverlay?.ok ? "healthy" : "unknown"),
   });
   return {
     ...history,
-    data: acceptedRows,
+    data: returnedRows,
     liveOverlay,
   };
 }
@@ -588,13 +911,14 @@ async function aggregateThreadSearch(config, params = {}) {
   const historyParams = humanOnlyThreadListParams(params);
   const history = await readHistoryThreadSearch(config, historyParams);
   const rawData = Array.isArray(history.data) ? history.data : [];
-  const { acceptedResults, rejectedCounts } = filterHumanSearchResults(rawData);
+  const { acceptedResults, rejectedCounts, validationFailures } = await enrichHumanStartedSearchResults(config, rawData);
   const data = acceptedResults.map(sanitizeThreadSearchResult);
   logger.info("thread_search.loaded", {
     requestedLimit: params.limit,
     effectiveLimit: historyParams.limit,
     returnedRows: data.length,
     rejectedCounts,
+    validationFailures,
   });
   return {
     ...history,
@@ -620,7 +944,7 @@ async function aggregateThreadGoalGet(config, params = {}) {
 async function aggregateLoadedList(config, params = {}) {
   const logger = relayLogger(config);
   const snapshot = await liveStatusCacheForConfig(config).snapshotForRouting();
-  const rows = snapshot.rows.filter(isHumanBaseThread);
+  const rows = snapshot.rows.filter(isHumanStartedThread);
   const ids = rows.map((row) => row.id);
   logger.info("thread_loaded_list.loaded", {
     liveRows: ids.length,
@@ -636,16 +960,16 @@ async function aggregateThreadRead(config, params = {}) {
   }
   const liveRow = await sessionRouterForConfig(config).rowForThread(params.threadId);
   if (liveRow) {
-    assertRouteHumanBaseThread(liveRow, params.threadId);
+    assertRouteHumanStartedThread(liveRow, params.threadId);
     if (params.includeTurns) {
       const result = await readThreadFromEndpoint(liveRow.dockRelaySource, params, relayLogger(config));
-      assertRouteHumanBaseThread(result?.thread, params.threadId);
+      assertRouteHumanStartedThread(result?.thread, params.threadId);
       return result;
     }
     return { thread: sanitizeRelayFields(liveRow) };
   }
   const result = await readHistoryThread(config, params);
-  assertRouteHumanBaseThread(result?.thread, params.threadId);
+  assertRouteHumanStartedThread(result?.thread, params.threadId);
   return result;
 }
 
@@ -701,8 +1025,10 @@ export {
   collectLiveRows,
   configuredLiveEndpointsForConfig,
   endpointForThread,
+  enrichHumanStartedRows,
   initializeClient,
   listThreadTurns,
+  mergeHumanStartedRowsWithSupplements,
   mergeActiveFlags,
   parseLimit,
   clampThreadListParams,
@@ -713,6 +1039,7 @@ export {
   readHistoryThreadGoal,
   readHistoryThreadList,
   readHistoryThreadSearch,
+  readSessionIndexHumanStartedSupplements,
   sanitizeRelayFields,
   liveStatusCacheForConfig,
   sessionRouterForConfig,

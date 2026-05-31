@@ -29,6 +29,25 @@ Follow-up implementation in this pass:
 - `AppServerClientTests` now proves the typed `-32043` JSON-RPC error code and
   redacted data survive Swift decoding.
 
+Manual-fork implementation in the later 2026-05-31 pass:
+
+- Fork is now a relationship, not an origin. Human-source manual forks are
+  accepted as human-started rows with `relationship: "forked"` and
+  `forkedFromID`; spawned children, `exec`, app-server/API, MCP,
+  memory/internal, unknown, missing-source, and contradictory-source rows
+  remain rejected.
+- Relay list/search state enriches eligible rows with authoritative
+  `thread/read includeTurns:false` metadata before publishing app-facing cards.
+  It may supplement omitted candidates from `session_index.jsonl`, but only
+  after authoritative read confirms a human-started row.
+- Dock and Archive streams both carry the relationship metadata. Archived
+  manual forks stay out of active Dock by design and appear in Archive with the
+  same `Fork` badge metadata.
+- Swift decodes older cards without relationship fields, projects forked cards
+  into fork-badged rows, preserves relationship in cached pinned display
+  snapshots, opens Archive rows into Thread Detail, and shows the fork pill in
+  Thread Detail.
+
 ## Phase Evidence
 
 Phase 1 - Canonical classifier plus Dock subscribe slice:
@@ -88,10 +107,11 @@ Phase 5 - Contracts, diagnostics, simulator, live proof, and docs sync:
 - Updated controlled simulator and sync-audit spawn-edge expectations so
   spawned child rows stay absent and reject through `thread/read`.
 - Updated state snapshot and parity diagnostics to label normal app-facing
-  visibility as `app_facing_human_base_threads_only` and all-source data as
-  diagnostic.
-- No contract files, generated DTOs, Makefile targets, README runbook text,
-  app target settings, assets, or physical-device paths changed.
+  visibility as human-started only and all-source data as diagnostic.
+- The manual-fork pass did change the Dock card contract and generated Swift
+  DTO by adding optional `relationship` and `forkedFromID` fields. It did not
+  change Makefile targets, README runbook text, app target settings, assets, or
+  physical-device paths.
 - Proof: `rtk npm run test:relay` passed with 216 tests, 0 failures.
 - Proof: `rtk git diff --check` passed on 2026-05-31.
 - `rtk make dock-relay-restart` completed on 2026-05-31 so live proof tested
@@ -105,8 +125,7 @@ Phase 5 - Contracts, diagnostics, simulator, live proof, and docs sync:
   - 1 Archive card returned from `archive/subscribe`.
   - 0 sampled app-facing Dock/Archive cards had non-human `lane` or
     `sourceKind`.
-  - `state/query` reported `visibility.mode:
-    app_facing_human_base_threads_only`.
+  - `state/query` reported app-facing human-started-only visibility.
   - Diagnostic snapshot used `includeRejectedThreads: true` and reported
     `visibility.mode: diagnostic_includes_rejected_threads`.
   - Diagnostic rejected counts sampled in the first 100 rows: `not_base_level`
@@ -121,6 +140,23 @@ Phase 5 - Contracts, diagnostics, simulator, live proof, and docs sync:
   - rejected cards: 0.
   - live leases total: 10.
   - rejected live leases: 0.
+
+Manual-fork live proof on 2026-05-31:
+
+- `thread/read` for `Flutter tests`
+  (`019e7e1c-0f7a-7051-90bc-22c71490a9c8`) succeeded through the relay.
+- The authoritative row has `source: "vscode"` and
+  `forkedFromId: "019e7da2-9dbe-79f2-b084-7ff7113b59e3"`, so the
+  classification is human-started plus forked.
+- Active Dock returned 186 rows, did not include `Flutter tests`, and had 0
+  automation cards in the visible window because the thread is archived.
+- Archive returned 75 rows and included `Flutter tests` with `lane: "human"`,
+  `sourceKind: "human"`, `relationship: "forked"`, matching `forkedFromID`,
+  `archiveState: "archived"`, and 0 automation cards in the visible window.
+- iPhone 17 simulator build `20260531141919` showed `Flutter tests` in Archive
+  as a button with visible `Fork` badge and accessibility value
+  `relationship=forked`; tapping the row opened Thread Detail, whose header
+  showed the `Fork` pill instead of `Thread unavailable.`
 
 ## Review Evidence
 

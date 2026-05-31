@@ -19,4 +19,18 @@ final class ThreadDetailHeaderTests: XCTestCase {
         XCTAssertNil(ThreadDetailHeader(host: host, row: dormantRow).statusLabel)
         XCTAssertEqual(ThreadDetailHeader(host: host, row: runningRow).statusLabel, "Running")
     }
+
+    @MainActor
+    func testForkedRowCarriesForkRelationshipIntoThreadDetailHeader() throws {
+        let host = makeDetailHost()
+        let row = makeDetailRow(
+            hostID: host.id,
+            threadID: "forked-thread",
+            relationship: .forked
+        )
+
+        let header = ThreadDetailHeader(host: host, row: row)
+
+        XCTAssertEqual(header.relationship, .forked)
+    }
 }

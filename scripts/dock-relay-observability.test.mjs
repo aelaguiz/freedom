@@ -218,7 +218,7 @@ test("readyz can pass while dock state freshness is stale after upstream failure
     assert.equal(route.routeStatus, "healthy");
     assert.equal(status.appCriticalFailures.some((entry) => entry.route === "dock/subscribe"), false);
     assert.deepEqual(state.visibility, {
-      mode: "app_facing_human_base_threads_only",
+      mode: "app_facing_human_started_threads_only",
       includeRejectedThreads: false,
       rejectedThreadsRequireDiagnosticSnapshotOptIn: true,
     });

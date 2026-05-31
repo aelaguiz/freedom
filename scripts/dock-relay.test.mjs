@@ -24,8 +24,8 @@ import { createRelayLogger } from "./dock-relay-logger.mjs";
 import { SessionRouter, liveOverlayForSnapshot } from "./dock-relay-live-status-cache.mjs";
 import {
   classifyThreadOrigin,
-  filterHumanBaseThreads,
-  isHumanBaseThread,
+  filterHumanStartedThreads,
+  isHumanStartedThread,
   threadSpawnParentIDFromSource,
 } from "./dock-relay-human-thread-filter.mjs";
 import { RelayStateEngine } from "./dock-relay-state-engine.mjs";
@@ -860,33 +860,44 @@ test("subAgent sourceKinds match broad and specific live variants", () => {
   assert.equal(threadMatchesSourceKinds(other, ["subAgentOther"]), true);
 });
 
-test("human thread classifier accepts only user-started base threads", () => {
+test("human thread classifier accepts human-started roots and manual forks", () => {
   const cases = [
-    ["cli", { source: "cli" }, true, "human_cli"],
-    ["vscode", { source: "vscode" }, true, "human_vscode"],
-    ["atlas custom", { source: { custom: "atlas" } }, true, "human_custom_atlas"],
-    ["chatgpt custom", { source: "chatgpt" }, true, "human_custom_chatgpt"],
-    ["exec", { source: "exec" }, false, "exec"],
-    ["appServer", { source: "appServer" }, false, "app_server"],
-    ["mcp alias", { source: "mcp" }, false, "mcp"],
-    ["subAgent review", { source: { subAgent: "review" } }, false, "sub_agent"],
-    ["memory consolidation", { source: "memory_consolidation" }, false, "memory_internal"],
-    ["missing source", {}, false, "missing_source"],
-    ["forked human", { source: "cli", forkedFromId: "parent-thread" }, false, "forked"],
+    ["cli", { source: "cli" }, true, "human_cli", "root"],
+    ["vscode", { source: "vscode" }, true, "human_vscode", "root"],
+    ["atlas custom", { source: { custom: "atlas" } }, true, "human_custom_atlas", "root"],
+    ["chatgpt custom", { source: "chatgpt" }, true, "human_custom_chatgpt", "root"],
+    ["manual cli fork", { source: "cli", forkedFromId: "parent-thread" }, true, "human_cli", "forked"],
+    ["manual vscode fork", { source: "vscode", forkedFromId: "parent-thread" }, true, "human_vscode", "forked"],
+    ["exec", { source: "exec" }, false, "exec", "root"],
+    ["exec fork", { source: "exec", forkedFromId: "parent-thread" }, false, "exec", "forked"],
+    ["appServer", { source: "appServer" }, false, "app_server", "root"],
+    ["mcp alias", { source: "mcp" }, false, "mcp", "root"],
+    ["subAgent review", { source: { subAgent: "review" } }, false, "sub_agent", "root"],
+    ["memory consolidation", { source: "memory_consolidation" }, false, "memory_internal", "root"],
+    ["missing source", {}, false, "missing_source", "root"],
     [
       "thread spawn",
       { source: { subAgent: { thread_spawn: { parent_thread_id: "parent-thread" } } } },
       false,
       "not_base_level",
+      "spawned",
     ],
-    ["contradictory", { source: { cli: {}, subAgent: "review" } }, false, "contradictory_source"],
+    [
+      "thread spawn with fork field",
+      { source: { subAgent: { thread_spawn: { parent_thread_id: "parent-thread" } } }, forkedFromId: "parent-thread" },
+      false,
+      "not_base_level",
+      "spawned",
+    ],
+    ["contradictory", { source: { cli: {}, subAgent: "review" } }, false, "contradictory_source", "root"],
   ];
 
-  for (const [name, row, allowed, reason] of cases) {
+  for (const [name, row, allowed, reason, relationship] of cases) {
     const classification = classifyThreadOrigin(row);
     assert.equal(classification.allowed, allowed, name);
     assert.equal(classification.reason, reason, name);
-    assert.equal(isHumanBaseThread(row), allowed, name);
+    assert.equal(classification.relationship, relationship, name);
+    assert.equal(isHumanStartedThread(row), allowed, name);
   }
   assert.equal(
     threadSpawnParentIDFromSource({ subAgent: { threadSpawn: { parentThreadId: "parent-thread" } } }),
@@ -895,14 +906,15 @@ test("human thread classifier accepts only user-started base threads", () => {
 });
 
 test("human thread filtering reports rejected reason counts", () => {
-  const { acceptedRows, rejectedCounts } = filterHumanBaseThreads([
+  const { acceptedRows, rejectedCounts } = filterHumanStartedThreads([
     { id: "human", source: "cli" },
+    { id: "human-fork", source: "vscode", forkedFromId: "parent" },
     { id: "agent", source: "exec" },
     { id: "spawn", source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } },
     { id: "missing" },
   ]);
 
-  assert.deepEqual(acceptedRows.map((row) => row.id), ["human"]);
+  assert.deepEqual(acceptedRows.map((row) => row.id), ["human", "human-fork"]);
   assert.deepEqual(rejectedCounts, {
     exec: 1,
     missing_source: 1,
@@ -1113,6 +1125,19 @@ test("thread/search forwards app-server search params and strips relay-only thre
             backwardsCursor: null,
           },
         }));
+      } else if (message.method === "thread/read") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            thread: {
+              id: message.params?.threadId,
+              preview: "Search result",
+              updatedAt: 100,
+              status: { type: "notLoaded" },
+              source: "cli",
+            },
+          },
+        }));
       }
     });
   });
@@ -1320,6 +1345,29 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
             backwardsCursor: null,
           },
         }));
+      } else if (message.method === "thread/read") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            thread: {
+              id: message.params?.threadId,
+              sessionId: "history-session",
+              forkedFromId: "parent-thread",
+              preview: "History thread",
+              latestSummary: "Stored history row",
+              displaySummary: "Stored history message",
+              activityAt: 1_780_000_090,
+              updatedAt: 1_780_000_100,
+              status: { type: "notLoaded" },
+              cwd: "/Users/aelaguiz/workspace/codex-client",
+              gitInfo: {
+                branch: "main",
+                originUrl: "codex-client",
+              },
+              source: "cli",
+            },
+          },
+        }));
       } else if (message.method === "thread/loaded/list") {
         ws.send(JSON.stringify({
           id: message.id,
@@ -1351,7 +1399,7 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
     assert.equal(response.result.kind, "snapshot");
     assert.equal(response.result.view, "dock");
     assert.deepEqual(response.result.visibility, {
-      mode: "app_facing_human_base_threads_only",
+      mode: "app_facing_human_started_threads_only",
       includeRejectedThreads: false,
       rejectedThreadsRequireDiagnosticSnapshotOptIn: true,
     });
@@ -1362,7 +1410,7 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
     const params = update.params;
     const stateQuery = await jsonRpcRequest(ws, "state/query", { view: "dock" });
     assert.deepEqual(stateQuery.result.visibility, {
-      mode: "app_facing_human_base_threads_only",
+      mode: "app_facing_human_started_threads_only",
       includeRejectedThreads: false,
       rejectedThreadsRequireDiagnosticSnapshotOptIn: true,
     });
@@ -1395,8 +1443,240 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
     const historySession = params.upsertCards.find((row) => row.threadID === "history-thread");
     assert.equal(historySession.displaySummary, "Stored history message");
     assert.equal(historySession.activityAtMs, 1_780_000_090_000);
+    assert.equal(historySession.relationship, "forked");
+    assert.equal(historySession.forkedFromID, "parent-thread");
+    const read = await jsonRpcRequest(ws, "thread/read", {
+      threadId: "history-thread",
+      includeTurns: false,
+    });
+    assert.equal(read.error, undefined);
+    assert.equal(read.result.thread.forkedFromId, "parent-thread");
     assert.equal(JSON.stringify(params).includes("notLoaded"), false);
     assert.equal(JSON.stringify(params).includes("must-not-leak"), false);
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeWebSocketServer(historyServer);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dock/subscribe supplements human-started manual forks omitted from thread/list", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-test-"));
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "session_index.jsonl"),
+    [
+      JSON.stringify({
+        id: "supplement-fork",
+        thread_name: "Flutter tests",
+        updated_at: "2026-05-31T12:58:23.520776Z",
+      }),
+      "",
+    ].join("\n"),
+  );
+
+  const observedThreadReads = [];
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  historyServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "codex-test",
+            codexHome,
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/list") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            data: [],
+            nextCursor: null,
+            backwardsCursor: null,
+          },
+        }));
+      } else if (message.method === "thread/read") {
+        observedThreadReads.push(message.params || {});
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            thread: {
+              id: message.params?.threadId,
+              sessionId: "supplement-session",
+              name: "Flutter tests",
+              preview: "Manually forked Flutter test thread",
+              updatedAt: 1_780_232_303,
+              status: { type: "notLoaded" },
+              cwd: "/Users/aelaguiz/workspace/codex-client",
+              gitInfo: {
+                branch: "main",
+                originUrl: "codex-client",
+              },
+              source: "vscode",
+              forkedFromId: "parent-thread",
+            },
+          },
+        }));
+      } else if (message.method === "thread/loaded/list") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: { data: [], nextCursor: null },
+        }));
+      }
+    });
+  });
+
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    hostId: "Amir-M5",
+    hostName: "Amir M5",
+    hostEndpoint: "amir-m5.fairy-salmon.ts.net:4510",
+    codexHome,
+    advertiseBonjour: false,
+    relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const response = await jsonRpcRequest(ws, "dock/subscribe");
+
+    assert.equal(response.error, undefined);
+    assert.deepEqual(response.result.cards, []);
+    const update = await waitForRelayMessage(ws, (message) => message.method === "dock/update");
+    assert.equal(update.params.complete, true);
+    assert.equal(update.params.totalRows, 1);
+    const [card] = update.params.upsertCards;
+    assert.equal(card.threadID, "supplement-fork");
+    assert.equal(card.title, "Flutter tests");
+    assert.equal(card.lane, "human");
+    assert.equal(card.sourceKind, "human");
+    assert.equal(card.relationship, "forked");
+    assert.equal(card.forkedFromID, "parent-thread");
+    assert.ok(observedThreadReads.some((params) => (
+      params.threadId === "supplement-fork" && params.includeTurns === false
+    )));
+
+    const read = await jsonRpcRequest(ws, "thread/read", {
+      threadId: "supplement-fork",
+      includeTurns: false,
+    });
+    assert.equal(read.error, undefined);
+    assert.equal(read.result.thread.forkedFromId, "parent-thread");
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeWebSocketServer(historyServer);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("archive/subscribe publishes archived human-started manual forks with relationship metadata", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-test-"));
+  const observedThreadListParams = [];
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  historyServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "codex-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "thread/list") {
+        observedThreadListParams.push(message.params || {});
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            data: message.params?.archived === true ? [
+              {
+                id: "archived-fork",
+                sessionId: "archived-session",
+                name: "Archived fork",
+                updatedAt: 1_780_232_303,
+                status: { type: "notLoaded" },
+                source: "vscode",
+                path: "/tmp/codex/archived_sessions/rollout-archived-fork.jsonl",
+              },
+            ] : [],
+            nextCursor: null,
+            backwardsCursor: null,
+          },
+        }));
+      } else if (message.method === "thread/read") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            thread: {
+              id: message.params?.threadId,
+              sessionId: "archived-session",
+              name: "Archived fork",
+              updatedAt: 1_780_232_303,
+              status: { type: "notLoaded" },
+              source: "vscode",
+              forkedFromId: "parent-thread",
+              path: "/tmp/codex/archived_sessions/rollout-archived-fork.jsonl",
+            },
+          },
+        }));
+      } else if (message.method === "thread/loaded/list") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: { data: [], nextCursor: null },
+        }));
+      }
+    });
+  });
+
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    hostId: "Amir-M5",
+    hostName: "Amir M5",
+    hostEndpoint: "amir-m5.fairy-salmon.ts.net:4510",
+    advertiseBonjour: false,
+    relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const response = await jsonRpcRequest(ws, "archive/subscribe");
+
+    assert.equal(response.error, undefined);
+    assert.deepEqual(response.result.cards, []);
+    const update = await waitForRelayMessage(ws, (message) => message.method === "archive/update");
+    assert.equal(update.params.complete, true);
+    assert.equal(update.params.totalRows, 1);
+    assert.equal(observedThreadListParams.length, 1);
+    assert.equal(observedThreadListParams[0].archived, true);
+    const [card] = update.params.upsertCards;
+    assert.equal(card.threadID, "archived-fork");
+    assert.equal(card.archiveState, "archived");
+    assert.equal(card.relationship, "forked");
+    assert.equal(card.forkedFromID, "parent-thread");
+    assert.equal(card.lane, "human");
+    assert.equal(card.sourceKind, "human");
   } finally {
     ws.close();
     await relay.close();
@@ -1494,6 +1774,23 @@ test("dock/subscribe overlays live status without changing stored Codex order", 
             backwardsCursor: null,
           },
         }));
+      } else if (message.method === "thread/read") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            thread: {
+              id: message.params?.threadId,
+              sessionId: message.params?.threadId === "live-thread" ? "stored-session" : "stored-only-session",
+              preview: message.params?.threadId === "live-thread" ? "Stored summary" : "Stored only",
+              latestSummary: message.params?.threadId === "live-thread" ? "Stored summary" : undefined,
+              displaySummary: message.params?.threadId === "live-thread" ? "Stored message" : undefined,
+              activityAt: message.params?.threadId === "live-thread" ? 250 : undefined,
+              updatedAt: message.params?.threadId === "live-thread" ? 300 : 200,
+              source: "cli",
+              status: { type: "notLoaded" },
+            },
+          },
+        }));
       } else if (message.method === "thread/loaded/list") {
         ws.send(JSON.stringify({
           id: message.id,
@@ -1547,7 +1844,7 @@ test("dock/subscribe overlays live status without changing stored Codex order", 
   }
 });
 
-test("dock/subscribe drains only human-started base thread pages", async () => {
+test("dock/subscribe drains only human-started thread pages", async () => {
   const observedThreadListParams = [];
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-test-"));
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -1589,6 +1886,19 @@ test("dock/subscribe drains only human-started base thread pages", async () => {
             data,
             nextCursor,
             backwardsCursor: null,
+          },
+        }));
+      } else if (message.method === "thread/read") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            thread: {
+              id: message.params?.threadId,
+              preview: message.params?.threadId,
+              updatedAt: message.params?.threadId === "human-page-1" ? 40 : 30,
+              status: { type: "notLoaded" },
+              source: "cli",
+            },
           },
         }));
       } else if (message.method === "thread/loaded/list") {

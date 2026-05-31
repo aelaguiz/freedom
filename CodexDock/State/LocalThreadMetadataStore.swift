@@ -53,6 +53,7 @@ public struct LocalPinnedDisplaySnapshot: Codable, Equatable, Sendable {
     public var rail: DockRowRail
     public var label: String?
     public var originKind: LocalPinnedDisplayOriginKind
+    public var relationship: DockRowThreadRelationship?
 
     public init(
         title: String,
@@ -66,7 +67,8 @@ public struct LocalPinnedDisplaySnapshot: Codable, Equatable, Sendable {
         summary: String,
         rail: DockRowRail,
         label: String?,
-        originKind: LocalPinnedDisplayOriginKind
+        originKind: LocalPinnedDisplayOriginKind,
+        relationship: DockRowThreadRelationship? = nil
     ) {
         self.title = title
         self.hostDisplayName = hostDisplayName
@@ -80,6 +82,7 @@ public struct LocalPinnedDisplaySnapshot: Codable, Equatable, Sendable {
         self.rail = rail
         self.label = Self.normalized(label)
         self.originKind = originKind
+        self.relationship = relationship
     }
 
     public init(row: DockRowViewModel) {
@@ -95,7 +98,8 @@ public struct LocalPinnedDisplaySnapshot: Codable, Equatable, Sendable {
             summary: row.summary,
             rail: row.rail,
             label: row.label,
-            originKind: LocalPinnedDisplayOriginKind(origin: row.origin)
+            originKind: LocalPinnedDisplayOriginKind(origin: row.origin),
+            relationship: row.relationship
         )
     }
 

@@ -196,7 +196,7 @@ public final class ArchiveStore: ObservableObject {
         }
     }
 
-    private func hostConfiguration(for row: DockRowViewModel) -> DockHostConfiguration? {
+    public func hostConfiguration(for row: DockRowViewModel) -> DockHostConfiguration? {
         if case .loaded(let snapshot) = state,
            let resolved = snapshot.hostIdentityResolver.resolve(
                rowHostID: row.id.hostID,

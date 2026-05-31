@@ -275,6 +275,47 @@ extension DockThreadCardArchiveState: Codable {
     }
 }
 
+public enum DockThreadCardRelationship: Equatable, Sendable {
+    case root
+    case forked
+    case spawned
+    case unknown
+
+    public var rawValue: String {
+        switch self {
+        case .root:
+            return "root"
+        case .forked:
+            return "forked"
+        case .spawned:
+            return "spawned"
+        case .unknown:
+            return "unknown"
+        }
+    }
+}
+
+extension DockThreadCardRelationship: Codable {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        switch try container.decode(String.self) {
+        case "root":
+            self = .root
+        case "forked":
+            self = .forked
+        case "spawned":
+            self = .spawned
+        default:
+            self = .unknown
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
 public enum DockThreadCardCompleteness: Equatable, Sendable {
     case complete
     case partial
@@ -326,6 +367,8 @@ public struct DockThreadCardDTO: Codable, Equatable, Sendable {
     public let status: DockThreadCardStatus
     public let sourceKind: DockThreadCardSourceKind
     public let lane: DockThreadCardLane
+    public let relationship: DockThreadCardRelationship?
+    public let forkedFromID: String?
     public let archiveState: DockThreadCardArchiveState
     public let freshness: DockStreamFreshnessStatus
     public let completeness: DockThreadCardCompleteness
@@ -349,6 +392,8 @@ public struct DockThreadCardDTO: Codable, Equatable, Sendable {
         status: DockThreadCardStatus,
         sourceKind: DockThreadCardSourceKind,
         lane: DockThreadCardLane,
+        relationship: DockThreadCardRelationship? = nil,
+        forkedFromID: String? = nil,
         archiveState: DockThreadCardArchiveState,
         freshness: DockStreamFreshnessStatus,
         completeness: DockThreadCardCompleteness,
@@ -371,6 +416,8 @@ public struct DockThreadCardDTO: Codable, Equatable, Sendable {
         self.status = status
         self.sourceKind = sourceKind
         self.lane = lane
+        self.relationship = relationship
+        self.forkedFromID = forkedFromID
         self.archiveState = archiveState
         self.freshness = freshness
         self.completeness = completeness

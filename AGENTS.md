@@ -253,6 +253,16 @@ Do not use preview rows as production evidence.
 You may be in a dirty worktree. Do not block on unrelated dirty or untracked
 files; treat them as intentional local work.
 
+- The Mac checkout at `/Users/aelaguiz/workspace/codex-client` is the
+  authoritative repo. The `home` server checkout at
+  `/home/aelaguiz/workspace/codex-client` is only a pull-and-run deployment
+  copy; do not author, preserve, stash, merge, or commit home-only dirty repo
+  work there.
+- When refreshing `home`, first make the Mac branch clean and pushed, then
+  update `home` from that pushed branch with `git fetch` and `git pull
+  --ff-only`. If home-only dirt blocks the pull, report the exact dirty paths
+  and the cleanup command before discarding it; do not treat that dirt as work
+  to save.
 - Do not create worktrees unless explicitly asked.
 - Never use `git clean`, `git reset`, `git restore`, or `git checkout -- <path>` unless Amir explicitly asks.
 - If Amir asks for a destructive git command, state the exact command and affected paths first.

@@ -461,7 +461,7 @@ async function handleRequest(config, method, params, session, downstreamWs) {
     case "initialize":
       return {
         userAgent: `codex_dock_relay/${RELAY_VERSION} (${os.type()} ${os.release()}; ${os.arch()})`,
-        codexHome: process.env.CODEX_HOME || `${os.homedir()}/.codex`,
+        codexHome: config.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), ".codex"),
         platformFamily: "unix",
         platformOs: platformOs(),
         relayInstanceID: config.hostId,
@@ -1273,6 +1273,7 @@ function main() {
     hostId: args["host-id"] || process.env.CODEX_DOCK_REAL_HOST_ID || os.hostname(),
     hostName: args["host-name"] || process.env.CODEX_DOCK_REAL_HOST_NAME || args["bonjour-name"],
     hostEndpoint: args["host-endpoint"] || process.env.CODEX_DOCK_HOST_ENDPOINT || null,
+    codexHome: args["codex-home"] || process.env.CODEX_HOME || path.join(os.homedir(), ".codex"),
     relayStateDatabasePath: args["relay-state-db"] || process.env.CODEX_DOCK_RELAY_STATE_DB || null,
     bonjourName: args["bonjour-name"] || process.env.CODEX_DOCK_BONJOUR_NAME || `Codex Dock ${os.hostname()}`,
     advertiseBonjour: (args["advertise-bonjour"] || process.env.CODEX_DOCK_ADVERTISE_BONJOUR || "1") !== "0",

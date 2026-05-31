@@ -185,7 +185,7 @@ private struct DetailHeaderView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
         .accessibilityElement(children: .contain)
-        .accessibilityValue("host=\(header.hostID); thread=\(header.threadID); live=\(liveState.label); status=\(header.statusLabel ?? "none")")
+        .accessibilityValue("host=\(header.hostID); thread=\(header.threadID); live=\(liveState.label); status=\(header.statusLabel ?? "none"); relationship=\(header.relationship.rawValue)")
         .codexAutomationID(AutomationID.Session.header)
     }
 
@@ -203,6 +203,7 @@ private struct DetailHeaderView: View {
                 HStack(spacing: 8) {
                     hostPill
                     livePill
+                    forkPill
                 }
                 statusPill
             }
@@ -210,6 +211,7 @@ private struct DetailHeaderView: View {
             VStack(alignment: .leading, spacing: 8) {
                 hostPill
                 livePill
+                forkPill
                 statusPill
             }
         }
@@ -219,6 +221,7 @@ private struct DetailHeaderView: View {
         HStack(spacing: 8) {
             hostPill
             livePill
+            forkPill
             statusPill
         }
     }
@@ -233,6 +236,14 @@ private struct DetailHeaderView: View {
         DetailPill(label: liveState.label, systemImage: liveIcon, color: liveColor)
             .accessibilityValue(liveState.label)
             .codexAutomationID(AutomationID.Session.livePill)
+    }
+
+    @ViewBuilder
+    private var forkPill: some View {
+        if header.relationship.isForked {
+            DetailPill(label: "Fork", systemImage: "arrow.triangle.branch", color: .secondary)
+                .accessibilityValue("Forked thread")
+        }
     }
 
     @ViewBuilder

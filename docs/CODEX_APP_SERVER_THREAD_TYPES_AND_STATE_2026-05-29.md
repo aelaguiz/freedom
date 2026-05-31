@@ -499,7 +499,7 @@ Use this practical classification:
 
 | Classification | Strong signals | Caveats |
 | --- | --- | --- |
-| User-created or interactive root | `source` is `cli`, `vscode`, `{ "custom": "atlas" }`, or `{ "custom": "chatgpt" }`; `threadSource` is `user` or `null`; `forkedFromId == null`; not `subAgent`. | Does not prove the exact UI action that created it. |
+| User-created or interactive | `source` is `cli`, `vscode`, `{ "custom": "atlas" }`, or `{ "custom": "chatgpt" }`; `threadSource` is `user` or `null`; not `subAgent`. | Does not prove the exact UI action that created it. If `forkedFromId != null`, treat it as a manual fork relationship, not a different origin. |
 | App-server/API-created root | `source == "appServer"` or source consistent with the app-server runtime, no sub-agent source, no parent. | App-server does not expose the external caller identity as a durable field. |
 | `codex exec` root | `source == "exec"`. | Could still have user-authored prompt content, but the origin is exec. |
 | Spawned agent | `source == { "subAgent": ... }`, especially `thread_spawn`; `threadSource == "subagent"`; parent has `CollabAgentToolCall` item with child ID. | Some sub-agent variants are review/compact/other and may not have nickname/role. |

@@ -313,6 +313,20 @@
             "unknown"
           ]
         },
+        "relationship": {
+          "enum": [
+            "root",
+            "forked",
+            "spawned",
+            "unknown"
+          ]
+        },
+        "forkedFromID": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "archiveState": {
           "enum": [
             "active",

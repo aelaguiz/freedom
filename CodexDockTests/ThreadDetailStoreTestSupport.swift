@@ -348,7 +348,8 @@ func makeDetailRow(
     hostID: String,
     threadID: String,
     sourceHostID: String? = nil,
-    status: DockRowStatusKind = .running
+    status: DockRowStatusKind = .running,
+    relationship: DockRowThreadRelationship = .root
 ) -> DockRowViewModel {
     DockRowViewModel(
         id: HostScopedThreadID(hostID: hostID, threadID: threadID),
@@ -365,7 +366,8 @@ func makeDetailRow(
         summary: "Open a real thread",
         rail: .blue,
         label: nil,
-        origin: .humanInteractive(subtype: .cli)
+        origin: .humanInteractive(subtype: .cli),
+        relationship: relationship
     )
 }
 

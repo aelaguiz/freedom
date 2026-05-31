@@ -209,6 +209,7 @@ public struct CodexDockRootView: View {
             ArchiveView(
                 store: archiveStore,
                 title: "Archived Threads",
+                threadDetailFactory: threadDetailFactory,
                 onClose: {
                     activeTaskSheet = nil
                 },

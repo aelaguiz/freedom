@@ -9,6 +9,7 @@ import {
   RELAY_STATE_SCHEMA_VERSION,
 } from "./dock-relay-constants.mjs";
 import {
+  ARCHIVE_VIEW,
   DOCK_VIEW,
   applyLeaseToCard,
   archiveOrderKey,
@@ -140,6 +141,8 @@ class RelayStateStore {
         branch TEXT,
         updated_at_ms INTEGER,
         source_kind TEXT,
+        relationship TEXT,
+        forked_from_id TEXT,
         archive_state TEXT NOT NULL DEFAULT 'active',
         completeness TEXT NOT NULL DEFAULT 'complete',
         summary_source TEXT,
@@ -279,6 +282,8 @@ class RelayStateStore {
       display_summary: "TEXT",
       completeness: "TEXT NOT NULL DEFAULT 'complete'",
       summary_source: "TEXT",
+      relationship: "TEXT",
+      forked_from_id: "TEXT",
     };
     for (const [column, definition] of Object.entries(definitions)) {
       if (!columns.has(column)) {
@@ -431,7 +436,7 @@ class RelayStateStore {
 
   listArchiveCards({ hostID, offset = 0, limit = null } = {}) {
     const params = [];
-    let where = `${HUMAN_APP_FACING_THREAD_SQL} AND archive_state = 'archived'`;
+    let where = `${HUMAN_APP_FACING_THREAD_SQL} AND archive_state = 'archived' AND archived_scope_present = 1`;
     if (hostID) {
       where += " AND host_id = ?";
       params.push(hostID);
@@ -507,6 +512,8 @@ class RelayStateStore {
       status: row.status,
       lane: row.lane,
       sourceKind: row.source_kind || "unknown",
+      relationship: row.relationship || "root",
+      forkedFromID: row.forked_from_id || null,
       activityAtMs: row.activity_at_ms,
       freshnessStatus: row.freshness_status,
       lastSeenAt: row.last_seen_at,
@@ -563,7 +570,7 @@ class RelayStateStore {
       const upsertCards = [];
       const deleteCardIDs = [];
 
-      cards.forEach((card, index) => {
+      cards.forEach((card) => {
         const existing = existingByThreadID.get(card.threadID);
         if (isFreshLocalArchiveMutation(existing, atMs)) {
           return;
@@ -629,6 +636,70 @@ class RelayStateStore {
     });
   }
 
+  applyArchiveReconciliation({ host, cards, complete = true, error = null, previousCards = null }) {
+    const at = nowISOString();
+    return this.transaction(() => {
+      this.upsertHost(host, at);
+      const previousRows = Array.isArray(previousCards)
+        ? previousCards
+        : this.listArchiveCards({ hostID: host.id }).cards;
+      const previousByID = new Map(previousRows.map((row) => [row.id, row]));
+      const nextByID = new Map();
+      const upsertCards = [];
+      const deleteCardIDs = [];
+
+      cards.forEach((card, index) => {
+        const cardWithOrder = {
+          ...card,
+          orderKey: card.orderKey || archiveOrderKey(card.activityAtMs || Date.now(), card.threadID),
+          archiveState: "archived",
+        };
+        nextByID.set(cardWithOrder.id, cardWithOrder);
+        const previous = previousByID.get(cardWithOrder.id);
+        if (sortedJSONString(previous) !== sortedJSONString(cardWithOrder)) {
+          upsertCards.push(cardWithOrder);
+        }
+        this.upsertThreadCard(host.id, cardWithOrder, {
+          archiveState: "archived",
+          activeScopePresent: false,
+          archivedScopePresent: true,
+          at,
+        });
+      });
+
+      if (complete) {
+        for (const previous of previousRows) {
+          if (!nextByID.has(previous.id)) {
+            deleteCardIDs.push(previous.id);
+            this.markThreadNotArchived(host.id, previous.threadID, at);
+          }
+        }
+      }
+
+      this.recordSyncScope(host.id, {
+        name: "archived:interactiveDefault",
+        archived: true,
+        sourceScope: "interactiveDefault",
+        complete,
+        error,
+      }, at);
+
+      const seq = this.recordChange({
+        view: ARCHIVE_VIEW,
+        hostID: host.id,
+        changeType: "archive-reconcile",
+        payload: {
+          upsertCount: upsertCards.length,
+          deleteCount: deleteCardIDs.length,
+          complete,
+        },
+        at,
+      });
+      this.pruneChanges();
+      return { seq, upsertCards, deleteCardIDs };
+    });
+  }
+
   upsertThreadCard(hostID, card, {
     archiveState = "active",
     activeScopePresent = true,
@@ -640,11 +711,11 @@ class RelayStateStore {
         host_id, thread_id, dock_id, logical_host_id, backend_session_id,
         host_display_name, host_endpoint, order_key, activity_at, activity_at_ms,
         display_summary, title, status, lane, repository, working_directory,
-        branch, updated_at_ms, source_kind, archive_state, completeness,
+        branch, updated_at_ms, source_kind, relationship, forked_from_id, archive_state, completeness,
         summary_source, active_scope_present, archived_scope_present,
         freshness_status, last_seen_at, updated_at, raw_json
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(host_id, thread_id) DO UPDATE SET
         dock_id = excluded.dock_id,
         logical_host_id = excluded.logical_host_id,
@@ -663,6 +734,8 @@ class RelayStateStore {
         branch = excluded.branch,
         updated_at_ms = excluded.updated_at_ms,
         source_kind = excluded.source_kind,
+        relationship = excluded.relationship,
+        forked_from_id = excluded.forked_from_id,
         archive_state = excluded.archive_state,
         completeness = excluded.completeness,
         summary_source = excluded.summary_source,
@@ -692,6 +765,8 @@ class RelayStateStore {
       nullable(card.branch),
       nullable(card.activityAtMs),
       nullable(card.sourceKind),
+      nullable(card.relationship),
+      nullable(card.forkedFromID),
       archiveState,
       nullable(card.completeness || "complete"),
       nullable(card.summarySource),
@@ -708,6 +783,14 @@ class RelayStateStore {
     this.db.prepare(`
       UPDATE threads
       SET active_scope_present = 0, updated_at = ?
+      WHERE host_id = ? AND thread_id = ?
+    `).run(at, hostID, threadID);
+  }
+
+  markThreadNotArchived(hostID, threadID, at = nowISOString()) {
+    this.db.prepare(`
+      UPDATE threads
+      SET archive_state = 'active', archived_scope_present = 0, updated_at = ?
       WHERE host_id = ? AND thread_id = ?
     `).run(at, hostID, threadID);
   }

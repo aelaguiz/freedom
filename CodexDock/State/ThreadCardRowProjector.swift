@@ -51,6 +51,7 @@ struct ThreadCardRowProjector {
             rail: metadata?.rail ?? rail(for: card),
             label: metadata?.label,
             origin: origin(for: card),
+            relationship: relationship(for: card),
             isPinned: metadata?.isPinned ?? false,
             pinnedAt: metadata?.pinnedAt,
             pinnedOrder: metadata?.pinnedOrder
@@ -81,6 +82,7 @@ struct ThreadCardRowProjector {
             rail: metadata.rail ?? snapshot?.rail ?? .blue,
             label: metadata.label ?? snapshot?.label,
             origin: snapshot?.originKind.sessionOrigin ?? .unknown(),
+            relationship: snapshot?.relationship ?? .root,
             isPinned: true,
             pinnedAt: metadata.pinnedAt,
             pinnedOrder: metadata.pinnedOrder
@@ -180,6 +182,17 @@ struct ThreadCardRowProjector {
             return "\(seconds / 3_600)h ago"
         default:
             return "\(seconds / 86_400)d ago"
+        }
+    }
+
+    private func relationship(for card: DockThreadCardDTO) -> DockRowThreadRelationship {
+        switch card.relationship {
+        case .forked:
+            return .forked
+        case .root, .spawned:
+            return .root
+        case .unknown, nil:
+            return .root
         }
     }
 

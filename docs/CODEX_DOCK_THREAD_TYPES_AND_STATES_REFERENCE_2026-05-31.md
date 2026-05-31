@@ -19,12 +19,13 @@ ephemeral, and goal-tracked threads can often be detected from raw Codex
 thread data. That raw taxonomy remains useful for diagnostics and future
 product work.
 
-For ordinary app-facing Codex Dock UX after the 2026-05-31 implementation,
-there is one allowed thread bucket: a base/root thread started from a proven
-interactive human source. The relay rejects `exec`, app-server/API, MCP,
-sub-agent, thread-spawn child, memory/internal, unknown, missing-source,
-contradictory-source, and forked rows before they can become Dock, Archive,
-detail, resume, focused-turn, or live-lease state.
+For ordinary app-facing Codex Dock UX after the 2026-05-31 manual-fork update,
+there is one allowed origin bucket: a thread started from a proven interactive
+human source. Manual forks are included because `forkedFromId` is a
+relationship signal, not an origin signal. The relay rejects `exec`,
+app-server/API, MCP, sub-agent, thread-spawn child, memory/internal, unknown,
+missing-source, and contradictory-source rows before they can become Dock,
+Archive, detail, resume, focused-turn, or live-lease state.
 
 For diagnostics and internal reasoning, Dock can still describe these
 differences:
@@ -58,14 +59,13 @@ Ordinary app-facing paths are human-only:
 
 The canonical app-facing policy lives in
 `scripts/dock-relay-human-thread-filter.mjs`. The self-documenting predicate is
-`isHumanBaseThread(row)`. Persisted card cleanup and counts use
-`scripts/dock-relay-state-store-human-filter.mjs` so the state store keeps the
-same named app-facing SQL boundary. Direct non-human IDs fail closed with
-`code: -32043`, `message: "thread rejected by human-only filter"`, and
-redacted `{ threadId, reason }` data.
+`isHumanStartedThread(row)`. Persisted card cleanup and counts keep the same
+named app-facing boundary. Direct non-human IDs fail closed with `code:
+-32043`, `message: "thread rejected by human-only filter"`, and redacted
+`{ threadId, reason }` data.
 
 All-source visibility is diagnostic only. `relay/state/snapshot` defaults to
-`app_facing_human_base_threads_only`; callers must opt into
+`app_facing_human_started_threads_only`; callers must opt into
 `includeRejectedThreads: true` to inspect rejected rows, and that mode is
 labeled `diagnostic_includes_rejected_threads`.
 
@@ -91,6 +91,11 @@ first `session_meta` record can include fields such as `id`, `forked_from_id`,
 `Dock stream` means the phone-facing Home or Archive stream. Home uses
 `dock/subscribe`, `dock/update`, and `dock/resync`. Archive uses
 `archive/subscribe`, `archive/update`, and `archive/resync`.
+
+Archive rows are openable. They use the same `DockRowViewModel` relationship
+metadata as Dock rows, so an archived manual fork opens Thread Detail with the
+same `Fork` pill instead of falling into the non-human `Thread unavailable.`
+path.
 
 ## Current Data Path
 
@@ -125,10 +130,12 @@ The current Dock card contract contains these origin/state fields:
 - `archiveState`: `active`, `archived`, `unknown`.
 - `freshness`: `unknown`, `fresh`, `stale`, `offline`, `error`.
 - `completeness`: `complete`, `partial`, `unknown`.
+- `relationship`: `root`, `forked`, `spawned`, `unknown`.
+- `forkedFromID`: fork parent thread ID when present.
 
 It does not contain raw `source`, `threadSource`, source subtype, spawn parent,
-spawn depth, `forkedFromId`, `ephemeral`, goal status, `agentNickname`,
-`agentRole`, or `agentPath`.
+spawn depth, `ephemeral`, goal status, `agentNickname`, `agentRole`, or
+`agentPath`.
 
 ## Thread Origin Types
 
@@ -136,7 +143,7 @@ Origin is the closest thing to a "thread type", but it is still only one axis.
 
 | UX bucket | Raw evidence | Current Dock card | Detection quality |
 | --- | --- | --- | --- |
-| Human interactive root | `source == "cli"`, `source == "vscode"`, or custom interactive sources such as `atlas` and `chatgpt` | `lane: human`, `sourceKind: human` | Strong for interactive source. Not proof of the exact human gesture that created it. |
+| Human interactive | `source == "cli"`, `source == "vscode"`, or custom interactive sources such as `atlas` and `chatgpt` | `lane: human`, `sourceKind: human` | Strong for interactive source. Includes root threads and manual forks. Not proof of the exact human gesture that created it. |
 | `codex exec` root | `source == "exec"` | `lane: agent`, `sourceKind: automation` | Strong on raw routes. Exact subtype is lost on Dock cards. |
 | App-server/API/MCP root | `source == "appServer"` or `mcp` alias in relay source filtering | `lane: agent`, `sourceKind: automation` | Strong on raw routes. Exact subtype is lost on Dock cards. |
 | Spawned sub-agent | `source.subAgent`, `threadSource == "subagent"`, `agentNickname`, `agentRole`, `agentPath`, and sometimes `source.subAgent.thread_spawn.parent_thread_id` | `lane: agent`, `sourceKind: automation` | Strong on raw routes and storage. Parent/depth are lost on Dock cards. |
@@ -152,15 +159,20 @@ The relay source classifier already understands more than the Dock card sends:
 internal memory rows. The Dock card collapses this to `human`, `agent`, or
 `unknown`.
 
+If app-server `thread/list` omits a recent readable human-started thread, the
+relay can use `session_index.jsonl` as a bounded candidate list. Every
+candidate still has to pass authoritative `thread/read includeTurns:false`
+classification before it can become a Dock card.
+
 ## Relationship Types
 
 Relationship is separate from origin.
 
 | Relationship | Raw evidence | Current Dock card | Notes |
 | --- | --- | --- | --- |
-| Root thread | No `forkedFromId` and no spawn parent evidence | Not explicit | Root is inferred by absence of parent/fork evidence. |
-| Spawned child | `thread_spawn_edges`, `source.subAgent.thread_spawn.parent_thread_id`, `depth`, agent fields | Not explicit | The Dock card only says agent/automation. |
-| Forked thread | `Thread.forkedFromId` or rollout `forked_from_id` | Not explicit | Forking is not the same as spawning, but fixtures sometimes combine both for test coverage. |
+| Root thread | No `forkedFromId` and no spawn parent evidence | `relationship: "root"` | Root is inferred by absence of parent/fork evidence. |
+| Spawned child | `thread_spawn_edges`, `source.subAgent.thread_spawn.parent_thread_id`, `depth`, agent fields | Rejected from app-facing cards | Spawn is automation relationship evidence and remains outside human Dock surfaces. |
+| Forked thread | `Thread.forkedFromId` or rollout `forked_from_id` | `relationship: "forked"`, `forkedFromID` | Forking is not the same as spawning. A human-source fork is human-started and appears with a `Fork` badge. |
 | Resumed thread | Observed `thread/resume` action or live session binding | Not explicit | Resume is an operation, not a durable thread type. |
 | Prompt-started thread | First user message or preview evidence | Not explicit | There is no durable `startedWithPrompt` boolean. Treat this as an inference only. |
 | Ephemeral thread | `Thread.ephemeral == true` on app-server thread data | Not explicit | App-server-only evidence. Not in Dock cards. |
@@ -390,13 +402,15 @@ Raw `ThreadDTO` is rich. It can represent app-server status, source,
 - human subtypes `cli`, `vscode`, and custom interactive source
 - automation subtypes `exec`, `appServer`, and sub-agent variants
 
-Dock rows are currently lossy. `ThreadCardRowProjector` maps `lane: human` to
-human `.cli`, and `lane: agent` to automation `.exec`. That means the UI loses
-the distinction between `exec`, app-server/API, review sub-agent, compact
-sub-agent, thread-spawn child, and other sub-agent rows.
+Dock rows are still lossy on exact origin. `ThreadCardRowProjector` maps
+`lane: human` to human `.cli`, and `lane: agent` to automation `.exec`. That
+means the UI loses the distinction between `exec`, app-server/API, review
+sub-agent, compact sub-agent, thread-spawn child, and other sub-agent rows.
 
-Pinned metadata is also lossy. It stores only broad `human`, `automation`, or
-`unknown` origin for cached pinned rows.
+Dock rows are no longer lossy on manual fork relationship for accepted
+human-started cards. The relay sends `relationship` and `forkedFromID`, Swift
+projects them onto row models, and cached pinned display snapshots preserve
+the relationship for pinned rows.
 
 ## Detectability Matrix
 
@@ -408,7 +422,7 @@ Pinned metadata is also lossy. It stores only broad `human`, `automation`, or
 | Is this a sub-agent? | Yes, from `source.subAgent`, `threadSource`, and agent fields. | Broadly yes as agent/automation. | High for broad agent on card. High exact subtype only on raw route. |
 | Is this specifically a thread-spawn child? | Yes, from `source.subAgent.thread_spawn` and `thread_spawn_edges`. | No. | High if using raw route/storage. |
 | What parent spawned it? | Yes, from `parent_thread_id` evidence where present. | No. | High when `thread_spawn` evidence exists. |
-| Is this forked? | Yes, from `forkedFromId` or rollout `forked_from_id`. | No. | High if using raw route/storage. |
+| Is this forked? | Yes, from `forkedFromId` or rollout `forked_from_id`. | Yes, as `relationship: "forked"` and optional `forkedFromID` for accepted human-started cards. | High for app-facing human-started cards and high if using raw route/storage. |
 | Is this resumed? | Only as an observed operation or live binding. | No. | Do not model as a thread type. |
 | Was this started with an initial prompt? | Inferred from first user message or preview. | No. | Medium/weak. No durable boolean. |
 | Is this JSON/structured-output mode? | Only if observing live `turn/start.outputSchema` or future durable evidence. | No. | Weak. Treat as turn behavior, not thread type. |
@@ -455,10 +469,14 @@ app-facing Codex Dock behavior by
 are named to state the policy directly:
 
 - `classifyThreadOrigin(row)`
-- `isHumanBaseThread(row)`
-- `filterHumanBaseThreads(rows)`
-- `assertHumanBaseThread(row)`
+- `isHumanStartedThread(row)`
+- `filterHumanStartedThreads(rows)`
+- `assertHumanStartedThread(row)`
 - `humanThreadRejectedError(threadId, reason)`
+
+`forkedFromId` is deliberately handled by relationship helpers, not by origin
+helpers. A row with source `cli`, `vscode`, custom `atlas`, or custom
+`chatgpt` plus `forkedFromId` is `origin=human`, `relationship=forked`.
 
 The Swift client is a defensive second line, not the source of truth. It drops
 stream cards unless `lane == .human` and `sourceKind == .human`, and it only
@@ -467,7 +485,7 @@ revives cached pinned rows when the cached display has
 
 Diagnostic all-source inspection still exists, but it is explicit. The normal
 `relay/state/snapshot` result is labeled
-`app_facing_human_base_threads_only`; including rejected rows requires
+`app_facing_human_started_threads_only`; including rejected rows requires
 `includeRejectedThreads: true` and is labeled
 `diagnostic_includes_rejected_threads`.
 
@@ -647,11 +665,16 @@ Tests also cover stale/offline/error/partial stream behavior, detail live state,
 archive/restore behavior, multi-host isolation, sync-gap recovery, and the
 controlled simulator `spawn-edge` path.
 
-After the 2026-05-31 human-only implementation, tests also cover:
+After the 2026-05-31 human-only implementation and manual-fork update, tests
+also cover:
 
-- The relay classifier accepting only human base/root rows and reporting
-  rejected reason counts.
-- Dock reconciliation draining human-started base thread pages only.
+- The relay classifier accepting human-started root rows and human-started
+  manual forks, while reporting rejected reason counts.
+- Dock reconciliation enriching human-started rows with authoritative
+  `thread/read` metadata before publishing cards.
+- Dock reconciliation supplementing `thread/list` omissions from
+  `session_index.jsonl` only after authoritative `thread/read` confirms a
+  human-started row.
 - Raw thread list/search ignoring caller-supplied source-kind broadening.
 - Direct route preflight rejection for non-human IDs through the shared
   classifier.

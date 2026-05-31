@@ -155,13 +155,25 @@ struct DockRowView: View {
 
                     Spacer(minLength: 8)
 
-                    if let statusLabel = row.status.visibleBadgeLabel {
-                        Text(statusLabel)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(statusColor)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 4)
-                            .background(statusColor.opacity(0.12), in: Capsule())
+                    HStack(spacing: 6) {
+                        if row.relationship.isForked {
+                            Label("Fork", systemImage: "arrow.triangle.branch")
+                                .labelStyle(.titleAndIcon)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 4)
+                                .background(Color.secondary.opacity(0.12), in: Capsule())
+                        }
+
+                        if let statusLabel = row.status.visibleBadgeLabel {
+                            Text(statusLabel)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(statusColor)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 4)
+                                .background(statusColor.opacity(0.12), in: Capsule())
+                        }
                     }
                 }
 
@@ -276,6 +288,7 @@ extension DockRowViewModel {
             "thread=\(id.threadID)",
             "status=\(status.rawValue)",
             "origin=\(origin.automationKind)",
+            "relationship=\(relationship.rawValue)",
             "label=\(label == nil ? "none" : "present")",
             isPinned ? "Pinned" : "Not pinned",
         ].joined(separator: "; ")

@@ -418,6 +418,29 @@ final class DockStoreTestsProjection: XCTestCase {
         XCTAssertEqual(projection.groups.first?.rows.map(\.id.threadID), ["thread-a"])
     }
 
+    func testThreadCardRowProjectorMarksForkedCards() throws {
+        let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
+        let projector = ThreadCardRowProjector(
+            hosts: [host],
+            hostIdentityResolver: DockHostIdentityResolver(hosts: [host]),
+            localMetadata: [:],
+            now: { Date(timeIntervalSince1970: 1_780_000_100) }
+        )
+        let card = threadCardFixture(
+            host: host,
+            threadID: "forked-thread",
+            title: "Forked thread",
+            updatedAt: 1_780_000_000,
+            relationship: .forked,
+            forkedFromID: "parent-thread"
+        )
+
+        let row = try XCTUnwrap(projector.rows(from: [card], sourceHostID: host.id).first)
+
+        XCTAssertEqual(row.relationship, .forked)
+        XCTAssertTrue(row.automationValue.contains("relationship=forked"))
+    }
+
     func testThreadCardTableDropsPinnedPlaceholderWithoutCachedHumanDisplay() {
         let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
         let key = LocalThreadMetadataKey(

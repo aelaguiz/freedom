@@ -162,6 +162,12 @@ test("relay thread/list ignores discovered live rows and preserves history curso
             backwardsCursor: "cursor-back",
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(ws, message.id, message.params.threadId, {
+          preview: "History preview",
+          source: { custom: "chatgpt" },
+          status: { type: "idle" },
+        });
       }
     });
   });
@@ -286,6 +292,13 @@ test("relay thread/list keeps history status while focused detail can still rout
             backwardsCursor: null,
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(ws, message.id, message.params.threadId, {
+          sessionId: "session-currently-active",
+          updatedAt: 300,
+          source: "cli",
+          status: { type: "notLoaded" },
+        });
       } else if (message.method === "thread/turns/list") {
         historyTurnsRequests += 1;
         ws.send(JSON.stringify({
@@ -494,6 +507,12 @@ test("relay thread/list returns history rows when live endpoint fails", async ()
             backwardsCursor: null,
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(ws, message.id, message.params.threadId, {
+          updatedAt: 10,
+          source: { custom: "chatgpt" },
+          status: { type: "idle" },
+        });
       }
     });
   });
@@ -618,6 +637,15 @@ test("relay thread/list preserves history preview without warming turns", async 
             backwardsCursor: null,
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(ws, message.id, message.params.threadId, {
+          sessionId: "session-history-latest",
+          preview: "Original opening prompt",
+          createdAt: 10,
+          updatedAt: 30,
+          source: { custom: "chatgpt" },
+          status: { type: "idle" },
+        });
       } else if (message.method === "thread/turns/list") {
         turnsParams = message.params;
         turnsRequests += 1;
@@ -765,6 +793,15 @@ test("relay thread/list preserves history preview without warming live owner tur
             backwardsCursor: null,
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(ws, message.id, message.params.threadId, {
+          sessionId: "session-live-latest",
+          preview: "Original opening prompt",
+          createdAt: 10,
+          updatedAt: 30,
+          source: "cli",
+          status: { type: "active", activeFlags: [] },
+        });
       } else if (message.method === "thread/turns/list") {
         historyTurnsRequests += 1;
         ws.send(JSON.stringify({

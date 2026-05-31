@@ -397,6 +397,33 @@ final class AppServerClientTests: XCTestCase {
         await connection.close()
     }
 
+    func testDockThreadCardDecodesLegacyPayloadWithoutRelationshipFields() throws {
+        let payload = """
+        {
+          "id": "Amir-M5::thread-1",
+          "logicalHostID": "Amir-M5",
+          "threadID": "thread-1",
+          "backendSessionID": "thread-1",
+          "hostDisplayName": "Amir-M5",
+          "orderKey": "000:thread-1",
+          "activityAt": "2026-05-31T00:00:00.000Z",
+          "displaySummary": "Summary",
+          "title": "Title",
+          "status": "dormant",
+          "sourceKind": "human",
+          "lane": "human",
+          "archiveState": "active",
+          "freshness": "fresh",
+          "completeness": "complete"
+        }
+        """
+
+        let card = try JSONDecoder().decode(DockThreadCardDTO.self, from: Data(payload.utf8))
+
+        XCTAssertNil(card.relationship)
+        XCTAssertNil(card.forkedFromID)
+    }
+
     func testOfflineAndMalformedResponsePathsSurfaceExplicitState() async throws {
         let offlineTransport = ScriptedAppServerTransport(connectError: TestTransportError.offline)
         let offlineClient = AppServerClient(transport: offlineTransport)

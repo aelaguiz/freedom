@@ -23,13 +23,14 @@ import {
 import {
   drainThreadListScope,
 } from "./dock-relay-state-snapshot.mjs";
+import { isHumanStartedThread } from "./dock-relay-human-thread-filter.mjs";
 import {
-  filterHumanBaseThreads,
-  isHumanBaseThread,
-} from "./dock-relay-human-thread-filter.mjs";
-import {
+  aggregateThreadList,
   collectLiveRows,
   configuredLiveEndpointsForConfig,
+  enrichHumanStartedRows,
+  mergeHumanStartedRowsWithSupplements,
+  readSessionIndexHumanStartedSupplements,
 } from "./dock-relay-thread-data.mjs";
 
 function nowISOString() {
@@ -53,9 +54,9 @@ const ACTIVE_ARCHIVE_SCOPE = {
   archived: false,
 };
 
-function appFacingHumanOnlyVisibility() {
+function appFacingHumanStartedVisibility() {
   return {
-    mode: "app_facing_human_base_threads_only",
+    mode: "app_facing_human_started_threads_only",
     includeRejectedThreads: false,
     rejectedThreadsRequireDiagnosticSnapshotOptIn: true,
   };
@@ -264,23 +265,44 @@ class RelayStateEngine {
         drainThreadListScope(this.config, baseParams, ACTIVE_ARCHIVE_SCOPE, ACTIVE_DEFAULT_SCOPE),
       ]);
       const interactiveRows = defaultScope.rows.map((row) => row.thread).filter(Boolean);
-      const { acceptedRows, rejectedCounts } = filterHumanBaseThreads(interactiveRows);
-      const orderedRows = orderedDockRows([], acceptedRows, liveRows);
+      const { acceptedRows, rejectedCounts, validationFailures } = await enrichHumanStartedRows(
+        this.config,
+        interactiveRows,
+        { route: "dock_reconcile" },
+      );
+      const supplements = await readSessionIndexHumanStartedSupplements(this.config, acceptedRows, {
+        route: "dock_reconcile",
+        params: baseParams,
+        limit: baseParams.limit,
+      });
+      for (const [rejectedReason, count] of Object.entries(supplements.rejectedCounts)) {
+        rejectedCounts[rejectedReason] = Number(rejectedCounts[rejectedReason] || 0) + Number(count || 0);
+      }
+      const appRows = mergeHumanStartedRowsWithSupplements(acceptedRows, supplements.acceptedRows);
+      const orderedRows = orderedDockRows([], appRows, liveRows);
       const cards = orderedRows
         .map(({ row, lane }, index) => normalizeThread(row, host, lane, {
           archiveState: "active",
           orderKey: dockOrderKey(index, row?.id || ""),
         }))
         .filter(Boolean);
-      const complete = defaultScope.complete;
+      const totalValidationFailures = validationFailures + supplements.validationFailures;
+      const complete = defaultScope.complete && totalValidationFailures === 0;
+      const reconciliationScope = complete
+        ? defaultScope
+        : {
+          ...defaultScope,
+          complete: false,
+          error: defaultScope.error || "human-started thread validation failed",
+        };
       const cleanup = this.store.deleteRejectedThreadCards(host.id);
       const leaseCleanup = this.store.deleteRejectedLiveLeases(host.id);
       const result = this.store.applyDockReconciliation({
         host,
         cards,
-        scopes: [defaultScope],
+        scopes: [reconciliationScope],
         complete,
-        error: defaultScope.error || null,
+        error: reconciliationScope.error || null,
         previousCards: previousDockCards,
       });
       const freshness = this.store.freshnessForHost(host.id);
@@ -305,6 +327,8 @@ class RelayStateEngine {
           hostId: host.id,
           rows: cards.length,
           rejectedCounts,
+          validationFailures: totalValidationFailures,
+          supplementedRows: supplements.acceptedRows.length,
           deletedRejectedCards: cleanup.deleted,
           deletedRejectedLiveLeases: leaseCleanup.deleted,
           seq: result.seq,
@@ -316,9 +340,11 @@ class RelayStateEngine {
           rows: cards.length,
           seq: result.seq,
           rejectedCounts,
+          validationFailures: totalValidationFailures,
+          supplementedRows: supplements.acceptedRows.length,
           deletedRejectedCards: cleanup.deleted,
           deletedRejectedLiveLeases: leaseCleanup.deleted,
-          error: defaultScope.error || error,
+          error: reconciliationScope.error || null,
         });
       }
       this.scheduleLiveLeaseExpiryReconciliation(host.id);
@@ -346,6 +372,72 @@ class RelayStateEngine {
     }
   }
 
+  async reconcileArchive({ reason = "manual" } = {}) {
+    const host = publicHostFromConfig(this.config);
+    try {
+      const baseParams = {
+        archived: true,
+        limit: THREAD_LIST_MAX_LIMIT,
+        sortKey: "updated_at",
+        sortDirection: "desc",
+        modelProviders: [],
+      };
+      const previousArchiveCards = this.store.listArchiveCards({ hostID: host.id }).cards;
+      const history = await aggregateThreadList(this.config, baseParams);
+      const rows = Array.isArray(history?.data) ? history.data : [];
+      const cards = rows
+        .map((row) => normalizeThread(row, host, "human", {
+          archiveState: "archived",
+        }))
+        .filter(Boolean);
+      const result = this.store.applyArchiveReconciliation({
+        host,
+        cards,
+        complete: true,
+        previousCards: previousArchiveCards,
+      });
+      const freshness = this.store.freshnessForHost(host.id);
+      const totalRows = this.store.listArchiveCards({ hostID: host.id }).totalRows;
+      await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
+        view: ARCHIVE_VIEW,
+        baseSeq: Math.max(0, Number(result.seq) - 1),
+        seq: result.seq,
+        freshness,
+        upsertHosts: [host],
+        upsertCards: result.upsertCards,
+        deleteCardIDs: result.deleteCardIDs,
+        totalRows,
+        complete: true,
+      }));
+      this.logger?.info?.("state.archive_reconcile_succeeded", {
+        reason,
+        hostId: host.id,
+        rows: cards.length,
+        seq: result.seq,
+      });
+      return result;
+    } catch (error) {
+      this.store.upsertHost(host);
+      this.store.markScopeStale(host.id, "archived:interactiveDefault", error);
+      const seq = this.store.currentSeq();
+      const totalRows = this.store.listArchiveCards({ hostID: host.id }).totalRows;
+      await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
+        view: ARCHIVE_VIEW,
+        baseSeq: Math.max(0, seq - 1),
+        seq,
+        freshness: this.store.freshnessForHost(host.id),
+        totalRows,
+        complete: false,
+      }));
+      this.logger?.warn?.("state.archive_reconcile_failed", {
+        reason,
+        hostId: host.id,
+        error,
+      });
+      return { seq, upsertCards: [], deleteCardIDs: [], error };
+    }
+  }
+
   async refreshLiveLeases() {
     const host = publicHostFromConfig(this.config);
     const endpoints = configuredLiveEndpointsForConfig(this.config, { includeHistory: true });
@@ -358,7 +450,7 @@ class RelayStateEngine {
     const endpointsByUrl = new Map(endpoints.map((endpoint) => [endpoint.url, endpoint]));
     const acceptedRows = [];
     for (const row of live.rows || []) {
-      if (!isHumanBaseThread(row)) {
+      if (!isHumanStartedThread(row)) {
         continue;
       }
       const endpoint = endpointsByUrl.get(row?.dockRelaySource?.url) || row?.dockRelaySource || null;
@@ -501,7 +593,7 @@ class RelayStateEngine {
       totalRows,
       window,
       asOf: nowISOString(),
-      visibility: appFacingHumanOnlyVisibility(),
+      visibility: appFacingHumanStartedVisibility(),
       freshness,
       hosts: this.store.hostRows(),
       cards,
@@ -532,6 +624,7 @@ class RelayStateEngine {
       session,
       downstreamWs,
       sendJson,
+      after: () => this.scheduleArchiveReconciliationAfterResponse("archive/subscribe"),
     });
   }
 
@@ -603,7 +696,18 @@ class RelayStateEngine {
       updateReason: "archive/update",
       downstreamWs,
       sendJson,
+      after: () => this.scheduleArchiveReconciliationAfterResponse("archive/resync"),
+      otherwise: () => this.scheduleArchiveReconciliationAfterResponse("archive/resync"),
     });
+  }
+
+  scheduleArchiveReconciliationAfterResponse(reason) {
+    const timer = setImmediate(() => {
+      this.reconcileArchive({ reason }).catch((error) => {
+        this.logger?.warn?.("state.archive_reconcile_failed", { reason, error });
+      });
+    });
+    timer.unref?.();
   }
 
   async resyncCardView({
@@ -769,7 +873,7 @@ class RelayStateEngine {
     return {
       ok: true,
       schema: "codexdock.relayState.v1",
-      visibility: appFacingHumanOnlyVisibility(),
+      visibility: appFacingHumanStartedVisibility(),
       db: this.store.dbHealth(),
       counts: this.store.stateCounts(),
       syncScopes: this.store.syncScopes(),

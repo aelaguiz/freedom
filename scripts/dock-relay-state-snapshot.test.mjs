@@ -356,7 +356,7 @@ test("relay/state/snapshot default scopes include an all-source combined Codex o
     });
 
     assert.equal(response.error, undefined);
-    assert.equal(response.result.visibility.mode, "app_facing_human_base_threads_only");
+    assert.equal(response.result.visibility.mode, "app_facing_human_started_threads_only");
     const allSourceScope = response.result.scopes.find((scope) => scope.name === "active:allSourceKinds");
     assert.deepEqual(allSourceScope.threadIDsInCodexOrder, ["thread-combined-1"]);
     assert.deepEqual(allSourceScope.humanFilter.rejectedCounts, { exec: 1 });

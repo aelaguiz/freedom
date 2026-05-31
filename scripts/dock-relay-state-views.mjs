@@ -217,6 +217,14 @@ function summarySourceForThread(thread) {
   return "title";
 }
 
+function forkParentIDForThread(thread) {
+  return nonEmpty(thread?.forkedFromId) || nonEmpty(thread?.forked_from_id);
+}
+
+function relationshipForThread(thread) {
+  return forkParentIDForThread(thread) ? "forked" : "root";
+}
+
 function statusPriority(thread) {
   const status = thread?.status;
   if (status?.type === "active") {
@@ -309,6 +317,7 @@ function normalizeThread(thread, host, lane = "human", options = {}) {
   const sessionID = nonEmpty(thread?.sessionId) || threadID;
   const activityAtMs = timestampToMs(thread?.activityAt ?? rowTimestamp(thread));
   const sourceKind = sourceKindFromThread(thread, lane);
+  const forkedFromID = forkParentIDForThread(thread);
   const orderKey = options.orderKey
     || (options.archiveState === "archived"
       ? archiveOrderKey(activityAtMs, threadID)
@@ -328,6 +337,8 @@ function normalizeThread(thread, host, lane = "human", options = {}) {
     status: normalizedStatus(thread),
     sourceKind,
     lane,
+    relationship: options.relationship || relationshipForThread(thread),
+    forkedFromID,
     archiveState: options.archiveState || "active",
     freshness: options.freshness || "fresh",
     completeness: options.completeness || "complete",
@@ -358,6 +369,8 @@ function normalizeStoredCard(row) {
     status: row.status,
     sourceKind: row.source_kind || "unknown",
     lane: row.lane,
+    relationship: row.relationship || "root",
+    forkedFromID: row.forked_from_id || null,
     archiveState: row.archive_state || "unknown",
     freshness: row.freshness_status || "unknown",
     completeness: row.completeness || "complete",

@@ -40,11 +40,13 @@ public struct ArchiveView: View {
     @ObservedObject private var screenStore: ArchiveScreenStore
     private let store: ArchiveStore
     private let title: String
+    private let threadDetailFactory: any ThreadDetailSessionMaking
     private let onClose: (@MainActor () -> Void)?
     private let onRestoreSucceeded: @MainActor () async -> Void
     @State private var searchText = ""
     @State private var selectedHostID: String?
     @State private var dateFilter: DateFilter = .all
+    @State private var selectedDetailRow: DockRowViewModel?
     @State private var isSelectionMode = false
     @State private var selectedRowIDs: Set<HostScopedThreadID> = []
     @State private var isBatchRestoring = false
@@ -55,11 +57,13 @@ public struct ArchiveView: View {
     public init(
         store: ArchiveStore,
         title: String = "Archive",
+        threadDetailFactory: any ThreadDetailSessionMaking = AppServerThreadDetailSessionFactory(),
         onClose: (@MainActor () -> Void)? = nil,
         onRestoreSucceeded: @escaping @MainActor () async -> Void = {}
     ) {
         self.store = store
         self.title = title
+        self.threadDetailFactory = threadDetailFactory
         self.onClose = onClose
         _screenStore = ObservedObject(wrappedValue: store.screenStore)
         self.onRestoreSucceeded = onRestoreSucceeded
@@ -90,6 +94,9 @@ public struct ArchiveView: View {
             }
             .refreshable {
                 await store.refresh()
+            }
+            .navigationDestination(isPresented: detailNavigationBinding) {
+                selectedDetailDestination
             }
         }
         .accessibilityElement(children: .contain)
@@ -275,11 +282,17 @@ public struct ArchiveView: View {
                 .accessibilityValue(selectedRowIDs.contains(row.id) ? "Selected" : "Not selected")
                 .codexAutomationID(AutomationID.Archive.selectionToggle(hostID: row.id.hostID, threadID: row.id.threadID))
             } else {
-                DockRowView(
-                    row: row,
-                    automationID: AutomationID.Archive.row(hostID: row.id.hostID, threadID: row.id.threadID)
-                )
-                    .accessibilityValue(row.automationValue)
+                Button {
+                    selectedDetailRow = row
+                } label: {
+                    DockRowView(
+                        row: row,
+                        automationID: AutomationID.Archive.row(hostID: row.id.hostID, threadID: row.id.threadID)
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(row.title)
+                .accessibilityValue(row.automationValue)
 
                 Button {
                     Task {
@@ -297,6 +310,12 @@ public struct ArchiveView: View {
         }
         .contextMenu {
             Button {
+                selectedDetailRow = row
+            } label: {
+                Label("Open", systemImage: "arrow.up.right.square")
+            }
+
+            Button {
                 Task {
                     if await store.restore(row) {
                         await onRestoreSucceeded()
@@ -306,6 +325,49 @@ public struct ArchiveView: View {
                 Label("Restore", systemImage: "arrow.uturn.backward")
             }
             .codexAutomationID(AutomationID.Archive.restoreButton(hostID: row.id.hostID, threadID: row.id.threadID))
+        }
+    }
+
+    private var detailNavigationBinding: Binding<Bool> {
+        Binding(
+            get: {
+                selectedDetailRow != nil
+            },
+            set: { isPresented in
+                if !isPresented {
+                    selectedDetailRow = nil
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var selectedDetailDestination: some View {
+        if let selectedDetailRow,
+           let host = store.hostConfiguration(for: selectedDetailRow) {
+            SessionDetailView(
+                store: ThreadDetailStore(
+                    host: host,
+                    row: selectedDetailRow,
+                    factory: threadDetailFactory,
+                    hostIdentityResolver: currentSnapshot?.hostIdentityResolver
+                )
+            )
+        } else {
+            DockMessageView(
+                icon: "exclamationmark.triangle",
+                title: "Thread unavailable",
+                message: "This thread's host is no longer configured."
+            )
+        }
+    }
+
+    private var currentSnapshot: ArchiveSnapshot? {
+        switch screenStore.state {
+        case .loaded(let snapshot), .empty(let snapshot), .unavailable(let snapshot, _):
+            return snapshot
+        case .configurationError, .idle, .loading:
+            return nil
         }
     }
 

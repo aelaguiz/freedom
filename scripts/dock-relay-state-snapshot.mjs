@@ -224,7 +224,7 @@ function scopeRowsWithHumanFilter(scope, { includeRejectedThreads = false } = {}
     threadIDsInCodexOrder: rows.map((row) => row.thread?.id).filter(Boolean),
     rows,
     humanFilter: {
-      mode: includeRejectedThreads ? "diagnostic_includes_rejected_threads" : "app_facing_human_base_threads_only",
+      mode: includeRejectedThreads ? "diagnostic_includes_rejected_threads" : "app_facing_human_started_threads_only",
       originalRowCount: scope.rowCount,
       rejectedCounts,
     },
@@ -608,7 +608,7 @@ async function buildRelayStateSnapshot(config, params = {}) {
     generatedAt: new Date().toISOString(),
     source: "app-server-only",
     visibility: {
-      mode: includeRejectedThreads ? "diagnostic_includes_rejected_threads" : "app_facing_human_base_threads_only",
+      mode: includeRejectedThreads ? "diagnostic_includes_rejected_threads" : "app_facing_human_started_threads_only",
       includeRejectedThreads,
       rejectedThreadsRequireExplicitOptIn: true,
     },
