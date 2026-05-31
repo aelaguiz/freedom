@@ -274,5 +274,8 @@ function threadMatchesSourceKinds(row, sourceKinds) {
 }
 
 export {
+  canonicalSourceName,
+  normalizedThreadSource,
+  signalsFromSourceValue,
   threadMatchesSourceKinds,
 };

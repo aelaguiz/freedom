@@ -21,7 +21,13 @@ import {
   threadMatchesSourceKinds,
 } from "./dock-relay.mjs";
 import { createRelayLogger } from "./dock-relay-logger.mjs";
-import { liveOverlayForSnapshot } from "./dock-relay-live-status-cache.mjs";
+import { SessionRouter, liveOverlayForSnapshot } from "./dock-relay-live-status-cache.mjs";
+import {
+  classifyThreadOrigin,
+  filterHumanBaseThreads,
+  isHumanBaseThread,
+  threadSpawnParentIDFromSource,
+} from "./dock-relay-human-thread-filter.mjs";
 import { RelayStateEngine } from "./dock-relay-state-engine.mjs";
 import { RelayStateStore } from "./dock-relay-state-store.mjs";
 import {
@@ -854,6 +860,84 @@ test("subAgent sourceKinds match broad and specific live variants", () => {
   assert.equal(threadMatchesSourceKinds(other, ["subAgentOther"]), true);
 });
 
+test("human thread classifier accepts only user-started base threads", () => {
+  const cases = [
+    ["cli", { source: "cli" }, true, "human_cli"],
+    ["vscode", { source: "vscode" }, true, "human_vscode"],
+    ["atlas custom", { source: { custom: "atlas" } }, true, "human_custom_atlas"],
+    ["chatgpt custom", { source: "chatgpt" }, true, "human_custom_chatgpt"],
+    ["exec", { source: "exec" }, false, "exec"],
+    ["appServer", { source: "appServer" }, false, "app_server"],
+    ["mcp alias", { source: "mcp" }, false, "mcp"],
+    ["subAgent review", { source: { subAgent: "review" } }, false, "sub_agent"],
+    ["memory consolidation", { source: "memory_consolidation" }, false, "memory_internal"],
+    ["missing source", {}, false, "missing_source"],
+    ["forked human", { source: "cli", forkedFromId: "parent-thread" }, false, "forked"],
+    [
+      "thread spawn",
+      { source: { subAgent: { thread_spawn: { parent_thread_id: "parent-thread" } } } },
+      false,
+      "not_base_level",
+    ],
+    ["contradictory", { source: { cli: {}, subAgent: "review" } }, false, "contradictory_source"],
+  ];
+
+  for (const [name, row, allowed, reason] of cases) {
+    const classification = classifyThreadOrigin(row);
+    assert.equal(classification.allowed, allowed, name);
+    assert.equal(classification.reason, reason, name);
+    assert.equal(isHumanBaseThread(row), allowed, name);
+  }
+  assert.equal(
+    threadSpawnParentIDFromSource({ subAgent: { threadSpawn: { parentThreadId: "parent-thread" } } }),
+    "parent-thread",
+  );
+});
+
+test("human thread filtering reports rejected reason counts", () => {
+  const { acceptedRows, rejectedCounts } = filterHumanBaseThreads([
+    { id: "human", source: "cli" },
+    { id: "agent", source: "exec" },
+    { id: "spawn", source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } },
+    { id: "missing" },
+  ]);
+
+  assert.deepEqual(acceptedRows.map((row) => row.id), ["human"]);
+  assert.deepEqual(rejectedCounts, {
+    exec: 1,
+    missing_source: 1,
+    not_base_level: 1,
+  });
+});
+
+test("session routing ignores non-human live rows defensively", async () => {
+  const historyEndpoint = { label: "history", url: "ws://history.example" };
+  const humanEndpoint = { label: "human-live", url: "ws://human.example" };
+  const execEndpoint = { label: "exec-live", url: "ws://exec.example" };
+  const router = new SessionRouter({
+    historyEndpoint,
+    liveStatusCache: {
+      async snapshotForRouting() {
+        return {
+          rows: [
+            { id: "exec-live-thread", source: "exec", dockRelaySource: execEndpoint },
+            { id: "human-live-thread", source: "cli", dockRelaySource: humanEndpoint },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(await router.rowForThread("exec-live-thread"), null);
+  assert.deepEqual(await router.endpointForThread("exec-live-thread"), historyEndpoint);
+  assert.deepEqual(await router.rowForThread("human-live-thread"), {
+    id: "human-live-thread",
+    source: "cli",
+    dockRelaySource: humanEndpoint,
+  });
+  assert.deepEqual(await router.loadedThreadIDs(), ["human-live-thread"]);
+});
+
 test("relay source marker is never returned to clients", () => {
   assert.deepEqual(
     sanitizeRelayFields({
@@ -1061,7 +1145,6 @@ test("thread/search forwards app-server search params and strips relay-only thre
         archived: false,
         limit: 250,
         searchTerm: "thread-1",
-        sourceKinds: ["cli", "exec"],
         sortKey: "updated_at",
         sortDirection: "desc",
       },
@@ -1111,6 +1194,19 @@ test("thread/goal/get forwards app-server goal reads through the relay", async (
               timeUsedSeconds: 34,
               createdAt: 1000,
               updatedAt: 2000,
+            },
+          },
+        }));
+      } else if (message.method === "thread/read") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            thread: {
+              id: message.params?.threadId,
+              preview: "Goal owner",
+              updatedAt: 100,
+              source: "cli",
+              status: { type: "notLoaded" },
             },
           },
         }));
@@ -1178,11 +1274,28 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
         }));
       } else if (message.method === "thread/list") {
         observedThreadListParams.push(message.params || {});
-        const isAgentRequest = Array.isArray(message.params?.sourceKinds);
         ws.send(JSON.stringify({
           id: message.id,
           result: {
-            data: isAgentRequest ? [
+            data: [
+              {
+                id: "history-thread",
+                sessionId: "history-session",
+                preview: "History thread",
+                latestSummary: "Stored history row",
+                displaySummary: "Stored history message",
+                activityAt: 1_780_000_090,
+                updatedAt: 1_780_000_100,
+                status: {
+                  type: "notLoaded",
+                },
+                cwd: "/Users/aelaguiz/workspace/codex-client",
+                gitInfo: {
+                  branch: "main",
+                  originUrl: "codex-client",
+                },
+                source: "cli",
+              },
               {
                 id: "agent-thread",
                 sessionId: "agent-session",
@@ -1201,25 +1314,6 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
                 dockRelaySource: {
                   bearerToken: "must-not-leak",
                 },
-              },
-            ] : [
-              {
-                id: "history-thread",
-                sessionId: "history-session",
-                preview: "History thread",
-                latestSummary: "Stored history row",
-                displaySummary: "Stored history message",
-                activityAt: 1_780_000_090,
-                updatedAt: 1_780_000_100,
-                status: {
-                  type: "notLoaded",
-                },
-                cwd: "/Users/aelaguiz/workspace/codex-client",
-                gitInfo: {
-                  branch: "main",
-                  originUrl: "codex-client",
-                },
-                source: "cli",
               },
             ],
             nextCursor: null,
@@ -1262,17 +1356,18 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
     const update = await waitForRelayMessage(ws, (message) => message.method === "dock/update");
     const params = update.params;
     assert.equal(observedAuthorization, "Bearer history-token");
-    assert.equal(observedThreadListParams.length, 2);
-    assert.deepEqual(observedThreadListParams.map((params) => params.archived), [false, false]);
+    assert.equal(observedThreadListParams.length, 1);
+    assert.deepEqual(observedThreadListParams.map((params) => params.archived), [false]);
     assert.ok(observedThreadListParams.every((params) => params.includePreviewless === undefined));
+    assert.ok(observedThreadListParams.every((params) => params.sourceKinds === undefined));
     assert.equal(params.kind, "delta");
     assert.equal(params.view, "dock");
     assert.equal(params.complete, true);
-    assert.equal(params.totalRows, 2);
+    assert.equal(params.totalRows, 1);
     assert.deepEqual(params.window, {
       offset: 0,
-      limit: 2,
-      rowCount: 2,
+      limit: 1,
+      rowCount: 1,
       nextOffset: null,
     });
     assert.equal(typeof params.stateGeneration, "number");
@@ -1283,7 +1378,6 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
     assert.deepEqual(
       params.upsertCards.map((row) => [row.threadID, row.status, row.lane, row.sourceKind]),
       [
-        ["agent-thread", "needsApproval", "agent", "automation"],
         ["history-thread", "dormant", "human", "human"],
       ],
     );
@@ -1442,7 +1536,7 @@ test("dock/subscribe overlays live status without changing stored Codex order", 
   }
 });
 
-test("dock/subscribe drains combined source pages before default interactive extras", async () => {
+test("dock/subscribe drains only human-started base thread pages", async () => {
   const observedThreadListParams = [];
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-relay-test-"));
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -1463,20 +1557,20 @@ test("dock/subscribe drains combined source pages before default interactive ext
       } else if (message.method === "thread/list") {
         const params = message.params || {};
         observedThreadListParams.push(params);
-        const automation = Array.isArray(params.sourceKinds);
         const cursor = params.cursor || null;
         let data = [];
         let nextCursor = null;
-        if (!automation && cursor === null) {
-          data = [{ id: "human-page-1", preview: "Human page 1", updatedAt: 40, status: { type: "notLoaded" }, source: "cli" }];
+        if (cursor === null) {
+          data = [
+            { id: "human-page-1", preview: "Human page 1", updatedAt: 40, status: { type: "notLoaded" }, source: "cli" },
+            { id: "agent-page-1", preview: "Agent page 1", updatedAt: 20, status: { type: "notLoaded" }, source: "exec" },
+          ];
           nextCursor = "human-page-2";
-        } else if (!automation && cursor === "human-page-2") {
-          data = [{ id: "human-page-2", preview: "Human page 2", updatedAt: 30, status: { type: "notLoaded" }, source: "cli" }];
-        } else if (automation && cursor === null) {
-          data = [{ id: "agent-page-1", preview: "Agent page 1", updatedAt: 20, status: { type: "notLoaded" }, source: "exec" }];
-          nextCursor = "agent-page-2";
-        } else if (automation && cursor === "agent-page-2") {
-          data = [{ id: "agent-page-2", preview: "Agent page 2", updatedAt: 10, status: { type: "notLoaded" }, source: "exec" }];
+        } else if (cursor === "human-page-2") {
+          data = [
+            { id: "human-page-2", preview: "Human page 2", updatedAt: 30, status: { type: "notLoaded" }, source: "cli" },
+            { id: "agent-page-2", preview: "Agent page 2", updatedAt: 10, status: { type: "notLoaded" }, source: "exec" },
+          ];
         }
         ws.send(JSON.stringify({
           id: message.id,
@@ -1516,15 +1610,14 @@ test("dock/subscribe drains combined source pages before default interactive ext
     const update = await waitForRelayMessage(ws, (message) => message.method === "dock/update");
     assert.deepEqual(
       update.params.upsertCards.map((row) => row.threadID),
-      ["agent-page-1", "agent-page-2", "human-page-1", "human-page-2"],
+      ["human-page-1", "human-page-2"],
     );
-    assert.equal(observedThreadListParams.length, 4);
+    assert.equal(observedThreadListParams.length, 2);
     assert.ok(observedThreadListParams.every((params) => params.archived === false));
     assert.ok(observedThreadListParams.every((params) => params.includePreviewless === undefined));
     assert.ok(observedThreadListParams.some((params) => !params.sourceKinds && !params.cursor));
     assert.ok(observedThreadListParams.some((params) => !params.sourceKinds && params.cursor === "human-page-2"));
-    assert.ok(observedThreadListParams.some((params) => Array.isArray(params.sourceKinds) && !params.cursor));
-    assert.ok(observedThreadListParams.some((params) => Array.isArray(params.sourceKinds) && params.cursor === "agent-page-2"));
+    assert.ok(observedThreadListParams.every((params) => params.sourceKinds === undefined));
   } finally {
     ws.close();
     await relay.close();

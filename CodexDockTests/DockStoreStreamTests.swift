@@ -253,6 +253,83 @@ final class DockStoreStreamTests: XCTestCase {
     }
 
     @MainActor
+    func testStreamDropsNonHumanCardsFromSnapshotsAndDeltas() async throws {
+        let host = makeHost()
+        let connection = ManualThreadCardStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                cards: [
+                    threadCardFixture(host: host, threadID: "human-initial", title: "Human initial", updatedAt: 1_000),
+                    threadCardFixture(host: host, threadID: "agent-initial", title: "Agent initial", updatedAt: 1_100, sourceKind: .automation, lane: .agent),
+                    threadCardFixture(host: host, threadID: "unknown-initial", title: "Unknown initial", updatedAt: 1_200, sourceKind: .unknown, lane: .unknown)
+                ]
+            )
+        )
+        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+
+        await store.load()
+
+        guard let initialSnapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.id.threadID) == ["human-initial"] }
+        ) else {
+            return XCTFail("Expected non-human snapshot cards to be dropped, got \(store.state)")
+        }
+        XCTAssertEqual(initialSnapshot.hostStates.map(\.status), [.loaded(rowCount: 1)])
+
+        await connection.send(
+            ThreadCardStreamUpdateDTO(
+                kind: .delta,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                view: .dock,
+                epoch: "epoch-1",
+                baseSeq: 1,
+                seq: 2,
+                upsertCards: [
+                    threadCardFixture(host: host, threadID: "human-delta", title: "Human delta", updatedAt: 1_300),
+                    threadCardFixture(host: host, threadID: "agent-delta", title: "Agent delta", updatedAt: 1_400, sourceKind: .automation, lane: .agent)
+                ],
+                deleteCardIDs: []
+            )
+        )
+
+        guard let updatedSnapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.id.threadID) == ["human-delta", "human-initial"] }
+        ) else {
+            return XCTFail("Expected non-human delta cards to be dropped, got \(store.state)")
+        }
+        XCTAssertEqual(updatedSnapshot.hostStates.map(\.status), [.loaded(rowCount: 2)])
+    }
+
+    func testSnapshotCollectorCompletesFinalWindowAfterDroppingNonHumanCards() async throws {
+        let host = makeHost()
+        let connection = ManualThreadCardStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                cards: [
+                    threadCardFixture(host: host, threadID: "human-final", title: "Human final", updatedAt: 1_000),
+                    threadCardFixture(host: host, threadID: "agent-final", title: "Agent final", updatedAt: 1_100, sourceKind: .automation, lane: .agent)
+                ],
+                complete: false,
+                totalRows: 2,
+                window: DockStreamWindowDTO(offset: 0, limit: 2, rowCount: 2)
+            )
+        )
+
+        let collection = try await ThreadCardStreamSnapshotCollector(
+            expectedView: .dock,
+            timeout: .milliseconds(100)
+        ).collect(from: connection)
+
+        XCTAssertEqual(collection.cards.map(\.threadID), ["human-final"])
+    }
+
+    @MainActor
     func testWindowedSnapshotIsExplicitlyPartial() async throws {
         let host = makeHost()
         let connection = ManualThreadCardStreamConnection(

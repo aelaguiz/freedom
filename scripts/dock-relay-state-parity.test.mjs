@@ -1104,10 +1104,10 @@ test("state parity treats dock/subscribe as a windowed card stream", () => {
     complete: true,
     scopes: [
       {
-        name: "active:allSourceKinds",
+        name: "active:interactiveDefault",
         archive: "active",
         archived: false,
-        sourceScope: "allSourceKinds",
+        sourceScope: "interactiveDefault",
         complete: true,
         rows: [
           { ordinal: 0, thread: firstThread },
@@ -1120,13 +1120,13 @@ test("state parity treats dock/subscribe as a windowed card stream", () => {
       {
         threadID: "first-thread",
         appearances: [
-          { scope: "active:allSourceKinds", archive: "active", archived: false, sourceScope: "allSourceKinds" },
+          { scope: "active:interactiveDefault", archive: "active", archived: false, sourceScope: "interactiveDefault" },
         ],
       },
       {
         threadID: "second-thread",
         appearances: [
-          { scope: "active:allSourceKinds", archive: "active", archived: false, sourceScope: "allSourceKinds" },
+          { scope: "active:interactiveDefault", archive: "active", archived: false, sourceScope: "interactiveDefault" },
         ],
       },
     ],
@@ -1204,10 +1204,10 @@ test("state parity compares dock/subscribe status against loaded app-server stat
     complete: true,
     scopes: [
       {
-        name: "active:allSourceKinds",
+        name: "active:interactiveDefault",
         archive: "active",
         archived: false,
-        sourceScope: "allSourceKinds",
+        sourceScope: "interactiveDefault",
         complete: true,
         rows: [
           { ordinal: 0, thread: liveThread },
@@ -1219,7 +1219,7 @@ test("state parity compares dock/subscribe status against loaded app-server stat
       {
         threadID: "live-thread",
         appearances: [
-          { scope: "active:allSourceKinds", archive: "active", archived: false, sourceScope: "allSourceKinds" },
+          { scope: "active:interactiveDefault", archive: "active", archived: false, sourceScope: "interactiveDefault" },
         ],
         routedRead: {
           thread: {
@@ -1287,7 +1287,7 @@ test("state parity compares dock/subscribe status against loaded app-server stat
   assert.equal(JSON.stringify(report).includes("private live prompt"), false);
 });
 
-test("state parity checks dock/subscribe order against app-server combined Codex order", () => {
+test("state parity checks dock/subscribe order against app-facing interactive Codex order", () => {
   const newerThread = {
     id: "newer-thread",
     createdAt: 20,
@@ -1316,10 +1316,10 @@ test("state parity checks dock/subscribe order against app-server combined Codex
     complete: true,
     scopes: [
       {
-        name: "active:allSourceKinds",
+        name: "active:interactiveDefault",
         archive: "active",
         archived: false,
-        sourceScope: "allSourceKinds",
+        sourceScope: "interactiveDefault",
         complete: true,
         rows: [
           { ordinal: 0, pageIndex: 0, rowIndex: 0, thread: newerThread },
@@ -1332,13 +1332,13 @@ test("state parity checks dock/subscribe order against app-server combined Codex
       {
         threadID: "newer-thread",
         appearances: [
-          { scope: "active:allSourceKinds", archive: "active", archived: false, sourceScope: "allSourceKinds" },
+          { scope: "active:interactiveDefault", archive: "active", archived: false, sourceScope: "interactiveDefault" },
         ],
       },
       {
         threadID: "older-thread",
         appearances: [
-          { scope: "active:allSourceKinds", archive: "active", archived: false, sourceScope: "allSourceKinds" },
+          { scope: "active:interactiveDefault", archive: "active", archived: false, sourceScope: "interactiveDefault" },
         ],
       },
     ],
@@ -1421,10 +1421,10 @@ test("state parity classifies dock/subscribe order changes caused by live timest
     complete: true,
     scopes: [
       {
-        name: "active:allSourceKinds",
+        name: "active:interactiveDefault",
         archive: "active",
         archived: false,
-        sourceScope: "allSourceKinds",
+        sourceScope: "interactiveDefault",
         complete: true,
         rows: [
           {

@@ -49,7 +49,7 @@ private func collectWithoutTimeout(
         hostsByID: &hostsByID,
         cardsByID: &cardsByID
     )
-    if isComplete(snapshot, visibleCount: cardsByID.count) {
+    if isComplete(snapshot) {
         return ThreadCardSnapshotCollection(hosts: sortedHosts(hostsByID), cards: sortedCards(cardsByID))
     }
 
@@ -60,7 +60,7 @@ private func collectWithoutTimeout(
             hostsByID: &hostsByID,
             cardsByID: &cardsByID
         )
-        if isComplete(update, visibleCount: cardsByID.count) {
+        if isComplete(update) {
             return ThreadCardSnapshotCollection(hosts: sortedHosts(hostsByID), cards: sortedCards(cardsByID))
         }
     }
@@ -82,12 +82,14 @@ private func apply(
     switch update.kind {
     case .snapshot:
         hostsByID = Dictionary(uniqueKeysWithValues: (update.hosts ?? []).map { ($0.id, $0) })
-        cardsByID = Dictionary(uniqueKeysWithValues: (update.cards ?? []).map { ($0.id, $0) })
+        cardsByID = Dictionary(uniqueKeysWithValues: (update.cards ?? [])
+            .filter(\.isAppFacingHumanThreadCard)
+            .map { ($0.id, $0) })
     case .delta:
         for host in update.upsertHosts ?? [] {
             hostsByID[host.id] = host
         }
-        for card in update.upsertCards ?? [] {
+        for card in (update.upsertCards ?? []).filter(\.isAppFacingHumanThreadCard) {
             cardsByID[card.id] = card
         }
         for cardID in update.deleteCardIDs ?? [] {
@@ -104,15 +106,16 @@ private func sortedHosts(_ hostsByID: [String: DockStreamHostDTO]) -> [DockStrea
     }
 }
 
-private func isComplete(_ update: ThreadCardStreamUpdateDTO, visibleCount: Int) -> Bool {
+private func isComplete(_ update: ThreadCardStreamUpdateDTO) -> Bool {
     if update.complete == true {
         return true
     }
     guard update.window?.nextOffset == nil,
-          let totalRows = update.totalRows else {
+          update.totalRows != nil else {
         return false
     }
-    return visibleCount >= totalRows
+    // Bad relay payloads may count rejected non-human rows in totalRows. A final window still completes after filtering.
+    return true
 }
 
 private func sortedCards(_ cardsByID: [String: DockThreadCardDTO]) -> [DockThreadCardDTO] {

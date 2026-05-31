@@ -5,7 +5,7 @@ Date: 2026-05-31
 Status: definitive working reference for current UX planning.
 
 Scope: Codex Dock client, Node Dock relay, contract files, tests, and existing
-thread-state docs. This doc does not change runtime behavior.
+thread-state docs. This doc records the 2026-05-31 human-only implementation.
 
 ## Net Answer
 
@@ -16,12 +16,18 @@ state, request-card state, turn state, and relay freshness.
 
 Yes, human-started, agent-spawned, `codex exec`, app-server/API, forked,
 ephemeral, and goal-tracked threads can often be detected from raw Codex
-thread data. The current Dock card stream does not send most of that evidence
-to the iPhone. It intentionally collapses origin into broad `human`,
-`automation`, or `unknown` source groups and `human`, `agent`, or `unknown`
-lanes.
+thread data. That raw taxonomy remains useful for diagnostics and future
+product work.
 
-For UX today, Dock can safely treat these as first-class differences:
+For ordinary app-facing Codex Dock UX after the 2026-05-31 implementation,
+there is one allowed thread bucket: a base/root thread started from a proven
+interactive human source. The relay rejects `exec`, app-server/API, MCP,
+sub-agent, thread-spawn child, memory/internal, unknown, missing-source,
+contradictory-source, and forked rows before they can become Dock, Archive,
+detail, resume, focused-turn, or live-lease state.
+
+For diagnostics and internal reasoning, Dock can still describe these
+differences:
 
 - `human` vs `agent` vs `unknown` lane.
 - `running`, `needsInput`, `needsApproval`, `idle`, `error`, `dormant`,
@@ -32,10 +38,36 @@ For UX today, Dock can safely treat these as first-class differences:
 - Request-card kinds such as command approval, file-change approval,
   permissions approval, user input, and MCP elicitation.
 
-For richer UX, such as different treatment for spawned sub-agents versus
-`codex exec` versus app-server/API versus JSON/structured-output turns, the
-relay needs to send more normalized evidence on Dock cards or the client must
-fetch raw `thread/read` data per row.
+For richer UX, such as a future separate machine/agent area, the relay should
+add a separate diagnostic or product surface. Normal Dock cards should not
+quietly return to mixed human and non-human rows.
+
+## App-Facing Human-Only Invariant
+
+Implemented on 2026-05-31.
+
+Ordinary app-facing paths are human-only:
+
+- Dock and Archive streams.
+- Relay card storage, counts, cache lookup, and live leases.
+- `thread/list`, `thread/search`, `thread/loaded/list`, `thread/read`,
+  `thread/turns/list`, `thread/goal/get`, `thread/archive`,
+  `thread/unarchive`, and `thread/resume`.
+- Focused `turn/start`, `turn/steer`, and `turn/interrupt`.
+- Swift stream ingestion, row projection, and cached pinned-row revival.
+
+The canonical app-facing policy lives in
+`scripts/dock-relay-human-thread-filter.mjs`. The self-documenting predicate is
+`isHumanBaseThread(row)`. Persisted card cleanup and counts use
+`scripts/dock-relay-state-store-human-filter.mjs` so the state store keeps the
+same named app-facing SQL boundary. Direct non-human IDs fail closed with
+`code: -32043`, `message: "thread rejected by human-only filter"`, and
+redacted `{ threadId, reason }` data.
+
+All-source visibility is diagnostic only. `relay/state/snapshot` defaults to
+`app_facing_human_base_threads_only`; callers must opt into
+`includeRejectedThreads: true` to inspect rejected rows, and that mode is
+labeled `diagnostic_includes_rejected_threads`.
 
 ## Vocabulary
 
@@ -417,6 +449,28 @@ self-started bucket until we add better evidence.
 This is a draft classification, not a permanent product taxonomy. It is meant
 to be easy to revise as real examples make the boundary clearer.
 
+Implementation note on `2026-05-31`: this draft classification is now enforced
+for app-facing Codex Dock behavior by
+`scripts/dock-relay-human-thread-filter.mjs`. The canonical relay predicates
+are named to state the policy directly:
+
+- `classifyThreadOrigin(row)`
+- `isHumanBaseThread(row)`
+- `filterHumanBaseThreads(rows)`
+- `assertHumanBaseThread(row)`
+- `humanThreadRejectedError(threadId, reason)`
+
+The Swift client is a defensive second line, not the source of truth. It drops
+stream cards unless `lane == .human` and `sourceKind == .human`, and it only
+revives cached pinned rows when the cached display has
+`originKind == .human`.
+
+Diagnostic all-source inspection still exists, but it is explicit. The normal
+`relay/state/snapshot` result is labeled
+`app_facing_human_base_threads_only`; including rejected rows requires
+`includeRejectedThreads: true` and is labeled
+`diagnostic_includes_rejected_threads`.
+
 Examples:
 
 - If you ask for `$fresh-consult` or `$model-consensus` inside a thread you
@@ -593,6 +647,21 @@ Tests also cover stale/offline/error/partial stream behavior, detail live state,
 archive/restore behavior, multi-host isolation, sync-gap recovery, and the
 controlled simulator `spawn-edge` path.
 
+After the 2026-05-31 human-only implementation, tests also cover:
+
+- The relay classifier accepting only human base/root rows and reporting
+  rejected reason counts.
+- Dock reconciliation draining human-started base thread pages only.
+- Raw thread list/search ignoring caller-supplied source-kind broadening.
+- Direct route preflight rejection for non-human IDs through the shared
+  classifier.
+- Diagnostic snapshot opt-in for rejected/non-human rows.
+- Swift stream snapshots and deltas dropping non-human cards.
+- Swift one-shot snapshot collection completing final windows after dropping
+  non-human cards.
+- Cached pinned rows staying hidden unless the pinned display proves a human
+  origin.
+
 The controlled simulator scenarios use real relay/client routes with fake
 upstream app-server fixtures. They are good client-path proof, but they do not
 prove current live Codex storage contents.
@@ -616,6 +685,13 @@ Relay code:
 
 - `scripts/dock-relay-source-filter.mjs`: detailed source classifier and
   default interactive source behavior.
+- `scripts/dock-relay-human-thread-filter.mjs`: app-facing human-only policy,
+  rejection reasons, and `-32043` JSON-RPC rejection helper.
+- `scripts/dock-relay-state-store-human-filter.mjs`: persisted human-only SQL
+  guards, rejected-card cleanup, live-lease cleanup, and app-facing state
+  counts.
+- `scripts/dock-relay-live-status-cache.mjs`: human-only live routing defense
+  for endpoint lookup, live row lookup, and loaded-thread IDs.
 - `scripts/dock-relay-thread-data.mjs`: raw route aggregation, live row
   collection, attention enrichment, and raw route forwarding.
 - `scripts/dock-relay-state-views.mjs`: raw-to-Dock card projection, lane
@@ -638,6 +714,8 @@ Swift code:
   origin model and subtypes.
 - `CodexDock/State/ThreadCardRowProjector.swift`: current lossy mapping from
   Dock cards into row origins and row statuses.
+- `CodexDock/State/HumanThreadCardPolicy.swift`: Swift defensive app-facing
+  card and cached pinned display guards.
 - `CodexDock/Dock/DockModels.swift`: Dock row statuses and source filters.
 - `CodexDock/State/DockCardProjection.swift`: source/status filtering,
   idle hiding, search, and facets.

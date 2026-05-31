@@ -7,8 +7,9 @@ import {
   readHistoryThreadGoal,
   readHistoryThreadList,
 } from "./dock-relay-thread-data.mjs";
+import { classifyThreadOrigin } from "./dock-relay-human-thread-filter.mjs";
 
-const STATE_SNAPSHOT_SCHEMA_VERSION = 1;
+const STATE_SNAPSHOT_SCHEMA_VERSION = 2;
 const DEFAULT_SORT_KEY = "updated_at";
 const DEFAULT_SORT_DIRECTION = "desc";
 const THREAD_SURFACE_FIELDS = Object.freeze([
@@ -202,6 +203,31 @@ async function drainThreadListScope(config, params, archiveScope, sourceScope) {
     rowCount: rows.length,
     threadIDsInCodexOrder: rows.map((row) => row.thread?.id).filter(Boolean),
     rows,
+  };
+}
+
+function scopeRowsWithHumanFilter(scope, { includeRejectedThreads = false } = {}) {
+  const rows = [];
+  const rejectedCounts = {};
+  for (const row of scope.rows || []) {
+    const classification = classifyThreadOrigin(row.thread);
+    if (classification.allowed || includeRejectedThreads) {
+      rows.push(row);
+    }
+    if (!classification.allowed) {
+      rejectedCounts[classification.reason] = Number(rejectedCounts[classification.reason] || 0) + 1;
+    }
+  }
+  return {
+    ...scope,
+    rowCount: rows.length,
+    threadIDsInCodexOrder: rows.map((row) => row.thread?.id).filter(Boolean),
+    rows,
+    humanFilter: {
+      mode: includeRejectedThreads ? "diagnostic_includes_rejected_threads" : "app_facing_human_base_threads_only",
+      originalRowCount: scope.rowCount,
+      rejectedCounts,
+    },
   };
 }
 
@@ -536,11 +562,13 @@ function snapshotCompleteness(scopes, loaded, threads) {
 }
 
 async function buildRelayStateSnapshot(config, params = {}) {
+  const includeRejectedThreads = params.includeRejectedThreads === true;
   const scopes = [];
   const threadsByID = new Map();
   for (const archiveScope of archiveScopes(params)) {
     for (const sourceScope of sourceScopes(params)) {
-      const scope = await drainThreadListScope(config, params, archiveScope, sourceScope);
+      const rawScope = await drainThreadListScope(config, params, archiveScope, sourceScope);
+      const scope = scopeRowsWithHumanFilter(rawScope, { includeRejectedThreads });
       scopes.push(scope);
       attachScopeRows(threadsByID, scope);
     }
@@ -579,6 +607,11 @@ async function buildRelayStateSnapshot(config, params = {}) {
     kind: "relayStateSnapshot",
     generatedAt: new Date().toISOString(),
     source: "app-server-only",
+    visibility: {
+      mode: includeRejectedThreads ? "diagnostic_includes_rejected_threads" : "app_facing_human_base_threads_only",
+      includeRejectedThreads,
+      rejectedThreadsRequireExplicitOptIn: true,
+    },
     surfaceMeanings: {
       "thread/list": "app-server list row scoped by archived/source filters; order is preserved within each scope only",
       "history thread/read": "raw configured history app-server thread/read result for a known thread ID",

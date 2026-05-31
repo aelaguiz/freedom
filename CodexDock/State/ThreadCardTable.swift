@@ -96,16 +96,17 @@ struct ThreadCardTable: Equatable, Sendable {
         state.window = update.window
         state.streamHosts = update.hosts ?? []
         state.cardsByID = Dictionary(
-            uniqueKeysWithValues: (update.cards ?? []).map { card in
-                (card.id, card)
-            }
+            uniqueKeysWithValues: (update.cards ?? [])
+                .filter(\.isAppFacingHumanThreadCard)
+                .map { card in
+                    (card.id, card)
+                }
         )
         state.status = hostStatus(
             freshness: update.freshness,
             rowCount: state.cardsByID.count,
             complete: state.complete,
-            totalRows: state.totalRows,
-            window: state.window
+            totalRows: state.totalRows
         )
         statesByHostID[host.id] = state
         return .applied
@@ -141,7 +142,7 @@ struct ThreadCardTable: Equatable, Sendable {
                 state.streamHosts.removeAll { $0.id == host.id }
                 state.streamHosts.append(host)
             }
-            for card in update.upsertCards ?? [] {
+            for card in (update.upsertCards ?? []).filter(\.isAppFacingHumanThreadCard) {
                 state.cardsByID[card.id] = card
             }
             for cardID in update.deleteCardIDs ?? [] {
@@ -160,8 +161,7 @@ struct ThreadCardTable: Equatable, Sendable {
             freshness: state.freshness,
             rowCount: state.cardsByID.count,
             complete: state.complete,
-            totalRows: state.totalRows,
-            window: state.window
+            totalRows: state.totalRows
         )
         statesByHostID[host.id] = state
         return .applied
@@ -322,12 +322,11 @@ struct ThreadCardTable: Equatable, Sendable {
         freshness: DockStreamFreshnessDTO?,
         rowCount: Int,
         complete: Bool,
-        totalRows: Int?,
-        window: DockStreamWindowDTO?
+        totalRows: Int?
     ) -> DockHostLoadStatus {
         if !complete {
-            let visibleRows = window?.rowCount ?? rowCount
-            let knownTotal = totalRows ?? visibleRows
+            let visibleRows = rowCount
+            let knownTotal = max(totalRows ?? visibleRows, visibleRows)
             let message = knownTotal > visibleRows
                 ? "Showing \(visibleRows) of \(knownTotal)"
                 : "Partial window"

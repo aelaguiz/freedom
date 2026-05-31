@@ -67,6 +67,7 @@ import {
   readToken,
 } from "./dock-relay-env.mjs";
 import {
+  assertHumanThreadID,
   aggregateLoadedList,
   aggregateThreadGoalGet,
   aggregateThreadList,
@@ -238,6 +239,13 @@ function assertFocusedRequestTargetsBoundThread(session, method, params = {}) {
       activeThreadIDHash: shortHash(boundThreadId),
     });
   }
+  if (session.acceptedHumanThreadId !== boundThreadId) {
+    throw relayError(`${method} requires a human-started active thread`, -32602, {
+      subsystem: "live-upstream",
+      reason: "thread_not_human_verified",
+      activeThreadIDHash: shortHash(boundThreadId),
+    });
+  }
 }
 
 function assertResumeResultMatchesRequestedThread(result, requestedThreadId) {
@@ -263,6 +271,7 @@ async function resumeThread(config, params = {}, session, downstreamWs) {
     throw new Error("thread/resume requires threadId");
   }
   const resumeParams = liveResumeParams(params);
+  await assertHumanThreadID(config, resumeParams.threadId);
 
   session.generation += 1;
   const generation = session.generation;
@@ -270,6 +279,7 @@ async function resumeThread(config, params = {}, session, downstreamWs) {
   session.pendingServerRequests?.clear();
   session.upstream?.close();
   session.upstream = null;
+  session.acceptedHumanThreadId = null;
 
   const logger = relayLogger(config);
   const endpoint = await sessionRouterForConfig(config).endpointForThread(resumeParams.threadId);
@@ -284,6 +294,7 @@ async function resumeThread(config, params = {}, session, downstreamWs) {
     assertResumeResultMatchesRequestedThread(result, resumeParams.threadId);
     session.upstream = client;
     session.resumeParams = { ...resumeParams };
+    session.acceptedHumanThreadId = resumeParams.threadId;
     session.endpoint = endpoint;
     logger.info("thread_resume.succeeded", {
       subsystem: "live-upstream",
@@ -558,6 +569,7 @@ function sessionDebugSnapshot(sessions) {
     retryActive: Boolean(session.retryTask),
     endpointUrl: session.endpoint?.url || null,
     threadIDHash: shortHash(session.resumeParams?.threadId),
+    acceptedHumanThreadIDHash: shortHash(session.acceptedHumanThreadId),
     pendingServerRequests: session.pendingServerRequests?.size || 0,
   }));
 }
@@ -981,6 +993,7 @@ function startServer(config) {
       realtimeTranscription: null,
       dockUnsubscribe: null,
       archiveUnsubscribe: null,
+      acceptedHumanThreadId: null,
     };
     sessions.add(session);
     session.realtimeTranscription = new RealtimeTranscriptionManager(config, {
@@ -1098,6 +1111,7 @@ function startServer(config) {
       } catch (error) {
         const errorData = classifyRelayRequestError(message.method, error);
         const errorCode = jsonRpcErrorCode(error);
+        const clientErrorData = errorCode === -32043 && error?.data ? error.data : errorData;
         if (String(message.method || "").startsWith("audio/transcription/")) {
           config.statusTracker?.recordTranscriptionError(error, {
             subsystem: "transcription",
@@ -1140,7 +1154,7 @@ function startServer(config) {
             message.id,
             errorCode,
             error.message || "relay error",
-            errorData,
+            clientErrorData,
           ),
         );
       }

@@ -21,9 +21,12 @@ import {
   publicHostFromConfig,
 } from "./dock-relay-state-views.mjs";
 import {
-  EXPLICIT_SOURCE_KINDS,
   drainThreadListScope,
 } from "./dock-relay-state-snapshot.mjs";
+import {
+  filterHumanBaseThreads,
+  isHumanBaseThread,
+} from "./dock-relay-human-thread-filter.mjs";
 import {
   collectLiveRows,
   configuredLiveEndpointsForConfig,
@@ -43,12 +46,6 @@ const ACTIVE_DEFAULT_SCOPE = {
   name: "interactiveDefault",
   sourceKinds: null,
   meaning: "app-server default interactive source scope",
-};
-
-const ACTIVE_ALL_SOURCE_SCOPE = {
-  name: "allSourceKinds",
-  sourceKinds: [...EXPLICIT_SOURCE_KINDS],
-  meaning: "app-server explicit sourceKinds union preserving combined Codex order",
 };
 
 const ACTIVE_ARCHIVE_SCOPE = {
@@ -254,27 +251,28 @@ class RelayStateEngine {
         modelProviders: [],
       };
       const previousDockCards = this.store.listDockCards({ hostID: host.id }).cards;
-      const [liveRows, primaryScope, defaultScope] = await Promise.all([
+      const [liveRows, defaultScope] = await Promise.all([
         this.refreshLiveLeases(),
-        drainThreadListScope(this.config, baseParams, ACTIVE_ARCHIVE_SCOPE, ACTIVE_ALL_SOURCE_SCOPE),
         drainThreadListScope(this.config, baseParams, ACTIVE_ARCHIVE_SCOPE, ACTIVE_DEFAULT_SCOPE),
       ]);
-      const primaryRows = primaryScope.rows.map((row) => row.thread).filter(Boolean);
       const interactiveRows = defaultScope.rows.map((row) => row.thread).filter(Boolean);
-      const orderedRows = orderedDockRows(primaryRows, interactiveRows, liveRows);
+      const { acceptedRows, rejectedCounts } = filterHumanBaseThreads(interactiveRows);
+      const orderedRows = orderedDockRows([], acceptedRows, liveRows);
       const cards = orderedRows
         .map(({ row, lane }, index) => normalizeThread(row, host, lane, {
           archiveState: "active",
           orderKey: dockOrderKey(index, row?.id || ""),
         }))
         .filter(Boolean);
-      const complete = primaryScope.complete && defaultScope.complete;
+      const complete = defaultScope.complete;
+      const cleanup = this.store.deleteRejectedThreadCards(host.id);
+      const leaseCleanup = this.store.deleteRejectedLiveLeases(host.id);
       const result = this.store.applyDockReconciliation({
         host,
         cards,
-        scopes: [primaryScope, defaultScope],
+        scopes: [defaultScope],
         complete,
-        error: primaryScope.error || defaultScope.error || null,
+        error: defaultScope.error || null,
         previousCards: previousDockCards,
       });
       const freshness = this.store.freshnessForHost(host.id);
@@ -298,6 +296,9 @@ class RelayStateEngine {
           reason,
           hostId: host.id,
           rows: cards.length,
+          rejectedCounts,
+          deletedRejectedCards: cleanup.deleted,
+          deletedRejectedLiveLeases: leaseCleanup.deleted,
           seq: result.seq,
         });
       } else {
@@ -306,14 +307,16 @@ class RelayStateEngine {
           hostId: host.id,
           rows: cards.length,
           seq: result.seq,
-          error: primaryScope.error || defaultScope.error || error,
+          rejectedCounts,
+          deletedRejectedCards: cleanup.deleted,
+          deletedRejectedLiveLeases: leaseCleanup.deleted,
+          error: defaultScope.error || error,
         });
       }
       this.scheduleLiveLeaseExpiryReconciliation(host.id);
       return result;
     } catch (error) {
       this.store.upsertHost(host);
-      this.store.markScopeStale(host.id, "active:allSourceKinds", error);
       this.store.markScopeStale(host.id, "active:interactiveDefault", error);
       const seq = this.store.currentSeq();
       const totalRows = this.store.listDockCards({ hostID: host.id }).totalRows;
@@ -345,7 +348,11 @@ class RelayStateEngine {
       excludeURLs: [],
     });
     const endpointsByUrl = new Map(endpoints.map((endpoint) => [endpoint.url, endpoint]));
+    const acceptedRows = [];
     for (const row of live.rows || []) {
+      if (!isHumanBaseThread(row)) {
+        continue;
+      }
       const endpoint = endpointsByUrl.get(row?.dockRelaySource?.url) || row?.dockRelaySource || null;
       const lease = liveLeaseFromRow(
         row,
@@ -354,9 +361,11 @@ class RelayStateEngine {
       );
       if (lease) {
         this.store.upsertLiveLease(host.id, lease);
+        acceptedRows.push(row);
       }
     }
-    return live.rows || [];
+    this.store.deleteRejectedLiveLeases(host.id);
+    return acceptedRows;
   }
 
   snapshotForView(view, {
@@ -751,6 +760,11 @@ class RelayStateEngine {
     return {
       ok: true,
       schema: "codexdock.relayState.v1",
+      visibility: {
+        mode: "app_facing_human_base_threads_only",
+        includeRejectedThreads: false,
+        rejectedThreadsRequireDiagnosticSnapshotOptIn: true,
+      },
       db: this.store.dbHealth(),
       counts: this.store.stateCounts(),
       syncScopes: this.store.syncScopes(),

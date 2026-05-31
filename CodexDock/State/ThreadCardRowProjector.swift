@@ -7,7 +7,7 @@ struct ThreadCardRowProjector {
     let now: @Sendable () -> Date
 
     func rows(from cards: [DockThreadCardDTO], sourceHostID: String? = nil) -> [DockRowViewModel] {
-        cards.map { card in
+        cards.filter(\.isAppFacingHumanThreadCard).map { card in
             makeRow(card: card, sourceHostID: sourceHostID)
         }
     }
@@ -15,6 +15,7 @@ struct ThreadCardRowProjector {
     func cachedPinnedRows(excluding loadedKeys: Set<LocalThreadMetadataKey>) -> [DockRowViewModel] {
         return localMetadata.compactMap { key, metadata in
             guard metadata.isPinned,
+                  metadata.hasAppFacingHumanPinnedDisplay,
                   !loadedKeys.contains(key),
                   hostIdentityResolver.logicalHostID(forAlias: key.hostID) != nil else {
                 return nil

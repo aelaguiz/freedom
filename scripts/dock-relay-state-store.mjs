@@ -16,6 +16,14 @@ import {
   dockOrderKey,
   normalizeStoredCard,
 } from "./dock-relay-state-views.mjs";
+import {
+  HUMAN_APP_FACING_THREAD_SQL,
+  HUMAN_APP_FACING_THREAD_SQL_FOR_ALIAS,
+  deleteRejectedLiveLeases,
+  deleteRejectedThreadCards,
+  humanAppFacingStateCounts,
+  isHumanAppFacingStoredRow,
+} from "./dock-relay-state-store-human-filter.mjs";
 
 function nowISOString() {
   return new Date().toISOString();
@@ -380,8 +388,8 @@ class RelayStateStore {
 
   listDockCards({ hostID, offset = 0, limit = null } = {}) {
     const params = [];
-    let countWhere = "active_scope_present = 1 AND archive_state != 'archived'";
-    let rowWhere = "t.active_scope_present = 1 AND t.archive_state != 'archived'";
+    let countWhere = `${HUMAN_APP_FACING_THREAD_SQL} AND active_scope_present = 1 AND archive_state != 'archived'`;
+    let rowWhere = `${HUMAN_APP_FACING_THREAD_SQL_FOR_ALIAS} AND t.active_scope_present = 1 AND t.archive_state != 'archived'`;
     if (hostID) {
       countWhere += " AND host_id = ?";
       rowWhere += " AND t.host_id = ?";
@@ -423,7 +431,7 @@ class RelayStateStore {
 
   listArchiveCards({ hostID, offset = 0, limit = null } = {}) {
     const params = [];
-    let where = "archive_state = 'archived'";
+    let where = `${HUMAN_APP_FACING_THREAD_SQL} AND archive_state = 'archived'`;
     if (hostID) {
       where += " AND host_id = ?";
       params.push(hostID);
@@ -469,11 +477,15 @@ class RelayStateStore {
         syncScopes,
       };
     }
-    const visibleInDock = row.active_scope_present === 1 && row.archive_state !== "archived";
+    const humanAppFacing = row.lane === "human" && row.source_kind === "human";
+    const visibleInDock = humanAppFacing && row.active_scope_present === 1 && row.archive_state !== "archived";
     const reasons = [];
     if (visibleInDock) {
-      reasons.push("active_scope_present is true and archive_state is not archived");
+      reasons.push("lane/source_kind are human and active_scope_present is true and archive_state is not archived");
     } else {
+      if (!humanAppFacing) {
+        reasons.push("lane/source_kind are not app-facing human");
+      }
       if (row.active_scope_present !== 1) {
         reasons.push("active_scope_present is false");
       }
@@ -593,9 +605,9 @@ class RelayStateStore {
       }
       if (scopes.length === 0) {
         this.recordSyncScope(host.id, {
-          name: "active:allSourceKinds",
+          name: "active:interactiveDefault",
           archived: false,
-          sourceScope: "allSourceKinds",
+          sourceScope: "interactiveDefault",
           complete,
           error,
         }, at);
@@ -700,14 +712,30 @@ class RelayStateStore {
     `).run(at, hostID, threadID);
   }
 
+  deleteRejectedThreadCards(hostID = null) {
+    return deleteRejectedThreadCards(this.db, hostID);
+  }
+
+  deleteRejectedLiveLeases(hostID = null) {
+    return deleteRejectedLiveLeases(this.db, hostID);
+  }
+
   applyArchiveMutation({ hostID, threadID, archived }) {
     const at = nowISOString();
     return this.transaction(() => {
       const existing = this.db.prepare(`
-        SELECT activity_at_ms, logical_host_id, dock_id
+        SELECT activity_at_ms, logical_host_id, dock_id, lane, source_kind
         FROM threads
         WHERE host_id = ? AND thread_id = ?
       `).get(hostID, threadID);
+      if (!existing) {
+        return null;
+      }
+      if (!isHumanAppFacingStoredRow(existing)) {
+        this.deleteRejectedThreadCards(hostID);
+        this.deleteRejectedLiveLeases(hostID);
+        return null;
+      }
       const dockID = existing?.dock_id || dockCardID(existing?.logical_host_id || hostID, threadID);
       const orderKey = archived
         ? archiveOrderKey(existing?.activity_at_ms || Date.now(), threadID)
@@ -757,6 +785,7 @@ class RelayStateStore {
       LEFT JOIN live_leases l
         ON l.host_id = t.host_id AND l.thread_id = t.thread_id
       WHERE t.host_id = ? AND t.thread_id = ?
+        AND ${HUMAN_APP_FACING_THREAD_SQL_FOR_ALIAS}
       LIMIT 1
     `).get(hostID, threadID);
     const card = normalizeStoredCard(row);
@@ -819,6 +848,13 @@ class RelayStateStore {
       WHERE host_id = ?
         AND expires_at_ms >= ?
         AND expired_published_at IS NULL
+        AND EXISTS (
+          SELECT 1
+          FROM threads t
+          WHERE t.host_id = live_leases.host_id
+            AND t.thread_id = live_leases.thread_id
+            AND ${HUMAN_APP_FACING_THREAD_SQL_FOR_ALIAS}
+        )
     `).get(hostID, Number(atMs));
     const expiresAtMs = Number(row?.expires_at_ms || 0);
     return Number.isFinite(expiresAtMs) && expiresAtMs > 0 ? expiresAtMs : null;
@@ -904,25 +940,16 @@ class RelayStateStore {
   }
 
   stateCounts() {
-    const threadCounts = this.db.prepare(`
-      SELECT
-        SUM(CASE WHEN active_scope_present = 1 AND archive_state != 'archived' THEN 1 ELSE 0 END) AS active,
-        SUM(CASE WHEN archive_state = 'archived' THEN 1 ELSE 0 END) AS archived,
-        SUM(CASE WHEN freshness_status = 'stale' THEN 1 ELSE 0 END) AS stale
-      FROM threads
-    `).get();
-    const live = this.db.prepare(`
-      SELECT COUNT(*) AS count FROM live_leases WHERE expires_at_ms >= ?
-    `).get(nowMs()).count;
+    const counts = humanAppFacingStateCounts(this.db, nowMs());
     const scopes = this.db.prepare(`
       SELECT COUNT(*) AS count FROM sync_scopes WHERE complete = 0
     `).get().count;
     return {
-      active: Number(threadCounts.active || 0),
-      archived: Number(threadCounts.archived || 0),
-      live: Number(live || 0),
+      active: counts.active,
+      archived: counts.archived,
+      live: counts.live,
       spawned: 0,
-      stale: Number(threadCounts.stale || 0),
+      stale: counts.stale,
       incomplete: Number(scopes || 0),
       conflict: 0,
     };

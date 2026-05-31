@@ -2119,7 +2119,7 @@ function dockOrderMismatchMovement(expectedIDs, actualIDs, snapshotUpdatedAt, do
 }
 
 function compareDockCodexOrder(findings, snapshot, cards, expectedIDs, auditMovement = { addedThreadIDs: new Set() }) {
-  const orderScope = (snapshot?.scopes || []).find((scope) => scope?.name === "active:allSourceKinds");
+  const orderScope = (snapshot?.scopes || []).find((scope) => scope?.name === "active:interactiveDefault");
   if (!orderScope || !Array.isArray(orderScope.threadIDsInCodexOrder)) {
     return {
       compared: false,
@@ -2153,7 +2153,7 @@ function compareDockCodexOrder(findings, snapshot, cards, expectedIDs, auditMove
   );
 
   if (movement.firstStableMismatch) {
-    addFinding(findings, "error", movement.firstStableMismatch.actualThreadID || movement.firstStableMismatch.expectedThreadID, "dock.subscribe", "threadIDOrder", "dock/subscribe order differs from app-server active:allSourceKinds thread/list order", {
+    addFinding(findings, "error", movement.firstStableMismatch.actualThreadID || movement.firstStableMismatch.expectedThreadID, "dock.subscribe", "threadIDOrder", "dock/subscribe order differs from app-facing active:interactiveDefault thread/list order", {
       index: movement.firstStableMismatch.index,
       expectedThreadID: movement.firstStableMismatch.expectedThreadID,
       actualThreadID: movement.firstStableMismatch.actualThreadID,
@@ -2294,14 +2294,14 @@ function compareDockSubscribe(findings, dockSnapshot, sqliteRows, auditMovement 
     addFinding(findings, "error", threadID, "dock.subscribe", "threadID", "dock/subscribe returned the same thread more than once");
   }
 
-  const dockReachableSourceScopes = ["interactiveDefault", ...EXPLICIT_SOURCE_KINDS];
+  const dockReachableSourceScopes = ["interactiveDefault"];
   const expectedRows = (sqliteRows || []).filter((row) => (
     !sqliteArchived(row)
       && sqliteThreadListableByAppServer(row)
       && expectedSourceScopeNamesForSQLiteThread(row, dockReachableSourceScopes).length > 0
   ));
   const expectedIDs = new Set(expectedRows.map((row) => row.id).filter(Boolean));
-  const orderScope = (snapshot?.scopes || []).find((scope) => scope?.name === "active:allSourceKinds");
+  const orderScope = (snapshot?.scopes || []).find((scope) => scope?.name === "active:interactiveDefault");
   const expectedOrderedIDs = Array.isArray(orderScope?.threadIDsInCodexOrder)
     ? orderScope.threadIDsInCodexOrder.filter((threadID) => expectedIDs.has(threadID))
     : expectedRows.map((row) => row.id).filter(Boolean);
@@ -2581,10 +2581,10 @@ function buildBlindSpots(options, snapshot, sqliteAfter, goalSummary, reportSumm
     blindSpots.push("dock/subscribe returned window did not exactly match the active app-server-listable SQLite thread window.");
   }
   if (reportSummary.dockParity?.included && reportSummary.dockParity.codexOrderCompared === false) {
-    blindSpots.push("dock/subscribe order was not compared against app-server active:allSourceKinds thread/list order.");
+    blindSpots.push("dock/subscribe order was not compared against app-facing active:interactiveDefault thread/list order.");
   }
   if (reportSummary.dockParity?.included && (reportSummary.dockParity.codexOrderStableMismatches || 0) > 0) {
-    blindSpots.push("dock/subscribe returned the right active card set, but not in the same order as app-server active:allSourceKinds thread/list.");
+    blindSpots.push("dock/subscribe returned the right active card set, but not in the same order as app-facing active:interactiveDefault thread/list.");
   }
   if (reportSummary.dockParity?.included && (reportSummary.dockParity.codexOrderMismatchesDueToFreshnessMovement || 0) > 0) {
     blindSpots.push("dock/subscribe order comparison saw app-server row timestamp movement during the audit; stable order mismatches are counted separately.");

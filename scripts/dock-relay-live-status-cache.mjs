@@ -3,6 +3,11 @@ import {
   LIVE_STATUS_MAX_AGE_MS,
   LIVE_STATUS_REFRESH_INTERVAL_MS,
 } from "./dock-relay-constants.mjs";
+import { isHumanBaseThread } from "./dock-relay-human-thread-filter.mjs";
+
+function humanLiveRows(rows = []) {
+  return rows.filter(isHumanBaseThread);
+}
 
 function liveOverlayForSnapshot(snapshot, maxAgeMs = LIVE_STATUS_MAX_AGE_MS) {
   const ageMs = snapshot.checkedAtMs ? Date.now() - snapshot.checkedAtMs : null;
@@ -103,7 +108,7 @@ class LiveStatusCache {
           status: "up",
           endpoints: live.endpoints || [],
           failedEndpoints: live.failedEndpoints || 0,
-          rows: live.rows || [],
+          rows: humanLiveRows(live.rows || []),
           error: null,
         };
         this.statusTracker?.recordLiveDiscovery({
@@ -172,18 +177,18 @@ class SessionRouter {
 
   async endpointForThread(threadId) {
     const snapshot = await this.liveStatusCache.snapshotForRouting();
-    const liveRow = snapshot.rows.find((row) => row.id === threadId);
+    const liveRow = humanLiveRows(snapshot.rows).find((row) => row.id === threadId);
     return liveRow?.dockRelaySource || this.historyEndpoint;
   }
 
   async rowForThread(threadId) {
     const snapshot = await this.liveStatusCache.snapshotForRouting();
-    return snapshot.rows.find((row) => row.id === threadId) || null;
+    return humanLiveRows(snapshot.rows).find((row) => row.id === threadId) || null;
   }
 
   async loadedThreadIDs(params = {}) {
     const snapshot = await this.liveStatusCache.snapshotForRouting();
-    const ids = snapshot.rows.map((row) => row.id).filter(Boolean);
+    const ids = humanLiveRows(snapshot.rows).map((row) => row.id).filter(Boolean);
     return ids;
   }
 }

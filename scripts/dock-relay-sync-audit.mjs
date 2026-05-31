@@ -65,7 +65,7 @@ const REQUIRED_SCENARIOS = Object.freeze([
   { id: "archive-removal", label: "Thread is archived and disappears from active Dock after complete refresh", implementedBy: "archive-toggle" },
   { id: "unarchive-return", label: "Thread is unarchived and reappears in active Dock after complete refresh", implementedBy: "archive-toggle" },
   { id: "goal-change", label: "Goal state changes and matches app-server-visible goal state", implementedBy: "goal-change" },
-  { id: "spawn-edge", label: "Subagent spawn edge appears where app-server and client contracts expose it", implementedBy: "spawn-edge" },
+  { id: "spawn-edge", label: "Subagent spawn edge stays out of human-only app-facing streams", implementedBy: "spawn-edge" },
   { id: "server-request-visible", label: "Server request appears in detail as both event and request card", implementedBy: "server-request" },
   { id: "server-request-resolution", label: "Server request resolution updates the card", implementedBy: "server-request" },
   { id: "source-refresh-fails", label: "Relay source refresh fails and stale state is explicit", implementedBy: "source-refresh" },
@@ -3407,13 +3407,10 @@ async function runSpawnEdgeScenario(options) {
     const spawnWait = await waitForStreamCondition({
       streamProbe,
       timeoutMs: options.dockCollectionTimeoutMs,
-      predicate: (snapshot) => {
-        const card = dockSnapshotCardForThread(snapshot, childThreadID);
-        return dockSnapshotThreadIndex(snapshot, childThreadID) === 0
-          && dockSnapshotHasThread(snapshot, parentThreadID)
-          && card?.lane === "agent"
-          && card?.sourceKind === "automation";
-      },
+      predicate: (snapshot) => (
+        dockSnapshotHasThread(snapshot, parentThreadID)
+        && !dockSnapshotHasThread(snapshot, childThreadID)
+      ),
     });
     const spawnLag = scenarioLagSummary({
       transition: "spawn-edge",
@@ -3424,9 +3421,9 @@ async function runSpawnEdgeScenario(options) {
     });
     if (!spawnWait.ok) {
       findings.push({
-        code: "scenario_spawn_edge_not_seen",
+        code: "scenario_spawn_edge_child_leaked_or_parent_missing",
         severity: "error",
-        message: "spawned child row did not appear as an automation/agent Dock card through the long-lived Dock stream",
+        message: "spawned child row was not kept out of the human-only long-lived Dock stream",
         parentThreadID,
         childThreadID,
       });
@@ -3434,7 +3431,7 @@ async function runSpawnEdgeScenario(options) {
       findings.push({
         code: "scenario_spawn_edge_lag_exceeded",
         severity: "error",
-        message: "spawned child row appeared after the client-visible lag budget",
+        message: "human-only spawn-edge state settled after the client-visible lag budget",
         observedLagMs: spawnLag.lag_change_to_relay_ms,
         maxStreamLagMs: options.maxStreamLagMs,
       });
@@ -3444,62 +3441,48 @@ async function runSpawnEdgeScenario(options) {
     const streamComparison = compareDockStates(streamProbe.snapshot(), freshDock);
     findings.push(...scenarioComparisonFindings({ phase: "spawn-edge", comparison: streamComparison }));
     const freshChildCard = dockSnapshotCardForThread(freshDock, childThreadID);
-    if (!freshChildCard) {
+    if (freshChildCard) {
       findings.push({
-        code: "scenario_spawn_edge_fresh_child_missing",
+        code: "scenario_spawn_edge_fresh_child_leaked",
         severity: "error",
-        message: "spawned child row was missing from a fresh Dock client-path subscription",
+        message: "spawned child row reached a fresh human-only Dock client-path subscription",
         childThreadID,
+        actualLane: freshChildCard.lane || null,
+        actualSourceKind: freshChildCard.sourceKind || null,
       });
-    } else {
-      if (freshChildCard.lane !== "agent") {
-        findings.push({
-          code: "scenario_spawn_edge_wrong_lane",
-          severity: "error",
-          message: "spawned child row did not reach the client as an agent-lane card",
-          childThreadID,
-          actualLane: freshChildCard.lane || null,
-        });
-      }
-      if (freshChildCard.sourceKind !== "automation") {
-        findings.push({
-          code: "scenario_spawn_edge_wrong_source_kind",
-          severity: "error",
-          message: "spawned child row did not reach the client as automation source kind",
-          childThreadID,
-          actualSourceKind: freshChildCard.sourceKind || null,
-        });
-      }
     }
 
-    const readResponse = await withRelayClient(fixtureOptions, null, async (client) => {
-      recordRoute(routeEvents, "thread/read", "spawn-edge scenario detail metadata read", {
-        threadID: childThreadID,
-        includeTurns: false,
-      });
-      return client.request("thread/read", {
-        threadId: childThreadID,
-        includeTurns: false,
-      });
-    }, routeEvents);
-    const readThread = readResponse?.thread || null;
-    const readParentID = threadSpawnParentIDFromSource(readThread?.source);
-    if (readThread?.id !== childThreadID) {
-      findings.push({
-        code: "scenario_spawn_edge_read_wrong_thread",
-        severity: "error",
-        message: "thread/read for spawned child returned the wrong thread",
-        expectedThreadID: childThreadID,
-        actualThreadID: readThread?.id || null,
-      });
+    let readRejection = null;
+    try {
+      await withRelayClient(fixtureOptions, null, async (client) => {
+        recordRoute(routeEvents, "thread/read", "spawn-edge scenario child rejection read", {
+          threadID: childThreadID,
+          includeTurns: false,
+        });
+        return client.request("thread/read", {
+          threadId: childThreadID,
+          includeTurns: false,
+        });
+      }, routeEvents);
+    } catch (error) {
+      readRejection = error;
     }
-    if (readParentID !== parentThreadID) {
+    if (readRejection?.code !== -32043) {
       findings.push({
-        code: "scenario_spawn_edge_parent_not_exposed",
+        code: "scenario_spawn_edge_read_not_rejected",
         severity: "error",
-        message: "thread/read did not expose the spawned child's parent thread id through app-server source metadata",
-        expectedParentThreadID: parentThreadID,
-        actualParentThreadID: readParentID,
+        message: "thread/read for spawned child did not reject with the human-only filter code",
+        threadID: childThreadID,
+        actualCode: readRejection?.code || null,
+        actualMessage: readRejection?.message || null,
+      });
+    } else if (readRejection?.data?.reason !== "not_base_level" && readRejection?.data?.reason !== "sub_agent") {
+      findings.push({
+        code: "scenario_spawn_edge_read_wrong_rejection_reason",
+        severity: "error",
+        message: "thread/read for spawned child rejected with an unexpected human-only reason",
+        threadID: childThreadID,
+        actualReason: readRejection?.data?.reason || null,
       });
     }
 
@@ -3512,10 +3495,9 @@ async function runSpawnEdgeScenario(options) {
       lag: spawnLag,
       freshDock: sanitizeDockSnapshotForReport(freshDock),
       streamComparison,
-      readThread: normalizeForComparison({
-        id: readThread?.id || null,
-        forkedFromId: readThread?.forkedFromId || null,
-        sourceParentThreadID: readParentID,
+      readRejection: normalizeForComparison({
+        code: readRejection?.code || null,
+        reason: readRejection?.data?.reason || null,
       }),
     });
 
@@ -3525,10 +3507,10 @@ async function runSpawnEdgeScenario(options) {
       startedAt: new Date(startedAtMs).toISOString(),
       endedAt: new Date().toISOString(),
       actuator: {
-        type: "controlled app-server subagent spawn fixture through real relay Dock and detail routes",
+        type: "controlled app-server subagent spawn absence fixture through real relay Dock and detail routes",
         routes: ["dock/subscribe", "dock/update", "thread/read"],
         clientExercised: true,
-        note: "The fixture changes app-server thread/list rows to model a new subagent spawn; proof only counts delivery through the same Dock stream and thread/read routes the client uses.",
+        note: "The fixture changes app-server thread/list rows to model a new subagent spawn; proof expects the child to stay absent from human-only Dock streams and to reject through thread/read.",
       },
       target: {
         logicalHostID: host.id,

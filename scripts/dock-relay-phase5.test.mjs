@@ -22,6 +22,21 @@ import {
   waitForWebSocketClose,
 } from "./dock-relay-test-helpers.mjs";
 
+function sendHumanThreadRead(ws, id, threadId, fields = {}) {
+  ws.send(JSON.stringify({
+    id,
+    result: {
+      thread: {
+        id: threadId,
+        updatedAt: 1,
+        source: "cli",
+        status: { type: "notLoaded" },
+        ...fields,
+      },
+    },
+  }));
+}
+
 test("attention probing resumes without replaying turns", async () => {
   let resumeParams = null;
   const upstreamServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -178,7 +193,7 @@ test("relay thread/list ignores discovered live rows and preserves history curso
       state: "disabled",
       ageMs: null,
     });
-    assert.deepEqual(historyListParams, { limit: 200, sourceKinds: ["exec"] });
+    assert.deepEqual(historyListParams, { limit: 200 });
     assert.equal(liveConnections, 0);
   } finally {
     ws.close();
@@ -867,6 +882,11 @@ test("thread/turns/list routes to the thread owning upstream", async () => {
             platformOs: "macos",
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(ws, message.id, message.params?.threadId, {
+          status: { type: "idle" },
+          source: { custom: "chatgpt" },
+        });
       } else if (message.method === "thread/turns/list") {
         historyTurnsRequests += 1;
         ws.send(JSON.stringify({
@@ -980,6 +1000,11 @@ test("thread/goal/get routes to the thread owning upstream", async () => {
             platformOs: "macos",
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(ws, message.id, message.params?.threadId, {
+          status: { type: "idle" },
+          source: { custom: "chatgpt" },
+        });
       } else if (message.method === "thread/goal/get") {
         historyGoalRequests += 1;
         ws.send(JSON.stringify({
@@ -1030,6 +1055,91 @@ test("thread/goal/get routes to the thread owning upstream", async () => {
   }
 });
 
+test("app-facing direct thread routes reject non-human thread IDs", async () => {
+  const threadId = "exec-direct-route";
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await onceListening(historyServer);
+  const forwardedMethods = [];
+  let readRequests = 0;
+
+  historyServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            userAgent: "history-direct-rejection-test",
+            codexHome: "/tmp/codex",
+            platformFamily: "unix",
+            platformOs: "macos",
+          },
+        }));
+      } else if (message.method === "initialized") {
+        return;
+      } else if (message.method === "thread/read") {
+        readRequests += 1;
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {
+            thread: {
+              id: message.params?.threadId,
+              preview: "Exec-owned helper thread",
+              updatedAt: 100,
+              source: "exec",
+              status: { type: "notLoaded" },
+            },
+          },
+        }));
+      } else {
+        forwardedMethods.push(message.method);
+        ws.send(JSON.stringify({
+          id: message.id,
+          result: {},
+        }));
+      }
+    });
+  });
+
+  const relay = startServer({
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+  });
+  await relay.listening;
+  const ws = await openWebSocket(`ws://127.0.0.1:${relay.server.address().port}`);
+
+  try {
+    const routes = [
+      ["thread/read", { threadId }],
+      ["thread/turns/list", { threadId }],
+      ["thread/goal/get", { threadId }],
+      ["thread/archive", { threadId }],
+      ["thread/unarchive", { threadId }],
+      ["thread/resume", { threadId }],
+    ];
+    for (const [method, params] of routes) {
+      const response = await jsonRpcRequest(ws, method, params);
+      assert.equal(response.result, undefined, method);
+      assert.equal(response.error?.code, -32043, method);
+      assert.equal(response.error?.message, "thread rejected by human-only filter", method);
+      assert.deepEqual(response.error?.data, {
+        threadId,
+        reason: "exec",
+      }, method);
+    }
+    assert.equal(readRequests, routes.length);
+    assert.deepEqual(forwardedMethods, []);
+  } finally {
+    ws.close();
+    await relay.close();
+    await closeWebSocketServer(historyServer);
+  }
+});
+
 test("thread/resume forwards upstream notifications requests and phone responses", async () => {
   const threadId = "thread-forward-phase5";
   let forwardedResponse = null;
@@ -1052,6 +1162,8 @@ test("thread/resume forwards upstream notifications requests and phone responses
             platformOs: "macos",
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(upstreamWs, message.id, message.params?.threadId);
       } else if (message.method === "thread/resume") {
         upstreamResumeParams = message.params;
         upstreamWs.send(JSON.stringify({
@@ -1133,6 +1245,8 @@ test("turn/start rejects requests for a thread different from the resumed sessio
             platformOs: "macos",
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(upstreamWs, message.id, message.params?.threadId);
       } else if (message.method === "thread/resume") {
         upstreamWs.send(JSON.stringify({
           id: message.id,
@@ -1199,6 +1313,8 @@ test("thread/resume refuses to bind an upstream that returns the wrong thread", 
             platformOs: "macos",
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(upstreamWs, message.id, message.params?.threadId);
       } else if (message.method === "thread/resume") {
         upstreamWs.send(JSON.stringify({
           id: message.id,
@@ -1259,6 +1375,8 @@ test("phone responses are rejected after their upstream request is made stale by
             platformOs: "macos",
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(upstreamWs, message.id, message.params?.threadId);
       } else if (message.method === "thread/resume") {
         upstreamWs.send(JSON.stringify({
           id: message.id,
@@ -1326,6 +1444,7 @@ test("phone responses are rejected after their upstream request is made stale by
 test("phone responses are rejected after their upstream request is made stale by recovery", async () => {
   const threadId = "thread-recovered-request-phase6";
   let connectionCount = 0;
+  let resumeCount = 0;
   let forwardedResponses = 0;
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(historyServer);
@@ -1344,12 +1463,15 @@ test("phone responses are rejected after their upstream request is made stale by
             platformOs: "macos",
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(upstreamWs, message.id, message.params?.threadId);
       } else if (message.method === "thread/resume") {
+        resumeCount += 1;
         upstreamWs.send(JSON.stringify({
           id: message.id,
           result: { thread: { id: message.params.threadId } },
         }));
-        if (connectionNumber === 1) {
+        if (resumeCount === 1) {
           setTimeout(() => {
             upstreamWs.send(JSON.stringify({
               id: "approval-recovery-phase6",
@@ -1413,7 +1535,7 @@ test("phone responses are rejected after their upstream request is made stale by
     assert.equal(rejected.error.message, "no matching active upstream request");
     await sleepMs(25);
     assert.equal(forwardedResponses, 0);
-    assert.equal(connectionCount, 2);
+    assert.equal(connectionCount, 3);
   } finally {
     ws.close();
     await relay.close();
@@ -1452,6 +1574,8 @@ test("thread/resume abandons initial upstream if downstream closes before resume
             platformOs: "macos",
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(upstreamWs, message.id, message.params?.threadId);
       } else if (message.method === "thread/resume") {
         resumeRequestID = message.id;
         resolveResumeSeen();
@@ -1500,6 +1624,7 @@ test("thread/resume abandons initial upstream if downstream closes before resume
 test("relay recovers upstream close by re-resuming and forwarding live updates", async () => {
   const threadId = "thread-recover-phase5";
   let connectionCount = 0;
+  let resumeCount = 0;
   const resumeParams = [];
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(historyServer);
@@ -1518,13 +1643,16 @@ test("relay recovers upstream close by re-resuming and forwarding live updates",
             platformOs: "macos",
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(upstreamWs, message.id, message.params?.threadId);
       } else if (message.method === "thread/resume") {
+        resumeCount += 1;
         resumeParams.push(message.params);
         upstreamWs.send(JSON.stringify({
           id: message.id,
           result: { thread: { id: message.params.threadId } },
         }));
-        if (connectionNumber === 1) {
+        if (resumeCount === 1) {
           setTimeout(() => upstreamWs.close(), 10);
         } else {
           setTimeout(() => {
@@ -1557,7 +1685,7 @@ test("relay recovers upstream close by re-resuming and forwarding live updates",
       (message) => message.method === "thread/status/changed",
     );
     assert.equal(notification.params.threadId, threadId);
-    assert.equal(connectionCount, 2);
+    assert.equal(connectionCount, 3);
     assert.deepEqual(resumeParams, [
       { threadId, excludeTurns: true },
       { threadId, excludeTurns: true },
@@ -1572,6 +1700,7 @@ test("relay recovers upstream close by re-resuming and forwarding live updates",
 test("relay recovery refuses to bind an upstream that resumes the wrong thread", async () => {
   const threadId = "thread-recovery-requested-phase6";
   let connectionCount = 0;
+  let resumeCount = 0;
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(historyServer);
   historyServer.on("connection", (upstreamWs) => {
@@ -1589,13 +1718,18 @@ test("relay recovery refuses to bind an upstream that resumes the wrong thread",
             platformOs: "macos",
           },
         }));
-      } else if (message.method === "thread/resume" && connectionNumber === 1) {
-        upstreamWs.send(JSON.stringify({
-          id: message.id,
-          result: { thread: { id: threadId } },
-        }));
-        setTimeout(() => upstreamWs.close(), 10);
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(upstreamWs, message.id, message.params?.threadId);
       } else if (message.method === "thread/resume") {
+        resumeCount += 1;
+        if (resumeCount === 1) {
+          upstreamWs.send(JSON.stringify({
+            id: message.id,
+            result: { thread: { id: threadId } },
+          }));
+          setTimeout(() => upstreamWs.close(), 10);
+          return;
+        }
         upstreamWs.send(JSON.stringify({
           id: message.id,
           result: { thread: { id: "thread-recovery-wrong-phase6" } },
@@ -1620,7 +1754,7 @@ test("relay recovery refuses to bind an upstream that resumes the wrong thread",
     assert.equal(resume.result.thread.id, threadId);
     const close = await waitForWebSocketClose(ws);
     assert.equal(close.code, 1011);
-    assert.equal(connectionCount, 3);
+    assert.equal(connectionCount, 4);
   } finally {
     ws.close();
     await relay.close();
@@ -1632,6 +1766,7 @@ test("relay ignores stale upstream recovery after a newer resume", async () => {
   const oldThreadId = "thread-stale-recovery-old";
   const newThreadId = "thread-stale-recovery-new";
   let connectionCount = 0;
+  let oldResumeCount = 0;
   let staleRecovery = null;
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(historyServer);
@@ -1650,8 +1785,11 @@ test("relay ignores stale upstream recovery after a newer resume", async () => {
             platformOs: "macos",
           },
         }));
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(upstreamWs, message.id, message.params?.threadId);
       } else if (message.method === "thread/resume" && message.params.threadId === oldThreadId) {
-        if (connectionNumber === 1) {
+        oldResumeCount += 1;
+        if (oldResumeCount === 1) {
           upstreamWs.send(JSON.stringify({
             id: message.id,
             result: { thread: { id: oldThreadId } },
@@ -1735,6 +1873,7 @@ test("relay ignores stale upstream recovery after a newer resume", async () => {
 test("relay closes downstream when upstream recovery is exhausted", async () => {
   const threadId = "thread-recovery-fails-phase5";
   let connectionCount = 0;
+  let resumeCount = 0;
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await onceListening(historyServer);
   historyServer.on("connection", (upstreamWs) => {
@@ -1752,14 +1891,19 @@ test("relay closes downstream when upstream recovery is exhausted", async () => 
             platformOs: "macos",
           },
         }));
-      } else if (message.method === "thread/resume" && connectionNumber === 1) {
+      } else if (message.method === "thread/read") {
+        sendHumanThreadRead(upstreamWs, message.id, message.params?.threadId);
+      } else if (message.method === "thread/resume") {
+        resumeCount += 1;
+        if (resumeCount !== 1) {
+          upstreamWs.close();
+          return;
+        }
         upstreamWs.send(JSON.stringify({
           id: message.id,
           result: { thread: { id: message.params.threadId } },
         }));
         setTimeout(() => upstreamWs.close(), 10);
-      } else if (message.method === "thread/resume") {
-        upstreamWs.close();
       }
     });
     if (connectionNumber > 1) {
@@ -1783,7 +1927,7 @@ test("relay closes downstream when upstream recovery is exhausted", async () => 
     assert.equal(resume.result.thread.id, threadId);
     const close = await waitForWebSocketClose(ws);
     assert.equal(close.code, 1011);
-    assert.equal(connectionCount, 3);
+    assert.equal(connectionCount, 4);
   } finally {
     ws.close();
     await relay.close();

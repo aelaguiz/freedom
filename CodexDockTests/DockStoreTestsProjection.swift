@@ -418,7 +418,7 @@ final class DockStoreTestsProjection: XCTestCase {
         XCTAssertEqual(projection.groups.first?.rows.map(\.id.threadID), ["thread-a"])
     }
 
-    func testThreadCardTableAddsNotLoadedPinnedPlaceholderWithoutCachedDisplay() {
+    func testThreadCardTableDropsPinnedPlaceholderWithoutCachedHumanDisplay() {
         let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
         let key = LocalThreadMetadataKey(
             hostID: host.id,
@@ -439,11 +439,7 @@ final class DockStoreTestsProjection: XCTestCase {
             now: { Date(timeIntervalSince1970: 300) }
         )
 
-        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["missing-thread"])
-        XCTAssertEqual(snapshot.rows[0].title, "Not loaded")
-        XCTAssertEqual(snapshot.rows[0].status, .dormant)
-        XCTAssertEqual(snapshot.rows[0].summary, "This pinned thread is not loaded yet.")
-        XCTAssertTrue(snapshot.rows[0].isPinned)
+        XCTAssertEqual(snapshot.rows.map(\.id.threadID), [])
     }
 }
 

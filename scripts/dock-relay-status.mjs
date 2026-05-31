@@ -354,6 +354,13 @@ async function checkRawAppServerHealth(config, tracker) {
 }
 
 function classifyRelayRequestError(method, error) {
+  if (error?.code === -32043 && error?.data) {
+    return {
+      subsystem: "human-filter",
+      retryable: false,
+      ...error.data,
+    };
+  }
   if (error?.code === -32001) {
     return {
       subsystem: "upstream-overload",

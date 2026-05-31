@@ -70,6 +70,7 @@ test("relay/state/snapshot drains app-server list pages and preserves Codex orde
             thread: {
               id: message.params.threadId,
               updatedAt: 1,
+              source: message.params.threadId === "thread-archived-agent" ? "exec" : "cli",
               status: { type: "notLoaded" },
             },
           },
@@ -111,6 +112,7 @@ test("relay/state/snapshot drains app-server list pages and preserves Codex orde
       includeThreadReads: true,
       includeGoals: true,
       includeLoaded: false,
+      includeRejectedThreads: true,
       sourceScopes: ["interactiveDefault", "exec"],
       limit: 2,
     });
@@ -119,6 +121,11 @@ test("relay/state/snapshot drains app-server list pages and preserves Codex orde
     assert.ok(observedThreadListParams.every((params) => params.includePreviewless === undefined));
     assert.equal(response.result.kind, "relayStateSnapshot");
     assert.equal(response.result.source, "app-server-only");
+    assert.deepEqual(response.result.visibility, {
+      mode: "diagnostic_includes_rejected_threads",
+      includeRejectedThreads: true,
+      rejectedThreadsRequireExplicitOptIn: true,
+    });
     assert.equal(response.result.threadCount, 4);
 
     const activeInteractive = response.result.scopes.find((scope) => scope.name === "active:interactiveDefault");
@@ -219,6 +226,7 @@ test("relay/state/snapshot drains thread turns in app-server order when requeste
             thread: {
               id: message.params.threadId,
               updatedAt: 10,
+              source: "cli",
               status: { type: "notLoaded" },
             },
           },
@@ -348,8 +356,21 @@ test("relay/state/snapshot default scopes include an all-source combined Codex o
     });
 
     assert.equal(response.error, undefined);
+    assert.equal(response.result.visibility.mode, "app_facing_human_base_threads_only");
     const allSourceScope = response.result.scopes.find((scope) => scope.name === "active:allSourceKinds");
-    assert.deepEqual(allSourceScope.threadIDsInCodexOrder, ["thread-combined-1", "thread-combined-2"]);
+    assert.deepEqual(allSourceScope.threadIDsInCodexOrder, ["thread-combined-1"]);
+    assert.deepEqual(allSourceScope.humanFilter.rejectedCounts, { exec: 1 });
+    const diagnosticResponse = await jsonRpcRequest(ws, "relay/state/snapshot", {
+      includeArchived: false,
+      includeThreadReads: false,
+      includeLoaded: false,
+      includeRejectedThreads: true,
+      limit: 2,
+    });
+    assert.equal(diagnosticResponse.error, undefined);
+    assert.equal(diagnosticResponse.result.visibility.mode, "diagnostic_includes_rejected_threads");
+    const diagnosticAllSourceScope = diagnosticResponse.result.scopes.find((scope) => scope.name === "active:allSourceKinds");
+    assert.deepEqual(diagnosticAllSourceScope.threadIDsInCodexOrder, ["thread-combined-1", "thread-combined-2"]);
     assert.ok(observedSourceKinds.some((sourceKinds) => (
       Array.isArray(sourceKinds)
         && sourceKinds.includes("cli")

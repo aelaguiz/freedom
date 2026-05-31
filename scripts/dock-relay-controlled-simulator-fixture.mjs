@@ -2897,13 +2897,10 @@ async function runSpawnEdgeScenario(options) {
     const spawnWait = await waitForStreamCondition({
       streamProbe,
       timeoutMs: options.dockCollectionTimeoutMs,
-      predicate: (snapshot) => {
-        const card = dockSnapshotCardForThread(snapshot, childThreadID);
-        return dockSnapshotThreadIndex(snapshot, childThreadID) === 0
-          && dockSnapshotHasThread(snapshot, parentThreadID)
-          && card?.lane === "agent"
-          && card?.sourceKind === "automation";
-      },
+      predicate: (snapshot) => (
+        dockSnapshotHasThread(snapshot, parentThreadID)
+        && !dockSnapshotHasThread(snapshot, childThreadID)
+      ),
     });
     const spawnLag = scenarioLagSummary({
       transition: "spawn-edge",
@@ -2915,15 +2912,15 @@ async function runSpawnEdgeScenario(options) {
     if (!spawnWait.ok) {
       transitionFailure(
         findings,
-        "scenario_spawn_edge_not_seen",
-        "spawned child row did not appear as an automation Dock card through the fixture relay stream",
+        "scenario_spawn_edge_child_leaked_or_parent_missing",
+        "spawned child row was not kept out of the human-only fixture relay stream",
         { parentThreadID, childThreadID }
       );
     } else if (spawnLag.exceeded) {
       transitionFailure(
         findings,
         "scenario_spawn_edge_lag_exceeded",
-        "spawned child row appeared after the relay lag budget",
+        "human-only spawn-edge state settled after the relay lag budget",
         {
           observedLagMs: spawnLag.lag_change_to_relay_ms,
           maxStreamLagMs: options.maxStreamLagMs,
@@ -2934,36 +2931,17 @@ async function runSpawnEdgeScenario(options) {
     const spawnComparison = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
     findings.push(...scenarioComparisonFindings({ phase: "spawn-edge", comparison: spawnComparison.comparison }));
     const freshChildCard = dockSnapshotCardForThread(spawnComparison.freshDock, childThreadID);
-    if (!freshChildCard) {
+    if (freshChildCard) {
       transitionFailure(
         findings,
-        "scenario_spawn_edge_fresh_child_missing",
-        "spawned child row was missing from a fresh Dock client-path subscription",
-        { childThreadID }
+        "scenario_spawn_edge_fresh_child_leaked",
+        "spawned child row reached a fresh human-only Dock client-path subscription",
+        {
+          childThreadID,
+          actualLane: freshChildCard.lane || null,
+          actualSourceKind: freshChildCard.sourceKind || null,
+        }
       );
-    } else {
-      if (freshChildCard.lane !== "agent") {
-        transitionFailure(
-          findings,
-          "scenario_spawn_edge_wrong_lane",
-          "spawned child row did not reach the client path as an agent-lane card",
-          {
-            childThreadID,
-            actualLane: freshChildCard.lane || null,
-          }
-        );
-      }
-      if (freshChildCard.sourceKind !== "automation") {
-        transitionFailure(
-          findings,
-          "scenario_spawn_edge_wrong_source_kind",
-          "spawned child row did not reach the client path as automation source kind",
-          {
-            childThreadID,
-            actualSourceKind: freshChildCard.sourceKind || null,
-          }
-        );
-      }
     }
     transitions.push({
       name: "spawn-edge",
@@ -3004,10 +2982,10 @@ async function runSpawnEdgeScenario(options) {
         id: "spawn-edge",
         ok: scenarioOK,
         actuator: {
-          type: "controlled app-server subagent spawn fixture through real relay Dock routes",
+          type: "controlled app-server subagent spawn absence fixture through real relay Dock routes",
           routes: ["dock/subscribe", "dock/update"],
           clientExercised: true,
-          note: "The fixture changes app-server thread/list rows to model a new subagent spawn; proof only counts delivery through the same Dock routes and literal simulator row accessibility values the client uses.",
+          note: "The fixture changes app-server thread/list rows to model a new subagent spawn; proof expects the child to stay absent from the human-only Dock routes and literal simulator row accessibility values the client uses.",
         },
         target: {
           logicalHostID: hostID,

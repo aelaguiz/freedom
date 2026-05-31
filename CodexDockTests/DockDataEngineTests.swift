@@ -82,7 +82,20 @@ final class DockDataEngineTests: XCTestCase {
             isPinned: true,
             pinnedAt: Date(timeIntervalSince1970: 10),
             pinnedOrder: 0,
-            lastKnownPinnedDisplay: nil
+            lastKnownPinnedDisplay: LocalPinnedDisplaySnapshot(
+                title: "Cached pinned",
+                hostDisplayName: host.displayName,
+                hostEndpoint: host.endpoint.displayEndpoint,
+                repository: "codex-client",
+                branch: "main",
+                status: .dormant,
+                lastActivity: "5m ago",
+                lastActivityDate: Date(timeIntervalSince1970: 1_700),
+                summary: "Cached summary",
+                rail: .blue,
+                label: nil,
+                originKind: .human
+            )
         )
         let engine = DockDataEngine(
             registry: registry,

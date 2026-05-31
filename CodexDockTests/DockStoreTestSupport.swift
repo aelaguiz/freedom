@@ -943,7 +943,9 @@ func threadCardFixture(
     status: DockThreadCardStatus = .running,
     updatedAt: Int64,
     logicalHostID: String? = nil,
-    hostDisplayName: String? = nil
+    hostDisplayName: String? = nil,
+    sourceKind: DockThreadCardSourceKind = .human,
+    lane: DockThreadCardLane = .human
 ) -> DockThreadCardDTO {
     let activityAt = Date(timeIntervalSince1970: TimeInterval(updatedAt))
     let activityAtMs = Int64(activityAt.timeIntervalSince1970 * 1_000)
@@ -962,8 +964,8 @@ func threadCardFixture(
         displaySummary: "Summary for \(title)",
         title: title,
         status: status,
-        sourceKind: .human,
-        lane: .human,
+        sourceKind: sourceKind,
+        lane: lane,
         archiveState: .active,
         freshness: .fresh,
         completeness: .complete,

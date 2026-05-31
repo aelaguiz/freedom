@@ -59,16 +59,16 @@ private struct PreviewThreadCardStreamConnection: ThreadCardStreamConnection {
                 displaySummary: "The simulator is connected to a reachable app-server."
             ),
             card(
-                id: "preview-agent",
+                id: "preview-followup",
                 title: "Audit the Dock snapshot model",
                 status: .idle,
-                lane: .agent,
-                sourceKind: .automation,
+                lane: .human,
+                sourceKind: .human,
                 repository: "codex-client",
                 workingDirectory: "/Users/aelaguiz/workspace/codex-client",
-                branch: "feature/agents",
+                branch: "feature/human-only",
                 activityAt: Date(timeIntervalSinceNow: -900),
-                displaySummary: "Sub-agent returned a focused review."
+                displaySummary: "Follow-up review notes are ready."
             )
         ]
         return ThreadCardStreamUpdateDTO(

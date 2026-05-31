@@ -10,6 +10,12 @@ import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
 import { LiveStatusCache, SessionRouter } from "./dock-relay-live-status-cache.mjs";
 import { ThreadSummaryCache } from "./dock-relay-thread-summary-cache.mjs";
 import { HistoryClient, UpstreamConnectionPool } from "./dock-relay-upstream-pool.mjs";
+import {
+  classifyThreadOrigin,
+  filterHumanBaseThreads,
+  humanThreadRejectedError,
+  isHumanBaseThread,
+} from "./dock-relay-human-thread-filter.mjs";
 
 function relayLogger(config) {
   return config?.logger || defaultRelayLogger;
@@ -210,6 +216,11 @@ function clampThreadListParams(params = {}) {
   };
 }
 
+function humanOnlyThreadListParams(params = {}) {
+  const { sourceKind: _sourceKind, sourceKinds: _sourceKinds, ...rest } = params || {};
+  return clampThreadListParams(rest);
+}
+
 function disabledLiveOverlay() {
   return {
     ok: false,
@@ -332,7 +343,17 @@ async function readLoadedRows(endpoint, {
         continue;
       }
       if (result.value?.thread?.id) {
-        rows.push({ ...result.value.thread, dockRelaySource: endpoint });
+        const row = { ...result.value.thread, dockRelaySource: endpoint };
+        const classification = classifyThreadOrigin(row);
+        if (classification.allowed) {
+          rows.push(row);
+        } else {
+          logger.debug("live.thread_rejected_by_human_filter", {
+            threadId: row.id,
+            endpointUrl: endpoint.url,
+            reason: classification.reason,
+          });
+        }
       }
     }
     return rows;
@@ -498,35 +519,82 @@ function sanitizeThreadSearchResult(result) {
   return result;
 }
 
+function threadRowFromSearchResult(result) {
+  if (result?.thread && typeof result.thread === "object") {
+    return result.thread;
+  }
+  return result;
+}
+
+function filterHumanSearchResults(results = []) {
+  const acceptedResults = [];
+  const rejectedCounts = {};
+  for (const result of results) {
+    const classification = classifyThreadOrigin(threadRowFromSearchResult(result));
+    if (classification.allowed) {
+      acceptedResults.push(result);
+      continue;
+    }
+    rejectedCounts[classification.reason] = Number(rejectedCounts[classification.reason] || 0) + 1;
+  }
+  return { acceptedResults, rejectedCounts };
+}
+
+function assertRouteHumanBaseThread(row, threadId) {
+  const classification = classifyThreadOrigin(row);
+  if (!classification.allowed) {
+    throw humanThreadRejectedError(threadId || row?.id || row?.threadId || row?.threadID, classification.reason);
+  }
+  return row;
+}
+
+async function readHumanThreadForRoute(config, threadId) {
+  const liveRow = await sessionRouterForConfig(config).rowForThread(threadId);
+  if (liveRow) {
+    return assertRouteHumanBaseThread(liveRow, threadId);
+  }
+  const history = await readHistoryThread(config, { threadId, includeTurns: false });
+  return assertRouteHumanBaseThread(history?.thread, threadId);
+}
+
+async function assertHumanThreadID(config, threadId) {
+  return sanitizeRelayFields(await readHumanThreadForRoute(config, threadId));
+}
+
 async function aggregateThreadList(config, params = {}) {
   const logger = relayLogger(config);
-  const historyParams = clampThreadListParams(params);
+  const historyParams = humanOnlyThreadListParams(params);
   const history = await readHistoryThreadList(config, historyParams);
   const data = Array.isArray(history.data) ? history.data : [];
+  const { acceptedRows, rejectedCounts } = filterHumanBaseThreads(data);
   const liveOverlay = history.liveOverlay || liveStatusCacheForConfig(config).liveOverlay();
   logger.info("thread_list.loaded", {
     historyRows: data.length,
     requestedLimit: params.limit,
     effectiveLimit: historyParams.limit,
-    returnedRows: data.length,
+    returnedRows: acceptedRows.length,
+    rejectedCounts,
     liveOverlayState: liveOverlay?.state || (liveOverlay?.ok ? "healthy" : "unknown"),
   });
   return {
     ...history,
-    data,
+    data: acceptedRows,
     liveOverlay,
   };
 }
 
 async function aggregateThreadSearch(config, params = {}) {
   const logger = relayLogger(config);
-  const historyParams = clampThreadListParams(params);
+  const historyParams = humanOnlyThreadListParams(params);
   const history = await readHistoryThreadSearch(config, historyParams);
-  const data = Array.isArray(history.data) ? history.data.map(sanitizeThreadSearchResult) : [];
+  const rawData = Array.isArray(history.data) ? history.data : [];
+  const { acceptedResults, rejectedCounts } = filterHumanSearchResults(rawData);
+  const data = acceptedResults.map(sanitizeThreadSearchResult);
   logger.info("thread_search.loaded", {
     requestedLimit: params.limit,
     effectiveLimit: historyParams.limit,
     returnedRows: data.length,
+    rejectedCounts,
   });
   return {
     ...history,
@@ -538,6 +606,7 @@ async function aggregateThreadGoalGet(config, params = {}) {
   if (!params.threadId) {
     throw new Error("thread/goal/get requires threadId");
   }
+  await assertHumanThreadID(config, params.threadId);
   const endpoint = await endpointForThread(config, params.threadId);
   const result = isHistoryEndpoint(config, endpoint)
     ? await readHistoryThreadGoal(config, params)
@@ -551,7 +620,8 @@ async function aggregateThreadGoalGet(config, params = {}) {
 async function aggregateLoadedList(config, params = {}) {
   const logger = relayLogger(config);
   const snapshot = await liveStatusCacheForConfig(config).snapshotForRouting();
-  const ids = snapshot.rows.map((row) => row.id);
+  const rows = snapshot.rows.filter(isHumanBaseThread);
+  const ids = rows.map((row) => row.id);
   logger.info("thread_loaded_list.loaded", {
     liveRows: ids.length,
     endpoints: snapshot.endpoints.length,
@@ -566,18 +636,24 @@ async function aggregateThreadRead(config, params = {}) {
   }
   const liveRow = await sessionRouterForConfig(config).rowForThread(params.threadId);
   if (liveRow) {
+    assertRouteHumanBaseThread(liveRow, params.threadId);
     if (params.includeTurns) {
-      return readThreadFromEndpoint(liveRow.dockRelaySource, params, relayLogger(config));
+      const result = await readThreadFromEndpoint(liveRow.dockRelaySource, params, relayLogger(config));
+      assertRouteHumanBaseThread(result?.thread, params.threadId);
+      return result;
     }
     return { thread: sanitizeRelayFields(liveRow) };
   }
-  return readHistoryThread(config, params);
+  const result = await readHistoryThread(config, params);
+  assertRouteHumanBaseThread(result?.thread, params.threadId);
+  return result;
 }
 
 async function listThreadTurns(config, params = {}) {
   if (!params.threadId) {
     throw new Error("thread/turns/list requires threadId");
   }
+  await assertHumanThreadID(config, params.threadId);
   const endpoint = await endpointForThread(config, params.threadId);
   if (isHistoryEndpoint(config, endpoint)) {
     return historyClientForConfig(config).request("thread/turns/list", params);
@@ -593,6 +669,7 @@ async function archiveThread(config, params = {}) {
   if (!params.threadId) {
     throw new Error("thread/archive requires threadId");
   }
+  await assertHumanThreadID(config, params.threadId);
   const endpoint = await endpointForThread(config, params.threadId);
   if (isHistoryEndpoint(config, endpoint)) {
     return historyClientForConfig(config).request("thread/archive", params);
@@ -608,10 +685,12 @@ async function unarchiveThread(config, params = {}) {
   if (!params.threadId) {
     throw new Error("thread/unarchive requires threadId");
   }
+  await assertHumanThreadID(config, params.threadId);
   return historyClientForConfig(config).request("thread/unarchive", params);
 }
 
 export {
+  assertHumanThreadID,
   aggregateLoadedList,
   aggregateThreadGoalGet,
   aggregateThreadList,
