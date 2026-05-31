@@ -124,8 +124,8 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250),
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
@@ -250,8 +250,8 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250),
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),

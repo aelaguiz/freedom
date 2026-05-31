@@ -1288,7 +1288,12 @@ final class AppServerClientTests: XCTestCase {
 
         let turnsListTask = Task {
             try await client.threadTurnsList(
-                params: ThreadTurnsListParams(threadId: "thread-1", cursor: "page-2", limit: 250),
+                params: ThreadTurnsListParams(
+                    threadId: "thread-1",
+                    cursor: "page-2",
+                    limit: 250,
+                    sortDirection: .desc
+                ),
                 timeout: .seconds(1)
             )
         }
@@ -1300,6 +1305,7 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(turnsListParams["threadId"], .string("thread-1"))
         XCTAssertEqual(turnsListParams["cursor"], .string("page-2"))
         XCTAssertEqual(turnsListParams["limit"], .integer(250))
+        XCTAssertEqual(turnsListParams["sortDirection"], .string("desc"))
 
         await transport.enqueue(
             .response(

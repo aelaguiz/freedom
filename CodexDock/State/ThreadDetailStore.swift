@@ -588,7 +588,8 @@ public final class ThreadDetailStore: ObservableObject {
                 params: ThreadTurnsListParams(
                     threadId: row.id.threadID,
                     cursor: cursor,
-                    limit: Self.turnPageLimit
+                    limit: Self.turnPageLimit,
+                    sortDirection: .desc
                 ),
                 timeout: CodexDockConstants.AppServer.defaultRequestTimeout
             )
@@ -763,17 +764,18 @@ public final class ThreadDetailStore: ObservableObject {
     }
 
     private func apply(request: JSONRPCRequest) async {
+        let receivedAt = now()
         guard let dataSnapshot = await dataEngine.apply(
             request: request,
             expectedThreadID: row.id.threadID,
-            now: now()
+            now: receivedAt
         ) else {
             return
         }
         applyDataSnapshot(dataSnapshot)
 
         liveState = .live
-        upsertRequestCard(ServerRequestCard.make(from: request, now: now()))
+        upsertRequestCard(ServerRequestCard.make(from: request, now: receivedAt))
         DockLog.threadDetail.notice("server request received method=\(request.method, privacy: .public) request_id=\(DockLog.publicID(request.id), privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
         publishLoaded()
     }

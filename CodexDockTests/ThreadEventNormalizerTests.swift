@@ -46,7 +46,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         XCTAssertFalse(events.contains { $0.body.contains("{") || $0.body.contains("}") })
     }
 
-    func testNewestFirstDisplayOrderShowsNewestTurnFirstAndPreservesSameTurnEventOrder() {
+    func testNewestFirstDisplayOrderShowsCompletedAgentReplyAboveEarlierUserPrompt() {
         let thread = ThreadDTO(
             id: "thread-1",
             turns: [
@@ -66,6 +66,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
                 .object([
                     "id": .string("turn-new"),
                     "startedAt": .integer(1_700_000_100),
+                    "completedAt": .integer(1_700_000_200),
                     "items": .array([
                         .object([
                             "id": .string("new-user"),
@@ -94,7 +95,11 @@ final class ThreadEventNormalizerTests: XCTestCase {
         let displayEvents = ThreadEventDisplayOrder.newestFirst(events)
 
         XCTAssertEqual(events.map(\.body), ["Old request", "New request", "New answer", "swift test", "passed"])
-        XCTAssertEqual(displayEvents.map(\.body), ["New request", "New answer", "swift test", "passed", "Old request"])
+        XCTAssertEqual(
+            ThreadDetailMessageFilter.default.visibleEvents(from: displayEvents).map(\.body),
+            ["New answer", "New request", "Old request"]
+        )
+        XCTAssertEqual(displayEvents.map(\.body).prefix(4), ["passed", "swift test", "New answer", "New request"])
     }
 
     func testStoredTurnEventsCarryDatesForDisplayOrdering() {
@@ -136,6 +141,80 @@ final class ThreadEventNormalizerTests: XCTestCase {
         ])
     }
 
+    func testSameSecondTurnsRespectReceivedNewestFirstPageOrder() {
+        let thread = ThreadDTO(
+            id: "thread-1",
+            turns: [
+                .object([
+                    "id": .string("turn-new"),
+                    "startedAt": .integer(1_700_000_000),
+                    "items": .array([
+                        .object([
+                            "id": .string("new-agent"),
+                            "type": .string("agentMessage"),
+                            "text": .string("Newer returned turn"),
+                        ]),
+                    ]),
+                ]),
+                .object([
+                    "id": .string("turn-old"),
+                    "startedAt": .integer(1_700_000_000),
+                    "items": .array([
+                        .object([
+                            "id": .string("old-agent"),
+                            "type": .string("agentMessage"),
+                            "text": .string("Older returned turn"),
+                        ]),
+                    ]),
+                ]),
+            ]
+        )
+
+        let events = ThreadEventDisplayOrder.newestFirst(ThreadEventNormalizer.events(from: thread))
+
+        XCTAssertEqual(events.map(\.body), ["Newer returned turn", "Older returned turn"])
+    }
+
+    func testInProgressUserOnlyTurnAppearsFirstWhenNewestMeaningfulActivity() {
+        let thread = ThreadDTO(
+            id: "thread-1",
+            turns: [
+                .object([
+                    "id": .string("turn-user"),
+                    "startedAt": .integer(1_700_000_100),
+                    "status": .string("inProgress"),
+                    "items": .array([
+                        .object([
+                            "id": .string("user-1"),
+                            "type": .string("userMessage"),
+                            "content": .array([
+                                .object(["text": .string("Still waiting")]),
+                            ]),
+                        ]),
+                    ]),
+                ]),
+                .object([
+                    "id": .string("turn-old"),
+                    "startedAt": .integer(1_700_000_000),
+                    "completedAt": .integer(1_700_000_050),
+                    "items": .array([
+                        .object([
+                            "id": .string("agent-old"),
+                            "type": .string("agentMessage"),
+                            "text": .string("Older answer"),
+                        ]),
+                    ]),
+                ]),
+            ]
+        )
+
+        let events = ThreadDetailMessageFilter.default.visibleEvents(
+            from: ThreadEventNormalizer.events(from: thread)
+        )
+
+        XCTAssertEqual(events.map(\.body), ["Still waiting", "Older answer"])
+    }
+
     func testLiveDeltaUsesStableThreadAndItemIdentity() {
         let notification = JSONRPCNotification(
             method: "item/agentMessage/delta",
@@ -170,6 +249,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             method: "item/commandExecution/requestApproval",
             params: .object([
                 "threadId": .string("thread-1"),
+                "startedAtMs": .integer(1_999_000),
                 "command": .array([.string("make"), .string("app")]),
             ])
         )
@@ -186,6 +266,8 @@ final class ThreadEventNormalizerTests: XCTestCase {
         XCTAssertEqual(event.title, "Command approval")
         XCTAssertEqual(event.body, "make app")
         XCTAssertEqual(event.isLive, true)
+        XCTAssertEqual(event.date, Date(timeIntervalSince1970: 1_999))
+        XCTAssertEqual(event.activityDate, Date(timeIntervalSince1970: 1_999))
     }
 
     func testUnknownStoredItemStaysVisibleAsUnsupportedEvent() {
@@ -219,6 +301,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
                 .object([
                     "id": .string("turn-1"),
                     "startedAt": .integer(1_700_000_000),
+                    "completedAt": .integer(1_700_000_100),
                     "items": .array([
                         .object([
                             "id": .string("user-1"),
@@ -290,32 +373,32 @@ final class ThreadEventNormalizerTests: XCTestCase {
         XCTAssertEqual(
             ThreadDetailMessageFilter.all.visibleEvents(from: events).map(\.body),
             [
-                "Run the tests",
-                "I am checking the suite.",
-                "Run the model tests first.",
-                "The normalizer owns visibility.",
-                "swift test",
-                "passed",
-                "File changes are available on desktop.",
-                "workspace.read",
                 "shell",
+                "workspace.read",
+                "File changes are available on desktop.",
+                "passed",
+                "swift test",
+                "The normalizer owns visibility.",
+                "Run the model tests first.",
+                "I am checking the suite.",
                 "Unsupported event type: newServerThing",
+                "Run the tests",
             ]
         )
         XCTAssertEqual(
             ThreadDetailMessageFilter.default.visibleEvents(from: events).map(\.body),
             [
-                "Run the tests",
-                "I am checking the suite.",
                 "File changes are available on desktop.",
+                "I am checking the suite.",
+                "Run the tests",
             ]
         )
         XCTAssertEqual(
             ThreadDetailMessageFilter.kind(.agentMessage).visibleEvents(from: events).map(\.body),
             [
-                "I am checking the suite.",
-                "Run the model tests first.",
                 "The normalizer owns visibility.",
+                "Run the model tests first.",
+                "I am checking the suite.",
             ]
         )
         XCTAssertEqual(
@@ -388,6 +471,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             params: .object([
                 "threadId": .string("thread-1"),
                 "turnId": .string("turn-live"),
+                "startedAtMs": .integer(2_100_000),
                 "item": .object([
                     "id": .string("reasoning-live"),
                     "type": .string("reasoning"),
@@ -402,6 +486,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             params: .object([
                 "threadId": .string("thread-1"),
                 "turnId": .string("turn-live"),
+                "completedAtMs": .integer(2_200_000),
                 "item": .object([
                     "id": .string("command-live"),
                     "type": .string("commandExecution"),
@@ -423,9 +508,13 @@ final class ThreadEventNormalizerTests: XCTestCase {
         XCTAssertEqual(reasoningEvent?.visibilityCategory, .thinking)
         XCTAssertEqual(reasoningEvent?.body, "Reason through the failure.")
         XCTAssertEqual(reasoningEvent?.isStreamingDelta, false)
+        XCTAssertEqual(reasoningEvent?.date, Date(timeIntervalSince1970: 2_100))
+        XCTAssertEqual(reasoningEvent?.activityDate, Date(timeIntervalSince1970: 2_100))
         XCTAssertEqual(commandEvent?.kind, .command)
         XCTAssertEqual(commandEvent?.visibilityCategory, .tooling)
         XCTAssertEqual(commandEvent?.body, "swift test")
+        XCTAssertEqual(commandEvent?.date, Date(timeIntervalSince1970: 2_200))
+        XCTAssertEqual(commandEvent?.activityDate, Date(timeIntervalSince1970: 2_200))
     }
 
     func testMessageTypeProjectionIgnoresOtherTypeDatesWhenOrderingNewestFirst() {

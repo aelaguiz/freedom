@@ -40,7 +40,7 @@ final class ThreadDetailStoreTests: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
@@ -147,8 +147,8 @@ final class ThreadDetailStoreTests: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250),
-            ThreadTurnsListParams(threadId: "thread-1", cursor: "page-2", limit: 250),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
+            ThreadTurnsListParams(threadId: "thread-1", cursor: "page-2", limit: 250, sortDirection: .desc),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
@@ -198,8 +198,8 @@ final class ThreadDetailStoreTests: XCTestCase {
         let turnsListParams = await session.turnsListParamsSnapshot()
         let resumeParams = await session.resumeParamsSnapshot()
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250),
-            ThreadTurnsListParams(threadId: "thread-1", cursor: "same-page", limit: 250),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
+            ThreadTurnsListParams(threadId: "thread-1", cursor: "same-page", limit: 250, sortDirection: .desc),
         ])
         XCTAssertEqual(resumeParams, [ThreadResumeParams]())
     }
@@ -596,6 +596,7 @@ final class ThreadDetailStoreTests: XCTestCase {
                 method: "item/commandExecution/requestApproval",
                 params: .object([
                     "threadId": .string("thread-1"),
+                    "startedAtMs": .integer(2_999_000),
                     "command": .array([.string("make"), .string("test")]),
                 ])
             )
@@ -612,6 +613,11 @@ final class ThreadDetailStoreTests: XCTestCase {
         }
         XCTAssertEqual(store.requestCards.count, 1)
         XCTAssertEqual(store.requestCards[0].kind, .commandApproval)
+        XCTAssertEqual(store.requestCards[0].requestedAt, Date(timeIntervalSince1970: 2_999))
+        if case let .loaded(snapshot) = store.state {
+            XCTAssertEqual(snapshot.events[0].date, Date(timeIntervalSince1970: 2_999))
+            XCTAssertEqual(snapshot.events[0].activityDate, Date(timeIntervalSince1970: 2_999))
+        }
     }
 
     @MainActor

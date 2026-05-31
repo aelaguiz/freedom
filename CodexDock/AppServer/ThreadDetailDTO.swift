@@ -14,11 +14,18 @@ public struct ThreadTurnsListParams: Codable, Equatable, Sendable {
     public let threadId: String
     public let cursor: String?
     public let limit: Int?
+    public let sortDirection: SortDirection?
 
-    public init(threadId: String, cursor: String? = nil, limit: Int? = nil) {
+    public init(
+        threadId: String,
+        cursor: String? = nil,
+        limit: Int? = nil,
+        sortDirection: SortDirection? = nil
+    ) {
         self.threadId = threadId
         self.cursor = cursor
         self.limit = limit
+        self.sortDirection = sortDirection
     }
 }
 

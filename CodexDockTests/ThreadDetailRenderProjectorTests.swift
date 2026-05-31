@@ -56,6 +56,43 @@ final class ThreadDetailRenderProjectorTests: XCTestCase {
         XCTAssertTrue(render.hasUnfilteredEvents)
     }
 
+    func testProjectorAppliesVisibleLimitAfterFilteringOrderedEvents() {
+        let snapshot = ThreadDetailSnapshot(
+            header: makeHeader(),
+            liveState: .live,
+            events: ThreadEventDisplayOrder.newestFirst([
+                ThreadEvent(
+                    id: "old-user",
+                    kind: .userMessage,
+                    visibilityCategory: .message,
+                    title: "User",
+                    body: "Older prompt",
+                    date: Date(timeIntervalSince1970: 1_000),
+                    activityDate: Date(timeIntervalSince1970: 1_000)
+                ),
+                ThreadEvent(
+                    id: "new-agent",
+                    kind: .agentMessage,
+                    visibilityCategory: .message,
+                    title: "Agent",
+                    body: "Newer answer",
+                    date: Date(timeIntervalSince1970: 2_000),
+                    activityDate: Date(timeIntervalSince1970: 2_000)
+                ),
+            ])
+        )
+
+        let render = ThreadDetailRenderProjector().render(
+            snapshot: snapshot,
+            requestCards: [],
+            options: ThreadDetailRenderOptions(filter: .default, visibleLimit: 1),
+            revision: RenderRevision(rawValue: 4)
+        )
+
+        XCTAssertEqual(render.rows.map(\.event.body), ["Newer answer"])
+        XCTAssertEqual(render.visibleWindow.totalMatchingCount, 2)
+    }
+
     private func makeHeader() -> ThreadDetailHeader {
         let host = makeHost()
         let row = DockRowViewModel(

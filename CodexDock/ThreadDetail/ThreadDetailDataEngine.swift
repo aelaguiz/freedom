@@ -146,9 +146,7 @@ struct ThreadEventIndex: Sendable {
 
         let mergedEvent: ThreadEvent
         if events[index].isStreamingDelta, event.isStreamingDelta, events[index].kind == event.kind {
-            var existing = events[index]
-            existing.body += event.body
-            mergedEvent = existing
+            mergedEvent = events[index].mergingStreamingDelta(event)
         } else {
             mergedEvent = event
         }
@@ -170,9 +168,7 @@ struct ThreadEventIndex: Sendable {
         let existing = events[index]
         let mergedEvent: ThreadEvent?
         if existing.isStreamingDelta, event.isStreamingDelta, existing.kind == event.kind {
-            var next = existing
-            next.body += event.body
-            mergedEvent = next
+            mergedEvent = existing.mergingStreamingDelta(event)
         } else if existing.isStreamingDelta || !event.isStreamingDelta {
             mergedEvent = event
         } else {

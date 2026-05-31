@@ -51,7 +51,10 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
     public let turnSequence: Int?
     public let itemSequence: Int?
     public let eventSequence: Int?
+    /// Display grouping fallback. New ordering logic should prefer `activityDate`.
     public let displayGroupDate: Date?
+    /// Semantic activity time used for newest-first thread detail ordering.
+    public let activityDate: Date?
     public let isStreamingDelta: Bool
 
     public init(
@@ -68,6 +71,7 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
         itemSequence: Int? = nil,
         eventSequence: Int? = nil,
         displayGroupDate: Date? = nil,
+        activityDate: Date? = nil,
         isStreamingDelta: Bool = false
     ) {
         self.id = id
@@ -83,7 +87,29 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
         self.itemSequence = itemSequence
         self.eventSequence = eventSequence
         self.displayGroupDate = displayGroupDate ?? date
+        self.activityDate = activityDate
         self.isStreamingDelta = isStreamingDelta
+    }
+
+    func mergingStreamingDelta(_ delta: ThreadEvent) -> ThreadEvent {
+        ThreadEvent(
+            id: id,
+            kind: kind,
+            visibilityCategory: visibilityCategory,
+            title: title,
+            body: body + delta.body,
+            date: delta.date ?? date,
+            isLive: isLive || delta.isLive,
+            turnID: turnID,
+            itemID: itemID,
+            turnSequence: turnSequence,
+            itemSequence: itemSequence,
+            eventSequence: eventSequence,
+            displayGroupDate: delta.displayGroupDate ?? displayGroupDate,
+            activityDate: ThreadMessageSemantics.activityDate(for: delta)
+                ?? ThreadMessageSemantics.activityDate(for: self),
+            isStreamingDelta: isStreamingDelta
+        )
     }
 }
 
@@ -139,7 +165,7 @@ public enum ThreadMessageSemantics {
     }
 
     public static func activityDate(for event: ThreadEvent) -> Date? {
-        event.displayGroupDate ?? event.date
+        event.activityDate ?? event.displayGroupDate ?? event.date
     }
 }
 
@@ -164,25 +190,25 @@ public enum ThreadEventDisplayOrder {
             return dateOrder
         }
 
-        let leftTurn = left.event.turnSequence ?? Int.min
-        let rightTurn = right.event.turnSequence ?? Int.min
+        let leftTurn = left.event.turnSequence ?? Int.max
+        let rightTurn = right.event.turnSequence ?? Int.max
         if leftTurn != rightTurn {
-            return leftTurn > rightTurn
+            return leftTurn < rightTurn
         }
 
-        let leftItem = left.event.itemSequence ?? Int.max
-        let rightItem = right.event.itemSequence ?? Int.max
+        let leftItem = left.event.itemSequence ?? Int.min
+        let rightItem = right.event.itemSequence ?? Int.min
         if leftItem != rightItem {
-            return leftItem < rightItem
+            return leftItem > rightItem
         }
         if left.itemKey != right.itemKey {
             return left.itemKey < right.itemKey
         }
 
-        let leftEvent = left.event.eventSequence ?? Int.max
-        let rightEvent = right.event.eventSequence ?? Int.max
+        let leftEvent = left.event.eventSequence ?? Int.min
+        let rightEvent = right.event.eventSequence ?? Int.min
         if leftEvent != rightEvent {
-            return leftEvent < rightEvent
+            return leftEvent > rightEvent
         }
         if left.event.id != right.event.id {
             return left.event.id < right.event.id
@@ -216,7 +242,7 @@ public enum ThreadEventDisplayOrder {
         }
 
         var eventDate: Date? {
-            event.displayGroupDate ?? event.date
+            ThreadMessageSemantics.activityDate(for: event)
         }
     }
 }
@@ -269,7 +295,8 @@ public enum ThreadEventNormalizer {
             guard let item = params["item"] else {
                 return nil
             }
-            return events(fromItem: item, turn: params, defaultDate: now, isLive: true).first
+            let eventDate = lifecycleDate(for: notification.method, params: params, now: now)
+            return events(fromItem: item, turn: params, defaultDate: eventDate, isLive: true).first
         case "thread/status/changed":
             let status = params["status"]?.objectValue?["type"]?.stringValue ?? "updated"
             return ThreadEvent(
@@ -300,6 +327,7 @@ public enum ThreadEventNormalizer {
 
     public static func event(from request: JSONRPCRequest, now: Date = Date()) -> ThreadEvent {
         let params = request.params?.objectValue ?? [:]
+        let requestDate = date(milliseconds: params["startedAtMs"]) ?? now
         let body = firstNonEmpty(
             commandText(params["command"]),
             params["reason"]?.stringValue,
@@ -313,11 +341,12 @@ public enum ThreadEventNormalizer {
             visibilityCategory: .request,
             title: requestTitle(for: request.method),
             body: body,
-            date: now,
+            date: requestDate,
             isLive: true,
             turnID: params["turnId"]?.stringValue,
             itemID: params["itemId"]?.stringValue,
-            displayGroupDate: now
+            displayGroupDate: requestDate,
+            activityDate: requestDate
         )
     }
 
@@ -344,13 +373,17 @@ public enum ThreadEventNormalizer {
             ]
         }
 
-        let defaultDate = date(seconds: object["startedAt"]) ?? date(seconds: object["completedAt"])
+        let turnStartedAt = date(seconds: object["startedAt"])
+        let turnCompletedAt = date(seconds: object["completedAt"])
+        let defaultDate = turnStartedAt ?? turnCompletedAt
         let items = object["items"]?.arrayValue ?? []
         return items.enumerated().flatMap { itemSequence, item in
             events(
                 fromItem: item,
                 turn: object,
                 defaultDate: defaultDate,
+                turnStartedAt: turnStartedAt,
+                turnCompletedAt: turnCompletedAt,
                 isLive: false,
                 turnSequence: turnSequence,
                 itemSequence: itemSequence
@@ -362,6 +395,8 @@ public enum ThreadEventNormalizer {
         fromItem item: JSONValue,
         turn: [String: JSONValue],
         defaultDate: Date?,
+        turnStartedAt: Date? = nil,
+        turnCompletedAt: Date? = nil,
         isLive: Bool,
         turnSequence: Int? = nil,
         itemSequence: Int? = nil
@@ -380,7 +415,8 @@ public enum ThreadEventNormalizer {
                     turnSequence: turnSequence,
                     itemSequence: itemSequence,
                     eventSequence: 0,
-                    displayGroupDate: defaultDate
+                    displayGroupDate: defaultDate,
+                    activityDate: defaultDate
                 )
             ]
         }
@@ -389,7 +425,6 @@ public enum ThreadEventNormalizer {
         let eventItemID = itemID ?? UUID().uuidString
         let turnID = turn["id"]?.stringValue ?? turn["turnId"]?.stringValue
         let eventTurnID = turnID ?? "turn"
-        let date = defaultDate ?? date(milliseconds: turn["startedAtMs"]) ?? date(milliseconds: turn["completedAtMs"])
         let type = object["type"]?.stringValue ?? "unknown"
         func makeEvent(
             suffix: String,
@@ -399,20 +434,27 @@ public enum ThreadEventNormalizer {
             body: String,
             eventSequence: Int = 0
         ) -> ThreadEvent {
-            ThreadEvent(
+            let eventDate = displayDate(
+                for: type,
+                defaultDate: defaultDate,
+                turnStartedAt: turnStartedAt,
+                turnCompletedAt: turnCompletedAt
+            )
+            return ThreadEvent(
                 id: "\(eventTurnID)-\(eventItemID)-\(suffix)",
                 kind: kind,
                 visibilityCategory: visibilityCategory,
                 title: title,
                 body: body,
-                date: date,
+                date: eventDate,
                 isLive: isLive,
                 turnID: turnID,
                 itemID: itemID,
                 turnSequence: turnSequence,
                 itemSequence: itemSequence,
                 eventSequence: eventSequence,
-                displayGroupDate: date
+                displayGroupDate: eventDate,
+                activityDate: eventDate
             )
         }
 
@@ -540,8 +582,48 @@ public enum ThreadEventNormalizer {
             turnID: turnID,
             itemID: itemID,
             displayGroupDate: now,
+            activityDate: now,
             isStreamingDelta: true
         )
+    }
+
+    private static func displayDate(
+        for itemType: String,
+        defaultDate: Date?,
+        turnStartedAt: Date?,
+        turnCompletedAt: Date?
+    ) -> Date? {
+        switch itemType {
+        case "userMessage":
+            return turnStartedAt ?? defaultDate
+        case "agentMessage",
+             "plan",
+             "reasoning",
+             "commandExecution",
+             "fileChange",
+             "mcpToolCall",
+             "dynamicToolCall":
+            return turnCompletedAt ?? turnStartedAt ?? defaultDate
+        default:
+            return defaultDate
+        }
+    }
+
+    private static func lifecycleDate(
+        for method: String,
+        params: [String: JSONValue],
+        now: Date
+    ) -> Date {
+        switch method {
+        case "item/started":
+            return date(milliseconds: params["startedAtMs"]) ?? now
+        case "item/completed":
+            return date(milliseconds: params["completedAtMs"])
+                ?? date(milliseconds: params["startedAtMs"])
+                ?? now
+        default:
+            return now
+        }
     }
 
     private static func requestTitle(for method: String) -> String {

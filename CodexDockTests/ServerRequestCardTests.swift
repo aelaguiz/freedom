@@ -11,6 +11,7 @@ final class ServerRequestCardTests: XCTestCase {
                     "threadId": .string("thread-1"),
                     "turnId": .string("turn-1"),
                     "itemId": .string("cmd-1"),
+                    "startedAtMs": .integer(999_000),
                     "command": .string("swift test"),
                     "cwd": .string("/repo"),
                 ])
@@ -22,6 +23,7 @@ final class ServerRequestCardTests: XCTestCase {
         XCTAssertEqual(card.kind, .commandApproval)
         XCTAssertEqual(card.summary, "swift test")
         XCTAssertEqual(card.detail, "/repo")
+        XCTAssertEqual(card.requestedAt, Date(timeIntervalSince1970: 999))
         XCTAssertEqual(card.responsePayload(for: .accept), .object(["decision": .string("accept")]))
         XCTAssertEqual(card.responsePayload(for: .decline), .object(["decision": .string("decline")]))
     }

@@ -116,7 +116,7 @@ public struct ServerRequestCard: Equatable, Identifiable, Sendable {
             turnID: turnID,
             itemID: itemID,
             params: request.params,
-            requestedAt: now
+            requestedAt: date(milliseconds: params["startedAtMs"]) ?? now
         )
 
         switch request.method {
@@ -315,5 +315,12 @@ public struct ServerRequestCard: Equatable, Identifiable, Sendable {
             }
         }
         return nil
+    }
+
+    private static func date(milliseconds value: JSONValue?) -> Date? {
+        guard let number = value?.numberValue else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: number / 1_000)
     }
 }
