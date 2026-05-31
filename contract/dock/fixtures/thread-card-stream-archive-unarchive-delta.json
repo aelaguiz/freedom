@@ -1,0 +1,27 @@
+{
+  "kind": "delta",
+  "schemaVersion": 2,
+  "view": "archive",
+  "complete": true,
+  "totalRows": 0,
+  "window": {
+    "offset": 0,
+    "limit": 1,
+    "rowCount": 0,
+    "nextOffset": null
+  },
+  "stateGeneration": 11,
+  "epoch": "fixture-epoch",
+  "baseSeq": 10,
+  "seq": 11,
+  "freshness": {
+    "status": "fresh",
+    "lastAttemptAt": "2026-05-30T00:03:00.000Z",
+    "lastSyncAt": "2026-05-30T00:03:00.000Z",
+    "lastError": null
+  },
+  "upsertCards": [],
+  "deleteCardIDs": [
+    "Amir-M5::thread-archived"
+  ]
+}

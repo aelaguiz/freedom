@@ -13,21 +13,18 @@ import {
   DOCK_VIEW,
   ARCHIVE_VIEW,
   buildWindow,
-  dockOrderKey,
   estimateJSONBytes,
   normalizeThread,
   normalizedStatus,
   orderedDockRows,
   publicHostFromConfig,
 } from "./dock-relay-state-views.mjs";
-import {
-  drainThreadListScope,
-} from "./dock-relay-state-snapshot.mjs";
 import { isHumanStartedThread } from "./dock-relay-human-thread-filter.mjs";
 import {
-  aggregateThreadList,
+  canonicalizeThreadRows,
   collectLiveRows,
   configuredLiveEndpointsForConfig,
+  drainThreadListRows,
   enrichHumanStartedRows,
   mergeHumanStartedRowsWithSupplements,
   readSessionIndexHumanStartedSupplements,
@@ -262,7 +259,10 @@ class RelayStateEngine {
       const previousDockCards = this.store.listDockCards({ hostID: host.id }).cards;
       const [liveRows, defaultScope] = await Promise.all([
         this.refreshLiveLeases(),
-        drainThreadListScope(this.config, baseParams, ACTIVE_ARCHIVE_SCOPE, ACTIVE_DEFAULT_SCOPE),
+        drainThreadListRows(this.config, baseParams, {
+          name: `${ACTIVE_ARCHIVE_SCOPE.name}:${ACTIVE_DEFAULT_SCOPE.name}`,
+          sourceScope: ACTIVE_DEFAULT_SCOPE.name,
+        }),
       ]);
       const interactiveRows = defaultScope.rows.map((row) => row.thread).filter(Boolean);
       const { acceptedRows, rejectedCounts, validationFailures } = await enrichHumanStartedRows(
@@ -280,14 +280,27 @@ class RelayStateEngine {
       }
       const appRows = mergeHumanStartedRowsWithSupplements(acceptedRows, supplements.acceptedRows);
       const orderedRows = orderedDockRows([], appRows, liveRows);
+      // Card order is derived only after every row has proven activity from
+      // thread/read plus thread/turns/list. Raw thread/list order is input data,
+      // not a client-visible ordering contract.
+      const canonical = await canonicalizeThreadRows(
+        this.config,
+        orderedRows.map(({ row }) => row).filter(Boolean),
+        { route: "dock_reconcile" },
+      );
+      const canonicalByID = new Map(canonical.rows.map((row) => [row.id, row]));
       const cards = orderedRows
-        .map(({ row, lane }, index) => normalizeThread(row, host, lane, {
+        .map(({ row, lane }) => canonicalByID.get(row?.id) ? normalizeThread(canonicalByID.get(row.id), host, lane, {
           archiveState: "active",
-          orderKey: dockOrderKey(index, row?.id || ""),
-        }))
+          orderKey: canonicalByID.get(row.id).orderKey,
+          freshness: canonicalByID.get(row.id).freshness,
+          completeness: canonicalByID.get(row.id).completeness,
+        }) : null)
         .filter(Boolean);
-      const totalValidationFailures = validationFailures + supplements.validationFailures;
-      const complete = defaultScope.complete && totalValidationFailures === 0;
+      const totalValidationFailures = validationFailures
+        + supplements.validationFailures
+        + canonical.validationFailures;
+      const complete = defaultScope.complete && totalValidationFailures === 0 && canonical.complete;
       const reconciliationScope = complete
         ? defaultScope
         : {
@@ -307,7 +320,10 @@ class RelayStateEngine {
       });
       const freshness = this.store.freshnessForHost(host.id);
       const totalRows = this.store.listDockCards({ hostID: host.id }).totalRows;
+      const truthComplete = freshness.status === "fresh"
+        && this.store.cardTruthCompleteForHost(host.id, { archived: false });
       const deltaCarriesEveryRow = complete
+        && truthComplete
         && Number(result.deleteCardIDs?.length || 0) === 0
         && Number(result.upsertCards?.length || 0) === Number(totalRows || 0);
       await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
@@ -383,21 +399,49 @@ class RelayStateEngine {
         modelProviders: [],
       };
       const previousArchiveCards = this.store.listArchiveCards({ hostID: host.id }).cards;
-      const history = await aggregateThreadList(this.config, baseParams);
-      const rows = Array.isArray(history?.data) ? history.data : [];
-      const cards = rows
+      const defaultScope = await drainThreadListRows(this.config, baseParams, {
+        name: "archived:interactiveDefault",
+        sourceScope: "interactiveDefault",
+      });
+      const interactiveRows = defaultScope.rows.map((row) => row.thread).filter(Boolean);
+      const { acceptedRows, rejectedCounts, validationFailures } = await enrichHumanStartedRows(
+        this.config,
+        interactiveRows,
+        { route: "archive_reconcile" },
+      );
+      const supplements = await readSessionIndexHumanStartedSupplements(this.config, acceptedRows, {
+        route: "archive_reconcile",
+        params: baseParams,
+        limit: baseParams.limit,
+      });
+      for (const [rejectedReason, count] of Object.entries(supplements.rejectedCounts)) {
+        rejectedCounts[rejectedReason] = Number(rejectedCounts[rejectedReason] || 0) + Number(count || 0);
+      }
+      const rows = mergeHumanStartedRowsWithSupplements(acceptedRows, supplements.acceptedRows);
+      const canonical = await canonicalizeThreadRows(this.config, rows, { route: "archive_reconcile" });
+      const cards = canonical.rows
         .map((row) => normalizeThread(row, host, "human", {
           archiveState: "archived",
+          orderKey: row.orderKey,
+          freshness: row.freshness,
+          completeness: row.completeness,
         }))
         .filter(Boolean);
+      const totalValidationFailures = validationFailures
+        + supplements.validationFailures
+        + canonical.validationFailures;
+      const complete = defaultScope.complete && totalValidationFailures === 0 && canonical.complete;
       const result = this.store.applyArchiveReconciliation({
         host,
         cards,
-        complete: true,
+        complete,
+        error: complete ? null : (defaultScope.error || "archive card activity proof incomplete"),
         previousCards: previousArchiveCards,
       });
       const freshness = this.store.freshnessForHost(host.id);
       const totalRows = this.store.listArchiveCards({ hostID: host.id }).totalRows;
+      const truthComplete = freshness.status === "fresh"
+        && this.store.cardTruthCompleteForHost(host.id, { archived: true });
       await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
         view: ARCHIVE_VIEW,
         baseSeq: Math.max(0, Number(result.seq) - 1),
@@ -407,12 +451,14 @@ class RelayStateEngine {
         upsertCards: result.upsertCards,
         deleteCardIDs: result.deleteCardIDs,
         totalRows,
-        complete: true,
+        complete: complete && truthComplete ? true : false,
       }));
       this.logger?.info?.("state.archive_reconcile_succeeded", {
         reason,
         hostId: host.id,
         rows: cards.length,
+        rejectedCounts,
+        validationFailures: totalValidationFailures,
         seq: result.seq,
       });
       return result;
@@ -487,16 +533,19 @@ class RelayStateEngine {
     softLimitBytes = RELAY_STATE_SNAPSHOT_SOFT_LIMIT_BYTES,
   } = {}) {
     const host = publicHostFromConfig(this.config);
+    const freshness = this.store.freshnessForHost(host.id);
+    const truthComplete = freshness.status === "fresh"
+      && this.store.cardTruthCompleteForHost(host.id, { archived: false });
     const totalRows = this.store.listDockCards({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
     if (totalRows === 0) {
       return this.makeSnapshot({
         view: DOCK_VIEW,
         epoch,
-        complete: true,
+        complete: truthComplete,
         totalRows: 0,
         window: buildWindow({ offset: 0, limit: 0, rowCount: 0, totalRows: 0 }),
         cards: [],
-        freshness: this.store.freshnessForHost(host.id),
+        freshness,
       });
     }
 
@@ -511,11 +560,11 @@ class RelayStateEngine {
     let snapshot = this.makeSnapshot({
       view: DOCK_VIEW,
       epoch,
-      complete: offset + bounded.cards.length >= bounded.totalRows,
+      complete: truthComplete && offset + bounded.cards.length >= bounded.totalRows,
       totalRows: bounded.totalRows,
       window,
       cards: bounded.cards,
-      freshness: this.store.freshnessForHost(host.id),
+      freshness,
     });
 
     while (estimateJSONBytes(snapshot) > softLimitBytes && windowLimit > 1) {
@@ -530,22 +579,22 @@ class RelayStateEngine {
       snapshot = this.makeSnapshot({
         view: DOCK_VIEW,
         epoch,
-        complete: offset + bounded.cards.length >= bounded.totalRows,
+        complete: truthComplete && offset + bounded.cards.length >= bounded.totalRows,
         totalRows: bounded.totalRows,
         window,
         cards: bounded.cards,
-        freshness: this.store.freshnessForHost(host.id),
+        freshness,
       });
     }
 
     return this.makeSnapshot({
       view: DOCK_VIEW,
       epoch,
-      complete: offset + bounded.cards.length >= bounded.totalRows,
+      complete: truthComplete && offset + bounded.cards.length >= bounded.totalRows,
       totalRows: bounded.totalRows,
       window,
       cards: bounded.cards,
-      freshness: this.store.freshnessForHost(host.id),
+      freshness,
     });
   }
 
@@ -555,11 +604,14 @@ class RelayStateEngine {
     limit = RELAY_STATE_DOCK_WINDOW_SIZE,
   } = {}) {
     const host = publicHostFromConfig(this.config);
+    const freshness = this.store.freshnessForHost(host.id);
+    const truthComplete = freshness.status === "fresh"
+      && this.store.cardTruthCompleteForHost(host.id, { archived: true });
     const result = this.store.listArchiveCards({ hostID: host.id, offset, limit });
     return this.makeSnapshot({
       view: ARCHIVE_VIEW,
       epoch,
-      complete: offset + result.cards.length >= result.totalRows,
+      complete: truthComplete && offset + result.cards.length >= result.totalRows,
       totalRows: result.totalRows,
       window: buildWindow({
         offset,
@@ -568,7 +620,7 @@ class RelayStateEngine {
         totalRows: result.totalRows,
       }),
       cards: result.cards,
-      freshness: this.store.freshnessForHost(host.id),
+      freshness,
     });
   }
 
@@ -820,12 +872,16 @@ class RelayStateEngine {
     const bounded = snapshot.view === ARCHIVE_VIEW
       ? this.store.listArchiveCards({ hostID: host.id, offset, limit })
       : this.store.listDockCards({ hostID: host.id, offset, limit });
-    const complete = offset + bounded.cards.length >= bounded.totalRows;
+    const archived = snapshot.view === ARCHIVE_VIEW;
+    const freshness = this.store.freshnessForHost(host.id);
+    const truthComplete = freshness.status === "fresh"
+      && this.store.cardTruthCompleteForHost(host.id, { archived });
+    const complete = truthComplete && offset + bounded.cards.length >= bounded.totalRows;
     return this.subscriptions.cardDelta({
       view: snapshot.view,
       baseSeq: snapshot.seq,
       seq: snapshot.seq,
-      freshness: snapshot.freshness || this.store.freshnessForHost(host.id),
+      freshness,
       upsertCards: bounded.cards,
       deleteCardIDs: [],
       totalRows: bounded.totalRows,
@@ -840,50 +896,17 @@ class RelayStateEngine {
   }
 
   async handleArchiveMutation({ threadId, archived }) {
-    const result = this.ingestor.ingestArchiveMutation({ threadId, archived });
-    if (!result) {
-      return;
-    }
-    const host = publicHostFromConfig(this.config);
-    const dockTotalRows = this.store.listDockCards({ hostID: host.id }).totalRows;
-    await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
-      view: DOCK_VIEW,
-      baseSeq: Math.max(0, Number(result.seq) - 1),
-      seq: result.seq,
-      freshness: this.store.freshnessForHost(host.id),
-      upsertCards: result.dockUpsertCards || [],
-      deleteCardIDs: result.dockDeleteCardIDs || [],
-      totalRows: dockTotalRows,
-      complete: true,
-    }));
-    const archiveTotalRows = this.store.listArchiveCards({ hostID: host.id }).totalRows;
-    await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
-      view: ARCHIVE_VIEW,
-      baseSeq: Math.max(0, Number(result.seq) - 1),
-      seq: result.seq,
-      freshness: this.store.freshnessForHost(host.id),
-      upsertCards: result.archiveUpsertCards || [],
-      deleteCardIDs: result.archiveDeleteCardIDs || [],
-      totalRows: archiveTotalRows,
-      complete: true,
-    }));
+    this.ingestor.ingestArchiveMutation({ threadId, archived });
   }
 
-  stateSnapshot() {
+  stateHealth() {
     return {
       ok: true,
-      schema: "codexdock.relayState.v1",
-      visibility: appFacingHumanStartedVisibility(),
+      schema: "codexdock.relayState.health.v1",
       db: this.store.dbHealth(),
-      counts: this.store.stateCounts(),
-      syncScopes: this.store.syncScopes(),
     };
   }
 
-  explainThread(threadID) {
-    const host = publicHostFromConfig(this.config);
-    return this.store.explainThread({ hostID: host.id, threadID });
-  }
 }
 
 function relayStateEngineForConfig(config) {

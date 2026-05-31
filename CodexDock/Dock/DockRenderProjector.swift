@@ -23,15 +23,15 @@ struct DockRenderProjector: Sendable {
                 sourceHostID: host.id
             )
         }
-        let loadedKeys = Set(liveRows.map(\.metadataKey))
-        let rows = liveRows + rowProjector.cachedPinnedRows(excluding: loadedKeys)
+        // Local metadata may decorate relay rows, but it must never create card
+        // rows. The relay is the single source of truth for card existence and order.
 
         return DockSnapshot(
             host: DockHostViewModel(host: input.hosts[0]),
             hosts: input.hosts.map(DockHostViewModel.init),
             hostStates: input.hostStates,
             hostIdentityResolver: input.hostIdentityResolver,
-            rows: rows,
+            rows: liveRows,
             isPartial: input.isPartial
         )
     }

@@ -9,73 +9,17 @@ struct ThreadCardFixtureResult: Equatable, Sendable {
     }
 }
 
-struct ThreadCardFixtureQuery: Equatable, Sendable {
-    let archived: Bool
-    let sourceKinds: [ThreadSourceKind]?
-    let maxPages: Int?
-
-    init(
-        archived: Bool = false,
-        sourceKinds: [ThreadSourceKind]? = nil,
-        maxPages: Int? = nil
-    ) {
-        self.archived = archived
-        self.sourceKinds = sourceKinds
-        self.maxPages = maxPages
-    }
-
-    static let activeHuman = ThreadCardFixtureQuery(
-        archived: false,
-        sourceKinds: nil,
-        maxPages: CodexDockConstants.Dock.activeSessionMaxPages
-    )
-    static let activeHumanFullScan = ThreadCardFixtureQuery(
-        archived: false,
-        sourceKinds: nil,
-        maxPages: nil
-    )
-    static let archivedHuman = ThreadCardFixtureQuery(archived: true, sourceKinds: nil)
-    static let activeAgents = ThreadCardFixtureQuery(
-        archived: false,
-        sourceKinds: ThreadSourceKind.dockAgentScopeKinds,
-        maxPages: CodexDockConstants.Dock.activeSessionMaxPages
-    )
-}
-
 protocol ThreadCardFixtureLoading: Sendable {
     func loadFixtures(
         for host: DockHostConfiguration,
-        query: ThreadCardFixtureQuery
+        view: ThreadCardStreamView
     ) async throws -> ThreadCardFixtureResult
 }
 
 extension ThreadCardFixtureLoading {
     func testConnectionResult(to host: DockHostConfiguration) async throws -> HostConnectionTestResult {
-        let result = try await loadFixtures(for: host, query: .activeHuman)
+        let result = try await loadFixtures(for: host, view: .dock)
         return HostConnectionTestResult(rowCount: result.fixtures.count)
-    }
-}
-
-private enum ThreadCardFixtureScope: String, CaseIterable, Hashable, Sendable {
-    case human
-    case agents
-
-    var label: String {
-        switch self {
-        case .human:
-            return "Dock"
-        case .agents:
-            return "Agents"
-        }
-    }
-
-    var query: ThreadCardFixtureQuery {
-        switch self {
-        case .human:
-            return .activeHuman
-        case .agents:
-            return .activeAgents
-        }
     }
 }
 
@@ -220,50 +164,12 @@ actor LoaderBackedThreadCardStreamConnection: ThreadCardStreamConnection {
 
     private func snapshot() async throws -> ThreadCardStreamUpdateDTO {
         seq += 1
-        if view == .archive {
-            let result = try await loader.loadFixtures(for: host, query: .archivedHuman)
-            let cards = result.fixtures.map {
-                streamCard(from: $0, archiveState: .archived)
-            }
-            return update(cards: cards, freshness: DockStreamFreshnessDTO(status: .fresh))
-        }
-
-        let scopedResults = await loadScopes()
-        let successes = scopedResults.compactMap { scope, result -> (ThreadCardFixtureScope, ThreadCardFixtureResult)? in
-            if case .success(let value) = result {
-                return (scope, value)
-            }
-            return nil
-        }
-        let failures = scopedResults.compactMap { scope, result -> (ThreadCardFixtureScope, DockRequestFailure)? in
-            if case .failure(let value) = result {
-                return (scope, value)
-            }
-            return nil
-        }
-
-        guard !successes.isEmpty else {
-            throw failures.first?.1 ?? DockRequestFailure.error("No stream rows loaded")
-        }
-
-        let fixtures = deduplicated(successes.flatMap { scope, result in
-            result.fixtures.map { summary in
-                (scope, summary)
-            }
-        })
-        let freshness: DockStreamFreshnessDTO
-        if failures.isEmpty {
-            freshness = DockStreamFreshnessDTO(status: .fresh)
-        } else {
-            let message = failures.map { scope, failure in
-                "\(scope.label): \(failure.localizedDescription)"
-            }.joined(separator: "; ")
-            freshness = DockStreamFreshnessDTO(status: .stale, lastError: message)
-        }
+        let result = try await loader.loadFixtures(for: host, view: view)
+        let archiveState: DockThreadCardArchiveState = view == .archive ? .archived : .active
 
         return update(
-            cards: fixtures.map { streamCard(from: $0) },
-            freshness: freshness
+            cards: result.fixtures.map { streamCard(from: $0, archiveState: archiveState) },
+            freshness: DockStreamFreshnessDTO(status: .fresh)
         )
     }
 
@@ -294,54 +200,6 @@ actor LoaderBackedThreadCardStreamConnection: ThreadCardStreamConnection {
             ],
             cards: cards
         )
-    }
-
-    private func loadScopes() async -> [(ThreadCardFixtureScope, Result<ThreadCardFixtureResult, DockRequestFailure>)] {
-        let host = self.host
-        let loader = self.loader
-        return await withTaskGroup(of: (ThreadCardFixtureScope, Result<ThreadCardFixtureResult, DockRequestFailure>).self) { group in
-            for scope in ThreadCardFixtureScope.allCases {
-                group.addTask {
-                    do {
-                        let result = try await loader.loadFixtures(for: host, query: scope.query)
-                        return (scope, .success(result))
-                    } catch {
-                        if let failure = error as? DockRequestFailure {
-                            return (scope, .failure(failure))
-                        }
-                        return (scope, .failure(.error(error.localizedDescription)))
-                    }
-                }
-            }
-            var results: [(ThreadCardFixtureScope, Result<ThreadCardFixtureResult, DockRequestFailure>)] = []
-            for await result in group {
-                results.append(result)
-            }
-            return results.sorted { lhs, rhs in
-                let lhsIndex = ThreadCardFixtureScope.allCases.firstIndex(of: lhs.0) ?? Int.max
-                let rhsIndex = ThreadCardFixtureScope.allCases.firstIndex(of: rhs.0) ?? Int.max
-                return lhsIndex < rhsIndex
-            }
-        }
-    }
-
-    private func deduplicated(_ fixtures: [(ThreadCardFixtureScope, ThreadCardFixtureSummary)]) -> [ThreadCardFixtureSummary] {
-        var orderedIDs: [HostScopedThreadID] = []
-        var summariesByID: [HostScopedThreadID: ThreadCardFixtureSummary] = [:]
-        for (scope, summary) in fixtures {
-            if summariesByID[summary.id] == nil {
-                orderedIDs.append(summary.id)
-                summariesByID[summary.id] = summary
-                continue
-            }
-            guard let existing = summariesByID[summary.id] else {
-                continue
-            }
-            if scope == .agents || existing.origin.kind == .unknown {
-                summariesByID[summary.id] = summary
-            }
-        }
-        return orderedIDs.compactMap { summariesByID[$0] }
     }
 
     private func streamCard(
@@ -436,59 +294,22 @@ actor LoaderBackedThreadCardStreamConnection: ThreadCardStreamConnection {
 }
 
 struct FakeThreadCardFixtureLoader: ThreadCardFixtureLoading {
-    private let results: [String: FakeMode]
+    private let mode: FakeMode
 
     init(mode: FakeMode) {
-        self.results = Self.results(for: mode)
+        self.mode = mode
     }
 
     func loadFixtures(
         for host: DockHostConfiguration,
-        query: ThreadCardFixtureQuery
+        view: ThreadCardStreamView
     ) async throws -> ThreadCardFixtureResult {
-        guard let mode = results[Self.key(query)] else {
-            throw DockRequestFailure.error("Unexpected query \(Self.queryLabel(query))")
-        }
         switch mode {
         case let .success(result):
             return result
         case let .failure(error):
             throw error
         }
-    }
-
-    private static func results(for mode: FakeMode) -> [String: FakeMode] {
-        switch mode {
-        case .success(let result):
-            return [
-                key(.activeHuman): .success(result),
-                key(.activeAgents): .success(ThreadCardFixtureResult(fixtures: [])),
-                key(.archivedHuman): .success(result)
-            ]
-        case .failure(let error):
-            return [
-                key(.activeHuman): .failure(error),
-                key(.activeAgents): .failure(error),
-                key(.archivedHuman): .failure(error)
-            ]
-        }
-    }
-
-    fileprivate static func key(_ query: ThreadCardFixtureQuery) -> String {
-        queryLabel(query)
-    }
-
-    fileprivate static func queryLabel(_ query: ThreadCardFixtureQuery) -> String {
-        if query == .activeHuman {
-            return "activeHuman"
-        }
-        if query == .activeAgents {
-            return "activeAgents"
-        }
-        if query == .archivedHuman {
-            return "archivedHuman"
-        }
-        return "\(query.archived)::\(query.sourceKinds?.map(\.rawValue).joined(separator: ",") ?? "nil")"
     }
 }
 
@@ -499,41 +320,30 @@ extension FakeThreadCardFixtureLoader: HostConnectionTesting {
 }
 
 actor SequencedThreadCardFixtureLoader: ThreadCardFixtureLoading {
-    private var resultsByQuery: [String: [FakeMode]]
-    private var queries: [ThreadCardFixtureQuery] = []
+    private var results: [FakeMode]
+    private var requestedViews: [ThreadCardStreamView] = []
 
     init(results: [FakeMode]) {
-        self.resultsByQuery = [
-            Self.key(.activeHuman): results,
-            Self.key(.activeAgents): Array(
-                repeating: .success(ThreadCardFixtureResult(fixtures: [])),
-                count: results.count
-            )
-        ]
+        self.results = results
     }
 
     func currentLoadCount() -> Int {
-        queries.count
+        requestedViews.count
     }
 
-    func recordedQueries() -> [ThreadCardFixtureQuery] {
-        queries
+    func recordedViews() -> [ThreadCardStreamView] {
+        requestedViews
     }
 
     func loadFixtures(
         for host: DockHostConfiguration,
-        query: ThreadCardFixtureQuery
+        view: ThreadCardStreamView
     ) async throws -> ThreadCardFixtureResult {
-        queries.append(query)
-        let key = Self.key(query)
-        guard var results = resultsByQuery[key] else {
-            throw DockRequestFailure.error("Unexpected query \(Self.queryLabel(query))")
-        }
+        requestedViews.append(view)
         guard !results.isEmpty else {
-            throw DockRequestFailure.error("No result configured for query \(Self.queryLabel(query))")
+            throw DockRequestFailure.error("No result configured for \(view.rawValue) stream")
         }
         let result = results.removeFirst()
-        resultsByQuery[key] = results
 
         switch result {
         case let .success(result):
@@ -542,56 +352,27 @@ actor SequencedThreadCardFixtureLoader: ThreadCardFixtureLoading {
             throw error
         }
     }
-
-    private static func key(_ query: ThreadCardFixtureQuery) -> String {
-        FakeThreadCardFixtureLoader.queryLabel(query)
-    }
-
-    private static func queryLabel(_ query: ThreadCardFixtureQuery) -> String {
-        FakeThreadCardFixtureLoader.queryLabel(query)
-    }
 }
 
 actor HostRoutedThreadCardFixtureLoader: ThreadCardFixtureLoading {
     private let results: [String: FakeMode]
 
     init(results: [String: FakeMode]) {
-        var scopedResults: [String: FakeMode] = [:]
-        for (hostID, mode) in results {
-            switch mode {
-            case .success(let result):
-                scopedResults[Self.key(hostID: hostID, query: .activeHuman)] = .success(result)
-                scopedResults[Self.key(hostID: hostID, query: .activeAgents)] = .success(
-                    ThreadCardFixtureResult(fixtures: [])
-                )
-            case .failure(let error):
-                scopedResults[Self.key(hostID: hostID, query: .activeHuman)] = .failure(error)
-                scopedResults[Self.key(hostID: hostID, query: .activeAgents)] = .failure(error)
-            }
-        }
-        self.results = scopedResults
+        self.results = results
     }
 
     func loadFixtures(
         for host: DockHostConfiguration,
-        query: ThreadCardFixtureQuery
+        view: ThreadCardStreamView
     ) async throws -> ThreadCardFixtureResult {
-        switch results[Self.key(hostID: host.id, query: query)] {
+        switch results[host.id] {
         case let .success(result):
             return result
         case let .failure(error):
             throw error
         case nil:
-            throw DockRequestFailure.error("Unexpected query \(Self.queryLabel(query)) for host \(host.id)")
+            throw DockRequestFailure.error("No \(view.rawValue) fixture result for host \(host.id)")
         }
-    }
-
-    private static func key(hostID: String, query: ThreadCardFixtureQuery) -> String {
-        "\(hostID)::\(queryLabel(query))"
-    }
-
-    private static func queryLabel(_ query: ThreadCardFixtureQuery) -> String {
-        FakeThreadCardFixtureLoader.queryLabel(query)
     }
 }
 
@@ -608,20 +389,7 @@ actor DelayedHostRoutedThreadCardFixtureLoader: ThreadCardFixtureLoading {
 
     init(delayedHostID: String, results: [String: FakeMode]) {
         self.delayedHostID = delayedHostID
-        var scopedResults: [String: FakeMode] = [:]
-        for (hostID, mode) in results {
-            switch mode {
-            case .success(let result):
-                scopedResults[Self.key(hostID: hostID, query: .activeHuman)] = .success(result)
-                scopedResults[Self.key(hostID: hostID, query: .activeAgents)] = .success(
-                    ThreadCardFixtureResult(fixtures: [])
-                )
-            case .failure(let error):
-                scopedResults[Self.key(hostID: hostID, query: .activeHuman)] = .failure(error)
-                scopedResults[Self.key(hostID: hostID, query: .activeAgents)] = .failure(error)
-            }
-        }
-        self.results = scopedResults
+        self.results = results
     }
 
     func waitForDelayedRequests(_ count: Int) async {
@@ -638,7 +406,7 @@ actor DelayedHostRoutedThreadCardFixtureLoader: ThreadCardFixtureLoading {
 
     func loadFixtures(
         for host: DockHostConfiguration,
-        query: ThreadCardFixtureQuery
+        view: ThreadCardStreamView
     ) async throws -> ThreadCardFixtureResult {
         if host.id == delayedHostID {
             await withCheckedContinuation { continuation in
@@ -646,48 +414,40 @@ actor DelayedHostRoutedThreadCardFixtureLoader: ThreadCardFixtureLoading {
             }
         }
 
-        switch results[Self.key(hostID: host.id, query: query)] {
+        switch results[host.id] {
         case let .success(result):
             return result
         case let .failure(error):
             throw error
         case nil:
-            throw DockRequestFailure.error("Unexpected query \(Self.queryLabel(query)) for host \(host.id)")
+            throw DockRequestFailure.error("No \(view.rawValue) fixture result for host \(host.id)")
         }
-    }
-
-    private static func key(hostID: String, query: ThreadCardFixtureQuery) -> String {
-        "\(hostID)::\(queryLabel(query))"
-    }
-
-    private static func queryLabel(_ query: ThreadCardFixtureQuery) -> String {
-        FakeThreadCardFixtureLoader.queryLabel(query)
     }
 }
 
 actor RecordingThreadCardFixtureLoader: ThreadCardFixtureLoading {
     private var results: [FakeMode]
-    private var queries: [ThreadCardFixtureQuery] = []
+    private var requestedViews: [ThreadCardStreamView] = []
 
     init(results: [FakeMode]) {
         self.results = results
     }
 
-    func recordedQueries() -> [ThreadCardFixtureQuery] {
-        queries
+    func recordedViews() -> [ThreadCardStreamView] {
+        requestedViews
     }
 
-    func archivedRequests() -> [Bool] {
-        queries.map(\.archived)
+    func archivedRequests() -> [ThreadCardStreamView] {
+        requestedViews.filter { $0 == .archive }
     }
 
     func loadFixtures(
         for host: DockHostConfiguration,
-        query: ThreadCardFixtureQuery
+        view: ThreadCardStreamView
     ) async throws -> ThreadCardFixtureResult {
-        queries.append(query)
+        requestedViews.append(view)
         guard !results.isEmpty else {
-            throw DockRequestFailure.error("No result configured for query \(FakeThreadCardFixtureLoader.queryLabel(query))")
+            throw DockRequestFailure.error("No result configured for \(view.rawValue) stream")
         }
         let result = results.removeFirst()
 
@@ -819,25 +579,6 @@ actor InMemoryLocalDockConfigurationStore: LocalDockConfigurationStoring {
     func savedConfiguration() -> LocalRelayHostList? {
         saved
     }
-}
-
-func sortedQueries(_ queries: [ThreadCardFixtureQuery]) -> [ThreadCardFixtureQuery] {
-    queries.sorted { lhs, rhs in
-        querySortKey(lhs) < querySortKey(rhs)
-    }
-}
-
-func querySortKey(_ query: ThreadCardFixtureQuery) -> String {
-    if query == .activeAgents {
-        return "0-activeAgents"
-    }
-    if query == .activeHuman {
-        return "1-activeHuman"
-    }
-    if query == .archivedHuman {
-        return "2-archivedHuman"
-    }
-    return "3-\(query.archived)-\(query.sourceKinds?.map(\.rawValue).joined(separator: ",") ?? "nil")"
 }
 
 func makeHost(url: String = "ws://192.168.50.117:4510") -> DockHostConfiguration {

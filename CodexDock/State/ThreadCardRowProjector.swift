@@ -12,18 +12,6 @@ struct ThreadCardRowProjector {
         }
     }
 
-    func cachedPinnedRows(excluding loadedKeys: Set<LocalThreadMetadataKey>) -> [DockRowViewModel] {
-        return localMetadata.compactMap { key, metadata in
-            guard metadata.isPinned,
-                  metadata.hasAppFacingHumanPinnedDisplay,
-                  !loadedKeys.contains(key),
-                  hostIdentityResolver.logicalHostID(forAlias: key.hostID) != nil else {
-                return nil
-            }
-            return cachedPinnedRow(key: key, metadata: metadata)
-        }
-    }
-
     func makeRow(card: DockThreadCardDTO, sourceHostID: String? = nil) -> DockRowViewModel {
         let id = HostScopedThreadID(hostID: card.logicalHostID, threadID: card.threadID)
         let metadata = metadata(
@@ -58,37 +46,6 @@ struct ThreadCardRowProjector {
         )
     }
 
-    private func cachedPinnedRow(
-        key: LocalThreadMetadataKey,
-        metadata: LocalThreadMetadata
-    ) -> DockRowViewModel {
-        let snapshot = metadata.lastKnownPinnedDisplay
-        let fallbackDate = metadata.pinnedAt ?? Date.distantPast
-        let resolved = hostIdentityResolver.resolve(rowHostID: key.hostID)
-        let logicalHostID = resolved?.logicalHostID ?? key.hostID
-        return DockRowViewModel(
-            id: HostScopedThreadID(hostID: logicalHostID, threadID: key.threadID),
-            sourceHostID: resolved?.host.id,
-            backendSessionID: key.backendSessionID,
-            title: nonEmpty(snapshot?.title) ?? "Not loaded",
-            hostDisplayName: hostDisplayNameForCachedRow(hostID: key.hostID, snapshot: snapshot),
-            hostEndpoint: hostEndpointForCachedRow(hostID: key.hostID, snapshot: snapshot),
-            repository: nonEmpty(snapshot?.repository) ?? "Unknown workspace",
-            branch: nonEmpty(snapshot?.branch) ?? "No branch",
-            status: snapshot?.status ?? .dormant,
-            lastActivity: nonEmpty(snapshot?.lastActivity) ?? "Not loaded",
-            lastActivityDate: snapshot?.lastActivityDate ?? fallbackDate,
-            summary: nonEmpty(snapshot?.summary) ?? "This pinned thread is not loaded yet.",
-            rail: metadata.rail ?? snapshot?.rail ?? .blue,
-            label: metadata.label ?? snapshot?.label,
-            origin: snapshot?.originKind.sessionOrigin ?? .unknown(),
-            relationship: snapshot?.relationship ?? .root,
-            isPinned: true,
-            pinnedAt: metadata.pinnedAt,
-            pinnedOrder: metadata.pinnedOrder
-        )
-    }
-
     private func metadata(
         for id: HostScopedThreadID,
         backendSessionID: String,
@@ -116,18 +73,9 @@ struct ThreadCardRowProjector {
     }
 
     private func activityDate(for card: DockThreadCardDTO) -> Date {
-        if let activityAtMs = card.activityAtMs {
-            return Date(timeIntervalSince1970: TimeInterval(activityAtMs) / 1_000)
-        }
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractionalFormatter.date(from: card.activityAt) {
-            return date
-        }
-        if let date = ISO8601DateFormatter().date(from: card.activityAt) {
-            return date
-        }
-        return .distantPast
+        // The relay owns card recency. If this timestamp is missing, decoding
+        // fails at the DTO boundary instead of letting Swift invent an order.
+        Date(timeIntervalSince1970: TimeInterval(card.activityAtMs) / 1_000)
     }
 
     private func status(for status: DockThreadCardStatus) -> DockRowStatusKind {
@@ -219,24 +167,6 @@ struct ThreadCardRowProjector {
 
     private func hostEndpoint(for hostID: String, sourceHostID: String? = nil) -> String {
         hostIdentityResolver.endpoint(forAlias: hostID, sourceConfiguredHostID: sourceHostID)
-            ?? hostID
-    }
-
-    private func hostDisplayNameForCachedRow(
-        hostID: String,
-        snapshot: LocalPinnedDisplaySnapshot?
-    ) -> String {
-        hostIdentityResolver.displayName(forAlias: hostID)
-            ?? nonEmpty(snapshot?.hostDisplayName)
-            ?? hostID
-    }
-
-    private func hostEndpointForCachedRow(
-        hostID: String,
-        snapshot: LocalPinnedDisplaySnapshot?
-    ) -> String {
-        hostIdentityResolver.endpoint(forAlias: hostID)
-            ?? nonEmpty(snapshot?.hostEndpoint)
             ?? hostID
     }
 

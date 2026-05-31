@@ -10,6 +10,11 @@ public struct ThreadReadParams: Codable, Equatable, Sendable {
     }
 }
 
+public enum SortDirection: String, Codable, Equatable, Sendable {
+    case asc
+    case desc
+}
+
 public struct ThreadTurnsListParams: Codable, Equatable, Sendable {
     public let threadId: String
     public let cursor: String?

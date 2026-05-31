@@ -1,0 +1,57 @@
+{
+  "kind": "snapshot",
+  "schemaVersion": 2,
+  "view": "dock",
+  "complete": true,
+  "totalRows": 1,
+  "window": {
+    "offset": 0,
+    "limit": 1,
+    "rowCount": 1,
+    "nextOffset": null
+  },
+  "stateGeneration": 10,
+  "epoch": "fixture-epoch",
+  "baseSeq": null,
+  "seq": 10,
+  "asOf": "2026-05-30T00:02:00.000Z",
+  "freshness": {
+    "status": "fresh",
+    "lastAttemptAt": "2026-05-30T00:02:00.000Z",
+    "lastSyncAt": "2026-05-30T00:02:00.000Z",
+    "lastError": null
+  },
+  "hosts": [
+    {
+      "id": "Amir-M5",
+      "logicalHostID": "Amir-M5",
+      "displayName": "Amir-M5",
+      "endpoint": "amir-m5.fairy-salmon.ts.net:4510"
+    }
+  ],
+  "cards": [
+    {
+      "id": "Amir-M5::thread-live-only",
+      "logicalHostID": "Amir-M5",
+      "threadID": "thread-live-only",
+      "backendSessionID": "session-live-only",
+      "hostDisplayName": "Amir-M5",
+      "hostEndpoint": "amir-m5.fairy-salmon.ts.net:4510",
+      "orderKey": "9223370256755455807:thread-live-only",
+      "activityAt": "2026-05-30T00:02:00.000Z",
+      "activityAtMs": 1780099320000,
+      "displaySummary": "Live event row folded into relay card truth before emission.",
+      "title": "Live only row fixture",
+      "status": "running",
+      "sourceKind": "human",
+      "lane": "human",
+      "archiveState": "active",
+      "freshness": "fresh",
+      "completeness": "complete",
+      "repository": "codex-client",
+      "workingDirectory": "/Users/aelaguiz/workspace/codex-client",
+      "branch": "codex-dock-agents-tab-live-counts",
+      "summarySource": "live_event"
+    }
+  ]
+}

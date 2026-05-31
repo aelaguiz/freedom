@@ -62,7 +62,7 @@ actor ArchiveCleanupDataEngine {
                 hostStates.append(
                     DockHostStateViewModel(
                         host: host,
-                        status: collection.cards.isEmpty ? .empty : .loaded(rowCount: collection.cards.count)
+                        status: collection.hostLoadStatus
                     )
                 )
             case .failure(let failure):
@@ -129,13 +129,12 @@ actor ArchiveCleanupDataEngine {
     }
 
     private func rowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
+        // Cleanup previews use relay orderKey for card recency. Missing
+        // orderKey falls back only to a stable identity order, never timestamps.
         if let lhsOrderKey = lhs.orderKey,
            let rhsOrderKey = rhs.orderKey,
            lhsOrderKey != rhsOrderKey {
             return lhsOrderKey < rhsOrderKey
-        }
-        if lhs.lastActivityDate != rhs.lastActivityDate {
-            return lhs.lastActivityDate > rhs.lastActivityDate
         }
         return "\(lhs.id.hostID)::\(lhs.id.threadID)" < "\(rhs.id.hostID)::\(rhs.id.threadID)"
     }

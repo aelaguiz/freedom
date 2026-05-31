@@ -35,7 +35,7 @@ final class ArchiveDataEngineTests: XCTestCase {
         XCTAssertEqual(snapshot.sections.map(\.title), ["main"])
         XCTAssertEqual(snapshot.sections[0].rows.map(\.title), ["Archived row"])
         XCTAssertEqual(snapshot.hostStates.map(\.status), [.loaded(rowCount: 1)])
-        XCTAssertEqual(archivedRequests, [true])
+        XCTAssertEqual(archivedRequests, [.archive])
     }
 
     func testEngineBuildsResolverForLogicalHostRowsLoadedFromEndpointHost() async throws {

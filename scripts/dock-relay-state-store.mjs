@@ -11,10 +11,8 @@ import {
 import {
   ARCHIVE_VIEW,
   DOCK_VIEW,
-  applyLeaseToCard,
+  activityOrderKey,
   archiveOrderKey,
-  dockCardID,
-  dockOrderKey,
   normalizeStoredCard,
 } from "./dock-relay-state-views.mjs";
 import {
@@ -23,7 +21,6 @@ import {
   deleteRejectedLiveLeases,
   deleteRejectedThreadCards,
   humanAppFacingStateCounts,
-  isHumanAppFacingStoredRow,
 } from "./dock-relay-state-store-human-filter.mjs";
 
 function nowISOString() {
@@ -49,10 +46,6 @@ function isFreshLocalArchiveMutation(row, atMs) {
   }
   return atMs - updatedAtMs >= 0
     && atMs - updatedAtMs <= RELAY_STATE_ARCHIVE_MUTATION_GRACE_MS;
-}
-
-function isLeaseExpired(lease, atMs) {
-  return Boolean(lease?.expires_at_ms) && Number(lease.expires_at_ms) < atMs;
 }
 
 function sortedJSONString(value) {
@@ -146,6 +139,9 @@ class RelayStateStore {
         archive_state TEXT NOT NULL DEFAULT 'active',
         completeness TEXT NOT NULL DEFAULT 'complete',
         summary_source TEXT,
+        activity_proof_status TEXT NOT NULL DEFAULT 'unknown',
+        activity_proof_source TEXT,
+        activity_proof_checked_at TEXT,
         active_scope_present INTEGER NOT NULL DEFAULT 0,
         archived_scope_present INTEGER NOT NULL DEFAULT 0,
         freshness_status TEXT NOT NULL DEFAULT 'unknown',
@@ -154,16 +150,6 @@ class RelayStateStore {
         raw_json TEXT,
         PRIMARY KEY (host_id, thread_id),
         FOREIGN KEY (host_id) REFERENCES hosts(host_id) ON DELETE CASCADE
-      );
-
-      CREATE TABLE IF NOT EXISTS thread_field_provenance (
-        host_id TEXT NOT NULL,
-        thread_id TEXT NOT NULL,
-        field TEXT NOT NULL,
-        source TEXT NOT NULL,
-        value_json TEXT,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (host_id, thread_id, field, source)
       );
 
       CREATE TABLE IF NOT EXISTS sync_scopes (
@@ -261,6 +247,9 @@ class RelayStateStore {
     `);
     this.ensureThreadColumns();
     this.ensureLiveLeaseColumns();
+    // Card truth lives on stored thread rows. Remove the old decorative
+    // provenance table so proof cannot drift away from the row the client sees.
+    this.db.exec("DROP TABLE IF EXISTS thread_field_provenance");
     this.db.prepare(`
       INSERT OR IGNORE INTO schema_migrations (version, applied_at)
       VALUES (?, ?)
@@ -284,6 +273,9 @@ class RelayStateStore {
       summary_source: "TEXT",
       relationship: "TEXT",
       forked_from_id: "TEXT",
+      activity_proof_status: "TEXT NOT NULL DEFAULT 'unknown'",
+      activity_proof_source: "TEXT",
+      activity_proof_checked_at: "TEXT",
     };
     for (const [column, definition] of Object.entries(definitions)) {
       if (!columns.has(column)) {
@@ -313,7 +305,6 @@ class RelayStateStore {
       this.db.prepare("DELETE FROM hosts WHERE host_id != ?").run(hostID);
       for (const table of [
         "threads",
-        "thread_field_provenance",
         "sync_scopes",
         "live_leases",
         "conflicts",
@@ -381,14 +372,36 @@ class RelayStateStore {
       };
     }
     const failed = rows.find((row) => row.complete === 0);
+    const unprovenCards = this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM threads
+      WHERE host_id = ?
+        AND (active_scope_present = 1 OR archived_scope_present = 1)
+        AND (activity_proof_status != 'proven' OR completeness != 'complete' OR freshness_status != 'fresh')
+    `).get(hostID).count;
     const latestAttempt = rows.map((row) => row.last_attempt_at).filter(Boolean).sort().at(-1) || null;
     const latestSync = rows.map((row) => row.last_sync_at).filter(Boolean).sort().at(-1) || null;
     return {
-      status: failed ? "stale" : "fresh",
+      status: failed || Number(unprovenCards || 0) > 0 ? "stale" : "fresh",
       lastAttemptAt: latestAttempt,
       lastSyncAt: latestSync,
-      lastError: failed?.last_error || null,
+      lastError: failed?.last_error || (Number(unprovenCards || 0) > 0 ? "card activity proof incomplete" : null),
     };
+  }
+
+  cardTruthCompleteForHost(hostID, { archived = false } = {}) {
+    const archivePredicate = archived
+      ? "archive_state = 'archived' AND archived_scope_present = 1"
+      : "active_scope_present = 1 AND archive_state != 'archived'";
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM threads
+      WHERE host_id = ?
+        AND ${archivePredicate}
+        AND ${HUMAN_APP_FACING_THREAD_SQL}
+        AND (activity_proof_status != 'proven' OR completeness != 'complete' OR freshness_status != 'fresh')
+    `).get(hostID);
+    return Number(row?.count || 0) === 0;
   }
 
   listDockCards({ hostID, offset = 0, limit = null } = {}) {
@@ -408,29 +421,15 @@ class RelayStateStore {
       queryParams.push(Number(limit), Number(offset || 0));
     }
     const rows = this.db.prepare(`
-      SELECT t.*, l.endpoint_label, l.endpoint_url, l.backend_session_id AS lease_backend_session_id,
-             l.status AS lease_status, l.waiting_state, l.validation_at_ms, l.expires_at_ms
+      SELECT t.*
       FROM threads t
-      LEFT JOIN live_leases l
-        ON l.host_id = t.host_id AND l.thread_id = t.thread_id
       WHERE ${rowWhere}
       ORDER BY t.order_key ASC, t.thread_id ASC
       ${limitClause}
     `).all(...queryParams);
-    const currentMs = nowMs();
     return {
       totalRows,
-      cards: rows.map((row) => {
-        const card = normalizeStoredCard(row);
-        if (!row.lease_status) {
-          return card;
-        }
-        return applyLeaseToCard(card, {
-          backend_session_id: row.lease_backend_session_id,
-          status: row.lease_status,
-          expires_at_ms: row.expires_at_ms,
-        }, currentMs);
-      }).filter(Boolean),
+      cards: rows.map(normalizeStoredCard).filter(Boolean),
     };
   }
 
@@ -461,77 +460,6 @@ class RelayStateStore {
     };
   }
 
-  explainThread({ hostID, threadID }) {
-    const row = this.db.prepare(`
-      SELECT t.*, l.endpoint_label, l.endpoint_url, l.backend_session_id AS lease_backend_session_id,
-             l.status AS lease_status, l.waiting_state, l.validation_at_ms, l.expires_at_ms
-      FROM threads t
-      LEFT JOIN live_leases l
-        ON l.host_id = t.host_id AND l.thread_id = t.thread_id
-      WHERE t.host_id = ? AND (t.thread_id = ? OR t.dock_id = ?)
-      LIMIT 1
-    `).get(hostID, threadID, threadID);
-    const syncScopes = this.syncScopes().filter((scope) => scope.hostID === hostID);
-    if (!row) {
-      return {
-        hostID,
-        threadID,
-        found: false,
-        visibleInDock: false,
-        reason: "No relay state row exists for this host/thread.",
-        syncScopes,
-      };
-    }
-    const humanAppFacing = row.lane === "human" && row.source_kind === "human";
-    const visibleInDock = humanAppFacing && row.active_scope_present === 1 && row.archive_state !== "archived";
-    const reasons = [];
-    if (visibleInDock) {
-      reasons.push("lane/source_kind are human and active_scope_present is true and archive_state is not archived");
-    } else {
-      if (!humanAppFacing) {
-        reasons.push("lane/source_kind are not app-facing human");
-      }
-      if (row.active_scope_present !== 1) {
-        reasons.push("active_scope_present is false");
-      }
-      if (row.archive_state === "archived") {
-        reasons.push("archive_state is archived");
-      }
-    }
-    return {
-      hostID: row.host_id,
-      threadID: row.thread_id,
-      dockID: row.dock_id,
-      found: true,
-      visibleInDock,
-      reasons,
-      archiveState: row.archive_state,
-      activeScopePresent: row.active_scope_present === 1,
-      archivedScopePresent: row.archived_scope_present === 1,
-      orderKey: row.order_key,
-      status: row.status,
-      lane: row.lane,
-      sourceKind: row.source_kind || "unknown",
-      relationship: row.relationship || "root",
-      forkedFromID: row.forked_from_id || null,
-      activityAtMs: row.activity_at_ms,
-      freshnessStatus: row.freshness_status,
-      lastSeenAt: row.last_seen_at,
-      rowUpdatedAt: row.updated_at,
-      liveLease: row.lease_status ? {
-        endpointLabel: row.endpoint_label,
-        endpointUrl: row.endpoint_url,
-        backendSessionID: row.lease_backend_session_id,
-        status: row.lease_status,
-        waitingState: row.waiting_state,
-        validationAtMs: row.validation_at_ms,
-        expiresAtMs: row.expires_at_ms,
-        expired: Number(row.expires_at_ms || 0) < nowMs(),
-      } : null,
-      syncScopes,
-    };
-  }
-
   applyDockReconciliation({ host, cards, scopes = [], complete = true, error = null, previousCards = null }) {
     const atMs = nowMs();
     const at = new Date(atMs).toISOString();
@@ -547,25 +475,6 @@ class RelayStateStore {
         WHERE host_id = ?
       `).all(host.id);
       const existingByThreadID = new Map(existingRows.map((row) => [row.thread_id, row]));
-      const leaseRows = this.db.prepare(`
-        SELECT thread_id, backend_session_id AS lease_backend_session_id,
-               status AS lease_status, expires_at_ms, expired_published_at
-        FROM live_leases
-        WHERE host_id = ?
-      `).all(host.id);
-      const leasesByThreadID = new Map(leaseRows.map((row) => [row.thread_id, row]));
-      const currentMs = nowMs();
-      const projectCardForClient = (card) => {
-        const lease = leasesByThreadID.get(card.threadID);
-        if (!lease) {
-          return card;
-        }
-        return applyLeaseToCard(card, {
-          backend_session_id: lease.lease_backend_session_id,
-          status: lease.lease_status,
-          expires_at_ms: lease.expires_at_ms,
-        }, currentMs);
-      };
       const nextByID = new Map();
       const upsertCards = [];
       const deleteCardIDs = [];
@@ -577,25 +486,19 @@ class RelayStateStore {
         }
         const cardWithOrder = {
           ...card,
-          orderKey: card.orderKey || dockOrderKey(index, card.threadID),
+          orderKey: card.orderKey || activityOrderKey(card.activityAtMs || Date.now(), card.threadID),
           archiveState: "active",
         };
         nextByID.set(cardWithOrder.id, cardWithOrder);
         const previous = previousByID.get(cardWithOrder.id);
-        const clientCard = projectCardForClient(cardWithOrder);
-        const lease = leasesByThreadID.get(cardWithOrder.threadID);
-        const expiredLeaseNeedsPublish = isLeaseExpired(lease, currentMs) && !lease.expired_published_at;
-        if (expiredLeaseNeedsPublish || sortedJSONString(previous) !== sortedJSONString(clientCard)) {
-          upsertCards.push(clientCard);
+        if (sortedJSONString(previous) !== sortedJSONString(cardWithOrder)) {
+          upsertCards.push(cardWithOrder);
         }
         this.upsertThreadCard(host.id, cardWithOrder, {
           archiveState: "active",
           activeScopePresent: true,
           at,
         });
-        if (expiredLeaseNeedsPublish) {
-          this.markLiveLeaseExpiryPublished(host.id, cardWithOrder.threadID, at);
-        }
       });
 
       if (complete) {
@@ -706,16 +609,20 @@ class RelayStateStore {
     archivedScopePresent = false,
     at = nowISOString(),
   } = {}) {
+    // Stored threads are the only card source emitted to Swift. Activity proof
+    // is stored beside the card row, and live lease status must be folded before
+    // this write rather than overlaid afterward.
     this.db.prepare(`
       INSERT INTO threads (
         host_id, thread_id, dock_id, logical_host_id, backend_session_id,
         host_display_name, host_endpoint, order_key, activity_at, activity_at_ms,
         display_summary, title, status, lane, repository, working_directory,
         branch, updated_at_ms, source_kind, relationship, forked_from_id, archive_state, completeness,
-        summary_source, active_scope_present, archived_scope_present,
+        summary_source, activity_proof_status, activity_proof_source, activity_proof_checked_at,
+        active_scope_present, archived_scope_present,
         freshness_status, last_seen_at, updated_at, raw_json
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(host_id, thread_id) DO UPDATE SET
         dock_id = excluded.dock_id,
         logical_host_id = excluded.logical_host_id,
@@ -739,6 +646,9 @@ class RelayStateStore {
         archive_state = excluded.archive_state,
         completeness = excluded.completeness,
         summary_source = excluded.summary_source,
+        activity_proof_status = excluded.activity_proof_status,
+        activity_proof_source = excluded.activity_proof_source,
+        activity_proof_checked_at = excluded.activity_proof_checked_at,
         active_scope_present = excluded.active_scope_present,
         archived_scope_present = excluded.archived_scope_present,
         freshness_status = excluded.freshness_status,
@@ -770,6 +680,9 @@ class RelayStateStore {
       archiveState,
       nullable(card.completeness || "complete"),
       nullable(card.summarySource),
+      nullable(card.activityProofStatus || (card.completeness === "complete" && card.freshness === "fresh" ? "proven" : "unproven")),
+      nullable(card.activityProofSource || null),
+      nullable(card.activityProofCheckedAt || null),
       boolInt(activeScopePresent),
       boolInt(archivedScopePresent),
       card.freshness || "fresh",
@@ -803,83 +716,15 @@ class RelayStateStore {
     return deleteRejectedLiveLeases(this.db, hostID);
   }
 
-  applyArchiveMutation({ hostID, threadID, archived }) {
-    const at = nowISOString();
-    return this.transaction(() => {
-      const existing = this.db.prepare(`
-        SELECT activity_at_ms, logical_host_id, dock_id, lane, source_kind
-        FROM threads
-        WHERE host_id = ? AND thread_id = ?
-      `).get(hostID, threadID);
-      if (!existing) {
-        return null;
-      }
-      if (!isHumanAppFacingStoredRow(existing)) {
-        this.deleteRejectedThreadCards(hostID);
-        this.deleteRejectedLiveLeases(hostID);
-        return null;
-      }
-      const dockID = existing?.dock_id || dockCardID(existing?.logical_host_id || hostID, threadID);
-      const orderKey = archived
-        ? archiveOrderKey(existing?.activity_at_ms || Date.now(), threadID)
-        : dockOrderKey(0, threadID);
-      this.db.prepare(`
-        UPDATE threads
-        SET archive_state = ?, active_scope_present = ?, archived_scope_present = ?,
-            order_key = ?, freshness_status = 'stale', updated_at = ?
-        WHERE host_id = ? AND thread_id = ?
-      `).run(
-        archived ? "archived" : "active",
-        archived ? 0 : 1,
-        archived ? 1 : 0,
-        orderKey,
-        at,
-        hostID,
-        threadID,
-      );
-      const changedCard = this.cardForThread({ hostID, threadID });
-      const seq = this.recordChange({
-        view: DOCK_VIEW,
-        hostID,
-        threadID,
-        changeType: archived ? "archive" : "unarchive",
-        payload: {
-          upsertCardIDs: !archived && changedCard ? [dockID] : [],
-          deleteCardIDs: archived ? [dockID] : [],
-          stale: true,
-        },
-        at,
-      });
-      return {
-        seq,
-        dockUpsertCards: !archived && changedCard ? [changedCard] : [],
-        dockDeleteCardIDs: archived ? [dockID] : [],
-        archiveUpsertCards: archived && changedCard ? [changedCard] : [],
-        archiveDeleteCardIDs: archived ? [] : [dockID],
-      };
-    });
-  }
-
   cardForThread({ hostID, threadID }) {
     const row = this.db.prepare(`
-      SELECT t.*, l.endpoint_label, l.endpoint_url, l.backend_session_id AS lease_backend_session_id,
-             l.status AS lease_status, l.waiting_state, l.validation_at_ms, l.expires_at_ms
+      SELECT t.*
       FROM threads t
-      LEFT JOIN live_leases l
-        ON l.host_id = t.host_id AND l.thread_id = t.thread_id
       WHERE t.host_id = ? AND t.thread_id = ?
         AND ${HUMAN_APP_FACING_THREAD_SQL_FOR_ALIAS}
       LIMIT 1
     `).get(hostID, threadID);
-    const card = normalizeStoredCard(row);
-    if (!card || !row?.lease_status) {
-      return card;
-    }
-    return applyLeaseToCard(card, {
-      backend_session_id: row.lease_backend_session_id,
-      status: row.lease_status,
-      expires_at_ms: row.expires_at_ms,
-    }, nowMs());
+    return normalizeStoredCard(row);
   }
 
   upsertLiveLease(hostID, lease, at = nowISOString()) {

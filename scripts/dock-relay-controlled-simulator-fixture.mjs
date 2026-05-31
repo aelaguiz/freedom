@@ -1970,12 +1970,8 @@ async function runLiveLeaseExpiryScenario(options) {
       await sleep(liveRunningHoldMs);
     }
 
-    const explained = relayConfig.relayStateEngine.store.explainThread({ hostID, threadID });
-    const leaseExpiresAtMs = Number(explained?.liveLease?.expiresAtMs || 0);
     liveRowsEnabled = false;
-    const expireStartedAtMs = Number.isFinite(leaseExpiresAtMs) && leaseExpiresAtMs > 0
-      ? leaseExpiresAtMs
-      : Date.now();
+    const expireStartedAtMs = Date.now();
     const expiredWait = await waitForStreamCondition({
       streamProbe,
       timeoutMs: options.dockCollectionTimeoutMs,

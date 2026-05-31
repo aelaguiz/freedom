@@ -309,13 +309,12 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         )
     }
 
-    func testScriptedDockCardsUseTrueMessagesForPreviewOrderAndDetailFilter() throws {
+    func testScriptedDockCardsRenderTrueMessagesAndDetailFilter() throws {
         let host = "scripted-noise-\(UUID().uuidString.prefix(8)).local:4510"
         let endpoint = try DockRelayEndpoint.parse(host)
         let slug = endpoint.id.map { character in
             character.isLetter || character.isNumber ? String(character) : "-"
         }.joined()
-        let newer = AutomationID.Dock.row(hostID: endpoint.id, threadID: "\(slug)-newer-message")
         let noisy = AutomationID.Dock.row(hostID: endpoint.id, threadID: "\(slug)-noise")
         let app = launchRelayBackedApp(
             hosts: host,
@@ -327,10 +326,6 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         XCTAssertTrue(
             root.waitForStringValue(containing: "rows=2", timeout: 10),
             "Scripted message-noise stream did not publish rows. Root value: \(root.stringValue)"
-        )
-        XCTAssertTrue(
-            app.waitForRowOrder([newer, noisy], timeout: 10),
-            "A row with newer non-message activity moved above a row with a newer true message.\n\nAccessibility tree:\n\(app.debugDescription)"
         )
         XCTAssertTrue(app.staticTexts["Stable true message before tool noise."].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["TOOL OUTPUT SHOULD NOT DISPLAY"].exists)

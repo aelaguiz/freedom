@@ -62,9 +62,7 @@ actor ArchiveDataEngine {
                 hostStates.append(
                     DockHostStateViewModel(
                         host: host,
-                        status: collection.cards.isEmpty
-                            ? .empty
-                            : .loaded(rowCount: collection.cards.count)
+                        status: collection.hostLoadStatus
                     )
                 )
             case .failure(let failure):
@@ -98,7 +96,7 @@ actor ArchiveDataEngine {
                 let status: DockHostLoadStatus
                 switch outcome.result {
                 case .success(let collection):
-                    status = collection.cards.isEmpty ? .empty : .loaded(rowCount: collection.cards.count)
+                    status = collection.hostLoadStatus
                 case .failure(let failure):
                     switch failure {
                     case .offline(let message):

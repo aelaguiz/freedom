@@ -89,7 +89,7 @@ public struct SystemHealthProjector: Sendable {
     private func routeNames(for category: SystemHealthCategory) -> Set<String> {
         switch category {
         case .dockFeed:
-            return [AppServerMethods.threadList, AppServerMethods.dockSubscribe, AppServerMethods.dockUpdate, AppServerMethods.dockResync]
+            return [AppServerMethods.dockSubscribe, AppServerMethods.dockUpdate, AppServerMethods.dockResync]
         case .threadDetail:
             return [AppServerMethods.threadRead, AppServerMethods.threadTurnsList, AppServerMethods.threadResume]
         case .archive:

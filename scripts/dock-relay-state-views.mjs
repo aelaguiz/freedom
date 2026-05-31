@@ -42,6 +42,13 @@ function optionalNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function timestampNumberToMs(number) {
+  if (!Number.isFinite(number) || number <= 0) {
+    return 0;
+  }
+  return number > 10_000_000_000 ? Math.trunc(number) : Math.trunc(number * 1000);
+}
+
 function publicHostFromConfig(config) {
   const logicalHostID = config.hostId || os.hostname();
   return {
@@ -164,11 +171,20 @@ function rowTimestamp(thread) {
 }
 
 function timestampToMs(value) {
-  const number = optionalNumber(value);
-  if (number === null) {
-    return 0;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return 0;
+    }
+    const number = optionalNumber(trimmed);
+    if (number !== null) {
+      return timestampNumberToMs(number);
+    }
+    const parsed = Date.parse(trimmed);
+    return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0;
   }
-  return number > 10_000_000_000 ? Math.trunc(number) : Math.trunc(number * 1000);
+  const number = optionalNumber(value);
+  return number === null ? 0 : timestampNumberToMs(number);
 }
 
 function timestampToISO(value) {
@@ -179,14 +195,13 @@ function timestampToISO(value) {
   return new Date(ms).toISOString();
 }
 
-function dockOrderKey(index, threadID) {
-  const prefix = String(Math.max(0, Number(index || 0))).padStart(12, "0");
-  return `${prefix}:${threadID}`;
+function activityOrderKey(activityAtMs, threadID) {
+  const inverted = Number.MAX_SAFE_INTEGER - Math.max(0, Number(activityAtMs || 0));
+  return `${String(Math.max(0, inverted)).padStart(16, "0")}:${threadID}`;
 }
 
 function archiveOrderKey(activityAtMs, threadID) {
-  const inverted = Number.MAX_SAFE_INTEGER - Math.max(0, Number(activityAtMs || 0));
-  return `${String(Math.max(0, inverted)).padStart(16, "0")}:${threadID}`;
+  return activityOrderKey(activityAtMs, threadID);
 }
 
 function displaySummaryForThread(thread) {
@@ -306,6 +321,9 @@ function orderedDockRows(primaryRows, interactiveRows, liveRows = []) {
   for (const row of interactiveRows) {
     addRow(row, "human");
   }
+  for (const row of liveRows) {
+    addRow(row, "human");
+  }
   return orderedThreadIDs.map((threadID) => byThreadID.get(threadID)).filter(Boolean);
 }
 
@@ -315,13 +333,12 @@ function normalizeThread(thread, host, lane = "human", options = {}) {
     return null;
   }
   const sessionID = nonEmpty(thread?.sessionId) || threadID;
-  const activityAtMs = timestampToMs(thread?.activityAt ?? rowTimestamp(thread));
+  const activityAtMs = timestampToMs(thread?.activityAtMs ?? thread?.activityAt ?? rowTimestamp(thread));
   const sourceKind = sourceKindFromThread(thread, lane);
   const forkedFromID = forkParentIDForThread(thread);
-  const orderKey = options.orderKey
-    || (options.archiveState === "archived"
-      ? archiveOrderKey(activityAtMs, threadID)
-      : dockOrderKey(options.dockOrder || 0, threadID));
+  const orderKey = options.orderKey || activityOrderKey(activityAtMs, threadID);
+  // Canonical card facts must already be folded before this point; this
+  // function formats relay-owned facts and never rebuilds order from list index.
   return {
     id: dockCardID(host.logicalHostID || host.id, threadID),
     logicalHostID: host.logicalHostID || host.id,
@@ -340,8 +357,8 @@ function normalizeThread(thread, host, lane = "human", options = {}) {
     relationship: options.relationship || relationshipForThread(thread),
     forkedFromID,
     archiveState: options.archiveState || "active",
-    freshness: options.freshness || "fresh",
-    completeness: options.completeness || "complete",
+    freshness: options.freshness || thread?.freshness || "fresh",
+    completeness: options.completeness || thread?.completeness || "complete",
     repository: boundedText(repositoryForThread(thread), RELAY_STATE_TITLE_MAX_CHARS),
     workingDirectory: firstBoundedText([thread?.cwd, thread?.path]),
     branch: boundedText(thread?.gitInfo?.branch, RELAY_STATE_TITLE_MAX_CHARS),
@@ -361,7 +378,7 @@ function normalizeStoredCard(row) {
     backendSessionID: row.backend_session_id,
     hostDisplayName: row.host_display_name || row.host_id,
     hostEndpoint: row.host_endpoint || null,
-    orderKey: row.order_key || dockOrderKey(0, row.thread_id),
+    orderKey: row.order_key || activityOrderKey(activityAtMs, row.thread_id),
     activityAt: row.activity_at || timestampToISO(activityAtMs),
     activityAtMs,
     displaySummary: row.display_summary || row.summary || row.title || "No summary",
@@ -373,28 +390,11 @@ function normalizeStoredCard(row) {
     forkedFromID: row.forked_from_id || null,
     archiveState: row.archive_state || "unknown",
     freshness: row.freshness_status || "unknown",
-    completeness: row.completeness || "complete",
+    completeness: row.completeness || "unknown",
     repository: row.repository,
     workingDirectory: row.working_directory,
     branch: row.branch,
     summarySource: row.summary_source || null,
-  };
-}
-
-function applyLeaseToCard(card, lease, nowMs = Date.now()) {
-  if (!card || !lease) {
-    return card;
-  }
-  if (lease.expires_at_ms && Number(lease.expires_at_ms) < nowMs) {
-    return card.status === "dormant"
-      ? { ...card, status: "unknown" }
-      : card;
-  }
-  const status = lease.status || "unknown";
-  return {
-    ...card,
-    backendSessionID: lease.backend_session_id || card.backendSessionID,
-    status: status === "waiting" ? "needsInput" : status,
   };
 }
 
@@ -421,11 +421,10 @@ function estimateJSONBytes(value) {
 export {
   ARCHIVE_VIEW,
   DOCK_VIEW,
-  applyLeaseToCard,
+  activityOrderKey,
   archiveOrderKey,
   buildWindow,
   dockCardID,
-  dockOrderKey,
   estimateJSONBytes,
   normalizedStatus,
   normalizeStoredCard,

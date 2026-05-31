@@ -41,16 +41,12 @@ struct ArchiveThreadCardProjector {
     }
 
     private func sectionPrecedes(_ lhs: DockSectionViewModel, _ rhs: DockSectionViewModel) -> Bool {
+        // Archive ordering follows relay orderKey only. If a row somehow lacks
+        // orderKey, keep ordering stable rather than rebuilding recency locally.
         if let lhsOrderKey = sectionOrderKey(lhs),
            let rhsOrderKey = sectionOrderKey(rhs),
            lhsOrderKey != rhsOrderKey {
             return lhsOrderKey < rhsOrderKey
-        }
-
-        let lhsDate = lhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
-        let rhsDate = rhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
-        if lhsDate != rhsDate {
-            return lhsDate > rhsDate
         }
 
         return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
@@ -61,14 +57,12 @@ struct ArchiveThreadCardProjector {
     }
 
     private func rowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
+        // The relay owns card recency. Archive may group and render rows, but
+        // must not fall back to timestamp sorting if orderKey is absent.
         if let lhsOrderKey = lhs.orderKey,
            let rhsOrderKey = rhs.orderKey,
            lhsOrderKey != rhsOrderKey {
             return lhsOrderKey < rhsOrderKey
-        }
-
-        if lhs.lastActivityDate != rhs.lastActivityDate {
-            return lhs.lastActivityDate > rhs.lastActivityDate
         }
 
         return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending

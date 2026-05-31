@@ -1,0 +1,57 @@
+{
+  "kind": "snapshot",
+  "schemaVersion": 2,
+  "view": "dock",
+  "complete": false,
+  "totalRows": 1,
+  "window": {
+    "offset": 0,
+    "limit": 1,
+    "rowCount": 1,
+    "nextOffset": null
+  },
+  "stateGeneration": 9,
+  "epoch": "fixture-epoch",
+  "baseSeq": null,
+  "seq": 9,
+  "asOf": "2026-05-30T00:01:00.000Z",
+  "freshness": {
+    "status": "stale",
+    "lastAttemptAt": "2026-05-30T00:01:00.000Z",
+    "lastSyncAt": null,
+    "lastError": "activity proof unavailable"
+  },
+  "hosts": [
+    {
+      "id": "Amir-M5",
+      "logicalHostID": "Amir-M5",
+      "displayName": "Amir-M5",
+      "endpoint": "amir-m5.fairy-salmon.ts.net:4510"
+    }
+  ],
+  "cards": [
+    {
+      "id": "Amir-M5::thread-unproven",
+      "logicalHostID": "Amir-M5",
+      "threadID": "thread-unproven",
+      "backendSessionID": "session-unproven",
+      "hostDisplayName": "Amir-M5",
+      "hostEndpoint": "amir-m5.fairy-salmon.ts.net:4510",
+      "orderKey": "9223370256755515807:thread-unproven",
+      "activityAt": "2026-05-30T00:01:00.000Z",
+      "activityAtMs": 1780099260000,
+      "displaySummary": "Retained only as stale because canonical activity could not be proven.",
+      "title": "Unproven activity fixture",
+      "status": "unknown",
+      "sourceKind": "human",
+      "lane": "human",
+      "archiveState": "active",
+      "freshness": "stale",
+      "completeness": "partial",
+      "repository": "codex-client",
+      "workingDirectory": "/Users/aelaguiz/workspace/codex-client",
+      "branch": "codex-dock-agents-tab-live-counts",
+      "summarySource": "activity_proof_unavailable"
+    }
+  ]
+}

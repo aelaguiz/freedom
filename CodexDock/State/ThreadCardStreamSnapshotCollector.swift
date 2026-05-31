@@ -3,6 +3,32 @@ import Foundation
 struct ThreadCardSnapshotCollection: Equatable, Sendable {
     let hosts: [DockStreamHostDTO]
     let cards: [DockThreadCardDTO]
+    let freshness: DockStreamFreshnessDTO?
+    let isComplete: Bool
+
+    var hostLoadStatus: DockHostLoadStatus {
+        let hasUnprovenCard = cards.contains { card in
+            card.freshness != .fresh || card.completeness != .complete
+        }
+        if !isComplete {
+            return .partial(rowCount: cards.count, message: "Stream incomplete")
+        }
+        if hasUnprovenCard {
+            return .partial(rowCount: cards.count, message: "Card truth incomplete")
+        }
+        switch freshness?.status {
+        case .fresh:
+            return cards.isEmpty ? .empty : .loaded(rowCount: cards.count)
+        case .stale:
+            return .partial(rowCount: cards.count, message: freshness?.lastError ?? "Stale card data")
+        case .offline:
+            return .partial(rowCount: cards.count, message: freshness?.lastError ?? "Offline card data")
+        case .error:
+            return .partial(rowCount: cards.count, message: freshness?.lastError ?? "Card stream error")
+        case .unknown, nil:
+            return .partial(rowCount: cards.count, message: "Unknown card freshness")
+        }
+    }
 }
 
 struct ThreadCardStreamSnapshotCollector: Sendable {
@@ -49,8 +75,13 @@ private func collectWithoutTimeout(
         hostsByID: &hostsByID,
         cardsByID: &cardsByID
     )
-    if isComplete(snapshot) {
-        return ThreadCardSnapshotCollection(hosts: sortedHosts(hostsByID), cards: sortedCards(cardsByID))
+    if let completion = completionState(snapshot) {
+        return collection(
+            hostsByID: hostsByID,
+            cardsByID: cardsByID,
+            freshness: snapshot.freshness,
+            completion: completion
+        )
     }
 
     for try await update in connection.updates() {
@@ -60,8 +91,13 @@ private func collectWithoutTimeout(
             hostsByID: &hostsByID,
             cardsByID: &cardsByID
         )
-        if isComplete(update) {
-            return ThreadCardSnapshotCollection(hosts: sortedHosts(hostsByID), cards: sortedCards(cardsByID))
+        if let completion = completionState(update) {
+            return collection(
+                hostsByID: hostsByID,
+                cardsByID: cardsByID,
+                freshness: update.freshness,
+                completion: completion
+            )
         }
     }
 
@@ -106,16 +142,34 @@ private func sortedHosts(_ hostsByID: [String: DockStreamHostDTO]) -> [DockStrea
     }
 }
 
-private func isComplete(_ update: ThreadCardStreamUpdateDTO) -> Bool {
+private enum StreamCompletionState {
+    case complete
+    case terminalIncomplete
+}
+
+private func completionState(_ update: ThreadCardStreamUpdateDTO) -> StreamCompletionState? {
     if update.complete == true {
-        return true
+        return .complete
     }
     guard update.window?.nextOffset == nil,
           update.totalRows != nil else {
-        return false
+        return nil
     }
-    // Bad relay payloads may count rejected non-human rows in totalRows. A final window still completes after filtering.
-    return true
+    return .terminalIncomplete
+}
+
+private func collection(
+    hostsByID: [String: DockStreamHostDTO],
+    cardsByID: [String: DockThreadCardDTO],
+    freshness: DockStreamFreshnessDTO?,
+    completion: StreamCompletionState
+) -> ThreadCardSnapshotCollection {
+    ThreadCardSnapshotCollection(
+        hosts: sortedHosts(hostsByID),
+        cards: sortedCards(cardsByID),
+        freshness: freshness,
+        isComplete: completion == .complete
+    )
 }
 
 private func sortedCards(_ cardsByID: [String: DockThreadCardDTO]) -> [DockThreadCardDTO] {

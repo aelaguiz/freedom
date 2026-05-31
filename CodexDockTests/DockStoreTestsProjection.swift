@@ -14,6 +14,38 @@ final class DockStoreTestsProjection: XCTestCase {
         XCTAssertEqual(projection.groups, [])
     }
 
+    func testNewestProjectionOrdersCrossHostRowsByRelayOrderKey() {
+        let amir = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
+        let home = makeProjectionHost(host: "home.fairy-salmon.ts.net")
+        let snapshot = makeSnapshot(
+            rows: [
+                makeRow(
+                    host: home,
+                    threadID: "home-old",
+                    title: "Home old",
+                    branch: "main",
+                    status: .running,
+                    lastActivity: 100,
+                    orderKey: "000000000000:home-old"
+                ),
+                makeRow(
+                    host: amir,
+                    threadID: "amir-new",
+                    title: "Amir new",
+                    branch: "main",
+                    status: .running,
+                    lastActivity: 300,
+                    orderKey: "000000000001:amir-new"
+                )
+            ],
+            hosts: [amir, home]
+        )
+
+        let projection = snapshot.project(options: .init(lens: .newest))
+
+        XCTAssertEqual(projection.rows.map(\.id.threadID), ["home-old", "amir-new"])
+    }
+
     func testHostLensGroupsByHostAndPreservesNewestOrdering() {
         let amir = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
         let home = makeProjectionHost(host: "home.fairy-salmon.ts.net")
@@ -309,7 +341,7 @@ final class DockStoreTestsProjection: XCTestCase {
         )
     }
 
-    func testThreadCardTableAddsCachedPinnedRowsWhenLiveCardIsAbsent() {
+    func testThreadCardTableDoesNotAddPinnedRowsWhenRelayCardIsAbsent() {
         let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
         let key = LocalThreadMetadataKey(
             hostID: host.id,
@@ -325,32 +357,13 @@ final class DockStoreTestsProjection: XCTestCase {
                 key: LocalThreadMetadata(
                     rail: .green,
                     isPinned: true,
-                    pinnedAt: Date(timeIntervalSince1970: 250),
-                    lastKnownPinnedDisplay: LocalPinnedDisplaySnapshot(
-                        title: "Cached pinned",
-                        hostDisplayName: "Old Host",
-                        hostEndpoint: "old-host:4510",
-                        repository: "cached-repo",
-                        branch: "feature/cache",
-                        status: .running,
-                        lastActivity: "5m ago",
-                        lastActivityDate: Date(timeIntervalSince1970: 200),
-                        summary: "Cached summary",
-                        rail: .orange,
-                        label: "Watch",
-                        originKind: .human
-                    )
+                    pinnedAt: Date(timeIntervalSince1970: 250)
                 )
             ],
             now: { Date(timeIntervalSince1970: 300) }
         )
 
-        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["cached-thread"])
-        XCTAssertEqual(snapshot.rows[0].title, "Cached pinned")
-        XCTAssertEqual(snapshot.rows[0].hostDisplayName, host.displayName)
-        XCTAssertEqual(snapshot.rows[0].repository, "cached-repo")
-        XCTAssertEqual(snapshot.rows[0].rail, .green)
-        XCTAssertTrue(snapshot.rows[0].isPinned)
+        XCTAssertEqual(snapshot.rows, [])
     }
 
     func testThreadCardTableProjectsLogicalHostRowsToConfiguredEndpointHost() {
@@ -516,13 +529,19 @@ private func makeRow(
     branch: String,
     status: DockRowStatusKind,
     lastActivity: TimeInterval,
+    orderKey: String? = nil,
     label: String? = nil,
     origin: SessionOrigin = .humanInteractive(subtype: .cli),
     isPinned: Bool = false,
     pinnedAt: TimeInterval? = nil,
     pinnedOrder: Int? = nil
 ) -> DockRowViewModel {
-    DockRowViewModel(
+    let resolvedOrderKey = orderKey ?? String(
+        format: "%019lld:%@",
+        Int64.max - Int64(lastActivity * 1_000),
+        threadID
+    )
+    return DockRowViewModel(
         id: HostScopedThreadID(hostID: host.id, threadID: threadID),
         backendSessionID: "\(threadID)-session",
         title: title,
@@ -533,6 +552,7 @@ private func makeRow(
         status: status,
         lastActivity: "now",
         lastActivityDate: Date(timeIntervalSince1970: lastActivity),
+        orderKey: resolvedOrderKey,
         summary: "Summary for \(title)",
         rail: .blue,
         label: label,

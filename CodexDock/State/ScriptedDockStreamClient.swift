@@ -1,6 +1,8 @@
 #if DEBUG
 import Foundation
 
+// Render-only UI fixture. It can exercise controls and layout, but it is not
+// data-contract proof for freshness, completeness, or card ordering.
 enum ScriptedDockStreamScenario: String, Sendable {
     case retention
     case messageNoise
@@ -168,8 +170,8 @@ actor ScriptedThreadCardStreamConnection: ThreadCardStreamConnection {
             freshness: freshnessDTO(status: freshness, seq: seq, message: message),
             hosts: [
                 DockStreamHostDTO(
-                    id: host.displayName,
-                    logicalHostID: host.displayName,
+                    id: host.id,
+                    logicalHostID: host.id,
                     displayName: host.displayName,
                     endpoint: host.endpoint.displayEndpoint
                 )
@@ -298,7 +300,7 @@ actor ScriptedThreadCardStreamConnection: ThreadCardStreamConnection {
             status: .dormant,
             updatedAt: 1_779_990_000,
             summary: "Dormant rows must not render a default row badge.",
-            source: .automation
+            source: .human
         )
     }
 
@@ -309,7 +311,7 @@ actor ScriptedThreadCardStreamConnection: ThreadCardStreamConnection {
             status: .needsInput,
             updatedAt: 1_779_990_400,
             summary: "Resync row added after a forced sequence gap.",
-            source: .automation
+            source: .human
         )
     }
 
@@ -348,7 +350,7 @@ actor ScriptedThreadCardStreamConnection: ThreadCardStreamConnection {
                 status: .needsApproval,
                 updatedAt: 1_779_990_300,
                 summary: "Charlie visible true message.",
-                source: .automation
+                source: .human
             ),
             card(
                 key: "delta",
@@ -356,7 +358,7 @@ actor ScriptedThreadCardStreamConnection: ThreadCardStreamConnection {
                 status: .running,
                 updatedAt: 1_779_990_400,
                 summary: "Delta hidden true message.",
-                source: .automation
+                source: .human
             )
         ]
     }
@@ -377,7 +379,7 @@ actor ScriptedThreadCardStreamConnection: ThreadCardStreamConnection {
                 status: .running,
                 updatedAt: 1_779_990_900,
                 summary: "TOOL OUTPUT SHOULD NOT DISPLAY",
-                source: .automation,
+                source: .human,
                 displaySummary: "Stable true message before tool noise.",
                 activityAt: 1_779_990_200
             )
@@ -396,9 +398,12 @@ actor ScriptedThreadCardStreamConnection: ThreadCardStreamConnection {
     ) -> DockThreadCardDTO {
         let threadID = "\(slug)-\(key)"
         let activitySeconds = activityAt ?? updatedAt
+        // Scripted Dock stream rows are render fixtures for the app-facing Dock
+        // card contract. Rows expected to be visible must obey the same
+        // human-lane policy as production relay card streams.
         return DockThreadCardDTO(
-            id: "\(host.displayName)::\(threadID)",
-            logicalHostID: host.displayName,
+            id: "\(host.id)::\(threadID)",
+            logicalHostID: host.id,
             threadID: threadID,
             backendSessionID: "scripted-\(threadID)",
             hostDisplayName: host.displayName,

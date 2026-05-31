@@ -1,0 +1,61 @@
+2026-05-31T18:54:14.629671Z  WARN codex_features: unknown feature key in config: hook
+2026-05-31T18:54:14.629747Z  WARN codex_features: unknown feature key in config: rmcp_client
+2026-05-31T18:54:15.376885Z  WARN codex_core_skills::loader: ignoring interface.default_prompt: exceeds maximum length of 1024 characters
+2026-05-31T18:54:15.412285Z  WARN codex_core_skills::loader: ignoring interface.default_prompt: exceeds maximum length of 1024 characters
+2026-05-31T18:54:15.431417Z  WARN codex_core_skills::loader: ignoring interface.default_prompt: exceeds maximum length of 1024 characters
+2026-05-31T18:54:15.452692Z  WARN codex_core_skills::loader: ignoring /Users/aelaguiz/.agents/skills/catalog-ops/agents/openai.yaml: invalid openai.yaml: dependencies.tools[0]: invalid type: string "exec_command", expected struct DependencyTool at line 11 column 7
+2026-05-31T18:54:15.463710Z  WARN codex_core_skills::loader: ignoring /Users/aelaguiz/.agents/skills/concepts-ops/agents/openai.yaml: invalid openai.yaml: dependencies.tools[0]: invalid type: string "exec_command", expected struct DependencyTool at line 11 column 7
+2026-05-31T18:54:15.583390Z  WARN codex_core_skills::loader: ignoring interface.default_prompt: exceeds maximum length of 1024 characters
+2026-05-31T18:54:15.620691Z  WARN codex_core_skills::loader: ignoring interface.default_prompt: exceeds maximum length of 1024 characters
+2026-05-31T18:54:15.774052Z  WARN codex_core_skills::loader: ignoring /Users/aelaguiz/.agents/skills/lessons-ops/agents/openai.yaml: invalid openai.yaml: dependencies.tools[0]: invalid type: string "exec_command", expected struct DependencyTool at line 11 column 7
+2026-05-31T18:54:15.784104Z  WARN codex_core_skills::loader: ignoring /Users/aelaguiz/.agents/skills/agent-linter/agents/openai.yaml: invalid openai.yaml: dependencies.tools[0]: invalid type: string "exec_command", expected struct DependencyTool at line 11 column 7
+2026-05-31T18:54:15.815373Z  WARN codex_core_skills::loader: ignoring interface.default_prompt: exceeds maximum length of 1024 characters
+2026-05-31T18:54:15.830612Z  WARN codex_core_skills::loader: ignoring /Users/aelaguiz/.agents/skills/glossary-ops/agents/openai.yaml: invalid openai.yaml: dependencies.tools[0]: invalid type: string "exec_command", expected struct DependencyTool at line 11 column 7
+2026-05-31T18:54:20.162528Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.162554Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.162943Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.162950Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.163339Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.163348Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.163714Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.163721Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.164087Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.164094Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.164956Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.164970Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.800463Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.800515Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.800880Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.800896Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.801361Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.801373Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.801723Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.801731Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.802071Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.802078Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.802799Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:20.802808Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:31.726607Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:31.726669Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:31.727044Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:31.727053Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:31.727402Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:31.727411Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:31.727762Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:31.727768Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:31.728084Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:31.728092Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:31.728782Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:31.728792Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:40.548102Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:40.548138Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:40.548596Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:40.548607Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:40.548956Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:40.548981Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:40.549324Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:40.549331Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:40.549672Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:40.549679Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:40.550448Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-05-31T18:54:40.550459Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/

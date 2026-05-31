@@ -28,7 +28,8 @@
       ]
     },
     "complete": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "True only when the emitted ordering window is fully proven by the relay card projection. If any emitted card has unproven canonical activity, the stream must be incomplete."
     },
     "totalRows": {
       "type": "integer",
@@ -60,7 +61,8 @@
       "type": "string"
     },
     "freshness": {
-      "$ref": "#/$defs/freshness"
+      "$ref": "#/$defs/freshness",
+      "description": "Relay-owned freshness for the stream. Transport reachability alone must not mark card data fresh."
     },
     "hosts": {
       "type": "array",
@@ -230,6 +232,7 @@
         "hostDisplayName",
         "orderKey",
         "activityAt",
+        "activityAtMs",
         "displaySummary",
         "title",
         "status",
@@ -268,17 +271,17 @@
         },
         "orderKey": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Relay-owned stable ordering key derived from canonical card activity. Clients may use it only as a tie-breaker after activity time."
         },
         "activityAt": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Relay-owned canonical card activity timestamp."
         },
         "activityAtMs": {
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer",
+          "description": "Relay-owned canonical card activity time in milliseconds. It must fold thread metadata, newest turns, and live activity when available."
         },
         "displaySummary": {
           "type": "string",
@@ -341,14 +344,16 @@
             "stale",
             "offline",
             "error"
-          ]
+          ],
+          "description": "Relay-owned card freshness. A card with unproven canonical activity must not be emitted as fresh."
         },
         "completeness": {
           "enum": [
             "complete",
             "partial",
             "unknown"
-          ]
+          ],
+          "description": "Relay-owned proof state for card truth. complete means canonical activity was proven or bounded by the relay projection."
         },
         "repository": {
           "type": [

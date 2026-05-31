@@ -10,7 +10,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let olderThan90Days = now.addingTimeInterval(-91 * 86_400)
         let exactly90Days = now.addingTimeInterval(-90 * 86_400)
         let recent = now.addingTimeInterval(-10 * 86_400)
-        let loader = CleanupCardQueryRecordingLoader(results: [
+        let loader = CleanupCardStreamRecordingLoader(results: [
             host.id: .success(
                 ThreadCardFixtureResult(
                     fixtures: [
@@ -114,22 +114,20 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         )
 
         await store.loadPreview(rule: ArchiveCleanupRule(age: .days90))
-        let recordedQueries = await loader.recordedQueries(for: host.id)
+        let recordedViews = await loader.recordedViews(for: host.id)
 
-        XCTAssertTrue(recordedQueries.contains(.activeHuman))
-        XCTAssertTrue(recordedQueries.contains(.activeAgents))
+        XCTAssertEqual(recordedViews, [.dock])
         guard case .preview(let snapshot) = store.state else {
             return XCTFail("Expected cleanup preview, got \(store.state)")
         }
         XCTAssertEqual(Set(snapshot.candidates.map(\.id.threadID)), ["old-idle", "old-error"])
         XCTAssertEqual(store.selectedRowIDs.map(\.threadID).sorted(), ["old-error", "old-idle"])
         XCTAssertEqual(snapshot.hostSummaries.map(\.candidateCount), [2])
-        XCTAssertEqual(snapshot.hostSummaries.map(\.excludedCount), [8])
+        XCTAssertEqual(snapshot.hostSummaries.map(\.excludedCount), [7])
         XCTAssertEqual(
             exclusionReasonsByThreadID(snapshot),
             [
                 "exactly-cutoff": .tooRecent,
-                "old-agent": .nonHuman,
                 "old-needs-approval": .needsApproval,
                 "old-needs-input": .needsInput,
                 "old-pinned": .pinned,
@@ -214,7 +212,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let home = makeHost(url: "ws://100.66.11.7:4510")
         let registry = try HostRegistry(hosts: [amir, home])
         let now = Date(timeIntervalSince1970: 20_000_000)
-        let loader = CleanupCardQueryRecordingLoader(results: [
+        let loader = CleanupCardStreamRecordingLoader(results: [
             amir.id: .success(
                 ThreadCardFixtureResult(
                     fixtures: [
@@ -256,7 +254,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let amir = makeHost()
         let home = makeHost(url: "ws://100.66.11.7:4510")
         let registry = try HostRegistry(hosts: [amir, home])
-        let loader = CleanupCardQueryRecordingLoader(results: [
+        let loader = CleanupCardStreamRecordingLoader(results: [
             amir.id: .failure(.offline("relay stopped")),
             home.id: .failure(.error("bad token"))
         ])
@@ -283,7 +281,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
         let now = Date(timeIntervalSince1970: 20_000_000)
-        let loader = CleanupCardQueryRecordingLoader(results: [
+        let loader = CleanupCardStreamRecordingLoader(results: [
             host.id: .success(
                 ThreadCardFixtureResult(
                     fixtures: [
@@ -338,7 +336,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let host = makeHost(url: "ws://amir-m5.fairy-salmon.ts.net:4510")
         let registry = try HostRegistry(hosts: [host])
         let now = Date(timeIntervalSince1970: 20_000_000)
-        let loader = CleanupCardQueryRecordingLoader(results: [
+        let loader = CleanupCardStreamRecordingLoader(results: [
             host.id: .success(
                 ThreadCardFixtureResult(
                     fixtures: [
@@ -395,7 +393,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
         let now = Date(timeIntervalSince1970: 20_000_000)
-        let loader = CleanupCardQueryRecordingLoader(results: [
+        let loader = CleanupCardStreamRecordingLoader(results: [
             host.id: .success(
                 ThreadCardFixtureResult(
                     fixtures: [
@@ -444,7 +442,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
         let now = Date(timeIntervalSince1970: 20_000_000)
-        let loader = CleanupCardQueryRecordingLoader(results: [
+        let loader = CleanupCardStreamRecordingLoader(results: [
             host.id: .success(
                 ThreadCardFixtureResult(
                     fixtures: [
@@ -500,7 +498,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
         let now = Date(timeIntervalSince1970: 20_000_000)
-        let loader = CleanupCardQueryRecordingLoader(results: [
+        let loader = CleanupCardStreamRecordingLoader(results: [
             host.id: .success(
                 ThreadCardFixtureResult(
                     fixtures: [
@@ -580,40 +578,29 @@ final class ArchiveCleanupStoreTests: XCTestCase {
     }
 }
 
-private actor CleanupCardQueryRecordingLoader: ThreadCardFixtureLoading {
+private actor CleanupCardStreamRecordingLoader: ThreadCardFixtureLoading {
     private let results: [String: FakeMode]
-    private var queriesByHost: [String: [ThreadCardFixtureQuery]] = [:]
+    private var viewsByHost: [String: [ThreadCardStreamView]] = [:]
 
     init(results: [String: FakeMode]) {
         self.results = results
     }
 
-    func recordedQueries(for hostID: String) -> [ThreadCardFixtureQuery] {
-        queriesByHost[hostID] ?? []
+    func recordedViews(for hostID: String) -> [ThreadCardStreamView] {
+        viewsByHost[hostID] ?? []
     }
 
     func loadFixtures(
         for host: DockHostConfiguration,
-        query: ThreadCardFixtureQuery
+        view: ThreadCardStreamView
     ) async throws -> ThreadCardFixtureResult {
-        var queries = queriesByHost[host.id] ?? []
-        queries.append(query)
-        queriesByHost[host.id] = queries
-
-        guard query == .activeHuman || query == .activeHumanFullScan || query == .activeAgents else {
-            throw DockRequestFailure.error("Unexpected query \(query) for host \(host.id)")
-        }
+        var views = viewsByHost[host.id] ?? []
+        views.append(view)
+        viewsByHost[host.id] = views
 
         switch results[host.id] ?? .failure(.error("No result for host \(host.id)")) {
         case .success(let result):
-            if query == .activeAgents {
-                return ThreadCardFixtureResult(
-                    fixtures: result.fixtures.filter { $0.origin.kind == .agentOrAutomation }
-                )
-            }
-            return ThreadCardFixtureResult(
-                fixtures: result.fixtures.filter { $0.origin.kind != .agentOrAutomation }
-            )
+            return result
         case .failure(let failure):
             throw failure
         }

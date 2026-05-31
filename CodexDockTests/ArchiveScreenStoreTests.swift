@@ -92,7 +92,7 @@ final class ArchiveScreenStoreTests: XCTestCase {
         let unarchivedIDs = await archiver.unarchivedIDs()
         let archivedRequests = await loader.archivedRequests()
         XCTAssertEqual(Set(unarchivedIDs), ["restore-ok", "restore-fails"])
-        XCTAssertEqual(archivedRequests, [true, true])
+        XCTAssertEqual(archivedRequests, [.archive, .archive])
     }
 
     @MainActor
@@ -207,7 +207,7 @@ final class ArchiveScreenStoreTests: XCTestCase {
         let unarchivedIDs = await archiver.unarchivedIDs()
         let archivedRequests = await loader.archivedRequests()
         XCTAssertEqual(unarchivedIDs, ["restore-one"])
-        XCTAssertEqual(archivedRequests, [true, true])
+        XCTAssertEqual(archivedRequests, [.archive, .archive])
     }
 }
 

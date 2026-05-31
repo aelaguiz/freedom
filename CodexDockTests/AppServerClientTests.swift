@@ -162,16 +162,16 @@ final class AppServerClientTests: XCTestCase {
         try await completeHandshake(client: client, transport: transport)
         let context = AppServerRequestObservabilityContext(
             configuredHostID: "home.fairy-salmon.ts.net:4510",
-            route: AppServerMethods.threadList,
-            operationID: "op-client-thread-list",
-            traceID: "tr-client-thread-list",
+            route: AppServerMethods.dockSubscribe,
+            operationID: "op-client-dock-subscribe",
+            traceID: "tr-client-dock-subscribe",
             clientBuild: "test-build",
             store: store
         )
 
         let requestTask = Task {
             try await client.sendRequest(
-                method: AppServerMethods.threadList,
+                method: AppServerMethods.dockSubscribe,
                 params: .object(["limit": .integer(10)]),
                 timeout: .seconds(1),
                 observabilityContext: context
@@ -186,10 +186,10 @@ final class AppServerClientTests: XCTestCase {
             return XCTFail("Expected trace metadata")
         }
         XCTAssertEqual(params["limit"], .integer(10))
-        XCTAssertEqual(trace["operationID"], .string("op-client-thread-list"))
-        XCTAssertEqual(trace["traceID"], .string("tr-client-thread-list"))
+        XCTAssertEqual(trace["operationID"], .string("op-client-dock-subscribe"))
+        XCTAssertEqual(trace["traceID"], .string("tr-client-dock-subscribe"))
         XCTAssertEqual(trace["configuredHostID"], .string("home.fairy-salmon.ts.net:4510"))
-        XCTAssertEqual(trace["route"], .string(AppServerMethods.threadList))
+        XCTAssertEqual(trace["route"], .string(AppServerMethods.dockSubscribe))
 
         await transport.enqueue(.response(JSONRPCResponse(id: request.id, result: .object(["ok": .bool(true)]))))
         _ = try await requestTask.value
@@ -197,13 +197,13 @@ final class AppServerClientTests: XCTestCase {
         try await waitUntil {
             let snapshots = await store.snapshots()
             return snapshots.contains {
-                $0.route == AppServerMethods.threadList && $0.routeStatus == .healthy
+                $0.route == AppServerMethods.dockSubscribe && $0.routeStatus == .healthy
             }
         }
         let snapshots = await store.snapshots()
-        let snapshot = try XCTUnwrap(snapshots.first { $0.route == AppServerMethods.threadList })
+        let snapshot = try XCTUnwrap(snapshots.first { $0.route == AppServerMethods.dockSubscribe })
         XCTAssertEqual(snapshot.configuredHostID, "home.fairy-salmon.ts.net:4510")
-        XCTAssertEqual(snapshot.operationID, "op-client-thread-list")
+        XCTAssertEqual(snapshot.operationID, "op-client-dock-subscribe")
         XCTAssertTrue(snapshot.appCritical)
     }
 
@@ -407,6 +407,7 @@ final class AppServerClientTests: XCTestCase {
           "hostDisplayName": "Amir-M5",
           "orderKey": "000:thread-1",
           "activityAt": "2026-05-31T00:00:00.000Z",
+          "activityAtMs": 1780185600000,
           "displaySummary": "Summary",
           "title": "Title",
           "status": "dormant",
@@ -1055,154 +1056,6 @@ final class AppServerClientTests: XCTestCase {
             URLSessionWebSocketAppServerTransport.defaultMaximumMessageSize
         )
         XCTAssertEqual(customTransport.maximumMessageSize, 16 * 1024 * 1024)
-    }
-
-    func testThreadListSendsTypedRequestAndDecodesResponse() async throws {
-        let transport = ScriptedAppServerTransport()
-        let client = AppServerClient(transport: transport)
-        try await completeHandshake(client: client, transport: transport)
-
-        let task = Task {
-            try await client.threadList(
-                params: ThreadListParams(
-                    limit: 2,
-                    sortKey: .updatedAt,
-                    sortDirection: .desc
-                ),
-                timeout: .seconds(1)
-            )
-        }
-        let request = try await transport.nextSentRequest()
-        XCTAssertEqual(request.method, AppServerMethods.threadList)
-
-        guard case .object(let params) = try XCTUnwrap(request.params) else {
-            return XCTFail("Expected object params")
-        }
-        XCTAssertEqual(params["limit"], .integer(2))
-        XCTAssertEqual(params["sortKey"], .string("updated_at"))
-        XCTAssertEqual(params["sortDirection"], .string("desc"))
-
-        await transport.enqueue(
-            .response(
-                JSONRPCResponse(
-                    id: request.id,
-                    result: try JSONValue.encoded(
-                        ThreadListResponseDTO(
-                            data: [
-                                ThreadDTO(
-                                    id: "thread-1",
-                                    sessionId: "session-1",
-                                    preview: "Build the Dock",
-                                    createdAt: 1_790_000_000,
-                                    updatedAt: 1_790_000_010,
-                                    status: .idle,
-                                    cwd: "/Users/aelaguiz/workspace/codex-client",
-                                    source: .string("cli"),
-                                    gitInfo: ThreadGitInfoDTO(branch: "main"),
-                                    turns: []
-                                ),
-                            ],
-                            nextCursor: nil,
-                            backwardsCursor: "before-1",
-                            liveOverlay: ThreadListLiveOverlayDTO(
-                                ok: false,
-                                state: "disabled",
-                                ageMs: nil
-                            )
-                        )
-                    )
-                )
-            )
-        )
-
-        let response = try await task.value
-        XCTAssertEqual(response.data.map(\.id), ["thread-1"])
-        XCTAssertEqual(response.data.first?.status, .idle)
-        XCTAssertEqual(response.backwardsCursor, "before-1")
-        XCTAssertEqual(response.liveOverlay?.degradedMessage, "Live status disabled")
-    }
-
-    func testThreadListEncodesSourceKinds() async throws {
-        let transport = ScriptedAppServerTransport()
-        let client = AppServerClient(transport: transport)
-        try await completeHandshake(client: client, transport: transport)
-
-        let task = Task {
-            try await client.threadList(
-                params: ThreadListParams(
-                    sourceKinds: [
-                        .exec,
-                        .appServer,
-                        .subAgentReview,
-                        .unknown
-                    ],
-                    archived: false
-                ),
-                timeout: .seconds(1)
-            )
-        }
-        let request = try await transport.nextSentRequest()
-        XCTAssertEqual(request.method, AppServerMethods.threadList)
-
-        guard case .object(let params) = try XCTUnwrap(request.params) else {
-            return XCTFail("Expected object params")
-        }
-        XCTAssertEqual(
-            params["sourceKinds"],
-            .array([
-                .string("exec"),
-                .string("appServer"),
-                .string("subAgentReview"),
-                .string("unknown")
-            ])
-        )
-        XCTAssertEqual(params["archived"], .bool(false))
-
-        await transport.enqueue(
-            .response(
-                JSONRPCResponse(
-                    id: request.id,
-                    result: try JSONValue.encoded(ThreadListResponseDTO(data: []))
-                )
-            )
-        )
-
-        let response = try await task.value
-        XCTAssertEqual(response.data, [])
-    }
-
-    func testThreadListMethodFailureSurfacesServerError() async throws {
-        let transport = ScriptedAppServerTransport()
-        let client = AppServerClient(transport: transport)
-        try await completeHandshake(client: client, transport: transport)
-
-        let task = Task {
-            try await client.threadList(timeout: .seconds(1))
-        }
-        let request = try await transport.nextSentRequest()
-        XCTAssertEqual(request.method, AppServerMethods.threadList)
-
-        await transport.enqueue(
-            .error(
-                JSONRPCErrorResponse(
-                    error: JSONRPCErrorObject(
-                        code: -32602,
-                        message: "invalid thread/list params"
-                    ),
-                    id: request.id
-                )
-            )
-        )
-
-        do {
-            _ = try await task.value
-            XCTFail("Expected server error")
-        } catch AppServerClientError.server(let error) {
-            XCTAssertEqual(error.code, -32602)
-            XCTAssertEqual(error.message, "invalid thread/list params")
-        } catch {
-            XCTFail("Expected server error, got \(error)")
-        }
     }
 
     func testThreadReadHumanOnlyRejectionSurfacesTypedServerCode() async throws {
@@ -2204,22 +2057,25 @@ final class AppServerClientTests: XCTestCase {
         )
     }
 
-    func testPhoneReachableRealHostThreadListWhenEndpointIsProvided() async throws {
+    func testPhoneReachableRealHostDockSubscribeWhenEndpointIsProvided() async throws {
         let environment = ProcessInfo.processInfo.environment
-        let url = try configuredRelayURL(from: environment, label: "phone-reachable thread/list")
+        let url = try configuredRelayURL(from: environment, label: "phone-reachable dock/subscribe")
         let client = AppServerClient(webSocketURL: url, bearerToken: nil)
         _ = try await client.connectAndInitialize(
             params: .codexDock(version: "0.1.0"),
             timeout: .seconds(5)
         )
-        let response = try await client.threadList(
-            params: ThreadListParams(limit: 5, sortKey: .updatedAt, sortDirection: .desc),
-            timeout: .seconds(5)
+        let response = try await client.sendRequest(
+            method: AppServerMethods.dockSubscribe,
+            params: .object(["offset": .integer(0), "limit": .integer(5)]),
+            timeout: .seconds(5),
+            as: ThreadCardStreamUpdateDTO.self
         )
-        XCTAssertLessThanOrEqual(response.data.count, 5)
-        for thread in response.data {
-            XCTAssertFalse(thread.id?.isEmpty ?? true)
-            XCTAssertFalse(thread.sessionId?.isEmpty ?? true)
+        let cards = response.cards ?? []
+        XCTAssertLessThanOrEqual(cards.count, 5)
+        for card in cards {
+            XCTAssertFalse(card.threadID.isEmpty)
+            XCTAssertFalse(card.backendSessionID.isEmpty)
         }
         await client.disconnect()
     }
@@ -2232,15 +2088,17 @@ final class AppServerClientTests: XCTestCase {
             params: .codexDock(version: "0.1.0"),
             timeout: .seconds(5)
         )
-        let list = try await client.threadList(
-            params: ThreadListParams(limit: 50, sortKey: .updatedAt, sortDirection: .desc),
-            timeout: .seconds(10)
+        let dock = try await client.sendRequest(
+            method: AppServerMethods.dockSubscribe,
+            params: .object(["offset": .integer(0), "limit": .integer(50)]),
+            timeout: .seconds(10),
+            as: ThreadCardStreamUpdateDTO.self
         )
-        let thread = try XCTUnwrap(
-            list.data.first(where: canOpenThreadDetail),
+        let card = try XCTUnwrap(
+            (dock.cards ?? []).first { $0.status != .dormant },
             "Real-host detail smoke test requires at least one loaded thread"
         )
-        let threadID = try XCTUnwrap(thread.id)
+        let threadID = card.threadID
 
         let read = try await client.threadRead(
             params: ThreadReadParams(threadId: threadID, includeTurns: false),
@@ -2279,22 +2137,17 @@ final class AppServerClientTests: XCTestCase {
         var archivedThreadID: String?
 
         do {
-            let list = try await client.threadList(
-                params: ThreadListParams(
-                    limit: 100,
-                    sortKey: .updatedAt,
-                    sortDirection: .desc,
-                    archived: false
-                ),
-                timeout: .seconds(10)
+            let dock = try await client.sendRequest(
+                method: AppServerMethods.dockSubscribe,
+                params: .object(["offset": .integer(0), "limit": .integer(100)]),
+                timeout: .seconds(10),
+                as: ThreadCardStreamUpdateDTO.self
             )
-            let thread = try XCTUnwrap(
-                list.data.first { thread in
-                    thread.status == .notLoaded && thread.id?.isEmpty == false
-                },
+            let card = try XCTUnwrap(
+                (dock.cards ?? []).first { $0.status == .dormant },
                 "Real-host archive smoke test requires one notLoaded thread"
             )
-            let threadID = try XCTUnwrap(thread.id)
+            let threadID = card.threadID
 
             _ = try await client.threadArchive(
                 params: ThreadArchiveParams(threadId: threadID),
@@ -2302,18 +2155,15 @@ final class AppServerClientTests: XCTestCase {
             )
             archivedThreadID = threadID
 
-            let archived = try await client.threadList(
-                params: ThreadListParams(
-                    limit: 100,
-                    sortKey: .updatedAt,
-                    sortDirection: .desc,
-                    archived: true
-                ),
-                timeout: .seconds(10)
+            let archived = try await client.sendRequest(
+                method: AppServerMethods.archiveSubscribe,
+                params: .object(["offset": .integer(0), "limit": .integer(100)]),
+                timeout: .seconds(10),
+                as: ThreadCardStreamUpdateDTO.self
             )
             XCTAssertTrue(
-                archived.data.contains { $0.id == threadID },
-                "Archived list should include \(threadID) after thread/archive"
+                (archived.cards ?? []).contains { $0.threadID == threadID },
+                "Archive stream should include \(threadID) after thread/archive"
             )
 
             let restored = try await client.threadUnarchive(
@@ -2323,18 +2173,15 @@ final class AppServerClientTests: XCTestCase {
             archivedThreadID = nil
             XCTAssertEqual(restored.thread.id, threadID)
 
-            let unarchived = try await client.threadList(
-                params: ThreadListParams(
-                    limit: 100,
-                    sortKey: .updatedAt,
-                    sortDirection: .desc,
-                    archived: false
-                ),
-                timeout: .seconds(10)
+            let unarchived = try await client.sendRequest(
+                method: AppServerMethods.dockSubscribe,
+                params: .object(["offset": .integer(0), "limit": .integer(100)]),
+                timeout: .seconds(10),
+                as: ThreadCardStreamUpdateDTO.self
             )
             XCTAssertTrue(
-                unarchived.data.contains { $0.id == threadID },
-                "Default list should include \(threadID) after thread/unarchive"
+                (unarchived.cards ?? []).contains { $0.threadID == threadID },
+                "Dock stream should include \(threadID) after thread/unarchive"
             )
         } catch {
             if let archivedThreadID {
@@ -2416,15 +2263,6 @@ private func isLoopbackHost(_ host: String?) -> Bool {
         return false
     }
     return ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
-}
-
-private func canOpenThreadDetail(_ thread: ThreadDTO) -> Bool {
-    switch thread.status {
-    case .notLoaded, nil:
-        return false
-    case .idle, .systemError, .active, .unknown:
-        return thread.id?.isEmpty == false
-    }
 }
 
 actor ScriptedAppServerTransport: AppServerTransport {
@@ -2661,21 +2499,6 @@ private func respondToInitialize(
     )
     let initializedNotification = try await transport.nextSentNotification()
     XCTAssertEqual(initializedNotification.method, AppServerMethods.initialized)
-}
-
-private func threadListRow(id: String, updatedAt: Int64) -> ThreadDTO {
-    ThreadDTO(
-        id: id,
-        sessionId: "session-\(id)",
-        preview: "Preview \(id)",
-        createdAt: updatedAt - 10,
-        updatedAt: updatedAt,
-        status: .idle,
-        cwd: "/Users/aelaguiz/workspace/codex-client",
-        source: .string("cli"),
-        gitInfo: ThreadGitInfoDTO(branch: "main"),
-        turns: []
-    )
 }
 
 @MainActor

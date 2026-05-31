@@ -1,5 +1,13 @@
 # Codex Dock Exhaustive Sync Test Plan
 
+> 2026-05-31 implementation note: this draft references older parity/oracle
+> routes as historical context. Current card proof must observe `dock/subscribe`,
+> `dock/update`, `dock/resync`, `archive/subscribe`, `archive/update`, and
+> `archive/resync`. Deleted routes such as `relay/state/snapshot`, `state/query`,
+> `thread/search`, `thread/goal/get`, app-facing `thread/loaded/list`, `/statez`,
+> `/dbz`, and `/explainz` must not be reintroduced as test-only or diagnostic
+> card proof paths.
+
 Date: 2026-05-31
 Status: Draft for audit
 Doc type: Implementation plan
@@ -97,36 +105,16 @@ The mechanism must compare four planes of truth:
 
 ## Current State
 
-The current parity harness already compares several important surfaces:
+As of the 2026-05-31 single-source contract cleanup, card proof must run through
+the same client path the app renders: `dock/subscribe`, `dock/update`, and
+`dock/resync`. The deleted oracle routes `relay/state/snapshot`, `state/query`,
+`thread/search`, `thread/goal/get`, and `thread/loaded/list` must not return as
+app-facing or test-only card proof paths.
 
-- Local SQLite thread metadata.
-- Goal rows.
-- Spawn edges.
-- Rollout session metadata.
-- Relay `relay/state/snapshot`.
-- Dock `dock/subscribe`.
-- Direct `thread/read` probes.
-- Search probes.
-
-Important evidence:
-
-- `scripts/dock-relay-state-parity.mjs:127` defines `--exhaustive`,
-  `--include-thread-reads`, `--include-turns`, `--include-goals`,
-  `--include-loaded`, the opt-out `--no-dock-subscribe`, and `--fail-on-diff`.
-- `scripts/dock-relay-state-parity.mjs:2740` takes one-shot relay and Dock
-  snapshots.
-- `scripts/dock-relay-state-parity.mjs:3149` builds the report from SQLite,
-  goals, relay snapshot, Dock subscribe, SQLite-after, goals-after, and spawn
-  edges.
-- `scripts/dock-relay-state-parity.mjs:2121` compares Dock ordering against
-  app-server active all-source order.
-- `scripts/dock-relay-state-parity.mjs:2245` compares Dock card set,
-  duplicates, archive extras, windows, order, and status.
-- `scripts/dock-relay-state-parity.mjs:2528` documents blind spots.
-- `scripts/dock-relay-state-parity.mjs:2662` defines the completion boundary.
-
-That foundation is not sufficient by itself because it is mostly a one-shot
-snapshot comparison. It does not yet prove these over-time behaviors:
+The remaining relay sync audit is client-path-only. It may use raw Codex facts
+as upstream fixture/verifier inputs, but the observed relay output for Dock
+cards is the Dock stream contract.
+That foundation still needs over-time proof for these behaviors:
 
 - A long-lived `dock/subscribe` stream stays correct across many
   reconciliations.
@@ -544,17 +532,15 @@ Rules:
 
 #### 2. App-Server Oracle
 
-The app-server oracle collects the raw Codex app-server surface through relay
-helpers.
+The app-server oracle collects raw Codex facts only as verifier inputs. It must
+not expose those facts as app-facing card routes or compare an app-facing card
+against a relay state snapshot side door.
 
 Inputs:
 
-- `relay/state/snapshot`
 - direct routed `thread/read`
 - direct history `thread/read`
 - `thread/turns/list`
-- `thread/goal/get`
-- `thread/loaded/list`
 
 Outputs:
 
@@ -563,16 +549,14 @@ Outputs:
 - archive membership
 - read metadata
 - turns
-- goal state
-- loaded live state
 - routed-vs-history conflicts
 - incomplete scopes
 - repeated cursor failures
 
 Rules:
 
-- `--exhaustive` must imply thread reads, turns, goals, loaded state,
-  Dock subscribe, and full enough turn evidence for the selected detail mode.
+- `--exhaustive` must imply thread reads, turns, Dock subscribe, and full enough
+  turn evidence for the selected detail mode.
 - A repeated cursor in `thread/turns/list` is a hard detail-read failure.
 - A missing routed read can be acceptable only when a history read succeeds and
   the report classifies why routed live state is unavailable.
@@ -812,9 +796,9 @@ client mismatch.
 `A-01`: `thread/list` drains all requested source scopes without repeated
 cursors.
 
-`A-02`: `relay/state/snapshot --exhaustive` includes active, archived, default
-interactive, all-source, loaded, goals, reads, and turns for the selected audit
-mode.
+`A-02`: The client-path relay report includes active, archived, default
+interactive, reads, and turns for the selected audit mode without using
+`relay/state/snapshot` or `state/query`.
 
 `A-03`: Every app-server-listable stable thread maps to a storage row or a
 clearly classified app-server-only live row.

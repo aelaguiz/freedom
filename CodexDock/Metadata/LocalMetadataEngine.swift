@@ -94,12 +94,10 @@ actor LocalMetadataEngine {
             if !wasPinned || metadata.pinnedOrder == nil {
                 metadata.pinnedOrder = PinnedMetadataOrdering.nextOrder(in: nextValues, excluding: key)
             }
-            metadata.lastKnownPinnedDisplay = LocalPinnedDisplaySnapshot(row: row)
         } else {
             metadata.isPinned = false
             metadata.pinnedAt = nil
             metadata.pinnedOrder = nil
-            metadata.lastKnownPinnedDisplay = nil
         }
         nextValues[key] = metadata
         return try await save(metadataValues: PinnedMetadataOrdering.normalized(nextValues))
@@ -184,9 +182,6 @@ actor LocalMetadataEngine {
             } else {
                 result.pinnedOrder = incomingPinnedOrder
             }
-        }
-        if result.lastKnownPinnedDisplay == nil {
-            result.lastKnownPinnedDisplay = incoming.lastKnownPinnedDisplay
         }
         return result
     }

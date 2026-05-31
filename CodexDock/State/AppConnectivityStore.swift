@@ -74,6 +74,9 @@ public struct HostConnectivitySnapshot: Equatable, Identifiable, Sendable {
 }
 
 public enum AppConnectivityOverallStatus: Equatable, Sendable {
+    // Connectivity says whether the relay path is reachable. Dock card
+    // freshness is separate and comes from relay stream freshness/proof fields,
+    // not from process reachability alone.
     case unconfigured(String)
     case checking(String)
     case online(String)

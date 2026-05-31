@@ -11,7 +11,7 @@ final class SystemHealthProjectorTests: XCTestCase {
             routeDiagnostics: [
                 RouteDiagnosticSnapshot(
                     configuredHostID: "amir",
-                    route: AppServerMethods.threadList,
+                    route: AppServerMethods.dockSubscribe,
                     routeStatus: .healthy,
                     appCritical: true
                 )

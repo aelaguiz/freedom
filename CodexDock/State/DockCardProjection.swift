@@ -52,8 +52,8 @@ private struct DockCardProjectionProjector {
         let bodyRows = filteredIgnoringIdle
             .filter { !$0.isPinned }
             .filter { options.filters.showsIdle || $0.status != .idle }
-            .sorted(by: rowPrecedesByRecency)
-        let visibleRows = (pinnedRows + bodyRows).sorted(by: rowPrecedesByRecency)
+            .sorted(by: rowPrecedesByRelayOrder)
+        let visibleRows = (pinnedRows + bodyRows).sorted(by: rowPrecedesByRelayOrder)
         let allPinnedRows = snapshot.rows.filter(\.isPinned).sorted(by: pinnedRowPrecedes)
         let groups = groups(for: bodyRows, hiddenIdleRows: hiddenIdleRows)
         let emptyReason = visibleRows.isEmpty ? emptyReason(searchedRows: searchedRows, hiddenIdleCount: hiddenIdleCount) : nil
@@ -105,7 +105,7 @@ private struct DockCardProjectionProjector {
 
             let hostRows = rows
                 .filter { rowBelongs($0, to: host.id) }
-                .sorted(by: rowPrecedesByRecency)
+                .sorted(by: rowPrecedesByRelayOrder)
             let hiddenIdleCount = hiddenIdleRows.filter { rowBelongs($0, to: host.id) }.count
             let hostState = stateByHost[host.id]
             let isUnavailable = hostState?.status.isUnavailable ?? false
@@ -120,6 +120,7 @@ private struct DockCardProjectionProjector {
                 subtitle: hostState?.status.subtitle ?? "\(hostRows.count) sessions",
                 rows: hostRows,
                 hostIDs: [host.id],
+                orderKey: hostRows.first?.orderKey,
                 newestActivityDate: hostRows.map(\.lastActivityDate).max(),
                 runningCount: hostRows.filter { $0.status == .running }.count,
                 hiddenIdleCount: hiddenIdleCount,
@@ -138,7 +139,7 @@ private struct DockCardProjectionProjector {
         let hiddenIdleCountsByBranch = Dictionary(grouping: hiddenIdleRows, by: \.branch)
             .mapValues(\.count)
         return groupedRows.map { branch, rows in
-            let sortedRows = rows.sorted(by: rowPrecedesByRecency)
+            let sortedRows = rows.sorted(by: rowPrecedesByRelayOrder)
             let hostNames = Set(sortedRows.map(\.hostDisplayName)).sorted()
             return DockProjectionGroupViewModel(
                 id: "branch::\(branch)",
@@ -147,6 +148,7 @@ private struct DockCardProjectionProjector {
                 subtitle: "\(sortedRows.count) sessions · \(hostNames.joined(separator: ", "))",
                 rows: sortedRows,
                 hostIDs: Set(sortedRows.map(hostIDForGroup)).sorted(),
+                orderKey: sortedRows.first?.orderKey,
                 newestActivityDate: sortedRows.map(\.lastActivityDate).max(),
                 runningCount: sortedRows.filter { $0.status == .running }.count,
                 hiddenIdleCount: hiddenIdleCountsByBranch[branch] ?? 0,
@@ -353,10 +355,16 @@ private struct DockCardProjectionProjector {
     }
 
     private func groupPrecedes(_ lhs: DockProjectionGroupViewModel, _ rhs: DockProjectionGroupViewModel) -> Bool {
-        let lhsDate = lhs.newestActivityDate ?? Date.distantPast
-        let rhsDate = rhs.newestActivityDate ?? Date.distantPast
-        if lhsDate != rhsDate {
-            return lhsDate > rhsDate
+        if let lhsOrderKey = lhs.orderKey,
+           let rhsOrderKey = rhs.orderKey,
+           lhsOrderKey != rhsOrderKey {
+            return lhsOrderKey < rhsOrderKey
+        }
+        if lhs.orderKey != nil {
+            return true
+        }
+        if rhs.orderKey != nil {
+            return false
         }
 
         let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
@@ -366,15 +374,19 @@ private struct DockCardProjectionProjector {
         return lhs.id < rhs.id
     }
 
-    private func rowPrecedesByRecency(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
+    private func rowPrecedesByRelayOrder(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
+        // The relay owns card ordering. Swift may filter and group rows, but it
+        // must not rebuild recency from timestamps or local status.
         if let lhsOrderKey = lhs.orderKey,
            let rhsOrderKey = rhs.orderKey,
            lhsOrderKey != rhsOrderKey {
             return lhsOrderKey < rhsOrderKey
         }
-
-        if lhs.lastActivityDate != rhs.lastActivityDate {
-            return lhs.lastActivityDate > rhs.lastActivityDate
+        if lhs.orderKey != nil {
+            return true
+        }
+        if rhs.orderKey != nil {
+            return false
         }
 
         let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)

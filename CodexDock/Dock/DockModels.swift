@@ -279,6 +279,7 @@ public struct DockProjectionGroupViewModel: Equatable, Identifiable, Sendable {
     public let subtitle: String
     public let rows: [DockRowViewModel]
     public let hostIDs: [String]
+    public let orderKey: String?
     public let newestActivityDate: Date?
     public let runningCount: Int
     public let hiddenIdleCount: Int

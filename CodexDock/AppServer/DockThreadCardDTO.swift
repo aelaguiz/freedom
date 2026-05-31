@@ -348,7 +348,7 @@ public struct DockThreadCardDTO: Codable, Equatable, Sendable {
     public let hostEndpoint: String?
     public let orderKey: String
     public let activityAt: String
-    public let activityAtMs: Int64?
+    public let activityAtMs: Int64
     public let displaySummary: String
     public let title: String
     public let status: DockThreadCardStatus
@@ -373,7 +373,7 @@ public struct DockThreadCardDTO: Codable, Equatable, Sendable {
         hostEndpoint: String? = nil,
         orderKey: String,
         activityAt: String,
-        activityAtMs: Int64? = nil,
+        activityAtMs: Int64,
         displaySummary: String,
         title: String,
         status: DockThreadCardStatus,

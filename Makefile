@@ -65,7 +65,6 @@ LOG_STYLE ?= compact
 LOG_PREDICATE ?= subsystem == "com.aelaguiz.CodexDock"
 LOG_LAST ?= 10m
 DEVICE_LOG_OUTPUT ?= /tmp/codex-client/codex-dock-device-$(shell date -u +%Y%m%dT%H%M%SZ).logarchive
-THREAD_FIDELITY_REPORT ?= /tmp/codex-client/relay-thread-fidelity-$(shell date -u +%Y%m%dT%H%M%SZ).json
 RELAY_DEBUG_BUNDLE ?= /tmp/codex-client/relay-debug-bundle-$(shell date -u +%Y%m%dT%H%M%SZ).json
 RELAY_HOST_COMPARE_REPORT ?= /tmp/codex-client/relay-host-compare-$(shell date -u +%Y%m%dT%H%M%SZ).json
 HOSTS ?= $(CODEX_DOCK_HOSTS)
@@ -119,7 +118,7 @@ SIM_UI_SYNC_SCENARIO_THREAD_ARG = $(if $(SIM_UI_SYNC_SCENARIO_THREAD_ID),--scena
 
 .DEFAULT_GOAL := help
 
-.PHONY: help contract-generate contract-check app app-test sim-ui-sync-proof sim-ui-scenario-sync-proof sim-ui-isolated-scenario-sync-proof sim-ui-controlled-scenario-sync-proof sim-ui-controlled-matrix-verify sim-ui-controlled-matrix-proof sim-sync-audit sim-config-verify device-install device-install-iphone-17-pro device-install-iphone-14 iphone-17-pro iphone-14 device-install-all device-config device-config-verify device-config-verify-all device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart relay-probe relay-thread-fidelity relay-leak-check relay-doctor relay-debug-bundle relay-host-compare sim-debug-bundle device-debug-bundle app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
+.PHONY: help contract-generate contract-check app app-test sim-ui-sync-proof sim-ui-scenario-sync-proof sim-ui-isolated-scenario-sync-proof sim-ui-controlled-scenario-sync-proof sim-ui-controlled-matrix-verify sim-ui-controlled-matrix-proof sim-sync-audit sim-config-verify device-install device-install-iphone-17-pro device-install-iphone-14 iphone-17-pro iphone-14 device-install-all device-config device-config-verify device-config-verify-all device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart relay-doctor relay-debug-bundle relay-host-compare sim-debug-bundle device-debug-bundle app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
 
 help:
 	@printf "%s\n" "Codex Dock commands:"
@@ -150,9 +149,6 @@ help:
 	@printf "%s\n" "  rtk make dock-relay        Compatibility alias for the host service bundle"
 	@printf "%s\n" "  rtk make app-server-status Check host service bundle status"
 	@printf "%s\n" "  rtk make dock-relay-status Check host service bundle status"
-	@printf "%s\n" "  rtk make relay-probe      Compare raw history and relay thread/list cursor/top row"
-	@printf "%s\n" "  rtk make relay-thread-fidelity Cross-check relay sessions against Codex disk/SQLite"
-	@printf "%s\n" "  rtk make relay-leak-check Repeat relay thread/list and verify upstream socket count is flat"
 	@printf "%s\n" "  rtk make relay-doctor     Print relay-focused redacted diagnostics"
 	@printf "%s\n" "  rtk make relay-debug-bundle Fetch the relay route-health debug bundle"
 	@printf "%s\n" "  rtk make relay-host-compare HOSTS=host:port,host:port Compare route health across relays"
@@ -225,15 +221,6 @@ dock-relay-stop: host-service-stop
 app-server-restart: host-service-restart
 
 dock-relay-restart: host-service-restart
-
-relay-probe:
-	@CODEX_DOCK_RELAY_WS="$(DOCK_RELAY_PROBE_WS)" CODEX_DOCK_HISTORY_APP_SERVER_WS="$(DOCK_RELAY_HISTORY_WS)" CODEX_DOCK_HISTORY_TOKEN_FILE="$(APP_SERVER_TOKEN)" rtk node -- scripts/dock-relay-probe.mjs
-
-relay-thread-fidelity:
-	@CODEX_DOCK_RELAY_WS="$(DOCK_RELAY_PROBE_WS)" rtk node -- scripts/dock-relay-thread-fidelity.mjs --json-out "$(THREAD_FIDELITY_REPORT)" --summary-only
-
-relay-leak-check:
-	@CODEX_DOCK_RELAY_WS="$(DOCK_RELAY_PROBE_WS)" CODEX_DOCK_LEAK_CHECK_ITERATIONS="$(DOCK_RELAY_LEAK_CHECK_ITERATIONS)" rtk node -- scripts/dock-relay-leak-check.mjs
 
 relay-doctor: host-service-doctor
 

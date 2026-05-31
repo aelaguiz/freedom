@@ -91,11 +91,6 @@ public struct RelayDiagnosticsClient: Sendable {
         try await fetchJSONValue(try diagnosticsURL(for: endpoint, path: "/statusz"))
     }
 
-    public func fetchTrace(operationID: String, for endpoint: DockRelayEndpoint) async throws -> JSONValue {
-        let encoded = operationID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? operationID
-        return try await fetchJSONValue(try diagnosticsURL(for: endpoint, path: "/tracesz/\(encoded)"))
-    }
-
     private func fetch<Response: Decodable>(_ url: URL) async throws -> Response {
         let (data, response) = try await session.data(from: url)
         guard let httpResponse = response as? HTTPURLResponse,

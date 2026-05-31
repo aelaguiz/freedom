@@ -304,7 +304,7 @@ final class DockStoreStreamTests: XCTestCase {
         XCTAssertEqual(updatedSnapshot.hostStates.map(\.status), [.loaded(rowCount: 2)])
     }
 
-    func testSnapshotCollectorCompletesFinalWindowAfterDroppingNonHumanCards() async throws {
+    func testSnapshotCollectorKeepsTerminalIncompleteWindowPartialAfterDroppingNonHumanCards() async throws {
         let host = makeHost()
         let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
@@ -327,6 +327,8 @@ final class DockStoreStreamTests: XCTestCase {
         ).collect(from: connection)
 
         XCTAssertEqual(collection.cards.map(\.threadID), ["human-final"])
+        XCTAssertFalse(collection.isComplete)
+        XCTAssertEqual(collection.hostLoadStatus, .partial(rowCount: 1, message: "Stream incomplete"))
     }
 
     @MainActor

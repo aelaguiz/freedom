@@ -124,15 +124,19 @@ first normalized snapshot, `dock/update` pushes deltas and heartbeats, and
 `dock/resync` returns a replacement snapshot if the client detects a sequence
 gap. The relay materializes app-server thread projections in SQLite at
 `.codex-dock/relay-state.sqlite`, serves Dock Home from that state store, and
-keeps stale rows visible when a source refresh fails. Raw `thread/list` remains
-available for thread detail support, archive command diagnostics, and host
-settings diagnostics; it is no longer the Dock or Archive list contract.
+keeps stale rows visible when a source refresh fails.
+
+Card truth has one path. The relay may inspect raw app-server facts such as
+`thread/list`, `thread/read`, `thread/turns/list`, live events, and live loaded
+IDs internally, but Swift never uses those raw routes to prove Dock or Archive
+cards. Swift renders card truth only from `dock/*` and `archive/*` streams.
 
 Row text has two separate meanings. Raw history `preview` is preserved as the
 app-server's stored preview and may be the opening message. Dock overview rows
-use bounded relay state fields from the app-server projection; row summary
-work is not allowed to read turns, block subscribe/list, or reorder the
-dashboard response.
+use relay-owned card fields from the canonical projection. That projection may
+inspect newest turns and live events to compute honest activity, but any
+unproven card makes the stream partial or stale instead of pretending the list
+is fresh.
 
 The relay also owns OpenAI Realtime transcription. Keep `OPENAI_API_KEY` in the
 Mac environment or repo `.env`; the app never receives it. The default Realtime
@@ -209,9 +213,10 @@ rtk make app-server-status
 rtk make dock-relay-status
 ```
 
-Process health and app-path health are separate. `/readyz` only means the relay
-process can answer HTTP. The app path is healthy only when the relevant route
-is healthy in `/statusz`, `/routesz`, or the debug bundle.
+Process health, route health, and card freshness are separate. `/readyz` only
+means the relay process can answer HTTP. `/statusz`, `/routesz`, `/metricsz`,
+and `/syncz` expose process and route health only; they do not prove Dock or
+Archive card ordering, contents, freshness, completeness, or membership.
 
 Route-health diagnostics:
 
@@ -221,10 +226,10 @@ rtk make relay-host-compare HOSTS=amir-m5.fairy-salmon.ts.net:4510,home.fairy-sa
 rtk make relay-debug-bundle
 ```
 
-The relay stores bounded route evidence under `.codex-dock/observability/` and
-serves `/routesz`, `/tracesz/recent`, `/tracesz/<operationID>`, `/selftestz`,
-and `/bundlez`. Automatic probes only use auto-probe-safe routes; archive,
-turn, and transcription routes are passive evidence from real app traffic.
+The relay stores bounded route evidence under `.codex-dock/observability/`.
+Automatic probes only use auto-probe-safe routes; archive, turn, and
+transcription routes are passive evidence from real app traffic. HTTP
+diagnostics intentionally do not expose card rows or stored card state.
 
 Print the app-safe host config plus raw dev smoke helpers:
 

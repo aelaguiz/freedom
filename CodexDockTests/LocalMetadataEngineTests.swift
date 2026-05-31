@@ -17,7 +17,6 @@ final class LocalMetadataEngineTests: XCTestCase {
 
         XCTAssertEqual(reordered[rowB.metadataKey]?.pinnedOrder, 0)
         XCTAssertEqual(reordered[rowA.metadataKey]?.pinnedOrder, 1)
-        XCTAssertEqual(reordered[rowA.metadataKey]?.lastKnownPinnedDisplay?.title, "Thread A")
         let storedValues = await store.valuesSnapshot()
         XCTAssertEqual(storedValues, reordered)
     }

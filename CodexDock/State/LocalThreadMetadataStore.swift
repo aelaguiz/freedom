@@ -12,107 +12,10 @@ public struct LocalThreadMetadataKey: Codable, Equatable, Hashable, Sendable {
     }
 }
 
-public enum LocalPinnedDisplayOriginKind: String, Codable, Equatable, Sendable {
-    case human
-    case automation
-    case unknown
-
-    public init(origin: SessionOrigin) {
-        switch origin.kind {
-        case .humanInteractive:
-            self = .human
-        case .agentOrAutomation:
-            self = .automation
-        case .unknown:
-            self = .unknown
-        }
-    }
-
-    public var sessionOrigin: SessionOrigin {
-        switch self {
-        case .human:
-            return .humanInteractive(subtype: .cli)
-        case .automation:
-            return .agentOrAutomation(subtype: .exec)
-        case .unknown:
-            return .unknown()
-        }
-    }
-}
-
-public struct LocalPinnedDisplaySnapshot: Codable, Equatable, Sendable {
-    public var title: String
-    public var hostDisplayName: String
-    public var hostEndpoint: String
-    public var repository: String
-    public var branch: String
-    public var status: DockRowStatusKind
-    public var lastActivity: String
-    public var lastActivityDate: Date
-    public var summary: String
-    public var rail: DockRowRail
-    public var label: String?
-    public var originKind: LocalPinnedDisplayOriginKind
-    public var relationship: DockRowThreadRelationship?
-
-    public init(
-        title: String,
-        hostDisplayName: String,
-        hostEndpoint: String,
-        repository: String,
-        branch: String,
-        status: DockRowStatusKind,
-        lastActivity: String,
-        lastActivityDate: Date,
-        summary: String,
-        rail: DockRowRail,
-        label: String?,
-        originKind: LocalPinnedDisplayOriginKind,
-        relationship: DockRowThreadRelationship? = nil
-    ) {
-        self.title = title
-        self.hostDisplayName = hostDisplayName
-        self.hostEndpoint = hostEndpoint
-        self.repository = repository
-        self.branch = branch
-        self.status = status
-        self.lastActivity = lastActivity
-        self.lastActivityDate = lastActivityDate
-        self.summary = summary
-        self.rail = rail
-        self.label = Self.normalized(label)
-        self.originKind = originKind
-        self.relationship = relationship
-    }
-
-    public init(row: DockRowViewModel) {
-        self.init(
-            title: row.title,
-            hostDisplayName: row.hostDisplayName,
-            hostEndpoint: row.hostEndpoint,
-            repository: row.repository,
-            branch: row.branch,
-            status: row.status,
-            lastActivity: row.lastActivity,
-            lastActivityDate: row.lastActivityDate,
-            summary: row.summary,
-            rail: row.rail,
-            label: row.label,
-            originKind: LocalPinnedDisplayOriginKind(origin: row.origin),
-            relationship: row.relationship
-        )
-    }
-
-    private static func normalized(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let trimmed, !trimmed.isEmpty {
-            return trimmed
-        }
-        return nil
-    }
-}
-
 public struct LocalThreadMetadata: Codable, Equatable, Sendable {
+    // Local metadata decorates relay cards only. Pins, labels, and rails can be
+    // local; title, status, activity, summary, freshness, and archive state must
+    // come from the relay card stream.
     public var label: String? {
         didSet {
             label = Self.normalized(label)
@@ -122,22 +25,19 @@ public struct LocalThreadMetadata: Codable, Equatable, Sendable {
     public var isPinned: Bool
     public var pinnedAt: Date?
     public var pinnedOrder: Int?
-    public var lastKnownPinnedDisplay: LocalPinnedDisplaySnapshot?
 
     public init(
         label: String? = nil,
         rail: DockRowRail? = nil,
         isPinned: Bool = false,
         pinnedAt: Date? = nil,
-        pinnedOrder: Int? = nil,
-        lastKnownPinnedDisplay: LocalPinnedDisplaySnapshot? = nil
+        pinnedOrder: Int? = nil
     ) {
         self.label = Self.normalized(label)
         self.rail = rail
         self.isPinned = isPinned
         self.pinnedAt = isPinned ? pinnedAt : nil
         self.pinnedOrder = isPinned ? pinnedOrder : nil
-        self.lastKnownPinnedDisplay = isPinned ? lastKnownPinnedDisplay : nil
     }
 
     public var isEmpty: Bool {
@@ -146,7 +46,6 @@ public struct LocalThreadMetadata: Codable, Equatable, Sendable {
             && !isPinned
             && pinnedAt == nil
             && pinnedOrder == nil
-            && lastKnownPinnedDisplay == nil
     }
 
     private static func normalized(_ value: String?) -> String? {
@@ -163,7 +62,6 @@ public struct LocalThreadMetadata: Codable, Equatable, Sendable {
         case isPinned
         case pinnedAt
         case pinnedOrder
-        case lastKnownPinnedDisplay
     }
 
     public init(from decoder: Decoder) throws {
@@ -173,11 +71,7 @@ public struct LocalThreadMetadata: Codable, Equatable, Sendable {
             rail: try container.decodeIfPresent(DockRowRail.self, forKey: .rail),
             isPinned: try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false,
             pinnedAt: try container.decodeIfPresent(Date.self, forKey: .pinnedAt),
-            pinnedOrder: try container.decodeIfPresent(Int.self, forKey: .pinnedOrder),
-            lastKnownPinnedDisplay: try container.decodeIfPresent(
-                LocalPinnedDisplaySnapshot.self,
-                forKey: .lastKnownPinnedDisplay
-            )
+            pinnedOrder: try container.decodeIfPresent(Int.self, forKey: .pinnedOrder)
         )
     }
 
@@ -188,7 +82,6 @@ public struct LocalThreadMetadata: Codable, Equatable, Sendable {
         try container.encode(isPinned, forKey: .isPinned)
         try container.encodeIfPresent(pinnedAt, forKey: .pinnedAt)
         try container.encodeIfPresent(pinnedOrder, forKey: .pinnedOrder)
-        try container.encodeIfPresent(lastKnownPinnedDisplay, forKey: .lastKnownPinnedDisplay)
     }
 }
 

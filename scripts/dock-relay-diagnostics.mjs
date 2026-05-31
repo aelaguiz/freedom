@@ -104,7 +104,13 @@ function writeJSONAtomic(filename, value) {
 async function relayBundle(args) {
   const host = args.host || args.url || `127.0.0.1:${args.port || 4510}`;
   const baseURL = httpBaseForHost(host);
-  const bundle = await getJSONOrError(`${baseURL}/bundlez`);
+  const [readyz, statusz, metricsz, routesz, syncz] = await Promise.all([
+    getJSONOrError(`${baseURL}/readyz`),
+    getJSONOrError(`${baseURL}/statusz`),
+    getJSONOrError(`${baseURL}/metricsz`),
+    getJSONOrError(`${baseURL}/routesz`),
+    getJSONOrError(`${baseURL}/syncz`),
+  ]);
   const output = args.output || path.join(
     "/tmp",
     "codex-client",
@@ -115,10 +121,18 @@ async function relayBundle(args) {
     createdAt: new Date().toISOString(),
     host,
     baseURL,
-    bundle,
+    readyz,
+    statusz,
+    metricsz,
+    routesz,
+    syncz,
   };
   writeJSONAtomic(output, result);
-  return { ok: bundle.ok, output, host, statusCode: bundle.statusCode };
+  return {
+    ok: readyz.ok && statusz.ok && metricsz.ok && routesz.ok && syncz.ok,
+    output,
+    host,
+  };
 }
 
 async function relayHostCompare(args) {
@@ -132,11 +146,11 @@ async function relayHostCompare(args) {
   const compared = [];
   for (const host of hosts) {
     const baseURL = httpBaseForHost(host);
-    const [readyz, statusz, routesz, selftestz] = await Promise.all([
+    const [readyz, statusz, routesz, syncz] = await Promise.all([
       getJSONOrError(`${baseURL}/readyz`),
       getJSONOrError(`${baseURL}/statusz`),
       getJSONOrError(`${baseURL}/routesz`),
-      getJSONOrError(`${baseURL}/selftestz`),
+      getJSONOrError(`${baseURL}/syncz`),
     ]);
     compared.push({
       configuredHostID: host,
@@ -144,7 +158,7 @@ async function relayHostCompare(args) {
       readyz,
       statusz,
       routesz,
-      selftestz,
+      syncz,
       appCriticalFailures: statusz.body?.appCriticalFailures || [],
     });
   }

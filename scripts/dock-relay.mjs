@@ -21,7 +21,6 @@ import {
   RELAY_SHUTDOWN_PROCESS_TIMEOUT_MS,
   RELAY_SHUTDOWN_SOCKET_TIMEOUT_MS,
   RELAY_VERSION,
-  SELFTEST_ROUTE_TIMEOUT_MS,
   UPSTREAM_POOL_LIMITS,
   UPSTREAM_RECONNECT_ATTEMPTS,
   UPSTREAM_RECONNECT_DELAY_MS,
@@ -31,11 +30,6 @@ import {
   defaultRelayLogger,
   installRelayFatalHandlers,
 } from "./dock-relay-logger.mjs";
-import {
-  FAILURE_CATEGORY,
-  ROUTE_NAMES,
-  autoProbeSafeRoutes,
-} from "./dock-relay-observability-contract.mjs";
 import {
   createRelayObservability,
   extractTraceContextFromParams,
@@ -60,7 +54,6 @@ import {
   DOCK_SUBSCRIBE_METHOD,
 } from "./dock-relay-state-subscriptions.mjs";
 import { relayStateEngineForConfig } from "./dock-relay-state-engine.mjs";
-import { buildRelayStateSnapshot } from "./dock-relay-state-snapshot.mjs";
 import {
   loadDotEnvFile,
   parsePhoneAuthMode,
@@ -68,11 +61,7 @@ import {
 } from "./dock-relay-env.mjs";
 import {
   assertHumanThreadID,
-  aggregateLoadedList,
-  aggregateThreadGoalGet,
-  aggregateThreadList,
   aggregateThreadRead,
-  aggregateThreadSearch,
   archiveThread,
   attentionFlagsForServerRequest,
   endpointForThread,
@@ -466,12 +455,6 @@ async function handleRequest(config, method, params, session, downstreamWs) {
         platformOs: platformOs(),
         relayInstanceID: config.hostId,
       };
-    case "thread/list":
-      return aggregateThreadList(config, params || {});
-    case "thread/search":
-      return aggregateThreadSearch(config, params || {});
-    case "thread/goal/get":
-      return aggregateThreadGoalGet(config, params || {});
     case DOCK_SUBSCRIBE_METHOD:
       return relayStateEngineForConfig(config).subscribeDock({ session, downstreamWs, sendJson });
     case DOCK_RESYNC_METHOD:
@@ -480,10 +463,6 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       return relayStateEngineForConfig(config).subscribeArchive({ session, downstreamWs, sendJson });
     case ARCHIVE_RESYNC_METHOD:
       return relayStateEngineForConfig(config).resyncArchive({ downstreamWs, sendJson });
-    case "relay/state/snapshot":
-      return buildRelayStateSnapshot(config, params || {});
-    case "thread/loaded/list":
-      return aggregateLoadedList(config, params || {});
     case "thread/read":
       return aggregateThreadRead(config, params || {});
     case "thread/turns/list":
@@ -508,8 +487,6 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       });
       return result;
     }
-    case "state/query":
-      return relayStateEngineForConfig(config).snapshotForView(params?.view || "dock", params || {});
     case "audio/transcription/start":
       return session.realtimeTranscription.start(params || {});
     case "audio/transcription/append":
@@ -574,24 +551,15 @@ function sessionDebugSnapshot(sessions) {
   }));
 }
 
-function liveRowsDebugSnapshot(liveStatus) {
-  return (liveStatus?.rows || []).map((row) => ({
-    threadIDHash: shortHash(row?.id),
-    endpointUrl: row?.dockRelaySource?.url || null,
-    statusType: row?.status?.type || null,
-  }));
-}
-
 function runtimeSnapshot(config, sessions, downstreamSockets) {
   const liveStatus = config.liveStatusCache?.snapshot?.() || null;
   return {
     downstreamActive: downstreamSockets.size,
     upstreamActive: [...sessions].filter((session) => session.upstream?.isOpen()).length,
     upstreamPools: config.upstreamPool?.stats?.() || [],
-    liveStatus,
-    relayState: config.relayStateEngine?.stateSnapshot?.() || null,
+    liveStatus: liveStatus?.liveOverlay || null,
+    relayStateHealth: config.relayStateEngine?.stateHealth?.() || null,
     sessions: sessionDebugSnapshot(sessions),
-    liveRows: liveRowsDebugSnapshot(liveStatus),
   };
 }
 
@@ -620,22 +588,6 @@ function writeJSONResponse(response, value, statusCode = 200) {
   response.end(JSON.stringify(value));
 }
 
-function traceOperationIDFromPath(pathname) {
-  const prefix = "/tracesz/";
-  if (!pathname.startsWith(prefix)) {
-    return null;
-  }
-  const encoded = pathname.slice(prefix.length);
-  if (!encoded || encoded === "recent") {
-    return null;
-  }
-  try {
-    return decodeURIComponent(encoded);
-  } catch {
-    return encoded;
-  }
-}
-
 function semanticRouteOutcome(method, result) {
   return {
     ok: true,
@@ -644,61 +596,6 @@ function semanticRouteOutcome(method, result) {
     errorCode: null,
     phase: "response",
     outcome: "succeeded",
-  };
-}
-
-function withSelfTestTimeout(promise, routeName, timeoutMs) {
-  let timer = null;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      const error = new Error(`${routeName} self-test timed out after ${timeoutMs}ms`);
-      error.code = "SELFTEST_ROUTE_TIMEOUT";
-      error.timeoutMs = timeoutMs;
-      reject(error);
-    }, timeoutMs);
-    timer.unref?.();
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  });
-}
-
-async function runSelfTest(config) {
-  const routeTimeoutMs = config.selftestRouteTimeoutMs || SELFTEST_ROUTE_TIMEOUT_MS;
-  const safeRoutes = [];
-  for (const route of autoProbeSafeRoutes()) {
-    if (route.name === ROUTE_NAMES.dockSubscribe) {
-      const state = await withSelfTestTimeout(
-        Promise.resolve(config.relayStateEngine?.stateSnapshot?.() || null),
-        route.name,
-        routeTimeoutMs,
-      );
-      safeRoutes.push({
-        route: route.name,
-        probeSafety: route.probeSafety,
-        ok: Boolean(state?.ok),
-        note: "passive state health read; dock/subscribe not called",
-        rows: state?.counts?.active ?? null,
-      });
-      continue;
-    }
-    if (route.kind === "http" || route.name === ROUTE_NAMES.statusz) {
-      safeRoutes.push({
-        route: route.name,
-        probeSafety: route.probeSafety,
-        ok: true,
-        note: "registered auto-probe-safe route; mutating/passive routes skipped",
-      });
-    }
-  }
-  return {
-    ok: safeRoutes.every((route) => route.ok),
-    service: "codex-dock-relay",
-    schema: "codexdock.selftest.v1",
-    checkedAt: new Date().toISOString(),
-    routes: safeRoutes,
   };
 }
 
@@ -794,57 +691,6 @@ function startServer(config) {
     });
   }
 
-  function writeTraceResponse(request, response) {
-    const requestURL = new URL(request.url, "http://127.0.0.1");
-    if (requestURL.pathname === "/tracesz/recent") {
-      writeJSONResponse(response, {
-        ok: true,
-        service: "codex-dock-relay",
-        schema: "codexdock.tracesz.recent.v1",
-        traces: config.observability.recentTraces({ limit: 50 }),
-      });
-      return;
-    }
-    const operationID = traceOperationIDFromPath(requestURL.pathname);
-    const trace = config.observability.trace(operationID);
-    if (!trace) {
-      writeJSONResponse(response, {
-        ok: false,
-        service: "codex-dock-relay",
-        error: "trace not found",
-        operationID,
-      }, 404);
-      return;
-    }
-    writeJSONResponse(response, {
-      ok: true,
-      service: "codex-dock-relay",
-      schema: "codexdock.tracesz.operation.v1",
-      trace,
-    });
-  }
-
-  function writeSelfTestResponse(request, response) {
-    runSelfTest(config)
-      .then((result) => writeJSONResponse(response, result))
-      .catch((error) => {
-        logger.error("selftestz.failed", { error });
-        writeJSONResponse(response, {
-          ok: false,
-          service: "codex-dock-relay",
-          error: "selftest unavailable",
-        }, 500);
-      });
-  }
-
-  async function writeBundleResponse(request, response) {
-    await checkRawAppServerHealth(config, config.statusTracker);
-    const runtime = runtimeSnapshot(config, sessions, downstreamSockets);
-    const status = config.statusTracker.snapshot(config, runtime);
-    const metrics = config.statusTracker.metricsSnapshot(config, runtime);
-    writeJSONResponse(response, config.observability.bundle({ status, metrics, runtime }));
-  }
-
   const server = http.createServer((request, response) => {
     const requestURL = new URL(request.url, "http://127.0.0.1");
     if (requestURL.pathname === "/readyz") {
@@ -884,16 +730,8 @@ function startServer(config) {
       writeMetricsResponse(request, response);
       return;
     }
-    if (requestURL.pathname === "/debugz/sessions") {
-      writeDebugSessionsResponse(request, response);
-      return;
-    }
     if (requestURL.pathname === "/routesz") {
       writeRoutesResponse(request, response);
-      return;
-    }
-    if (requestURL.pathname === "/statez") {
-      writeJSONResponse(response, config.relayStateEngine.stateSnapshot());
       return;
     }
     if (requestURL.pathname === "/syncz") {
@@ -901,54 +739,7 @@ function startServer(config) {
         ok: true,
         service: "codex-dock-relay",
         schema: "codexdock.syncz.v1",
-        syncScopes: config.relayStateEngine.stateSnapshot().syncScopes,
-      });
-      return;
-    }
-    if (requestURL.pathname === "/subscriptionsz") {
-      writeJSONResponse(response, {
-        ok: true,
-        service: "codex-dock-relay",
-        schema: "codexdock.subscriptionsz.v1",
-        subscribers: config.relayStateEngine.subscriptions.subscribers.size,
-      });
-      return;
-    }
-    if (requestURL.pathname === "/dbz") {
-      writeJSONResponse(response, {
-        ok: true,
-        service: "codex-dock-relay",
-        schema: "codexdock.dbz.v1",
-        db: config.relayStateEngine.stateSnapshot().db,
-      });
-      return;
-    }
-    if (requestURL.pathname.startsWith("/explainz/thread/")) {
-      const threadID = decodeURIComponent(requestURL.pathname.slice("/explainz/thread/".length));
-      writeJSONResponse(response, {
-        ok: true,
-        service: "codex-dock-relay",
-        schema: "codexdock.explainz.thread.v1",
-        explanation: config.relayStateEngine.explainThread(threadID),
-      });
-      return;
-    }
-    if (requestURL.pathname === "/tracesz/recent" || requestURL.pathname.startsWith("/tracesz/")) {
-      writeTraceResponse(request, response);
-      return;
-    }
-    if (requestURL.pathname === "/selftestz") {
-      writeSelfTestResponse(request, response);
-      return;
-    }
-    if (requestURL.pathname === "/bundlez") {
-      writeBundleResponse(request, response).catch((error) => {
-        logger.error("bundlez.failed", { error });
-        writeJSONResponse(response, {
-          ok: false,
-          service: "codex-dock-relay",
-          error: "bundle unavailable",
-        }, 500);
+        state: "available",
       });
       return;
     }

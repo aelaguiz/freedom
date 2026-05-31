@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
+import Ajv2020 from "ajv/dist/2020.js";
 
 const repoRoot = process.cwd();
 const schemaPath = path.join(repoRoot, "contract/dock/dock-thread-card.schema.json");
@@ -38,71 +39,39 @@ function walk(value, visit) {
   }
 }
 
-function requireObject(value, label) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    fail(`${label} must be an object`);
-    return false;
-  }
-  return true;
-}
-
-function validateCard(card, label) {
-  if (!requireObject(card, label)) {
-    return;
-  }
-  for (const key of [
-    "id",
-    "logicalHostID",
-    "threadID",
-    "backendSessionID",
-    "hostDisplayName",
-    "orderKey",
-    "activityAt",
-    "displaySummary",
-    "title",
-    "status",
-    "sourceKind",
-    "lane",
-    "archiveState",
-    "freshness",
-    "completeness",
-  ]) {
-    if (typeof card[key] !== "string" || card[key].trim() === "") {
-      fail(`${label}.${key} must be a non-empty string`);
+function validateStream(stream, filePath, validateSchema) {
+  const relativePath = path.relative(repoRoot, filePath);
+  if (!validateSchema(stream)) {
+    for (const error of validateSchema.errors || []) {
+      fail(`${relativePath} schema error ${error.instancePath || "/"} ${error.message}`);
     }
-  }
-}
-
-function validateStream(stream, filePath) {
-  if (!requireObject(stream, filePath)) {
-    return;
   }
   walk(stream, (key) => {
     if (forbiddenKeys.has(key)) {
-      fail(`${path.relative(repoRoot, filePath)} contains forbidden legacy key ${key}`);
+      fail(`${relativePath} contains forbidden legacy key ${key}`);
     }
   });
-  if (stream.schemaVersion !== 2) {
-    fail(`${path.relative(repoRoot, filePath)} schemaVersion must be 2`);
+
+  if (stream.complete === true && stream.freshness?.status !== "fresh") {
+    fail(`${relativePath} complete streams must carry fresh stream freshness`);
   }
-  if (!["snapshot", "delta", "heartbeat"].includes(stream.kind)) {
-    fail(`${path.relative(repoRoot, filePath)} has invalid kind ${stream.kind}`);
-  }
-  if (!["dock", "archive"].includes(stream.view)) {
-    fail(`${path.relative(repoRoot, filePath)} has invalid view ${stream.view}`);
-  }
+
   for (const [field, cards] of Object.entries({
     cards: stream.cards,
     upsertCards: stream.upsertCards,
   })) {
-    if (cards === undefined) {
-      continue;
-    }
     if (!Array.isArray(cards)) {
-      fail(`${path.relative(repoRoot, filePath)} ${field} must be an array`);
       continue;
     }
-    cards.forEach((card, index) => validateCard(card, `${path.relative(repoRoot, filePath)}.${field}[${index}]`));
+    cards.forEach((card, index) => {
+      const label = `${relativePath}.${field}[${index}]`;
+      if (card.completeness !== "complete" && card.freshness === "fresh") {
+        fail(`${label} cannot be fresh when card completeness is ${card.completeness}`);
+      }
+      if (stream.complete === true && (card.completeness !== "complete" || card.freshness !== "fresh")) {
+        fail(`${label} must be fresh and complete when stream complete is true`);
+      }
+    });
   }
 }
 
@@ -111,8 +80,11 @@ if (schema?.properties?.schemaVersion?.const !== 2) {
   fail("contract schemaVersion const must be 2");
 }
 
+const ajv = new Ajv2020({ allErrors: true });
+const validateSchema = ajv.compile(schema);
+
 for (const entry of fs.readdirSync(fixtureDir).filter((name) => name.endsWith(".json")).sort()) {
-  validateStream(readJSON(path.join(fixtureDir, entry)), path.join(fixtureDir, entry));
+  validateStream(readJSON(path.join(fixtureDir, entry)), path.join(fixtureDir, entry), validateSchema);
 }
 
 const generated = spawnSync(process.execPath, ["scripts/generate-dock-thread-card-contract.mjs", "--check"], {

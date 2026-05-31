@@ -2,10 +2,6 @@ const HUMAN_APP_FACING_THREAD_SQL = "lane = 'human' AND source_kind = 'human'";
 const HUMAN_APP_FACING_THREAD_SQL_FOR_ALIAS = "t.lane = 'human' AND t.source_kind = 'human'";
 const REJECTED_APP_FACING_THREAD_SQL = "lane IS NOT 'human' OR source_kind IS NOT 'human'";
 
-function isHumanAppFacingStoredRow(row) {
-  return row?.lane === "human" && row?.source_kind === "human";
-}
-
 function deleteRejectedThreadCards(db, hostID = null) {
   const params = [];
   let where = REJECTED_APP_FACING_THREAD_SQL;
@@ -76,5 +72,4 @@ export {
   deleteRejectedLiveLeases,
   deleteRejectedThreadCards,
   humanAppFacingStateCounts,
-  isHumanAppFacingStoredRow,
 };

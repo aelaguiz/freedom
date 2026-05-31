@@ -121,14 +121,9 @@ final class DockStoreTests: XCTestCase {
         }
 
         let loadCount = await loader.currentLoadCount()
-        let recordedQueries = await loader.recordedQueries()
-        XCTAssertEqual(loadCount, 4)
-        XCTAssertEqual(sortedQueries(recordedQueries), [
-            .activeAgents,
-            .activeAgents,
-            .activeHuman,
-            .activeHuman
-        ])
+        let recordedViews = await loader.recordedViews()
+        XCTAssertEqual(loadCount, 2)
+        XCTAssertEqual(recordedViews, [.dock, .dock])
         XCTAssertEqual(snapshot.rows.map(\.branch), ["feature/refresh"])
         XCTAssertEqual(snapshot.rows[0].title, "Refreshed row")
     }
@@ -312,7 +307,7 @@ final class DockStoreTests: XCTestCase {
         let store = DockStore(registry: registry, streamClient: LoaderBackedThreadCardStreamClient(loader: loader))
 
         let loadTask = Task { await store.load() }
-        await loader.waitForDelayedRequests(2)
+        await loader.waitForDelayedRequests(1)
 
         guard let partial = await waitForLoadedSnapshot(from: store, where: \.isPartial) else {
             XCTFail("Expected a partial loaded snapshot while \(home.id) was still checking; got \(store.state)")
@@ -485,7 +480,6 @@ final class DockStoreTests: XCTestCase {
         XCTAssertTrue(storedValues[key]?.isPinned == true)
         XCTAssertEqual(storedValues[key]?.pinnedAt, Date(timeIntervalSince1970: 2_000))
         XCTAssertEqual(storedValues[key]?.pinnedOrder, 0)
-        XCTAssertEqual(storedValues[key]?.lastKnownPinnedDisplay?.title, "Pinned row")
 
         let reloaded = DockStore(
             host: host,
@@ -549,7 +543,6 @@ final class DockStoreTests: XCTestCase {
         XCTAssertEqual(metadata.isPinned, false)
         XCTAssertNil(metadata.pinnedAt)
         XCTAssertNil(metadata.pinnedOrder)
-        XCTAssertNil(metadata.lastKnownPinnedDisplay)
     }
 
     @MainActor
@@ -776,7 +769,6 @@ final class DockStoreTests: XCTestCase {
         XCTAssertEqual(values[key]?.isPinned, false)
         XCTAssertNil(values[key]?.pinnedAt)
         XCTAssertNil(values[key]?.pinnedOrder)
-        XCTAssertNil(values[key]?.lastKnownPinnedDisplay)
     }
 
     @MainActor
@@ -885,16 +877,16 @@ final class DockStoreTests: XCTestCase {
         guard case let .loaded(initialSnapshot) = store.state else {
             return XCTFail("Expected archived rows, got \(store.state)")
         }
-        let initialQueries = await loader.recordedQueries()
-        XCTAssertEqual(initialQueries, [.archivedHuman])
+        let initialViews = await loader.recordedViews()
+        XCTAssertEqual(initialViews, [.archive])
 
         let restored = await store.restore(initialSnapshot.sections[0].rows[0])
 
         XCTAssertTrue(restored)
         let unarchivedIDs = await archiver.unarchivedIDs()
-        let finalQueries = await loader.recordedQueries()
+        let finalViews = await loader.recordedViews()
         XCTAssertEqual(unarchivedIDs, ["thread-restore"])
-        XCTAssertEqual(finalQueries, [.archivedHuman, .archivedHuman])
+        XCTAssertEqual(finalViews, [.archive, .archive])
         guard case let .empty(snapshot) = store.state else {
             return XCTFail("Expected empty archive after restore, got \(store.state)")
         }

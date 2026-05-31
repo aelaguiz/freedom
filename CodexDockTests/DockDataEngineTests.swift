@@ -68,44 +68,44 @@ final class DockDataEngineTests: XCTestCase {
         XCTAssertEqual(rowCount, 1)
     }
 
-    func testEngineAppliesLocalMetadataBeforeSnapshotProjection() async throws {
+    func testEngineAppliesLocalMetadataToRelayRowsBeforeProjection() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
         let key = LocalThreadMetadataKey(
             hostID: host.id,
-            backendSessionID: "cached-session",
-            threadID: "cached-thread"
+            backendSessionID: "thread-a-session",
+            threadID: "thread-a"
         )
         let metadata = LocalThreadMetadata(
             label: nil,
             rail: .violet,
             isPinned: true,
             pinnedAt: Date(timeIntervalSince1970: 10),
-            pinnedOrder: 0,
-            lastKnownPinnedDisplay: LocalPinnedDisplaySnapshot(
-                title: "Cached pinned",
-                hostDisplayName: host.displayName,
-                hostEndpoint: host.endpoint.displayEndpoint,
-                repository: "codex-client",
-                branch: "main",
-                status: .dormant,
-                lastActivity: "5m ago",
-                lastActivityDate: Date(timeIntervalSince1970: 1_700),
-                summary: "Cached summary",
-                rail: .blue,
-                label: nil,
-                originKind: .human
-            )
+            pinnedOrder: 0
         )
         let engine = DockDataEngine(
             registry: registry,
             localMetadata: [key: metadata]
         )
+        let update = dockStreamSnapshot(
+            host: host,
+            epoch: "epoch-a",
+            seq: 1,
+            cards: [
+                threadCardFixture(
+                    host: host,
+                    threadID: "thread-a",
+                    title: "Thread A",
+                    updatedAt: 2_000
+                )
+            ]
+        )
 
+        _ = await engine.applySnapshot(update, host: host)
         let snapshot = await engine.snapshot(now: { Date(timeIntervalSince1970: 2_000) })
         let rows = snapshot?.rows ?? []
 
-        XCTAssertEqual(rows.map(\.id.threadID), ["cached-thread"])
+        XCTAssertEqual(rows.map(\.id.threadID), ["thread-a"])
         XCTAssertEqual(rows.map(\.isPinned), [true])
         XCTAssertEqual(rows.map(\.rail), [.violet])
     }

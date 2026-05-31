@@ -15,16 +15,14 @@ class NotificationIngestor {
     if (!threadId) {
       return null;
     }
-    const result = this.store.applyArchiveMutation({
-      hostID: this.hostId,
-      threadID: threadId,
-      archived,
-    });
+    // Archive commands are inputs to the canonical projection. They must not
+    // write card order or freshness directly because that recreates a second
+    // card-truth path beside dock/* and archive/* streams.
     this.scheduleReconciliation?.({
       reason: archived ? "thread/archive" : "thread/unarchive",
-      immediate: false,
+      immediate: true,
     });
-    return result;
+    return null;
   }
 
   markScopeStale(scopeName, error) {

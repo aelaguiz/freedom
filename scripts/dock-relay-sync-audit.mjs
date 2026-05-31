@@ -14,11 +14,6 @@ import {
 } from "./dock-relay-constants.mjs";
 import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
 import { startServer } from "./dock-relay.mjs";
-import {
-  buildReport as buildParityReport,
-  parseArgs as parseParityArgs,
-  threadSpawnParentIDFromSource,
-} from "./dock-relay-state-parity.mjs";
 import { threadMatchesSourceKinds } from "./dock-relay-source-filter.mjs";
 import { initializeClient } from "./dock-relay-thread-data.mjs";
 
@@ -26,7 +21,7 @@ const MODES = new Set(["one-shot", "read-only-real-home", "soak", "scenario"]);
 const DETAIL_MODES = new Set(["none", "sampled", "all"]);
 const TURN_SORT_DIRECTIONS = new Set(["asc", "desc"]);
 const TURN_ITEMS_VIEWS = new Set(["notLoaded", "summary", "full"]);
-const SCENARIOS = new Set(["archive-toggle", "detail-reconnect", "goal-change", "live-lease-expiry", "multi-host-isolation", "resync-gap", "server-request", "source-refresh", "spawn-edge", "thread-activity", "all"]);
+const SCENARIOS = new Set(["archive-toggle", "detail-reconnect", "live-lease-expiry", "multi-host-isolation", "resync-gap", "server-request", "source-refresh", "spawn-edge", "thread-activity", "all"]);
 const DEFAULT_SCENARIO = "archive-toggle";
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_SOAK_DURATION_MS = 900_000;
@@ -41,7 +36,6 @@ const DEFAULT_SCENARIO_REPETITIONS = 1;
 const DEFAULT_DETAIL_LIMIT = 5;
 const DEFAULT_DETAIL_OBSERVE_MS = 100;
 const DEFAULT_DETAIL_TURN_LIMIT = 250;
-const DEFAULT_MISSING_READ_PROBE_LIMIT = 25;
 const TEXT_FIELD_RE = /(^|_|\b)(title|summary|preview|message|text|content|transcript|prompt|firstUserMessage|displaySummary|latestSummary)($|_|\b)/i;
 const SECRET_FIELD_RE = /(token|secret|authorization|apiKey|bearer|password|credential)/i;
 const CLIENT_PATH_ROUTES = new Set([
@@ -64,7 +58,6 @@ const REQUIRED_SCENARIOS = Object.freeze([
   { id: "live-lease-expiry", label: "Active live thread appears as live and later expires when no longer live", implementedBy: "live-lease-expiry" },
   { id: "archive-removal", label: "Thread is archived and disappears from active Dock after complete refresh", implementedBy: "archive-toggle" },
   { id: "unarchive-return", label: "Thread is unarchived and reappears in active Dock after complete refresh", implementedBy: "archive-toggle" },
-  { id: "goal-change", label: "Goal state changes and matches app-server-visible goal state", implementedBy: "goal-change" },
   { id: "spawn-edge", label: "Subagent spawn edge stays out of human-only app-facing streams", implementedBy: "spawn-edge" },
   { id: "server-request-visible", label: "Server request appears in detail as both event and request card", implementedBy: "server-request" },
   { id: "server-request-resolution", label: "Server request resolution updates the card", implementedBy: "server-request" },
@@ -84,21 +77,6 @@ const SCENARIO_ARCHIVE_STATUS_PRIORITY = Object.freeze({
   needsApproval: 5,
   running: 6,
 });
-const ORACLE_ONLY_SURFACES = Object.freeze([
-  "SQLite state_5.sqlite",
-  "SQLite goals_1.sqlite",
-  "rollout JSONL session_meta",
-  "relay/state/snapshot",
-  "thread/list",
-  "thread/goal/get",
-  "thread/loaded/list",
-  "thread/search missing-row probes",
-]);
-const OUTSIDE_CLIENT_CONTRACT_PARITY_CHECKS = Object.freeze({
-  relaySnapshotComplete: "relay/state/snapshot is an oracle-only verifier surface; the client consumes dock/subscribe, dock/update, and dock/resync.",
-  currentThreadGoalsExact: "thread/goal/get is not exposed by DockThreadCardDTO or the current ThreadDetailStore path.",
-});
-
 function usage() {
   return [
     "Usage: node scripts/dock-relay-sync-audit.mjs [options]",
@@ -109,18 +87,13 @@ function usage() {
     "  --codex-home <path>        Codex home. Defaults to CODEX_HOME or ~/.codex.",
     "  --sqlite-home <path>       SQLite home. Defaults to CODEX_SQLITE_HOME or codex home.",
     "  --limit <n>                App-server page size, capped at 250. Defaults to 250.",
-    "  --exhaustive               Include existing parity exhaustive checks.",
-    "  --include-thread-reads     Include app-server/routed thread/read surfaces in parity snapshots.",
-    "  --include-loaded           Include relay thread/loaded/list state in parity snapshots.",
-    "  --include-goals            Include app-server thread/goal/get state in parity snapshots.",
-    "  --include-turns            Include app-server thread/turns/list state in parity snapshots.",
     "  --turn-sort-direction <asc|desc>  Turn order to request. Defaults to desc.",
     "  --turn-items-view <notLoaded|summary|full>  Turn detail to request. Exhaustive defaults to full.",
-    "  --scenario <archive-toggle|detail-reconnect|goal-change|live-lease-expiry|multi-host-isolation|resync-gap|server-request|source-refresh|spawn-edge|thread-activity|all>  Scenario actuator set for scenario mode. Defaults to archive-toggle.",
+    "  --scenario <archive-toggle|detail-reconnect|live-lease-expiry|multi-host-isolation|resync-gap|server-request|source-refresh|spawn-edge|thread-activity|all>  Scenario actuator set for scenario mode. Defaults to archive-toggle.",
     "  --scenario-thread-id <id>   Select an exact thread id for scenario mode instead of the first active Dock row.",
     "  --scenario-hold-ms <n>      Hold after each scenario mutation before the next mutation. Defaults to 0.",
     "  --scenario-repetitions <n>  Repeat the selected scenario. Defaults to 1.",
-    "  --client-path-only         Skip oracle parity reads and verify only actual client-exercised relay routes.",
+    "  --client-path-only         Accepted for compatibility; this script only proves actual client-exercised relay routes.",
     "  --force-dock-resync        In soak mode, explicitly call dock/resync each sample and verify convergence.",
     "  --duration-ms <n>          Soak duration. Defaults to 900000.",
     "  --sample-interval-ms <n>   Soak sample interval. Defaults to 30000.",
@@ -136,9 +109,6 @@ function usage() {
     "  --no-detail-resume         Skip thread/resume in detail probes.",
     "  --no-detail-buffer-initial-live  Fail instead of modeling the Swift initial live-event buffer.",
     "  --request-timeout-ms <n>   JSON-RPC request timeout. Defaults to 120000.",
-    "  --missing-read-probe-limit <n>  Max missing IDs for existing parity probes. Defaults to 25.",
-    "  --no-missing-read-probes   Disable existing parity direct thread/read probes.",
-    "  --no-missing-search-probes Disable existing parity thread/search probes.",
     "  --json-out <path>          Write sanitized JSON report to a file.",
     "  --summary-out <path>       Write Markdown summary to a file.",
     "  --summary-only             Print compact stdout summary instead of full JSON.",
@@ -212,11 +182,6 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
     codexHome: env.CODEX_HOME || path.join(os.homedir(), ".codex"),
     sqliteHome: env.CODEX_SQLITE_HOME || null,
     limit: THREAD_LIST_MAX_LIMIT,
-    includeThreadReads: false,
-    includeLoaded: false,
-    includeGoals: false,
-    includeTurns: false,
-    exhaustive: false,
     clientPathOnly: false,
     forceDockResync: false,
     turnSortDirection: "desc",
@@ -240,9 +205,6 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
     detailResume: true,
     detailBufferInitialLive: true,
     requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
-    probeMissingDirectReads: true,
-    probeMissingSearches: true,
-    missingReadProbeLimit: DEFAULT_MISSING_READ_PROBE_LIMIT,
     jsonOut: null,
     summaryOut: null,
     summaryOnly: false,
@@ -287,20 +249,10 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
       index += 1;
     } else if (arg.startsWith("--limit=")) {
       options.limit = parsePositiveInteger(arg.slice("--limit=".length), "--limit");
-    } else if (arg === "--include-thread-reads") {
-      options.includeThreadReads = true;
-    } else if (arg === "--include-loaded") {
-      options.includeLoaded = true;
-    } else if (arg === "--include-goals") {
-      options.includeGoals = true;
-    } else if (arg === "--include-turns") {
-      options.includeTurns = true;
     } else if (arg === "--client-path-only") {
       options.clientPathOnly = true;
     } else if (arg === "--force-dock-resync") {
       options.forceDockResync = true;
-    } else if (arg === "--exhaustive") {
-      options.exhaustive = true;
     } else if (arg === "--turn-sort-direction") {
       options.turnSortDirection = readValue(index, arg);
       index += 1;
@@ -397,15 +349,6 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
       index += 1;
     } else if (arg.startsWith("--request-timeout-ms=")) {
       options.requestTimeoutMs = parsePositiveInteger(arg.slice("--request-timeout-ms=".length), "--request-timeout-ms");
-    } else if (arg === "--no-missing-read-probes") {
-      options.probeMissingDirectReads = false;
-    } else if (arg === "--no-missing-search-probes") {
-      options.probeMissingSearches = false;
-    } else if (arg === "--missing-read-probe-limit") {
-      options.missingReadProbeLimit = parsePositiveInteger(readValue(index, arg), "--missing-read-probe-limit");
-      index += 1;
-    } else if (arg.startsWith("--missing-read-probe-limit=")) {
-      options.missingReadProbeLimit = parsePositiveInteger(arg.slice("--missing-read-probe-limit=".length), "--missing-read-probe-limit");
     } else if (arg === "--json-out") {
       options.jsonOut = readValue(index, arg);
       index += 1;
@@ -438,62 +381,17 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
     throw new Error("--turn-items-view must be notLoaded, summary, or full");
   }
   if (!SCENARIOS.has(options.scenario)) {
-    throw new Error("--scenario must be archive-toggle, detail-reconnect, goal-change, live-lease-expiry, multi-host-isolation, resync-gap, server-request, source-refresh, spawn-edge, thread-activity, or all");
+    throw new Error("--scenario must be archive-toggle, detail-reconnect, live-lease-expiry, multi-host-isolation, resync-gap, server-request, source-refresh, spawn-edge, thread-activity, or all");
   }
 
   options.limit = Math.min(options.limit, THREAD_LIST_MAX_LIMIT);
   options.detailTurnLimit = Math.min(options.detailTurnLimit, THREAD_LIST_MAX_LIMIT);
-  options.missingReadProbeLimit = Math.min(options.missingReadProbeLimit, THREAD_LIST_MAX_LIMIT);
-  if (options.exhaustive) {
-    options.includeThreadReads = true;
-    options.includeLoaded = true;
-    options.includeGoals = true;
-    options.includeTurns = true;
-    if (!options.turnItemsViewExplicit) {
-      options.turnItemsView = "full";
-    }
-  }
   options.codexHome = resolveUserPath(options.codexHome, cwd);
   options.sqliteHome = resolveUserPath(options.sqliteHome || options.codexHome, cwd);
   options.jsonOut = options.jsonOut ? resolveUserPath(options.jsonOut, cwd) : null;
   options.summaryOut = options.summaryOut ? resolveUserPath(options.summaryOut, cwd) : null;
   delete options.turnItemsViewExplicit;
   return options;
-}
-
-function parityOptionsFromSyncOptions(options) {
-  const args = [
-    "--relay-url", options.relayUrl,
-    "--codex-home", options.codexHome,
-    "--sqlite-home", options.sqliteHome,
-    "--limit", String(options.limit),
-    "--turn-sort-direction", options.turnSortDirection,
-    "--turn-items-view", options.turnItemsView,
-    "--request-timeout-ms", String(options.requestTimeoutMs),
-    "--missing-read-probe-limit", String(options.missingReadProbeLimit),
-  ];
-  if (options.exhaustive) {
-    args.push("--exhaustive");
-  }
-  if (options.includeThreadReads) {
-    args.push("--include-thread-reads");
-  }
-  if (options.includeLoaded) {
-    args.push("--include-loaded");
-  }
-  if (options.includeGoals) {
-    args.push("--include-goals");
-  }
-  if (options.includeTurns) {
-    args.push("--include-turns");
-  }
-  if (!options.probeMissingDirectReads) {
-    args.push("--no-missing-read-probes");
-  }
-  if (!options.probeMissingSearches) {
-    args.push("--no-missing-search-probes");
-  }
-  return parseParityArgs(args, {}, process.cwd());
 }
 
 function textFingerprint(value) {
@@ -574,13 +472,6 @@ function summarizeClientPathEvents(events = []) {
     eventCount: events.length,
     events,
     note: "Only countedAsClientPath=true events are proof that the relay routes used by the client were exercised. Oracle reads diagnose drift but do not count as client-path proof.",
-  };
-}
-
-function oracleEvidenceSummary() {
-  return {
-    surfaces: [...ORACLE_ONLY_SURFACES],
-    note: "These reads are allowed only as comparison oracles. They must not be counted as proof that the client-facing relay path delivers current data.",
   };
 }
 
@@ -1839,125 +1730,25 @@ function findingCounts(findings) {
   }, { error: 0, warning: 0, info: 0 });
 }
 
-function summarizeParity(parityReport) {
-  if (!parityReport) {
-    return {
-      included: false,
-      ok: null,
-      findings: [],
-      blindSpots: [],
-    };
-  }
+function summarizeParity() {
   return {
-    included: true,
-    ok: Boolean(parityReport?.ok),
-    generatedAt: parityReport?.generatedAt || null,
-    relay: parityReport?.relay || null,
-    dock: parityReport?.dock || null,
-    sqlite: parityReport?.sqlite || null,
-    disk: parityReport?.disk || null,
-    summary: parityReport?.summary || null,
-    blindSpots: parityReport?.blindSpots || [],
-    missingThreads: parityReport?.missingThreads || [],
-    extraThreadIDs: parityReport?.extraThreadIDs || [],
-    findings: parityReport?.findings || [],
+    included: false,
+    ok: null,
+    findings: [],
+    blindSpots: [],
   };
 }
 
-function classifyParityForClientContract(parityReport) {
-  if (!parityReport) {
-    return {
-      ok: true,
-      oracleOK: null,
-      skipped: true,
-      oracleFindings: {
-        errors: 0,
-        warnings: 0,
-        info: 0,
-      },
-      clientRequiredFailures: [],
-      outsideClientContract: [],
-    };
-  }
-  const summary = parityReport?.summary || {};
-  const boundary = summary.completionBoundary || {};
-  const failedChecks = Array.isArray(boundary.failedAppServerChecks)
-    ? boundary.failedAppServerChecks
-    : [];
-  const clientRequiredFailures = [];
-  const outsideClientContract = [];
-
-  for (const check of failedChecks) {
-    if (OUTSIDE_CLIENT_CONTRACT_PARITY_CHECKS[check]) {
-      outsideClientContract.push({
-        check,
-        reason: OUTSIDE_CLIENT_CONTRACT_PARITY_CHECKS[check],
-      });
-    } else {
-      clientRequiredFailures.push({
-        check,
-        reason: "app-server or relay parity failed for a field used by the client contract",
-      });
-    }
-  }
-
-  if (parityReport?.ok === false && failedChecks.length === 0 && Number(summary.errors || 0) > 0) {
-    clientRequiredFailures.push({
-      check: "unknownParityError",
-      reason: "parity failed without a completion-boundary classification",
-    });
-  }
-
+function classifyParityForClientContract() {
   return {
-    ok: clientRequiredFailures.length === 0,
-    oracleOK: Boolean(parityReport?.ok),
-    oracleFindings: {
-      errors: Number(summary.errors || 0),
-      warnings: Number(summary.warnings || 0),
-      info: Number(summary.info || 0),
-    },
-    clientRequiredFailures,
-    outsideClientContract,
+    ok: true,
+    skipped: true,
+    clientRequiredFailures: [],
   };
 }
 
-function findingsForParityClientContract(classification) {
-  if (!classification) {
-    return [];
-  }
-  if (classification.skipped) {
-    return [{
-      code: "parity_skipped_client_path_only",
-      severity: "info",
-      message: "oracle parity was skipped because this run is proving only actual client-exercised relay routes",
-    }];
-  }
-  const findings = [];
-  if (classification.clientRequiredFailures.length > 0) {
-    findings.push({
-      code: "parity_client_required_failed",
-      severity: "error",
-      message: "relay/app-server parity failed for a client-required surface",
-      failures: classification.clientRequiredFailures,
-      oracleFindings: classification.oracleFindings,
-    });
-  } else if (!classification.oracleOK) {
-    findings.push({
-      code: "parity_oracle_outside_client_contract",
-      severity: "info",
-      message: "oracle-only parity findings exist, but they are outside the current client-exercised route or DTO contract",
-      outsideClientContract: classification.outsideClientContract,
-      oracleFindings: classification.oracleFindings,
-    });
-  } else if (classification.oracleFindings.warnings > 0) {
-    findings.push({
-      code: "parity_oracle_warnings",
-      severity: "info",
-      message: "oracle-only parity warnings exist without a client-required failure",
-      oracleFindings: classification.oracleFindings,
-    });
-  }
-  return findings;
+function findingsForParityClientContract() {
+  return [];
 }
 
 function sampleOK(sample) {
@@ -1974,9 +1765,7 @@ async function buildSample({ options, sampleIndex, streamProbe = null }) {
     }
     await streamProbe.waitForComplete(options.dockCollectionTimeoutMs);
   }
-  const parity = options.clientPathOnly
-    ? null
-    : await buildParityReport(parityOptionsFromSyncOptions(options));
+  const parity = null;
   let freshDock = await collectDockClientPathSnapshot(options, sampleRouteEvents);
   const streamComparisonResult = streamProbe
     ? await compareStreamToFreshDock({
@@ -2076,7 +1865,7 @@ async function buildSample({ options, sampleIndex, streamProbe = null }) {
     },
     clientContract: parityClientContract,
     clientPathEvidence: summarizeClientPathEvents(clientPathEvents),
-    oracleEvidence: oracleEvidenceSummary(),
+    oracleEvidence: null,
     findings,
     findingCounts: counts,
   };
@@ -2096,9 +1885,9 @@ async function buildOneShotReport(options) {
     samples: [sample],
     summary: summarizeSamples([sample], null),
     clientPathEvidence: summarizeClientPathEvents(sample.clientPathEvidence.events),
-    oracleEvidence: oracleEvidenceSummary(),
+    oracleEvidence: null,
     failures: sample.findings.filter((finding) => finding.severity === "error" || finding.severity === "warning"),
-    unsupportedFacts: sample.parity.blindSpots || [],
+    unsupportedFacts: [],
   };
 }
 
@@ -2143,10 +1932,10 @@ async function buildSoakReport(options) {
       ...streamProbe.routeEvents,
       ...samples.flatMap((sample) => sample.clientPathEvidence?.events || []),
     ]),
-    oracleEvidence: oracleEvidenceSummary(),
+    oracleEvidence: null,
     failures: samples.flatMap((sample) => sample.findings || [])
       .filter((finding) => finding.severity === "error" || finding.severity === "warning"),
-    unsupportedFacts: [...new Set(samples.flatMap((sample) => sample.parity?.blindSpots || []))],
+    unsupportedFacts: [],
   };
 }
 
@@ -3056,223 +2845,6 @@ async function runThreadActivityScenario(options) {
   }
 }
 
-function sanitizeGoalForScenario(goal) {
-  if (!goal || typeof goal !== "object") {
-    return null;
-  }
-  return normalizeForComparison({
-    threadID: goal.threadId || goal.thread_id || null,
-    status: goal.status || null,
-    tokenBudget: goal.tokenBudget ?? goal.token_budget ?? null,
-    tokensUsed: goal.tokensUsed ?? goal.tokens_used ?? null,
-    timeUsedSeconds: goal.timeUsedSeconds ?? goal.time_used_seconds ?? null,
-    createdAt: goal.createdAt ?? goal.created_at ?? null,
-    updatedAt: goal.updatedAt ?? goal.updated_at ?? null,
-    objectivePresent: typeof goal.objective === "string" && goal.objective.length > 0,
-  });
-}
-
-async function runGoalChangeScenario(options) {
-  const routeEvents = [];
-  const findings = [];
-  const transitions = [];
-  const startedAtMs = Date.now();
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-goal-change-"));
-  const hostID = "goal-change-fixture";
-  const host = {
-    id: hostID,
-    displayName: "Goal Change Fixture",
-    endpoint: "127.0.0.1:0",
-  };
-  const threadID = "goal-change-thread";
-  const baseThread = fixtureThread(threadID, "Thread with app-server visible goal", 100);
-  let currentGoal = {
-    threadId: threadID,
-    objective: "private controlled goal objective",
-    status: "in_progress",
-    tokenBudget: 100,
-    tokensUsed: 10,
-    timeUsedSeconds: 20,
-    createdAt: 1000,
-    updatedAt: 1000,
-  };
-
-  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  const listening = new Promise((resolve) => historyServer.once("listening", resolve));
-  await listening;
-  historyServer.on("connection", (ws) => {
-    ws.on("message", (data) => {
-      const message = JSON.parse(data.toString());
-      if (message.method === "initialize") {
-        sendFixtureResult(ws, message.id, {
-          userAgent: "codex-goal-change-fixture",
-          codexHome: tempDir,
-          platformFamily: "unix",
-          platformOs: "macos",
-        });
-      } else if (message.method === "thread/list") {
-        const sourceKinds = message.params?.sourceKinds;
-        const rows = [baseThread].filter((row) => threadMatchesSourceKinds(row, sourceKinds));
-        sendFixtureResult(ws, message.id, {
-          data: rows,
-          nextCursor: null,
-          backwardsCursor: null,
-        });
-      } else if (message.method === "thread/loaded/list") {
-        sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
-      } else if (message.method === "thread/goal/get") {
-        const requestedThreadID = message.params?.threadId || message.params?.threadID;
-        sendFixtureResult(ws, message.id, {
-          goal: requestedThreadID === threadID ? currentGoal : null,
-        });
-      }
-    });
-  });
-
-  const relayConfig = {
-    listenHost: "127.0.0.1",
-    port: 0,
-    phoneAuth: "none",
-    hostId: host.id,
-    hostName: host.displayName,
-    hostEndpoint: host.endpoint,
-    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
-    historyBearerToken: "history-token",
-    advertiseBonjour: false,
-    observabilityDir: false,
-    relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
-    relayStateAutoStart: false,
-    logger: {
-      debug() {},
-      info() {},
-      warn() {},
-      error() {},
-      fault() {},
-      fatalSync() {},
-    },
-  };
-  const relay = startServer(relayConfig);
-  await relay.listening;
-  const fixtureOptions = {
-    ...options,
-    relayUrl: `ws://127.0.0.1:${relay.server.address().port}`,
-    codexHome: tempDir,
-    sqliteHome: tempDir,
-    detail: "none",
-  };
-
-  const readGoal = async (label) => withRelayClient(fixtureOptions, null, async (client) => {
-    recordRoute(routeEvents, "thread/goal/get", `goal-change scenario ${label} goal read`, {
-      threadID,
-    });
-    return client.request("thread/goal/get", { threadId: threadID });
-  }, routeEvents);
-
-  try {
-    await relayConfig.relayStateEngine.reconcileDock({ reason: "scenario_goal_change_initial_projection" });
-    const beforeDock = await collectDockClientPathSnapshot(fixtureOptions, routeEvents);
-    if (!dockSnapshotHasThread(beforeDock, threadID)) {
-      findings.push({
-        code: "scenario_goal_change_thread_missing",
-        severity: "error",
-        message: "goal-change fixture thread was not visible through a fresh Dock client-path subscription",
-        threadID,
-      });
-    }
-
-    const beforeGoal = await readGoal("before-change");
-    const beforeSanitized = sanitizeGoalForScenario(beforeGoal?.goal);
-    if (beforeSanitized?.threadID !== threadID || beforeSanitized?.status !== "in_progress") {
-      findings.push({
-        code: "scenario_goal_change_initial_goal_wrong",
-        severity: "error",
-        message: "initial thread/goal/get did not return the expected app-server-visible goal state",
-        expectedStatus: "in_progress",
-        actualGoal: beforeSanitized,
-      });
-    }
-
-    const changeStartedAtMs = Date.now();
-    currentGoal = {
-      ...currentGoal,
-      status: "complete",
-      tokensUsed: 100,
-      timeUsedSeconds: 55,
-      updatedAt: 2000,
-    };
-    const afterGoal = await readGoal("after-change");
-    const observedAtMs = Date.now();
-    const afterSanitized = sanitizeGoalForScenario(afterGoal?.goal);
-    const goalLag = scenarioLagSummary({
-      transition: "goal-change",
-      startedAtMs: changeStartedAtMs,
-      acknowledgedAtMs: observedAtMs,
-      observedAtMs,
-      maxStreamLagMs: options.maxStreamLagMs,
-    });
-    if (afterSanitized?.threadID !== threadID || afterSanitized?.status !== "complete") {
-      findings.push({
-        code: "scenario_goal_change_not_seen",
-        severity: "error",
-        message: "thread/goal/get did not return the updated app-server-visible goal state",
-        expectedStatus: "complete",
-        actualGoal: afterSanitized,
-      });
-    } else if (goalLag.exceeded) {
-      findings.push({
-        code: "scenario_goal_change_lag_exceeded",
-        severity: "error",
-        message: "updated goal state was returned after the configured real-time budget",
-        observedLagMs: goalLag.lag_change_to_relay_ms,
-        maxStreamLagMs: options.maxStreamLagMs,
-      });
-    }
-
-    transitions.push({
-      name: "goal-change",
-      kind: "goal-change",
-      iteration: 1,
-      routes: ["thread/goal/get"],
-      routeCountsAsClientPath: false,
-      wait: {
-        ok: afterSanitized?.threadID === threadID && afterSanitized?.status === "complete",
-        observedAt: new Date(observedAtMs).toISOString(),
-        observedAtMs,
-      },
-      lag: goalLag,
-      beforeGoal: beforeSanitized,
-      afterGoal: afterSanitized,
-      note: "thread/goal/get is app-server-visible relay proof. It is intentionally not counted as current Swift client-path proof because DockThreadCardDTO and ThreadDetailStore do not consume goal fields today.",
-    });
-
-    return {
-      id: "goal-change",
-      ok: !findings.some((finding) => finding.severity === "error" || finding.severity === "warning"),
-      startedAt: new Date(startedAtMs).toISOString(),
-      endedAt: new Date().toISOString(),
-      actuator: {
-        type: "controlled app-server goal fixture through relay thread/goal/get",
-        routes: ["thread/goal/get"],
-        clientExercised: false,
-        outsideCurrentClientContract: true,
-        note: "The relay forwards the app-server-visible goal route, but the current Swift client does not consume goal fields. This scenario proves freshness of that relay route without counting it as client-path delivery.",
-      },
-      target: {
-        logicalHostID: host.id,
-        threadID,
-      },
-      beforeDock: sanitizeDockSnapshotForReport(beforeDock),
-      transitions,
-      clientPathEvidence: summarizeClientPathEvents(routeEvents),
-      findings,
-    };
-  } finally {
-    await relay.close();
-    await closeWebSocketServer(historyServer);
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-}
-
 async function runSpawnEdgeScenario(options) {
   const routeEvents = [];
   const findings = [];
@@ -3661,12 +3233,8 @@ async function runLiveLeaseExpiryScenario(options) {
       });
     }
 
-    const explained = relayConfig.relayStateEngine.store.explainThread({ hostID: host.id, threadID });
-    const leaseExpiresAtMs = Number(explained?.liveLease?.expiresAtMs || 0);
     liveRowsEnabled = false;
-    const expireStartedAtMs = Number.isFinite(leaseExpiresAtMs) && leaseExpiresAtMs > 0
-      ? leaseExpiresAtMs
-      : Date.now();
+    const expireStartedAtMs = Date.now();
     const expiredWait = await waitForStreamCondition({
       streamProbe,
       timeoutMs: options.dockCollectionTimeoutMs,
@@ -3685,7 +3253,6 @@ async function runLiveLeaseExpiryScenario(options) {
         severity: "error",
         message: "live lease expiry did not publish the non-live status through the long-lived Dock stream",
         threadID,
-        leaseExpiresAt: Number.isFinite(leaseExpiresAtMs) && leaseExpiresAtMs > 0 ? new Date(leaseExpiresAtMs).toISOString() : null,
       });
     } else if (expiredLag.exceeded) {
       findings.push({
@@ -4817,13 +4384,8 @@ function reportConfig(options) {
     codexHome: options.codexHome,
     sqliteHome: options.sqliteHome,
     limit: options.limit,
-    exhaustive: options.exhaustive,
     clientPathOnly: options.clientPathOnly,
     forceDockResync: options.forceDockResync,
-    includeThreadReads: options.includeThreadReads,
-    includeLoaded: options.includeLoaded,
-    includeGoals: options.includeGoals,
-    includeTurns: options.includeTurns,
     turnSortDirection: options.turnSortDirection,
     turnItemsView: options.turnItemsView,
     scenario: options.scenario,
@@ -4858,14 +4420,6 @@ function summarizeSamples(samples, streamProbe) {
     ), 0)
   ), 0);
   const clientPathOK = samples.every((sample) => sample.clientPath?.ok !== false);
-  const oracleContractSamples = samples.filter((sample) => sample.clientContract?.skipped !== true);
-  const clientRequiredOracleOK = oracleContractSamples.length > 0
-    ? oracleContractSamples.every((sample) => sample.clientContract?.ok !== false)
-    : null;
-  const clientRequiredParityFailures = samples.reduce(
-    (count, sample) => count + Number(sample.clientContract?.clientRequiredFailures?.length || 0),
-    0,
-  );
   const streamLagMeasurements = samples.flatMap((sample) => [
     sample.stream?.convergence,
     sample.stream?.convergenceAfterResync,
@@ -4873,9 +4427,6 @@ function summarizeSamples(samples, streamProbe) {
   const maxObservedStreamLagMs = streamLagMeasurements.length > 0
     ? Math.max(...streamLagMeasurements.map((entry) => Number(entry.observedLagMs)))
     : null;
-  const oracleOnlyParitySamples = samples.filter(
-    (sample) => sample.clientContract?.oracleOK === false && sample.clientContract?.ok === true,
-  ).length;
   const routeCounts = {};
   const sampleClientPathEvents = samples.flatMap((sample) => sample.clientPathEvidence?.events || []);
   const allClientPathEvents = streamProbe
@@ -4893,8 +4444,8 @@ function summarizeSamples(samples, streamProbe) {
     okSamples,
     failedSamples: samples.length - okSamples,
     clientPathOK,
-    clientRequiredOracleOK,
-    clientRequiredOracleSampleCount: oracleContractSamples.length,
+    clientRequiredOracleOK: null,
+    clientRequiredOracleSampleCount: 0,
     errors: counts.error,
     warnings: counts.warning,
     info: counts.info,
@@ -4904,9 +4455,9 @@ function summarizeSamples(samples, streamProbe) {
     detailBufferedInitialLiveEvents,
     clientPathRoutesExercised: Object.keys(routeCounts).sort(),
     clientPathRouteCounts: routeCounts,
-    parityFailures: samples.filter((sample) => sample.parity?.ok === false).length,
-    clientRequiredParityFailures,
-    oracleOnlyParitySamples,
+    parityFailures: 0,
+    clientRequiredParityFailures: 0,
+    oracleOnlyParitySamples: 0,
     longLivedStreamMismatches: findings.filter((finding) => finding.code?.startsWith("dock_stream_")).length,
     streamLagFailures: findings.filter((finding) => finding.code === "dock_stream_lag_exceeded").length,
     maxObservedStreamLagMs,
@@ -4922,9 +4473,6 @@ async function buildScenarioReport(options) {
   }
   if (options.scenario === "detail-reconnect" || options.scenario === "all") {
     scenarios.push(await runDetailReconnectScenario(options));
-  }
-  if (options.scenario === "goal-change" || options.scenario === "all") {
-    scenarios.push(await runGoalChangeScenario(options));
   }
   if (options.scenario === "resync-gap" || options.scenario === "all") {
     scenarios.push(await runResyncGapScenario(options));
@@ -4999,10 +4547,10 @@ async function buildScenarioReport(options) {
       unimplementedRequiredScenarios: unsupportedScenarioFindings.map((finding) => finding.scenarioID),
     },
     clientPathEvidence,
-    oracleEvidence: oracleEvidenceSummary(),
+    oracleEvidence: null,
     failures: samples.flatMap((entry) => entry.findings || [])
       .filter((finding) => finding.severity === "error" || finding.severity === "warning"),
-    unsupportedFacts: sample.parity.blindSpots || [],
+    unsupportedFacts: [],
   };
 }
 
@@ -5029,12 +4577,9 @@ function markdownSummary(report) {
   lines.push("");
   lines.push(`- OK: ${report.summary.ok ? "true" : "false"}`);
   lines.push(`- Client-path OK: ${report.summary.clientPathOK ? "true" : "false"}`);
-  lines.push(`- Client-required oracle OK: ${report.summary.clientRequiredOracleOK === null ? "not run" : (report.summary.clientRequiredOracleOK ? "true" : "false")}`);
   lines.push(`- Samples: ${report.summary.sampleCount}`);
   lines.push(`- Errors: ${report.summary.errors}`);
   lines.push(`- Warnings: ${report.summary.warnings}`);
-  lines.push(`- Oracle-only parity samples: ${report.summary.oracleOnlyParitySamples}`);
-  lines.push(`- Client-required parity failures: ${report.summary.clientRequiredParityFailures}`);
   lines.push(`- Long-lived stream mismatches: ${report.summary.longLivedStreamMismatches}`);
   lines.push(`- Stream lag budget: ${report.config?.maxStreamLagMs ?? "unknown"} ms`);
   lines.push(`- Max observed stream lag: ${report.summary.maxObservedStreamLagMs === null ? "not observed" : `${report.summary.maxObservedStreamLagMs} ms`}`);
@@ -5049,7 +4594,7 @@ function markdownSummary(report) {
     lines.push(`- Unimplemented required scenarios: ${(report.summary.unimplementedRequiredScenarios || []).join(", ") || "none"}`);
   }
   lines.push("");
-  lines.push("Client-path proof counts only relay routes the client exercises. Oracle reads such as `relay/state/snapshot`, SQLite, `thread/list`, and `thread/search` are used only to judge freshness and drift.");
+  lines.push("Client-path proof counts only relay routes the client exercises.");
   lines.push("");
   lines.push("## Failures");
   lines.push("");
@@ -5132,7 +4677,6 @@ export {
   applyDockPayload,
   buildSyncAuditReport,
   cardID,
-  classifyParityForClientContract,
   compareDockStates,
   collectDockClientPathSnapshot,
   dockStateFromPayload,

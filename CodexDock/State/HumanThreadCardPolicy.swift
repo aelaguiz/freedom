@@ -5,9 +5,3 @@ extension DockThreadCardDTO {
         lane == .human && sourceKind == .human
     }
 }
-
-extension LocalThreadMetadata {
-    var hasAppFacingHumanPinnedDisplay: Bool {
-        lastKnownPinnedDisplay?.originKind == .human
-    }
-}

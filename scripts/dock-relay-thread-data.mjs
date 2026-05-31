@@ -20,6 +20,11 @@ import {
   humanThreadRejectedError,
   isHumanStartedThread,
 } from "./dock-relay-human-thread-filter.mjs";
+import {
+  activityOrderKey,
+  timestampToISO,
+  timestampToMs,
+} from "./dock-relay-state-views.mjs";
 
 function relayLogger(config) {
   return config?.logger || defaultRelayLogger;
@@ -191,6 +196,50 @@ function mergeActiveFlags(thread, additionalFlags) {
 
 function rowTimestamp(thread) {
   return Number(thread?.updatedAt ?? thread?.createdAt ?? 0);
+}
+
+function maxTimestampMs(values = []) {
+  let newest = 0;
+  for (const value of values) {
+    const timestamp = timestampToMs(value);
+    if (timestamp > newest) {
+      newest = timestamp;
+    }
+  }
+  return newest;
+}
+
+function turnActivityMs(turn) {
+  if (!turn || typeof turn !== "object") {
+    return 0;
+  }
+  return maxTimestampMs([
+    turn.activityAtMs,
+    turn.activityAt,
+    turn.updatedAtMs,
+    turn.updatedAt,
+    turn.completedAtMs,
+    turn.completedAt,
+    turn.finishedAtMs,
+    turn.finishedAt,
+    turn.startedAtMs,
+    turn.startedAt,
+    turn.createdAtMs,
+    turn.createdAt,
+    turn.timestampMs,
+    turn.timestamp,
+  ]);
+}
+
+function threadActivityMs(thread) {
+  return maxTimestampMs([
+    thread?.activityAtMs,
+    thread?.activityAt,
+    thread?.updatedAtMs,
+    thread?.updatedAt,
+    thread?.createdAtMs,
+    thread?.createdAt,
+  ]);
 }
 
 function preferThread(candidate, existing) {
@@ -553,16 +602,73 @@ async function readHistoryThreadList(config, params) {
   return historyClientForConfig(config).request("thread/list", params);
 }
 
-async function readHistoryThreadSearch(config, params) {
-  return historyClientForConfig(config).request("thread/search", params);
+async function drainThreadListRows(config, params = {}, {
+  name = "active:interactiveDefault",
+  sourceScope = "interactiveDefault",
+} = {}) {
+  const pages = [];
+  const rows = [];
+  const seenCursors = new Set();
+  const historyParams = humanOnlyThreadListParams(params);
+  let cursor = historyParams.cursor || null;
+  let complete = true;
+  let error = null;
+  let ordinal = 0;
+
+  try {
+    while (true) {
+      const request = {
+        ...historyParams,
+        ...(cursor ? { cursor } : {}),
+      };
+      const response = await readHistoryThreadList(config, request);
+      const data = Array.isArray(response?.data) ? response.data : [];
+      pages.push({
+        cursor,
+        nextCursor: response?.nextCursor || null,
+        backwardsCursor: response?.backwardsCursor || null,
+        rowCount: data.length,
+      });
+      for (let index = 0; index < data.length; index += 1) {
+        rows.push({
+          ordinal,
+          pageIndex: pages.length - 1,
+          rowIndex: index,
+          thread: data[index],
+        });
+        ordinal += 1;
+      }
+      const nextCursor = response?.nextCursor || null;
+      if (!nextCursor) {
+        break;
+      }
+      if (seenCursors.has(nextCursor)) {
+        complete = false;
+        error = `repeated thread/list cursor ${nextCursor}`;
+        break;
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
+  } catch (caught) {
+    complete = false;
+    error = caught?.message || String(caught);
+  }
+
+  return {
+    name,
+    archived: Boolean(historyParams.archived),
+    sourceScope,
+    complete,
+    error,
+    pages,
+    rowCount: rows.length,
+    rows,
+  };
 }
 
 async function readHistoryThread(config, params) {
   return historyClientForConfig(config).request("thread/read", params);
-}
-
-async function readHistoryThreadGoal(config, params) {
-  return historyClientForConfig(config).request("thread/goal/get", params);
 }
 
 async function readThreadTurnsFromEndpoint(endpoint, params, timeoutMs = undefined, logger = defaultRelayLogger) {
@@ -581,43 +687,12 @@ async function readThreadFromEndpoint(endpoint, params, logger = defaultRelayLog
   );
 }
 
-async function readThreadGoalFromEndpoint(endpoint, params, logger = defaultRelayLogger) {
-  return withClient(
-    endpoint.url,
-    { bearerToken: endpoint.bearerToken || null, logger },
-    async (client) => client.request("thread/goal/get", params),
-  );
-}
-
 function sanitizeRelayFields(thread) {
   if (!thread || typeof thread !== "object") {
     return thread;
   }
   const { dockRelaySource, ...clean } = thread;
   return clean;
-}
-
-function sanitizeThreadSearchResult(result) {
-  if (!result || typeof result !== "object") {
-    return result;
-  }
-  if (result.thread && typeof result.thread === "object") {
-    return {
-      ...result,
-      thread: sanitizeRelayFields(result.thread),
-    };
-  }
-  if (result.id) {
-    return sanitizeRelayFields(result);
-  }
-  return result;
-}
-
-function threadRowFromSearchResult(result) {
-  if (result?.thread && typeof result.thread === "object") {
-    return result.thread;
-  }
-  return result;
 }
 
 function mergeAuthoritativeThreadRead(listRow, readThread) {
@@ -630,8 +705,15 @@ function mergeAuthoritativeThreadRead(listRow, readThread) {
       merged[key] = value;
     }
   }
-  if (!merged.id && listRow?.id) {
+  // `thread/read` enriches display/detail fields, but it must not downgrade the
+  // list identity or activity baseline before turn activity is proven.
+  if (listRow?.id) {
     merged.id = listRow.id;
+  }
+  for (const field of ["createdAt", "updatedAt"]) {
+    if (Number.isFinite(Number(listRow?.[field])) && Number.isFinite(Number(readThread?.[field]))) {
+      merged[field] = Math.max(Number(listRow[field]), Number(readThread[field]));
+    }
   }
   delete merged.turns;
   return merged;
@@ -802,52 +884,6 @@ function mergeHumanStartedRowsWithSupplements(rows = [], supplements = []) {
   });
 }
 
-async function enrichHumanStartedSearchResults(config, results = []) {
-  const rowsWithResult = [];
-  const rejectedCounts = {};
-  for (const result of results) {
-    const row = threadRowFromSearchResult(result);
-    const classification = classifyThreadOrigin(row);
-    if (classification.allowed) {
-      rowsWithResult.push({ result, row });
-      continue;
-    }
-    rejectedCounts[classification.reason] = Number(rejectedCounts[classification.reason] || 0) + 1;
-  }
-
-  const enriched = await enrichHumanStartedRows(
-    config,
-    rowsWithResult.map((entry) => entry.row),
-    { route: "thread_search" },
-  );
-  for (const [reason, count] of Object.entries(enriched.rejectedCounts)) {
-    rejectedCounts[reason] = Number(rejectedCounts[reason] || 0) + Number(count || 0);
-  }
-
-  const enrichedByID = new Map(enriched.acceptedRows.map((row) => [row?.id, row]).filter(([id]) => id));
-  const acceptedResults = [];
-  for (const entry of rowsWithResult) {
-    const row = enrichedByID.get(entry.row?.id);
-    if (!row) {
-      continue;
-    }
-    if (entry.result?.thread && typeof entry.result.thread === "object") {
-      acceptedResults.push({
-        ...entry.result,
-        thread: row,
-      });
-    } else {
-      acceptedResults.push(row);
-    }
-  }
-
-  return {
-    acceptedResults,
-    rejectedCounts,
-    validationFailures: enriched.validationFailures,
-  };
-}
-
 function assertRouteHumanStartedThread(row, threadId) {
   const classification = classifyThreadOrigin(row);
   if (!classification.allowed) {
@@ -906,54 +942,6 @@ async function aggregateThreadList(config, params = {}) {
   };
 }
 
-async function aggregateThreadSearch(config, params = {}) {
-  const logger = relayLogger(config);
-  const historyParams = humanOnlyThreadListParams(params);
-  const history = await readHistoryThreadSearch(config, historyParams);
-  const rawData = Array.isArray(history.data) ? history.data : [];
-  const { acceptedResults, rejectedCounts, validationFailures } = await enrichHumanStartedSearchResults(config, rawData);
-  const data = acceptedResults.map(sanitizeThreadSearchResult);
-  logger.info("thread_search.loaded", {
-    requestedLimit: params.limit,
-    effectiveLimit: historyParams.limit,
-    returnedRows: data.length,
-    rejectedCounts,
-    validationFailures,
-  });
-  return {
-    ...history,
-    data,
-  };
-}
-
-async function aggregateThreadGoalGet(config, params = {}) {
-  if (!params.threadId) {
-    throw new Error("thread/goal/get requires threadId");
-  }
-  await assertHumanThreadID(config, params.threadId);
-  const endpoint = await endpointForThread(config, params.threadId);
-  const result = isHistoryEndpoint(config, endpoint)
-    ? await readHistoryThreadGoal(config, params)
-    : await readThreadGoalFromEndpoint(endpoint, params, relayLogger(config));
-  relayLogger(config).info("thread_goal_get.loaded", {
-    goalPresent: result?.goal != null,
-  });
-  return result;
-}
-
-async function aggregateLoadedList(config, params = {}) {
-  const logger = relayLogger(config);
-  const snapshot = await liveStatusCacheForConfig(config).snapshotForRouting();
-  const rows = snapshot.rows.filter(isHumanStartedThread);
-  const ids = rows.map((row) => row.id);
-  logger.info("thread_loaded_list.loaded", {
-    liveRows: ids.length,
-    endpoints: snapshot.endpoints.length,
-    failedEndpoints: snapshot.failedEndpoints,
-  });
-  return paginateStrings(ids, params);
-}
-
 async function aggregateThreadRead(config, params = {}) {
   if (!params.threadId) {
     throw new Error("thread/read requires threadId");
@@ -983,6 +971,114 @@ async function listThreadTurns(config, params = {}) {
     return historyClientForConfig(config).request("thread/turns/list", params);
   }
   return readThreadTurnsFromEndpoint(endpoint, params, undefined, relayLogger(config));
+}
+
+async function readNewestTurnActivity(config, threadId) {
+  const pages = [];
+  const seenCursors = new Set();
+  let cursor = null;
+  let newestTurnActivityAtMs = 0;
+
+  while (true) {
+    const response = await listThreadTurns(config, {
+      threadId,
+      limit: THREAD_LIST_MAX_LIMIT,
+      ...(cursor ? { cursor } : {}),
+    });
+    const turns = Array.isArray(response?.data) ? response.data : [];
+    pages.push({
+      cursor,
+      nextCursor: response?.nextCursor || null,
+      rowCount: turns.length,
+    });
+    for (const turn of turns) {
+      newestTurnActivityAtMs = Math.max(newestTurnActivityAtMs, turnActivityMs(turn));
+    }
+    const nextCursor = response?.nextCursor || null;
+    if (!nextCursor) {
+      break;
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw new Error(`repeated thread/turns/list cursor ${nextCursor}`);
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+
+  return {
+    newestTurnActivityAtMs,
+    pages,
+  };
+}
+
+async function canonicalizeThreadRows(config, rows = [], {
+  route = "dock_reconcile",
+} = {}) {
+  // This is the card-truth collapse point. Raw list rows, read metadata,
+  // turn pages, live/session candidates, and archive inputs may feed this
+  // projection, but only the canonical rows returned here may become Dock or
+  // Archive card facts.
+  const logger = relayLogger(config);
+  const results = await allSettledInBatches(
+    rows,
+    HUMAN_THREAD_READ_ENRICHMENT_CONCURRENCY,
+    async (row) => {
+      if (!row?.id) {
+        throw new Error("thread row missing id");
+      }
+      const baseActivityAtMs = threadActivityMs(row);
+      const turns = await readNewestTurnActivity(config, row.id);
+      const activityAtMs = Math.max(baseActivityAtMs, turns.newestTurnActivityAtMs);
+      return {
+        ...row,
+        activityAtMs,
+        activityAt: timestampToISO(activityAtMs),
+        orderKey: activityOrderKey(activityAtMs, row.id),
+        freshness: "fresh",
+        completeness: "complete",
+        activityProofStatus: "proven",
+        activityProofSource: "thread/read+thread/turns/list",
+        activityProofCheckedAt: new Date().toISOString(),
+      };
+    },
+  );
+
+  const canonicalRows = [];
+  let validationFailures = 0;
+  for (let index = 0; index < results.length; index += 1) {
+    const result = results[index];
+    const row = rows[index];
+    if (result.status === "fulfilled") {
+      canonicalRows.push(result.value);
+      continue;
+    }
+    validationFailures += 1;
+    const fallbackActivityAtMs = threadActivityMs(row);
+    logger.warn("card_activity_proof.failed", {
+      route,
+      threadId: row?.id || null,
+      error: result.reason,
+    });
+    if (row?.id) {
+      canonicalRows.push({
+        ...row,
+        activityAtMs: fallbackActivityAtMs,
+        activityAt: timestampToISO(fallbackActivityAtMs),
+        orderKey: activityOrderKey(fallbackActivityAtMs, row.id),
+        freshness: "stale",
+        completeness: "partial",
+        activityProofStatus: "unproven",
+        activityProofSource: "thread/read+thread/turns/list:error",
+        activityProofCheckedAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  return {
+    rows: canonicalRows,
+    complete: validationFailures === 0,
+    validationFailures,
+  };
 }
 
 async function endpointForThread(config, threadId) {
@@ -1015,15 +1111,14 @@ async function unarchiveThread(config, params = {}) {
 
 export {
   assertHumanThreadID,
-  aggregateLoadedList,
-  aggregateThreadGoalGet,
   aggregateThreadList,
   aggregateThreadRead,
-  aggregateThreadSearch,
   archiveThread,
   attentionFlagsForServerRequest,
+  canonicalizeThreadRows,
   collectLiveRows,
   configuredLiveEndpointsForConfig,
+  drainThreadListRows,
   endpointForThread,
   enrichHumanStartedRows,
   initializeClient,
@@ -1036,9 +1131,7 @@ export {
   pendingRequestsForActiveThread,
   preferThread,
   readHistoryThread,
-  readHistoryThreadGoal,
   readHistoryThreadList,
-  readHistoryThreadSearch,
   readSessionIndexHumanStartedSupplements,
   sanitizeRelayFields,
   liveStatusCacheForConfig,

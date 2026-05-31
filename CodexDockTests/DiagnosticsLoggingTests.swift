@@ -44,7 +44,6 @@ final class DiagnosticsLoggingTests: XCTestCase {
         let expectedRoutes: Set<String> = [
             AppServerMethods.initialize,
             AppServerMethods.initialized,
-            AppServerMethods.threadList,
             AppServerMethods.threadRead,
             AppServerMethods.threadResume,
             AppServerMethods.threadTurnsList,
@@ -87,8 +86,8 @@ final class DiagnosticsLoggingTests: XCTestCase {
             "http://home.fairy-salmon.ts.net:4510/routesz"
         )
         XCTAssertEqual(
-            try client.diagnosticsURL(for: endpoint, path: "tracesz/op-client-1").absoluteString,
-            "http://home.fairy-salmon.ts.net:4510/tracesz/op-client-1"
+            try client.diagnosticsURL(for: endpoint, path: "syncz").absoluteString,
+            "http://home.fairy-salmon.ts.net:4510/syncz"
         )
     }
 
