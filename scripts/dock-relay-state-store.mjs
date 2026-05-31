@@ -11,6 +11,7 @@ import {
   DOCK_VIEW,
   applyLeaseToCard,
   archiveOrderKey,
+  dockCardID,
   dockOrderKey,
   normalizeStoredCard,
 } from "./dock-relay-state-views.mjs";
@@ -628,12 +629,12 @@ class RelayStateStore {
   applyArchiveMutation({ hostID, threadID, archived }) {
     const at = nowISOString();
     return this.transaction(() => {
-      const dockID = `${hostID}::${threadID}`;
       const existing = this.db.prepare(`
-        SELECT activity_at_ms
+        SELECT activity_at_ms, logical_host_id, dock_id
         FROM threads
         WHERE host_id = ? AND thread_id = ?
       `).get(hostID, threadID);
+      const dockID = existing?.dock_id || dockCardID(existing?.logical_host_id || hostID, threadID);
       const orderKey = archived
         ? archiveOrderKey(existing?.activity_at_ms || Date.now(), threadID)
         : dockOrderKey(0, threadID);

@@ -569,6 +569,13 @@ public struct DockView: View {
         return nil
     }
 
+    private var currentSnapshot: DockSnapshot? {
+        if case .loaded(let renderSnapshot) = screenStore.state {
+            return renderSnapshot.snapshot
+        }
+        return nil
+    }
+
     private var detailNavigationBinding: Binding<Bool> {
         Binding(
             get: {
@@ -585,9 +592,13 @@ public struct DockView: View {
     @ViewBuilder
     private var selectedDetailDestination: some View {
         if let selectedDetailRow,
-           let host = store.hostConfiguration(for: selectedDetailRow.id.hostID) {
+           let host = store.hostConfiguration(for: selectedDetailRow) {
             SessionDetailView(
-                store: makeThreadDetailStore(host: host, row: selectedDetailRow)
+                store: makeThreadDetailStore(
+                    host: host,
+                    row: selectedDetailRow,
+                    hostIdentityResolver: currentSnapshot?.hostIdentityResolver
+                )
             )
         } else {
             DockMessageView(
@@ -600,7 +611,8 @@ public struct DockView: View {
 
     private func makeThreadDetailStore(
         host: DockHostConfiguration,
-        row: DockRowViewModel
+        row: DockRowViewModel,
+        hostIdentityResolver: DockHostIdentityResolver?
     ) -> ThreadDetailStore {
         if let runtime {
             return runtime.makeThreadDetailStore(
@@ -608,7 +620,8 @@ public struct DockView: View {
                 row: row,
                 factory: threadDetailFactory,
                 lifecycleCoordinator: lifecycleCoordinator,
-                connectivityReporter: connectivityReporter
+                connectivityReporter: connectivityReporter,
+                hostIdentityResolver: hostIdentityResolver
             )
         }
         return ThreadDetailStore(
@@ -616,7 +629,8 @@ public struct DockView: View {
             row: row,
             factory: threadDetailFactory,
             lifecycleCoordinator: lifecycleCoordinator,
-            connectivityReporter: connectivityReporter
+            connectivityReporter: connectivityReporter,
+            hostIdentityResolver: hostIdentityResolver
         )
     }
 
@@ -802,7 +816,7 @@ public struct DockView: View {
                     await store.setPinned(!row.isPinned, for: row)
                 }
             },
-            canOpen: store.hostConfiguration(for: row.id.hostID) != nil,
+            canOpen: store.hostConfiguration(for: row) != nil,
             onOpen: {
                 selectedDetailRow = row
             }
@@ -903,6 +917,10 @@ public struct DockView: View {
             return nil
         }
         return renderSnapshot.snapshot.hostStates.first { $0.host.id == hostID }
+            ?? renderSnapshot.snapshot.hostIdentityResolver.state(
+                forAlias: hostID,
+                in: renderSnapshot.snapshot.hostStates
+            )
     }
 
     private func contextualHostStates(in snapshot: DockSnapshot) -> [DockHostStateViewModel] {

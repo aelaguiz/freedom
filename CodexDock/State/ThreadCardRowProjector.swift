@@ -2,43 +2,44 @@ import Foundation
 
 struct ThreadCardRowProjector {
     let hosts: [DockHostConfiguration]
+    let hostIdentityResolver: DockHostIdentityResolver
     let localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata]
     let now: @Sendable () -> Date
 
-    func rows(from cards: [DockThreadCardDTO]) -> [DockRowViewModel] {
-        cards.map(makeRow)
+    func rows(from cards: [DockThreadCardDTO], sourceHostID: String? = nil) -> [DockRowViewModel] {
+        cards.map { card in
+            makeRow(card: card, sourceHostID: sourceHostID)
+        }
     }
 
     func cachedPinnedRows(excluding loadedKeys: Set<LocalThreadMetadataKey>) -> [DockRowViewModel] {
-        let activeHostIDs = Set(hosts.flatMap { host in
-            [host.id, host.displayName, host.endpoint.displayEndpoint]
-        })
         return localMetadata.compactMap { key, metadata in
             guard metadata.isPinned,
                   !loadedKeys.contains(key),
-                  activeHostIDs.contains(key.hostID) else {
+                  hostIdentityResolver.logicalHostID(forAlias: key.hostID) != nil else {
                 return nil
             }
             return cachedPinnedRow(key: key, metadata: metadata)
         }
     }
 
-    func makeRow(card: DockThreadCardDTO) -> DockRowViewModel {
+    func makeRow(card: DockThreadCardDTO, sourceHostID: String? = nil) -> DockRowViewModel {
         let id = HostScopedThreadID(hostID: card.logicalHostID, threadID: card.threadID)
-        let metadata = localMetadata[
-            LocalThreadMetadataKey(
-                hostID: id.hostID,
-                backendSessionID: card.backendSessionID,
-                threadID: id.threadID
-            )
-        ]
+        let metadata = metadata(
+            for: id,
+            backendSessionID: card.backendSessionID,
+            sourceHostID: sourceHostID
+        )
         let activityDate = activityDate(for: card)
         return DockRowViewModel(
             id: id,
+            sourceHostID: sourceHostID,
             backendSessionID: card.backendSessionID,
             title: nonEmpty(card.title) ?? "Thread \(shortThreadID(card.threadID))",
-            hostDisplayName: nonEmpty(card.hostDisplayName) ?? hostDisplayName(for: card.logicalHostID),
-            hostEndpoint: nonEmpty(card.hostEndpoint) ?? hostEndpoint(for: card.logicalHostID),
+            hostDisplayName: nonEmpty(card.hostDisplayName)
+                ?? hostDisplayName(for: card.logicalHostID, sourceHostID: sourceHostID),
+            hostEndpoint: nonEmpty(card.hostEndpoint)
+                ?? hostEndpoint(for: card.logicalHostID, sourceHostID: sourceHostID),
             repository: nonEmpty(card.repository) ?? nonEmpty(card.workingDirectory) ?? "Unknown workspace",
             branch: nonEmpty(card.branch) ?? "No branch",
             status: status(for: card.status),
@@ -61,8 +62,11 @@ struct ThreadCardRowProjector {
     ) -> DockRowViewModel {
         let snapshot = metadata.lastKnownPinnedDisplay
         let fallbackDate = metadata.pinnedAt ?? Date.distantPast
+        let resolved = hostIdentityResolver.resolve(rowHostID: key.hostID)
+        let logicalHostID = resolved?.logicalHostID ?? key.hostID
         return DockRowViewModel(
-            id: HostScopedThreadID(hostID: key.hostID, threadID: key.threadID),
+            id: HostScopedThreadID(hostID: logicalHostID, threadID: key.threadID),
+            sourceHostID: resolved?.host.id,
             backendSessionID: key.backendSessionID,
             title: nonEmpty(snapshot?.title) ?? "Not loaded",
             hostDisplayName: hostDisplayNameForCachedRow(hostID: key.hostID, snapshot: snapshot),
@@ -80,6 +84,32 @@ struct ThreadCardRowProjector {
             pinnedAt: metadata.pinnedAt,
             pinnedOrder: metadata.pinnedOrder
         )
+    }
+
+    private func metadata(
+        for id: HostScopedThreadID,
+        backendSessionID: String,
+        sourceHostID: String?
+    ) -> LocalThreadMetadata? {
+        let exactKey = LocalThreadMetadataKey(
+            hostID: id.hostID,
+            backendSessionID: backendSessionID,
+            threadID: id.threadID
+        )
+        if let metadata = localMetadata[exactKey] {
+            return metadata
+        }
+
+        return localMetadata.first { key, _ in
+            guard key.backendSessionID == backendSessionID,
+                  key.threadID == id.threadID else {
+                return false
+            }
+            return hostIdentityResolver.logicalHostID(
+                forAlias: key.hostID,
+                sourceConfiguredHostID: sourceHostID
+            ) == id.hostID
+        }?.value
     }
 
     private func activityDate(for card: DockThreadCardDTO) -> Date {
@@ -168,25 +198,21 @@ struct ThreadCardRowProjector {
         return nil
     }
 
-    private func hostDisplayName(for hostID: String) -> String {
-        hosts.first { host in
-            host.id == hostID || host.displayName == hostID || host.endpoint.displayEndpoint == hostID
-        }?.displayName ?? hostID
+    private func hostDisplayName(for hostID: String, sourceHostID: String? = nil) -> String {
+        hostIdentityResolver.displayName(forAlias: hostID, sourceConfiguredHostID: sourceHostID)
+            ?? hostID
     }
 
-    private func hostEndpoint(for hostID: String) -> String {
-        hosts.first { host in
-            host.id == hostID || host.displayName == hostID || host.endpoint.displayEndpoint == hostID
-        }?.endpoint.displayEndpoint ?? hostID
+    private func hostEndpoint(for hostID: String, sourceHostID: String? = nil) -> String {
+        hostIdentityResolver.endpoint(forAlias: hostID, sourceConfiguredHostID: sourceHostID)
+            ?? hostID
     }
 
     private func hostDisplayNameForCachedRow(
         hostID: String,
         snapshot: LocalPinnedDisplaySnapshot?
     ) -> String {
-        hosts.first { host in
-            host.id == hostID || host.displayName == hostID || host.endpoint.displayEndpoint == hostID
-        }?.displayName
+        hostIdentityResolver.displayName(forAlias: hostID)
             ?? nonEmpty(snapshot?.hostDisplayName)
             ?? hostID
     }
@@ -195,9 +221,7 @@ struct ThreadCardRowProjector {
         hostID: String,
         snapshot: LocalPinnedDisplaySnapshot?
     ) -> String {
-        hosts.first { host in
-            host.id == hostID || host.displayName == hostID || host.endpoint.displayEndpoint == hostID
-        }?.endpoint.displayEndpoint
+        hostIdentityResolver.endpoint(forAlias: hostID)
             ?? nonEmpty(snapshot?.hostEndpoint)
             ?? hostID
     }

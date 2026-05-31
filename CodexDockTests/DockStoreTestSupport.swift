@@ -271,7 +271,9 @@ actor LoaderBackedThreadCardStreamConnection: ThreadCardStreamConnection {
         cards: [DockThreadCardDTO],
         freshness: DockStreamFreshnessDTO
     ) -> ThreadCardStreamUpdateDTO {
-        ThreadCardStreamUpdateDTO(
+        let logicalHostID = cards.first?.logicalHostID ?? host.id
+        let hostDisplayName = cards.first?.hostDisplayName ?? host.displayName
+        return ThreadCardStreamUpdateDTO(
             kind: .snapshot,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
             view: view,
@@ -282,7 +284,14 @@ actor LoaderBackedThreadCardStreamConnection: ThreadCardStreamConnection {
             epoch: host.id,
             seq: seq,
             freshness: freshness,
-            hosts: [DockStreamHostDTO(id: host.id, logicalHostID: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
+            hosts: [
+                DockStreamHostDTO(
+                    id: logicalHostID,
+                    logicalHostID: logicalHostID,
+                    displayName: hostDisplayName,
+                    endpoint: host.endpoint.displayEndpoint
+                )
+            ],
             cards: cards
         )
     }
@@ -341,13 +350,15 @@ actor LoaderBackedThreadCardStreamConnection: ThreadCardStreamConnection {
     ) -> DockThreadCardDTO {
         let activity = summary.cardActivityDate ?? summary.lastActivity
         let activityAtMs = Int64(activity.timeIntervalSince1970 * 1_000)
+        let logicalHostID = summary.id.hostID
+        let hostDisplayName = logicalHostID == host.id ? host.displayName : logicalHostID
         let sourceKind = streamSource(from: summary.origin)
         return DockThreadCardDTO(
-            id: "\(host.id)::\(summary.id.threadID)",
-            logicalHostID: host.id,
+            id: "\(logicalHostID)::\(summary.id.threadID)",
+            logicalHostID: logicalHostID,
             threadID: summary.id.threadID,
             backendSessionID: summary.backendSessionID,
-            hostDisplayName: host.displayName,
+            hostDisplayName: hostDisplayName,
             hostEndpoint: host.endpoint.displayEndpoint,
             orderKey: orderKey(activityAtMs: activityAtMs, threadID: summary.id.threadID),
             activityAt: ISO8601DateFormatter().string(from: activity),
@@ -895,7 +906,9 @@ func dockStreamSnapshot(
     totalRows: Int? = nil,
     window: DockStreamWindowDTO? = nil
 ) -> ThreadCardStreamUpdateDTO {
-    ThreadCardStreamUpdateDTO(
+    let logicalHostID = cards.first?.logicalHostID ?? host.id
+    let hostDisplayName = cards.first?.hostDisplayName ?? host.displayName
+    return ThreadCardStreamUpdateDTO(
         kind: .snapshot,
         schemaVersion: schemaVersion,
         view: view,
@@ -911,7 +924,14 @@ func dockStreamSnapshot(
         epoch: epoch,
         seq: seq,
         freshness: freshness,
-        hosts: [DockStreamHostDTO(id: host.id, logicalHostID: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
+        hosts: [
+            DockStreamHostDTO(
+                id: logicalHostID,
+                logicalHostID: logicalHostID,
+                displayName: hostDisplayName,
+                endpoint: host.endpoint.displayEndpoint
+            )
+        ],
         cards: cards
     )
 }
@@ -921,16 +941,20 @@ func threadCardFixture(
     threadID: String,
     title: String,
     status: DockThreadCardStatus = .running,
-    updatedAt: Int64
+    updatedAt: Int64,
+    logicalHostID: String? = nil,
+    hostDisplayName: String? = nil
 ) -> DockThreadCardDTO {
     let activityAt = Date(timeIntervalSince1970: TimeInterval(updatedAt))
     let activityAtMs = Int64(activityAt.timeIntervalSince1970 * 1_000)
+    let cardLogicalHostID = logicalHostID ?? host.id
+    let cardHostDisplayName = hostDisplayName ?? (cardLogicalHostID == host.id ? host.displayName : cardLogicalHostID)
     return DockThreadCardDTO(
-        id: "\(host.id)::\(threadID)",
-        logicalHostID: host.id,
+        id: "\(cardLogicalHostID)::\(threadID)",
+        logicalHostID: cardLogicalHostID,
         threadID: threadID,
         backendSessionID: "\(threadID)-session",
-        hostDisplayName: host.displayName,
+        hostDisplayName: cardHostDisplayName,
         hostEndpoint: host.endpoint.displayEndpoint,
         orderKey: String(format: "%019lld:%@", Int64.max - activityAtMs, threadID),
         activityAt: ISO8601DateFormatter().string(from: activityAt),

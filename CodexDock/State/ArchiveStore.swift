@@ -4,6 +4,7 @@ import Foundation
 public struct ArchiveSnapshot: Equatable, Sendable {
     public let hosts: [DockHostViewModel]
     public let hostStates: [DockHostStateViewModel]
+    public let hostIdentityResolver: DockHostIdentityResolver
     public let sections: [DockSectionViewModel]
 
     public var rowCount: Int {
@@ -174,7 +175,7 @@ public final class ArchiveStore: ObservableObject {
     }
 
     private func restoreRow(_ row: DockRowViewModel) async -> ArchiveRestoreResult {
-        guard let host = hosts.first(where: { $0.id == row.id.hostID }) else {
+        guard let host = hostConfiguration(for: row) else {
             DockLog.archive.error("archive restore skipped missing host_id=\(row.id.hostID, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
             let message = "Host \(row.id.hostID) is no longer configured."
             setActionError(message)
@@ -193,6 +194,37 @@ public final class ArchiveStore: ObservableObject {
             setActionError(message)
             return ArchiveRestoreResult(row: row, status: .failed(message))
         }
+    }
+
+    private func hostConfiguration(for row: DockRowViewModel) -> DockHostConfiguration? {
+        if case .loaded(let snapshot) = state,
+           let resolved = snapshot.hostIdentityResolver.resolve(
+               rowHostID: row.id.hostID,
+               sourceConfiguredHostID: row.sourceHostID
+           ) {
+            return resolved.host
+        }
+        if case .empty(let snapshot) = state,
+           let resolved = snapshot.hostIdentityResolver.resolve(
+               rowHostID: row.id.hostID,
+               sourceConfiguredHostID: row.sourceHostID
+           ) {
+            return resolved.host
+        }
+        if case .unavailable(let snapshot, _) = state,
+           let resolved = snapshot.hostIdentityResolver.resolve(
+               rowHostID: row.id.hostID,
+               sourceConfiguredHostID: row.sourceHostID
+           ) {
+            return resolved.host
+        }
+        if let sourceHostID = row.sourceHostID,
+           let host = hosts.first(where: { $0.id == sourceHostID }) {
+            return host
+        }
+        return DockHostIdentityResolver(hosts: hosts)
+            .resolve(rowHostID: row.id.hostID, sourceConfiguredHostID: row.sourceHostID)?
+            .host
     }
 
     private func reload(showLoading: Bool) async {

@@ -74,7 +74,8 @@ public struct ClientRuntime: Sendable {
         realtimeTranscriptionService: (any RealtimeTranscriptionServicing)? = nil,
         liveVoiceCaptureController: (any LiveVoiceCaptureControlling)? = nil,
         lifecycleCoordinator: AppLifecycleCoordinator? = nil,
-        connectivityReporter: (any AppConnectivityReporting)? = nil
+        connectivityReporter: (any AppConnectivityReporting)? = nil,
+        hostIdentityResolver: DockHostIdentityResolver? = nil
     ) -> ThreadDetailStore {
         ThreadDetailStore(
             host: host,
@@ -85,6 +86,7 @@ public struct ClientRuntime: Sendable {
             lifecycleCoordinator: lifecycleCoordinator,
             connectivityReporter: connectivityReporter,
             connectivityEventSink: connectivityEventSink,
+            hostIdentityResolver: hostIdentityResolver,
             now: now
         )
     }

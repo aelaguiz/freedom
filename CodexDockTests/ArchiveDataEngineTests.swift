@@ -38,6 +38,48 @@ final class ArchiveDataEngineTests: XCTestCase {
         XCTAssertEqual(archivedRequests, [true])
     }
 
+    func testEngineBuildsResolverForLogicalHostRowsLoadedFromEndpointHost() async throws {
+        let host = makeHost(url: "ws://amir-m5.fairy-salmon.ts.net:4510")
+        let registry = try HostRegistry(hosts: [host])
+        let loader = RecordingThreadCardFixtureLoader(results: [
+            .success(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
+                            hostID: "Amir-M5",
+                            threadID: "thread-logical",
+                            branch: "main",
+                            status: .notLoaded,
+                            lastActivity: Date(timeIntervalSince1970: 2_000),
+                            prompt: "Archived logical row"
+                        )
+                    ]
+                )
+            )
+        ])
+        let engine = ArchiveDataEngine(
+            registry: registry,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader, view: .archive),
+            metadataStore: InMemoryLocalThreadMetadataStore(),
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+
+        let snapshot = await engine.loadSnapshot()
+        let row = try XCTUnwrap(snapshot.sections.first?.rows.first)
+
+        XCTAssertEqual(row.id.hostID, "Amir-M5")
+        XCTAssertEqual(row.sourceHostID, host.id)
+        XCTAssertEqual(row.hostDisplayName, "Amir-M5")
+        XCTAssertEqual(row.hostEndpoint, host.endpoint.displayEndpoint)
+        XCTAssertTrue(
+            snapshot.hostIdentityResolver.contains(
+                rowHostID: row.id.hostID,
+                sourceConfiguredHostID: row.sourceHostID,
+                in: host.id
+            )
+        )
+    }
+
     func testEngineCollectsArchiveCatchupWindowsBeforeBuildingSnapshot() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])

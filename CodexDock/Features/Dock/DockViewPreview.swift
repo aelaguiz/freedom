@@ -82,7 +82,7 @@ private struct PreviewThreadCardStreamConnection: ThreadCardStreamConnection {
             epoch: "preview",
             seq: 1,
             freshness: DockStreamFreshnessDTO(status: .fresh),
-            hosts: [DockStreamHostDTO(id: host.id, logicalHostID: host.displayName, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
+            hosts: [DockStreamHostDTO(id: host.displayName, logicalHostID: host.displayName, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
             cards: cards
         )
     }
@@ -101,7 +101,7 @@ private struct PreviewThreadCardStreamConnection: ThreadCardStreamConnection {
     ) -> DockThreadCardDTO {
         let activityAtMs = Int64(activityAt.timeIntervalSince1970 * 1_000)
         return DockThreadCardDTO(
-            id: "\(host.id)::\(id)",
+            id: "\(host.displayName)::\(id)",
             logicalHostID: host.displayName,
             threadID: id,
             backendSessionID: "preview-session-\(id)",

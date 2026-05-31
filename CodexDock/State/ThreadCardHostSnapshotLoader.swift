@@ -2,7 +2,7 @@ import Foundation
 
 struct ThreadCardHostLoadOutcome: Sendable {
     let host: DockHostConfiguration
-    let result: Result<[DockThreadCardDTO], DockRequestFailure>
+    let result: Result<ThreadCardSnapshotCollection, DockRequestFailure>
 }
 
 struct ThreadCardHostSnapshotLoader: Sendable {
@@ -33,17 +33,17 @@ struct ThreadCardHostSnapshotLoader: Sendable {
         DockLog.archive.debug("\(self.operation, privacy: .public) card stream load started host_id=\(host.id, privacy: .public)")
         do {
             let connection = try await streamClient.connect(to: host)
-            let cards: [DockThreadCardDTO]
+            let collection: ThreadCardSnapshotCollection
             do {
-                cards = try await ThreadCardStreamSnapshotCollector(expectedView: expectedView)
+                collection = try await ThreadCardStreamSnapshotCollector(expectedView: expectedView)
                     .collect(from: connection)
             } catch {
                 await connection.close()
                 throw error
             }
             await connection.close()
-            DockLog.archive.debug("\(self.operation, privacy: .public) card stream load finished host_id=\(host.id, privacy: .public) rows=\(cards.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
-            return ThreadCardHostLoadOutcome(host: host, result: .success(cards))
+            DockLog.archive.debug("\(self.operation, privacy: .public) card stream load finished host_id=\(host.id, privacy: .public) rows=\(collection.cards.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+            return ThreadCardHostLoadOutcome(host: host, result: .success(collection))
         } catch {
             DockLog.archive.warning("\(self.operation, privacy: .public) card stream load failed host_id=\(host.id, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             return ThreadCardHostLoadOutcome(host: host, result: .failure(mapRequestFailure(error)))

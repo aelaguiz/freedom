@@ -977,6 +977,7 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
     historyBearerToken: "history-token",
     hostId: "Amir-M5",
     hostName: "Amir M5",
+    hostEndpoint: "amir-m5.fairy-salmon.ts.net:4510",
     advertiseBonjour: false,
     relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
   });
@@ -1010,6 +1011,9 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
     });
     assert.equal(typeof params.stateGeneration, "number");
     assert.equal(params.upsertHosts[0].id, "Amir-M5");
+    assert.equal(params.upsertHosts[0].logicalHostID, "Amir-M5");
+    assert.equal(params.upsertHosts[0].endpoint, "amir-m5.fairy-salmon.ts.net:4510");
+    assert.ok(params.upsertCards.every((row) => row.id === `${row.logicalHostID}::${row.threadID}`));
     assert.deepEqual(
       params.upsertCards.map((row) => [row.threadID, row.status, row.lane, row.sourceKind]),
       [

@@ -29,9 +29,28 @@ public final class DockStore: ObservableObject {
     }
 
     public func hostConfiguration(for hostID: String) -> DockHostConfiguration? {
-        hosts.first { host in
-            host.id == hostID || host.displayName == hostID || host.endpoint.displayEndpoint == hostID
+        if case .loaded(let snapshot) = state,
+           let resolved = snapshot.hostIdentityResolver.resolve(rowHostID: hostID) {
+            return resolved.host
         }
+        return DockHostIdentityResolver(hosts: hosts)
+            .resolve(rowHostID: hostID)?
+            .host
+    }
+
+    public func hostConfiguration(for row: DockRowViewModel) -> DockHostConfiguration? {
+        if case .loaded(let snapshot) = state,
+           let resolved = snapshot.hostIdentityResolver.resolve(
+               rowHostID: row.id.hostID,
+               sourceConfiguredHostID: row.sourceHostID
+           ) {
+            return resolved.host
+        }
+        if let sourceHostID = row.sourceHostID,
+           let host = hosts.first(where: { $0.id == sourceHostID }) {
+            return host
+        }
+        return hostConfiguration(for: row.id.hostID)
     }
 
     public init(
@@ -190,7 +209,7 @@ public final class DockStore: ObservableObject {
 
     @discardableResult
     public func archive(_ row: DockRowViewModel) async -> Bool {
-        guard let host = hostConfiguration(for: row.id.hostID) else {
+        guard let host = hostConfiguration(for: row) else {
             DockLog.dock.error("dock archive skipped missing host_id=\(row.id.hostID, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
             setActionError("Host \(row.id.hostID) is no longer configured.")
             return false
@@ -248,6 +267,7 @@ public final class DockStore: ObservableObject {
         await dataEngine?.updateLocalMetadata(localMetadata)
         await dataEngine?.ensureHosts()
         await synchronizeStreams()
+        await migrateMetadataHostAliases()
         await publishSnapshot()
         if case let .loaded(snapshot) = state {
             DockLog.dock.notice("dock stream reload finished hosts=\(self.hosts.count, privacy: .public) rows=\(snapshot.rowCount, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
@@ -287,6 +307,7 @@ public final class DockStore: ObservableObject {
             let snapshot = try await connection.subscribe()
             try await applySubscribedSnapshot(snapshot, host: host, connection: connection)
             startUpdateTask(host: host, connection: connection)
+            await migrateMetadataHostAliases()
             await publishSnapshot()
         } catch {
             streamTasks[host.id]?.cancel()
@@ -307,6 +328,7 @@ public final class DockStore: ObservableObject {
         do {
             let snapshot = try await connection.resync()
             try await applyResyncSnapshot(snapshot, host: host)
+            await migrateMetadataHostAliases()
             await publishSnapshot()
             let rowCount = await dataEngine.rowCount(for: host)
             DockLog.dock.notice("dock stream resync finished host_id=\(host.id, privacy: .public) seq=\(snapshot.seq, privacy: .public) rows=\(rowCount, privacy: .public)")
@@ -353,6 +375,7 @@ public final class DockStore: ObservableObject {
             DockLog.dock.warning("dock stream resync needed host_id=\(host.id, privacy: .public) reason=\(reason.rawValue, privacy: .public) update_kind=\(update.kind.rawValue, privacy: .public) seq=\(update.seq, privacy: .public)")
             await resync(host: host, connection: connection)
         } else {
+            await migrateMetadataHostAliases()
             await publishSnapshot()
             let rowCount = await dataEngine.rowCount(for: host)
             DockLog.dock.info("dock stream update applied host_id=\(host.id, privacy: .public) update_kind=\(update.kind.rawValue, privacy: .public) seq=\(update.seq, privacy: .public) rows=\(rowCount, privacy: .public)")
@@ -451,6 +474,22 @@ public final class DockStore: ObservableObject {
         state = .loaded(snapshot)
         screenStore.publish(snapshot: snapshot)
         publishConnectivity(for: state)
+    }
+
+    private func migrateMetadataHostAliases() async {
+        guard let resolver = await dataEngine?.hostIdentityResolver() else {
+            return
+        }
+        do {
+            let migratedMetadata = try await metadataEngine.migrateHostAliases(using: resolver)
+            if migratedMetadata != localMetadata {
+                DockLog.persistence.notice("dock metadata host aliases migrated entries=\(migratedMetadata.count, privacy: .public)")
+            }
+            localMetadata = migratedMetadata
+            await dataEngine?.updateLocalMetadata(localMetadata)
+        } catch {
+            DockLog.persistence.warning("dock metadata host alias migration failed error=\(DockLog.errorSummary(error), privacy: .public)")
+        }
     }
 
     private func publishConnectivity(for state: DockStoreState) {

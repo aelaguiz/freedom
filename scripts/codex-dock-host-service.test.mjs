@@ -125,6 +125,8 @@ test("macOS render emits launchd services with raw app-server loopback by defaul
   assert.match(relay.contents, /<string>home<\/string>/);
   assert.match(relay.contents, /<string>--host-name<\/string>/);
   assert.match(relay.contents, /<string>Home<\/string>/);
+  assert.match(relay.contents, /<string>--host-endpoint<\/string>/);
+  assert.match(relay.contents, /<string>home\.local:4510<\/string>/);
 });
 
 test("Linux render emits systemd user services without requiring systemd to run", () => {

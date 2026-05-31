@@ -3,7 +3,7 @@ import Foundation
 actor ArchiveDataEngine {
     private var hosts: [DockHostConfiguration]
     private let streamClient: any ThreadCardStreamConnecting
-    private let metadataStore: any LocalThreadMetadataStoring
+    private let metadataEngine: LocalMetadataEngine
     private let now: @Sendable () -> Date
     private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
 
@@ -15,7 +15,7 @@ actor ArchiveDataEngine {
     ) {
         self.hosts = registry.hosts
         self.streamClient = streamClient
-        self.metadataStore = metadataStore
+        self.metadataEngine = LocalMetadataEngine(store: metadataStore, now: now)
         self.now = now
     }
 
@@ -25,15 +25,18 @@ actor ArchiveDataEngine {
 
     func loadSnapshot() async -> ArchiveSnapshot {
         do {
-            localMetadata = try await metadataStore.load()
+            localMetadata = try await metadataEngine.load()
             DockLog.persistence.debug("archive metadata loaded entries=\(self.localMetadata.count, privacy: .public)")
         } catch {
             localMetadata = [:]
+            await metadataEngine.replace(localMetadata)
             DockLog.persistence.warning("archive metadata load failed error=\(DockLog.errorSummary(error), privacy: .public)")
         }
 
         let results = await loadAllHosts()
-        return makeSnapshot(results: results)
+        let resolver = hostIdentityResolver(results: results)
+        await migrateMetadataHostAliases(using: resolver)
+        return makeSnapshot(results: results, resolver: resolver)
     }
 
     private func loadAllHosts() async -> [ThreadCardHostLoadOutcome] {
@@ -44,21 +47,24 @@ actor ArchiveDataEngine {
         ).loadAll(hosts: hosts)
     }
 
-    private func makeSnapshot(results: [ThreadCardHostLoadOutcome]) -> ArchiveSnapshot {
-        var cards: [DockThreadCardDTO] = []
+    private func makeSnapshot(
+        results: [ThreadCardHostLoadOutcome],
+        resolver: DockHostIdentityResolver
+    ) -> ArchiveSnapshot {
+        var cardBatches: [(hostID: String, cards: [DockThreadCardDTO])] = []
         var hostStates: [DockHostStateViewModel] = []
 
         for outcome in results {
             let host = DockHostViewModel(host: outcome.host)
             switch outcome.result {
-            case .success(let hostCards):
-                cards.append(contentsOf: hostCards)
+            case .success(let collection):
+                cardBatches.append((hostID: outcome.host.id, cards: collection.cards))
                 hostStates.append(
                     DockHostStateViewModel(
                         host: host,
-                        status: hostCards.isEmpty
+                        status: collection.cards.isEmpty
                             ? .empty
-                            : .loaded(rowCount: hostCards.count)
+                            : .loaded(rowCount: collection.cards.count)
                     )
                 )
             case .failure(let failure):
@@ -73,15 +79,59 @@ actor ArchiveDataEngine {
 
         let sections = ArchiveThreadCardProjector(
             hosts: hosts,
+            hostIdentityResolver: resolver,
             localMetadata: localMetadata,
             now: now
-        ).sections(from: cards)
+        ).sections(from: cardBatches)
 
         return ArchiveSnapshot(
             hosts: hosts.map(DockHostViewModel.init),
             hostStates: hostStates,
+            hostIdentityResolver: resolver,
             sections: sections
         )
+    }
+
+    private func hostIdentityResolver(results: [ThreadCardHostLoadOutcome]) -> DockHostIdentityResolver {
+        let statuses = Dictionary(
+            uniqueKeysWithValues: results.map { outcome in
+                let status: DockHostLoadStatus
+                switch outcome.result {
+                case .success(let collection):
+                    status = collection.cards.isEmpty ? .empty : .loaded(rowCount: collection.cards.count)
+                case .failure(let failure):
+                    switch failure {
+                    case .offline(let message):
+                        status = .offline(message)
+                    case .error(let message):
+                        status = .error(message)
+                    }
+                }
+                return (outcome.host.id, status)
+            }
+        )
+        return DockHostIdentityResolver(
+            hosts: hosts,
+            observations: results.flatMap { outcome in
+                guard case .success(let collection) = outcome.result else {
+                    return [DockHostIdentityObservation]()
+                }
+                return collection.hosts.map {
+                    DockHostIdentityObservation(configuredHostID: outcome.host.id, streamHost: $0)
+                } + collection.cards.map {
+                    DockHostIdentityObservation(configuredHostID: outcome.host.id, card: $0)
+                }
+            },
+            hostStatuses: statuses
+        )
+    }
+
+    private func migrateMetadataHostAliases(using resolver: DockHostIdentityResolver) async {
+        do {
+            localMetadata = try await metadataEngine.migrateHostAliases(using: resolver)
+        } catch {
+            DockLog.persistence.warning("archive metadata host alias migration failed error=\(DockLog.errorSummary(error), privacy: .public)")
+        }
     }
 
 }

@@ -353,6 +353,71 @@ final class DockStoreTestsProjection: XCTestCase {
         XCTAssertTrue(snapshot.rows[0].isPinned)
     }
 
+    func testThreadCardTableProjectsLogicalHostRowsToConfiguredEndpointHost() {
+        let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
+        let card = DockThreadCardDTO(
+            id: "Amir-M5::thread-a",
+            logicalHostID: "Amir-M5",
+            threadID: "thread-a",
+            backendSessionID: "thread-a-session",
+            hostDisplayName: "Amir-M5",
+            hostEndpoint: host.endpoint.displayEndpoint,
+            orderKey: "000000000000:thread-a",
+            activityAt: "2026-05-30T00:00:00.000Z",
+            activityAtMs: 1_780_099_200_000,
+            displaySummary: "Summary",
+            title: "Logical host row",
+            status: .running,
+            sourceKind: .human,
+            lane: .human,
+            archiveState: .active,
+            freshness: .fresh,
+            completeness: .complete,
+            repository: "codex-client",
+            workingDirectory: "/Users/aelaguiz/workspace/codex-client",
+            branch: "main",
+            summarySource: "test"
+        )
+        let update = ThreadCardStreamUpdateDTO(
+            kind: .snapshot,
+            schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            view: .dock,
+            complete: true,
+            totalRows: 1,
+            window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1),
+            epoch: "epoch",
+            seq: 1,
+            hosts: [
+                DockStreamHostDTO(
+                    id: "Amir-M5",
+                    logicalHostID: "Amir-M5",
+                    displayName: "Amir-M5",
+                    endpoint: host.endpoint.displayEndpoint
+                )
+            ],
+            cards: [card]
+        )
+        var table = ThreadCardTable()
+        table.reset(hosts: [host])
+        XCTAssertEqual(table.applySnapshot(update, host: host), .applied)
+
+        let snapshot = table.snapshot(
+            hosts: [host],
+            localMetadata: [:],
+            now: { Date(timeIntervalSince1970: 1_780_099_300) }
+        )
+        let projection = snapshot.project(options: .init(lens: .host))
+
+        XCTAssertEqual(snapshot.rows[0].id.hostID, "Amir-M5")
+        XCTAssertEqual(snapshot.rows[0].sourceHostID, host.id)
+        XCTAssertEqual(
+            snapshot.hostIdentityResolver.resolve(rowHostID: "Amir-M5", sourceConfiguredHostID: host.id)?.host.id,
+            host.id
+        )
+        XCTAssertEqual(projection.groups.map(\.title), ["Amir-M5"])
+        XCTAssertEqual(projection.groups.first?.rows.map(\.id.threadID), ["thread-a"])
+    }
+
     func testThreadCardTableAddsNotLoadedPinnedPlaceholderWithoutCachedDisplay() {
         let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
         let key = LocalThreadMetadataKey(
@@ -389,12 +454,33 @@ private func makeSnapshot(
     isPartial: Bool = false
 ) -> DockSnapshot {
     let hostViewModels = hosts.map(DockHostViewModel.init)
+    let observations = rows.compactMap { row -> DockHostIdentityObservation? in
+        let sourceHost = row.sourceHostID.flatMap { sourceHostID in
+            hosts.first { $0.id == sourceHostID }
+        }
+        let inferredHost = sourceHost ?? hosts.first { host in
+            host.id == row.id.hostID
+                || host.displayName == row.id.hostID
+                || host.endpoint.displayEndpoint == row.id.hostID
+        }
+        guard let host = inferredHost else {
+            return nil
+        }
+        return DockHostIdentityObservation(
+            configuredHostID: host.id,
+            logicalHostID: row.id.hostID,
+            displayName: row.hostDisplayName,
+            endpoint: row.hostEndpoint
+        )
+    }
+    let resolver = DockHostIdentityResolver(hosts: hosts, observations: observations)
     return DockSnapshot(
         host: hostViewModels[0],
         hosts: hostViewModels,
         hostStates: hostStates ?? hosts.map { host in
             DockHostStateViewModel(host: DockHostViewModel(host: host), status: .loaded(rowCount: rows.filter { $0.id.hostID == host.id }.count))
         },
+        hostIdentityResolver: resolver,
         rows: rows,
         isPartial: isPartial
     )

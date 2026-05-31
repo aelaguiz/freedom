@@ -11,15 +11,18 @@ struct DockRenderProjector: Sendable {
         from input: DockRenderInput,
         localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata]
     ) -> DockSnapshot {
-        let cards = input.hosts.flatMap { host in
-            input.cardsByHostID[host.id] ?? []
-        }
         let rowProjector = ThreadCardRowProjector(
             hosts: input.hosts,
+            hostIdentityResolver: input.hostIdentityResolver,
             localMetadata: localMetadata,
             now: now
         )
-        let liveRows = rowProjector.rows(from: cards)
+        let liveRows = input.hosts.flatMap { host in
+            rowProjector.rows(
+                from: input.cardsByHostID[host.id] ?? [],
+                sourceHostID: host.id
+            )
+        }
         let loadedKeys = Set(liveRows.map(\.metadataKey))
         let rows = liveRows + rowProjector.cachedPinnedRows(excluding: loadedKeys)
 
@@ -27,6 +30,7 @@ struct DockRenderProjector: Sendable {
             host: DockHostViewModel(host: input.hosts[0]),
             hosts: input.hosts.map(DockHostViewModel.init),
             hostStates: input.hostStates,
+            hostIdentityResolver: input.hostIdentityResolver,
             rows: rows,
             isPartial: input.isPartial
         )

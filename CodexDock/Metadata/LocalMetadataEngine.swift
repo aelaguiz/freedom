@@ -24,6 +24,44 @@ actor LocalMetadataEngine {
         self.values = values
     }
 
+    func migrateHostAliases(
+        using resolver: DockHostIdentityResolver
+    ) async throws -> [LocalThreadMetadataKey: LocalThreadMetadata] {
+        var changed = false
+        var nextValues: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
+        let entries = values.sorted { lhs, rhs in
+            let lhsKey = [lhs.key.hostID, lhs.key.backendSessionID, lhs.key.threadID].joined(separator: "\u{1f}")
+            let rhsKey = [rhs.key.hostID, rhs.key.backendSessionID, rhs.key.threadID].joined(separator: "\u{1f}")
+            return lhsKey < rhsKey
+        }
+
+        for (key, metadata) in entries {
+            let logicalHostID = resolver.migrationLogicalHostID(forAlias: key.hostID) ?? key.hostID
+            let nextKey = LocalThreadMetadataKey(
+                hostID: logicalHostID,
+                backendSessionID: key.backendSessionID,
+                threadID: key.threadID
+            )
+            changed = changed || nextKey != key
+            if let existing = nextValues[nextKey] {
+                nextValues[nextKey] = key == nextKey
+                    ? Self.mergedMetadata(metadata, existing)
+                    : Self.mergedMetadata(existing, metadata)
+                changed = true
+            } else {
+                nextValues[nextKey] = metadata
+            }
+        }
+
+        let normalizedValues = PinnedMetadataOrdering.normalized(nextValues)
+        guard changed || normalizedValues != values else {
+            values = normalizedValues
+            return normalizedValues
+        }
+        values = try await store.save(normalizedValues)
+        return values
+    }
+
     func setLabel(
         _ label: String?,
         for key: LocalThreadMetadataKey
@@ -115,5 +153,41 @@ actor LocalMetadataEngine {
         }
         values = try await store.save(persistedValues)
         return values
+    }
+
+    private static func mergedMetadata(
+        _ current: LocalThreadMetadata,
+        _ incoming: LocalThreadMetadata
+    ) -> LocalThreadMetadata {
+        var result = current
+        if result.label == nil {
+            result.label = incoming.label
+        }
+        if result.rail == nil {
+            result.rail = incoming.rail
+        }
+        guard incoming.isPinned else {
+            return result
+        }
+
+        result.isPinned = true
+        if let incomingPinnedAt = incoming.pinnedAt {
+            if let currentPinnedAt = result.pinnedAt {
+                result.pinnedAt = min(currentPinnedAt, incomingPinnedAt)
+            } else {
+                result.pinnedAt = incomingPinnedAt
+            }
+        }
+        if let incomingPinnedOrder = incoming.pinnedOrder {
+            if let currentPinnedOrder = result.pinnedOrder {
+                result.pinnedOrder = min(currentPinnedOrder, incomingPinnedOrder)
+            } else {
+                result.pinnedOrder = incomingPinnedOrder
+            }
+        }
+        if result.lastKnownPinnedDisplay == nil {
+            result.lastKnownPinnedDisplay = incoming.lastKnownPinnedDisplay
+        }
+        return result
     }
 }

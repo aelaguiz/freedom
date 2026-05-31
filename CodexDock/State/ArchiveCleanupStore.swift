@@ -126,7 +126,7 @@ public final class ArchiveCleanupStore: ObservableObject {
                 executionResults = results
                 continue
             }
-            guard let host = hosts.first(where: { $0.id == row.id.hostID }) else {
+            guard let host = hostConfiguration(for: row) else {
                 results.append(ArchiveCleanupExecutionResult(row: row, status: .failed("Host is no longer configured.")))
                 executionResults = results
                 continue
@@ -142,5 +142,22 @@ public final class ArchiveCleanupStore: ObservableObject {
         }
         executionResults = results
         return results
+    }
+
+    private func hostConfiguration(for row: DockRowViewModel) -> DockHostConfiguration? {
+        if case .preview(let preview) = state,
+           let resolved = preview.hostIdentityResolver.resolve(
+               rowHostID: row.id.hostID,
+               sourceConfiguredHostID: row.sourceHostID
+           ) {
+            return resolved.host
+        }
+        if let sourceHostID = row.sourceHostID,
+           let host = hosts.first(where: { $0.id == sourceHostID }) {
+            return host
+        }
+        return DockHostIdentityResolver(hosts: hosts)
+            .resolve(rowHostID: row.id.hostID, sourceConfiguredHostID: row.sourceHostID)?
+            .host
     }
 }

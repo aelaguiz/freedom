@@ -1852,4 +1852,45 @@ final class ThreadDetailStoreTests: XCTestCase {
         XCTAssertEqual(header.threadID, "thread-1")
         XCTAssertTrue(message.contains("wrong-thread"))
     }
+
+    @MainActor
+    func testLogicalHostRowCanOpenEndpointBackedDetail() async {
+        let host = try! DockHostConfiguration(host: "amir-m5.fairy-salmon.ts.net", port: 4510)
+        let row = makeDetailRow(
+            hostID: "Amir-M5",
+            threadID: "thread-1",
+            sourceHostID: host.id
+        )
+        let resolver = DockHostIdentityResolver(
+            hosts: [host],
+            observations: [
+                DockHostIdentityObservation(
+                    configuredHostID: host.id,
+                    streamHostID: "Amir-M5",
+                    logicalHostID: "Amir-M5",
+                    displayName: "Amir-M5",
+                    endpoint: host.endpoint.displayEndpoint
+                )
+            ]
+        )
+        let thread = makeDetailThread("thread-1", text: "Thread detail loaded")
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: thread)),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: thread))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session),
+            hostIdentityResolver: resolver
+        )
+
+        await store.load()
+
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected loaded detail, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.header.hostID, host.id)
+        XCTAssertEqual(snapshot.header.threadID, "thread-1")
+    }
 }

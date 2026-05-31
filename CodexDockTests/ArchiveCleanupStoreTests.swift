@@ -334,6 +334,63 @@ final class ArchiveCleanupStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testPreviewAndArchiveSelectedResolveLogicalHostRowToEndpointHost() async throws {
+        let host = makeHost(url: "ws://amir-m5.fairy-salmon.ts.net:4510")
+        let registry = try HostRegistry(hosts: [host])
+        let now = Date(timeIntervalSince1970: 20_000_000)
+        let loader = CleanupCardQueryRecordingLoader(results: [
+            host.id: .success(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
+                            hostID: "Amir-M5",
+                            threadID: "archive-logical",
+                            branch: "main",
+                            status: .idle,
+                            lastActivity: now.addingTimeInterval(-91 * 86_400),
+                            prompt: "Archive logical host"
+                        )
+                    ]
+                )
+            )
+        ])
+        let archiver = SelectiveArchiveCleanupArchiver()
+        let store = ArchiveCleanupStore(
+            registry: registry,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
+            archiver: archiver,
+            metadataStore: InMemoryLocalThreadMetadataStore(),
+            now: { now }
+        )
+
+        await store.loadPreview(rule: ArchiveCleanupRule(age: .days90))
+        guard case .preview(let snapshot) = store.state else {
+            return XCTFail("Expected cleanup preview, got \(store.state)")
+        }
+        let row = try XCTUnwrap(snapshot.candidates.first)
+        XCTAssertEqual(row.id.hostID, "Amir-M5")
+        XCTAssertEqual(row.sourceHostID, host.id)
+        XCTAssertEqual(snapshot.hostSummaries.map(\.id), [host.id])
+        XCTAssertEqual(snapshot.hostSummaries.map(\.candidateCount), [1])
+        XCTAssertEqual(store.selectedRowIDs, Set([HostScopedThreadID(hostID: "Amir-M5", threadID: "archive-logical")]))
+        XCTAssertTrue(
+            snapshot.hostIdentityResolver.contains(
+                rowHostID: row.id.hostID,
+                sourceConfiguredHostID: row.sourceHostID,
+                in: host.id
+            )
+        )
+
+        let results = await store.archiveSelected()
+        let archivedRequests = await archiver.archivedRequests()
+
+        XCTAssertEqual(results.map(\.status), [.archived])
+        XCTAssertEqual(archivedRequests.map(\.threadID), ["archive-logical"])
+        XCTAssertEqual(archivedRequests.map(\.hostID), [host.id])
+        XCTAssertEqual(store.selectedRowIDs, [])
+    }
+
+    @MainActor
     func testArchiveSelectedClearsSelectionAfterAllSuccess() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
@@ -565,18 +622,22 @@ private actor CleanupCardQueryRecordingLoader: ThreadCardFixtureLoading {
 
 private actor SelectiveArchiveCleanupArchiver: ThreadArchiveCommanding {
     private let failingThreadIDs: Set<String>
-    private var archived: [String] = []
+    private var archived: [(threadID: String, hostID: String)] = []
 
     init(failingThreadIDs: Set<String> = []) {
         self.failingThreadIDs = failingThreadIDs
     }
 
     func archivedIDs() -> [String] {
+        archived.map(\.threadID)
+    }
+
+    func archivedRequests() -> [(threadID: String, hostID: String)] {
         archived
     }
 
     func archiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
-        archived.append(threadID)
+        archived.append((threadID: threadID, hostID: host.id))
         if failingThreadIDs.contains(threadID) {
             throw DockRequestFailure.error("archive failed")
         }

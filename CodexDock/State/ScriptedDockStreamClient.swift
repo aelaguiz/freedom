@@ -168,7 +168,7 @@ actor ScriptedThreadCardStreamConnection: ThreadCardStreamConnection {
             freshness: freshnessDTO(status: freshness, seq: seq, message: message),
             hosts: [
                 DockStreamHostDTO(
-                    id: host.id,
+                    id: host.displayName,
                     logicalHostID: host.displayName,
                     displayName: host.displayName,
                     endpoint: host.endpoint.displayEndpoint
@@ -397,7 +397,7 @@ actor ScriptedThreadCardStreamConnection: ThreadCardStreamConnection {
         let threadID = "\(slug)-\(key)"
         let activitySeconds = activityAt ?? updatedAt
         return DockThreadCardDTO(
-            id: "\(host.id)::\(key)",
+            id: "\(host.displayName)::\(threadID)",
             logicalHostID: host.displayName,
             threadID: threadID,
             backendSessionID: "scripted-\(threadID)",

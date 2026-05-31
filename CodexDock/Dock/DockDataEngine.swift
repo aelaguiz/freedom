@@ -53,6 +53,10 @@ actor DockDataEngine {
         cardTable.rowCount(for: host)
     }
 
+    func hostIdentityResolver() -> DockHostIdentityResolver {
+        cardTable.hostIdentityResolver(hosts: hosts)
+    }
+
     func snapshot(now: @escaping @Sendable () -> Date = Date.init) -> DockSnapshot? {
         guard !hosts.isEmpty else {
             return nil

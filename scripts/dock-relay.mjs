@@ -696,6 +696,7 @@ function startServer(config) {
   config.version = config.version || RELAY_VERSION;
   config.hostId = config.hostId || process.env.CODEX_DOCK_REAL_HOST_ID || os.hostname();
   config.hostName = config.hostName || process.env.CODEX_DOCK_REAL_HOST_NAME || config.hostId;
+  config.hostEndpoint = config.hostEndpoint || process.env.CODEX_DOCK_HOST_ENDPOINT || null;
   if (!config.relayStateDatabasePath && process.env.NODE_TEST_CONTEXT) {
     config.relayStateDatabasePath = ":memory:";
   }
@@ -1257,6 +1258,7 @@ function main() {
     liveEndpoints: parseLiveEndpoints(args["live-endpoints"] || process.env.CODEX_DOCK_LIVE_APP_SERVER_WS || process.env.CODEX_DOCK_LIVE_ENDPOINTS),
     hostId: args["host-id"] || process.env.CODEX_DOCK_REAL_HOST_ID || os.hostname(),
     hostName: args["host-name"] || process.env.CODEX_DOCK_REAL_HOST_NAME || args["bonjour-name"],
+    hostEndpoint: args["host-endpoint"] || process.env.CODEX_DOCK_HOST_ENDPOINT || null,
     bonjourName: args["bonjour-name"] || process.env.CODEX_DOCK_BONJOUR_NAME || `Codex Dock ${os.hostname()}`,
     advertiseBonjour: (args["advertise-bonjour"] || process.env.CODEX_DOCK_ADVERTISE_BONJOUR || "1") !== "0",
     openAIAPIKey: process.env.OPENAI_API_KEY,

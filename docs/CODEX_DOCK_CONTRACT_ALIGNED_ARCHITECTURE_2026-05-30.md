@@ -521,8 +521,9 @@ cover these fields:
 Identity:
 
 - `id`: stable opaque card id scoped enough for list diffing. Relay composes it
-  from `logicalHostID`, `backendSessionID` when present, and `threadID`; Swift
-  treats it as opaque and never rebuilds it.
+  exactly as `logicalHostID::threadID`; `backendSessionID` stays separate card
+  data and never enters `DockThreadCardDTO.id`. Swift treats `id` as opaque and
+  never rebuilds it.
 - `logicalHostID`: stable product host identity supplied by relay status or
   relay-owned host metadata.
 - `threadID`: app-server thread id.
@@ -768,8 +769,9 @@ Relay `logicalHostID` source order:
 3. A normalized endpoint id only as a last-resort bootstrap identity.
 
 The chosen `logicalHostID` must be emitted in host metadata and every card.
-Swift can store and compare it, but must not infer it from display name,
-endpoint text, or row title.
+Stream host metadata must use `host.id == host.logicalHostID`, and
+`logicalHostID` is required. Swift can store and compare logical ids, but must
+not infer them from display name, endpoint text, or row title.
 
 The migration should map existing endpoint-derived local metadata keys to
 logical host ids once the relay reports enough information to do so. The
@@ -784,14 +786,16 @@ preserved.
 Migration requirements:
 
 - Read existing metadata keyed by endpoint-style host id.
-- Resolve a canonical `logicalHostID` for each configured host.
+- Resolve a canonical `logicalHostID` for each configured host only after relay
+  stream/card metadata proves that logical id.
 - Rewrite keys to `logicalHostID + backendSessionID + threadID`.
 - Keep pinned order stable.
 - Keep local labels stable.
 - Keep local archive overlays only if they still represent user intent.
 - Keep pinned snapshots useful, but rewrite snapshot activity fields to card
   activity concepts where needed.
-- Run migration once and mark it complete with a local metadata version.
+- Keep migration idempotent. A local metadata version is optional only if the
+  implementation needs one for compatibility.
 
 Do not leave both old and new keys live indefinitely. After migration, old keys
 are backup input only during that migration step.

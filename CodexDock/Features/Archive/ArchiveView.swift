@@ -442,7 +442,12 @@ public struct ArchiveView: View {
         let now = Date()
         return snapshot.sections.compactMap { section in
             let rows = section.rows.filter { row in
-                if let selectedHostID, row.id.hostID != selectedHostID {
+                if let selectedHostID,
+                   !snapshot.hostIdentityResolver.contains(
+                       rowHostID: row.id.hostID,
+                       sourceConfiguredHostID: row.sourceHostID,
+                       in: selectedHostID
+                   ) {
                     return false
                 }
                 if !dateFilter.includes(row, now: now) {

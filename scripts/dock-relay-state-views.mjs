@@ -52,6 +52,12 @@ function publicHostFromConfig(config) {
   };
 }
 
+function dockCardID(logicalHostID, threadID) {
+  const hostID = nonEmpty(logicalHostID);
+  const id = nonEmpty(threadID);
+  return hostID && id ? `${hostID}::${id}` : null;
+}
+
 function laneForScope(scope) {
   return scope === "automation" ? "agent" : "human";
 }
@@ -308,7 +314,7 @@ function normalizeThread(thread, host, lane = "human", options = {}) {
       ? archiveOrderKey(activityAtMs, threadID)
       : dockOrderKey(options.dockOrder || 0, threadID));
   return {
-    id: `${host.id}::${threadID}`,
+    id: dockCardID(host.logicalHostID || host.id, threadID),
     logicalHostID: host.logicalHostID || host.id,
     threadID,
     backendSessionID: sessionID,
@@ -338,7 +344,7 @@ function normalizeStoredCard(row) {
   }
   const activityAtMs = Number(row.activity_at_ms || row.updated_at_ms || 0);
   return {
-    id: row.dock_id,
+    id: row.dock_id || dockCardID(row.logical_host_id || row.host_id, row.thread_id),
     logicalHostID: row.logical_host_id || row.host_id,
     threadID: row.thread_id,
     backendSessionID: row.backend_session_id,
@@ -405,6 +411,7 @@ export {
   applyLeaseToCard,
   archiveOrderKey,
   buildWindow,
+  dockCardID,
   dockOrderKey,
   estimateJSONBytes,
   normalizedStatus,

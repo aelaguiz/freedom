@@ -193,7 +193,8 @@
     "host": {
       "type": "object",
       "required": [
-        "id"
+        "id",
+        "logicalHostID"
       ],
       "properties": {
         "id": {
@@ -201,10 +202,8 @@
           "minLength": 1
         },
         "logicalHostID": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string",
+          "minLength": 1
         },
         "displayName": {
           "type": [

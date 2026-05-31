@@ -100,6 +100,7 @@ public struct ArchiveCleanupExcludedRow: Equatable, Identifiable, Sendable {
 public struct ArchiveCleanupPreviewSnapshot: Equatable, Sendable {
     public let hosts: [DockHostViewModel]
     public let hostStates: [DockHostStateViewModel]
+    public let hostIdentityResolver: DockHostIdentityResolver
     public let hostSummaries: [ArchiveCleanupHostSummary]
     public let candidates: [DockRowViewModel]
     public let excluded: [ArchiveCleanupExcludedRow]

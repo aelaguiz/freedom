@@ -1,5 +1,10 @@
 import Foundation
 
+struct ThreadCardSnapshotCollection: Equatable, Sendable {
+    let hosts: [DockStreamHostDTO]
+    let cards: [DockThreadCardDTO]
+}
+
 struct ThreadCardStreamSnapshotCollector: Sendable {
     let expectedView: ThreadCardStreamView
     let timeout: Duration
@@ -12,8 +17,8 @@ struct ThreadCardStreamSnapshotCollector: Sendable {
         self.timeout = timeout
     }
 
-    func collect(from connection: any ThreadCardStreamConnection) async throws -> [DockThreadCardDTO] {
-        try await withThrowingTaskGroup(of: [DockThreadCardDTO].self) { group in
+    func collect(from connection: any ThreadCardStreamConnection) async throws -> ThreadCardSnapshotCollection {
+        try await withThrowingTaskGroup(of: ThreadCardSnapshotCollection.self) { group in
             group.addTask {
                 try await collectWithoutTimeout(from: connection, expectedView: expectedView)
             }
@@ -22,11 +27,11 @@ struct ThreadCardStreamSnapshotCollector: Sendable {
                 throw DockRequestFailure.error("Timed out waiting for \(expectedView.rawValue) card stream to complete")
             }
 
-            guard let cards = try await group.next() else {
+            guard let collection = try await group.next() else {
                 throw DockRequestFailure.error("Card stream ended before returning a snapshot")
             }
             group.cancelAll()
-            return cards
+            return collection
         }
     }
 }
@@ -34,18 +39,29 @@ struct ThreadCardStreamSnapshotCollector: Sendable {
 private func collectWithoutTimeout(
     from connection: any ThreadCardStreamConnection,
     expectedView: ThreadCardStreamView
-) async throws -> [DockThreadCardDTO] {
+) async throws -> ThreadCardSnapshotCollection {
+    var hostsByID: [String: DockStreamHostDTO] = [:]
     var cardsByID: [String: DockThreadCardDTO] = [:]
     let snapshot = try await connection.subscribe()
-    try apply(snapshot, expectedView: expectedView, cardsByID: &cardsByID)
+    try apply(
+        snapshot,
+        expectedView: expectedView,
+        hostsByID: &hostsByID,
+        cardsByID: &cardsByID
+    )
     if isComplete(snapshot, visibleCount: cardsByID.count) {
-        return sortedCards(cardsByID)
+        return ThreadCardSnapshotCollection(hosts: sortedHosts(hostsByID), cards: sortedCards(cardsByID))
     }
 
     for try await update in connection.updates() {
-        try apply(update, expectedView: expectedView, cardsByID: &cardsByID)
+        try apply(
+            update,
+            expectedView: expectedView,
+            hostsByID: &hostsByID,
+            cardsByID: &cardsByID
+        )
         if isComplete(update, visibleCount: cardsByID.count) {
-            return sortedCards(cardsByID)
+            return ThreadCardSnapshotCollection(hosts: sortedHosts(hostsByID), cards: sortedCards(cardsByID))
         }
     }
 
@@ -55,6 +71,7 @@ private func collectWithoutTimeout(
 private func apply(
     _ update: ThreadCardStreamUpdateDTO,
     expectedView: ThreadCardStreamView,
+    hostsByID: inout [String: DockStreamHostDTO],
     cardsByID: inout [String: DockThreadCardDTO]
 ) throws {
     guard update.schemaVersion == CodexDockConstants.Dock.streamSchemaVersion,
@@ -64,8 +81,12 @@ private func apply(
 
     switch update.kind {
     case .snapshot:
+        hostsByID = Dictionary(uniqueKeysWithValues: (update.hosts ?? []).map { ($0.id, $0) })
         cardsByID = Dictionary(uniqueKeysWithValues: (update.cards ?? []).map { ($0.id, $0) })
     case .delta:
+        for host in update.upsertHosts ?? [] {
+            hostsByID[host.id] = host
+        }
         for card in update.upsertCards ?? [] {
             cardsByID[card.id] = card
         }
@@ -74,6 +95,12 @@ private func apply(
         }
     case .heartbeat:
         break
+    }
+}
+
+private func sortedHosts(_ hostsByID: [String: DockStreamHostDTO]) -> [DockStreamHostDTO] {
+    hostsByID.values.sorted { lhs, rhs in
+        lhs.id < rhs.id
     }
 }
 

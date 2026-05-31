@@ -468,6 +468,8 @@ function relayArgs(config) {
     config.host.id,
     "--host-name",
     config.host.displayName,
+    "--host-endpoint",
+    config.relay.appEndpoint.serialized,
     "--history-url",
     config.relay.historyURL,
     "--history-auth-token-file",

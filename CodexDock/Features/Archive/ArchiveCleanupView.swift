@@ -394,10 +394,21 @@ public struct ArchiveCleanupView: View {
         guard case .preview(let snapshot) = store.state else {
             return "the selected hosts"
         }
-        let selectedCountsByHost = Dictionary(grouping: snapshot.candidates.filter { row in
+        let selectedRows = snapshot.candidates.filter { row in
             store.selectedRowIDs.contains(row.id)
-        }, by: \.id.hostID)
-            .mapValues(\.count)
+        }
+        let selectedCountsByHost = Dictionary(
+            uniqueKeysWithValues: snapshot.hostSummaries.map { summary in
+                let count = selectedRows.filter { row in
+                    snapshot.hostIdentityResolver.contains(
+                        rowHostID: row.id.hostID,
+                        sourceConfiguredHostID: row.sourceHostID,
+                        in: summary.id
+                    )
+                }.count
+                return (summary.id, count)
+            }
+        )
         let hosts = snapshot.hostSummaries.filter { summary in
             (selectedCountsByHost[summary.id] ?? 0) > 0
         }
@@ -692,7 +703,12 @@ private struct ArchiveCleanupReviewList: View {
     }
 
     private func matchesFilters(_ row: DockRowViewModel) -> Bool {
-        if let selectedHostID, row.id.hostID != selectedHostID {
+        if let selectedHostID,
+           !snapshot.hostIdentityResolver.contains(
+               rowHostID: row.id.hostID,
+               sourceConfiguredHostID: row.sourceHostID,
+               in: selectedHostID
+           ) {
             return false
         }
         if let selectedStatusRawValue, row.status.rawValue != selectedStatusRawValue {

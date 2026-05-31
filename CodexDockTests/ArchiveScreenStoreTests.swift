@@ -96,6 +96,57 @@ final class ArchiveScreenStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testArchiveStoreRestoreResolvesLogicalHostRowToEndpointHost() async throws {
+        let host = makeHost(url: "ws://amir-m5.fairy-salmon.ts.net:4510")
+        let registry = try HostRegistry(hosts: [host])
+        let loader = RecordingThreadCardFixtureLoader(results: [
+            .success(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
+                            hostID: "Amir-M5",
+                            threadID: "restore-logical",
+                            branch: "main",
+                            status: .notLoaded,
+                            lastActivity: Date(timeIntervalSince1970: 3_000),
+                            prompt: "Restore logical host"
+                        )
+                    ]
+                )
+            ),
+            .success(ThreadCardFixtureResult(fixtures: []))
+        ])
+        let archiver = SelectiveRestoreArchiver()
+        let store = ArchiveStore(
+            registry: registry,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader, view: .archive),
+            archiver: archiver
+        )
+
+        await store.load()
+        guard case .loaded(let snapshot) = store.state else {
+            return XCTFail("Expected loaded archive state, got \(store.state)")
+        }
+        let row = try XCTUnwrap(snapshot.sections.first?.rows.first)
+        XCTAssertEqual(row.id.hostID, "Amir-M5")
+        XCTAssertEqual(row.sourceHostID, host.id)
+        XCTAssertTrue(
+            snapshot.hostIdentityResolver.contains(
+                rowHostID: row.id.hostID,
+                sourceConfiguredHostID: row.sourceHostID,
+                in: host.id
+            )
+        )
+
+        let results = await store.restoreRows([row])
+        let unarchivedRequests = await archiver.unarchivedRequests()
+
+        XCTAssertEqual(results.map(\.status), [.restored])
+        XCTAssertEqual(unarchivedRequests.map(\.threadID), ["restore-logical"])
+        XCTAssertEqual(unarchivedRequests.map(\.hostID), [host.id])
+    }
+
+    @MainActor
     func testArchiveStoreBatchRestoreStopRemainingSkipsRowsNotStarted() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
@@ -162,20 +213,24 @@ final class ArchiveScreenStoreTests: XCTestCase {
 
 private actor SelectiveRestoreArchiver: ThreadArchiveCommanding {
     private let failingThreadIDs: Set<String>
-    private var unarchived: [String] = []
+    private var unarchived: [(threadID: String, hostID: String)] = []
 
     init(failingThreadIDs: Set<String> = []) {
         self.failingThreadIDs = failingThreadIDs
     }
 
     func unarchivedIDs() -> [String] {
+        unarchived.map(\.threadID)
+    }
+
+    func unarchivedRequests() -> [(threadID: String, hostID: String)] {
         unarchived
     }
 
     func archiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {}
 
     func unarchiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
-        unarchived.append(threadID)
+        unarchived.append((threadID: threadID, hostID: host.id))
         if failingThreadIDs.contains(threadID) {
             throw DockRequestFailure.error("restore failed")
         }

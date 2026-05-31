@@ -137,13 +137,13 @@ public struct DockStreamFreshnessDTO: Codable, Equatable, Sendable {
 
 public struct DockStreamHostDTO: Codable, Equatable, Sendable {
     public let id: String
-    public let logicalHostID: String?
+    public let logicalHostID: String
     public let displayName: String?
     public let endpoint: String?
 
     public init(
         id: String,
-        logicalHostID: String? = nil,
+        logicalHostID: String,
         displayName: String? = nil,
         endpoint: String? = nil
     ) {

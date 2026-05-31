@@ -178,6 +178,7 @@ public enum DockRowRail: String, Codable, Equatable, Sendable, CaseIterable {
 
 public struct DockRowViewModel: Equatable, Identifiable, Sendable {
     public let id: HostScopedThreadID
+    public let sourceHostID: String?
     public let backendSessionID: String
     public let title: String
     public let hostDisplayName: String
@@ -198,6 +199,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
 
     public init(
         id: HostScopedThreadID,
+        sourceHostID: String? = nil,
         backendSessionID: String,
         title: String,
         hostDisplayName: String,
@@ -217,6 +219,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
         pinnedOrder: Int? = nil
     ) {
         self.id = id
+        self.sourceHostID = sourceHostID
         self.backendSessionID = backendSessionID
         self.title = title
         self.hostDisplayName = hostDisplayName
@@ -356,6 +359,7 @@ public struct DockSnapshot: Equatable, Sendable {
     public let host: DockHostViewModel
     public let hosts: [DockHostViewModel]
     public let hostStates: [DockHostStateViewModel]
+    public let hostIdentityResolver: DockHostIdentityResolver
     public let rows: [DockRowViewModel]
     public let isPartial: Bool
 
@@ -367,12 +371,14 @@ public struct DockSnapshot: Equatable, Sendable {
         host: DockHostViewModel,
         hosts: [DockHostViewModel],
         hostStates: [DockHostStateViewModel],
+        hostIdentityResolver: DockHostIdentityResolver = .empty,
         rows: [DockRowViewModel],
         isPartial: Bool = false
     ) {
         self.host = host
         self.hosts = hosts
         self.hostStates = hostStates
+        self.hostIdentityResolver = hostIdentityResolver
         self.rows = rows
         self.isPartial = isPartial
     }

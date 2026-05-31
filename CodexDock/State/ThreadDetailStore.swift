@@ -120,6 +120,7 @@ public final class ThreadDetailStore: ObservableObject {
 
     private let host: DockHostConfiguration
     let row: DockRowViewModel
+    private let hostIdentityResolver: DockHostIdentityResolver
     private let header: ThreadDetailHeader
     private let factory: any ThreadDetailSessionMaking
     private let dataEngine: ThreadDetailDataEngine
@@ -162,10 +163,12 @@ public final class ThreadDetailStore: ObservableObject {
         lifecycleCoordinator: AppLifecycleCoordinator? = nil,
         connectivityReporter: (any AppConnectivityReporting)? = nil,
         connectivityEventSink: ConnectivityEventSink? = nil,
+        hostIdentityResolver: DockHostIdentityResolver? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.host = host
         self.row = row
+        self.hostIdentityResolver = hostIdentityResolver ?? DockHostIdentityResolver(hosts: [host])
         self.header = ThreadDetailHeader(host: host, row: row)
         self.screenStore = ThreadDetailScreenStore(header: self.header)
         self.factory = factory
@@ -213,7 +216,11 @@ public final class ThreadDetailStore: ObservableObject {
         }
         didLoad = true
 
-        guard row.id.hostID == host.id else {
+        guard hostIdentityResolver.contains(
+            rowHostID: row.id.hostID,
+            sourceConfiguredHostID: row.sourceHostID,
+            in: host.id
+        ) else {
             DockLog.threadDetail.error("thread detail load failed reason=host_mismatch expected=\(self.host.id, privacy: .public) actual=\(self.row.id.hostID, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
             let message = "This row belongs to host \(self.row.id.hostID), not \(self.host.id)."
             state = .error(

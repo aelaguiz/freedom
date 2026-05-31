@@ -341,10 +341,12 @@ func makeDetailHost() -> DockHostConfiguration {
 func makeDetailRow(
     hostID: String,
     threadID: String,
+    sourceHostID: String? = nil,
     status: DockRowStatusKind = .running
 ) -> DockRowViewModel {
     DockRowViewModel(
         id: HostScopedThreadID(hostID: hostID, threadID: threadID),
+        sourceHostID: sourceHostID,
         backendSessionID: "\(threadID)-session",
         title: "Build live detail",
         hostDisplayName: "Test host",

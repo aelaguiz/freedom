@@ -96,8 +96,6 @@ private struct DockCardProjectionProjector {
         for rows: [DockRowViewModel],
         hiddenIdleRows: [DockRowViewModel]
     ) -> [DockProjectionGroupViewModel] {
-        let rowsByHost = Dictionary(grouping: rows, by: \.id.hostID)
-        let hiddenIdleRowsByHost = Dictionary(grouping: hiddenIdleRows, by: \.id.hostID)
         let stateByHost = Dictionary(uniqueKeysWithValues: snapshot.hostStates.map { ($0.host.id, $0) })
         return snapshot.hosts.compactMap { host in
             if !options.filters.selectedHostIDs.isEmpty,
@@ -105,8 +103,10 @@ private struct DockCardProjectionProjector {
                 return nil
             }
 
-            let hostRows = (rowsByHost[host.id] ?? []).sorted(by: rowPrecedesByRecency)
-            let hiddenIdleCount = hiddenIdleRowsByHost[host.id]?.count ?? 0
+            let hostRows = rows
+                .filter { rowBelongs($0, to: host.id) }
+                .sorted(by: rowPrecedesByRecency)
+            let hiddenIdleCount = hiddenIdleRows.filter { rowBelongs($0, to: host.id) }.count
             let hostState = stateByHost[host.id]
             let isUnavailable = hostState?.status.isUnavailable ?? false
             guard !hostRows.isEmpty || hiddenIdleCount > 0 || isUnavailable || hostState?.status == .checking else {
@@ -146,7 +146,7 @@ private struct DockCardProjectionProjector {
                 title: branch,
                 subtitle: "\(sortedRows.count) sessions · \(hostNames.joined(separator: ", "))",
                 rows: sortedRows,
-                hostIDs: Set(sortedRows.map(\.id.hostID)).sorted(),
+                hostIDs: Set(sortedRows.map(hostIDForGroup)).sorted(),
                 newestActivityDate: sortedRows.map(\.lastActivityDate).max(),
                 runningCount: sortedRows.filter { $0.status == .running }.count,
                 hiddenIdleCount: hiddenIdleCountsByBranch[branch] ?? 0,
@@ -282,7 +282,9 @@ private struct DockCardProjectionProjector {
 
     private func matchesNonIdleFilters(_ row: DockRowViewModel) -> Bool {
         if !options.filters.selectedHostIDs.isEmpty,
-           !options.filters.selectedHostIDs.contains(row.id.hostID) {
+           !options.filters.selectedHostIDs.contains(where: { selectedHostID in
+               rowBelongs(row, to: selectedHostID)
+           }) {
             return false
         }
         if !options.filters.selectedBranches.isEmpty,
@@ -304,6 +306,24 @@ private struct DockCardProjectionProjector {
             return false
         }
         return options.filters.source.includes(row.origin)
+    }
+
+    private func rowBelongs(_ row: DockRowViewModel, to configuredHostID: String) -> Bool {
+        snapshot.hostIdentityResolver.contains(
+            rowHostID: row.id.hostID,
+            sourceConfiguredHostID: row.sourceHostID,
+            in: configuredHostID
+        )
+            || row.sourceHostID == configuredHostID
+    }
+
+    private func hostIDForGroup(_ row: DockRowViewModel) -> String {
+        snapshot.hostIdentityResolver.resolve(
+            rowHostID: row.id.hostID,
+            sourceConfiguredHostID: row.sourceHostID
+        )?.host.id
+            ?? row.sourceHostID
+            ?? row.id.hostID
     }
 
     private func matchesSearch(_ row: DockRowViewModel) -> Bool {

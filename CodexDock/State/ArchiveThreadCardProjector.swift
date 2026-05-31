@@ -2,15 +2,20 @@ import Foundation
 
 struct ArchiveThreadCardProjector {
     let hosts: [DockHostConfiguration]
+    let hostIdentityResolver: DockHostIdentityResolver
     let localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata]
     let now: @Sendable () -> Date
 
-    func sections(from cards: [DockThreadCardDTO]) -> [DockSectionViewModel] {
-        let rows = ThreadCardRowProjector(
+    func sections(from cardBatches: [(hostID: String, cards: [DockThreadCardDTO])]) -> [DockSectionViewModel] {
+        let rowProjector = ThreadCardRowProjector(
             hosts: hosts,
+            hostIdentityResolver: hostIdentityResolver,
             localMetadata: localMetadata,
             now: now
-        ).rows(from: cards)
+        )
+        let rows = cardBatches.flatMap { batch in
+            rowProjector.rows(from: batch.cards, sourceHostID: batch.hostID)
+        }
         let groupedRows = Dictionary(grouping: rows, by: sectionID(for:))
 
         return groupedRows

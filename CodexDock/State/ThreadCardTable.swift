@@ -21,6 +21,7 @@ struct ThreadCardTable: Equatable, Sendable {
         var complete: Bool
         var totalRows: Int?
         var window: DockStreamWindowDTO?
+        var streamHosts: [DockStreamHostDTO]
         var cardsByID: [String: DockThreadCardDTO]
 
         init(status: DockHostLoadStatus = .checking) {
@@ -31,6 +32,7 @@ struct ThreadCardTable: Equatable, Sendable {
             self.complete = false
             self.totalRows = nil
             self.window = nil
+            self.streamHosts = []
             self.cardsByID = [:]
         }
     }
@@ -92,6 +94,7 @@ struct ThreadCardTable: Equatable, Sendable {
         state.complete = update.complete ?? false
         state.totalRows = update.totalRows
         state.window = update.window
+        state.streamHosts = update.hosts ?? []
         state.cardsByID = Dictionary(
             uniqueKeysWithValues: (update.cards ?? []).map { card in
                 (card.id, card)
@@ -133,6 +136,10 @@ struct ThreadCardTable: Equatable, Sendable {
         case .delta:
             guard update.baseSeq == state.seq else {
                 return .needsResync(.sequenceGap)
+            }
+            for host in update.upsertHosts ?? [] {
+                state.streamHosts.removeAll { $0.id == host.id }
+                state.streamHosts.append(host)
             }
             for card in update.upsertCards ?? [] {
                 state.cardsByID[card.id] = card
@@ -233,14 +240,23 @@ struct ThreadCardTable: Equatable, Sendable {
     }
 
     func renderInput(hosts: [DockHostConfiguration]) -> DockRenderInput {
-        DockRenderInput(
+        let hostStates = hosts.map { host in
+            DockHostStateViewModel(
+                host: DockHostViewModel(host: host),
+                status: statesByHostID[host.id]?.status ?? .checking
+            )
+        }
+        let statuses = Dictionary(
+            uniqueKeysWithValues: hostStates.map { ($0.host.id, $0.status) }
+        )
+        return DockRenderInput(
             hosts: hosts,
-            hostStates: hosts.map { host in
-                DockHostStateViewModel(
-                    host: DockHostViewModel(host: host),
-                    status: statesByHostID[host.id]?.status ?? .checking
-                )
-            },
+            hostStates: hostStates,
+            hostIdentityResolver: DockHostIdentityResolver(
+                hosts: hosts,
+                observations: identityObservations(hosts: hosts),
+                hostStatuses: statuses
+            ),
             cardsByHostID: Dictionary(
                 uniqueKeysWithValues: hosts.map { host in
                     (host.id, sortedCards(for: host))
@@ -254,6 +270,18 @@ struct ThreadCardTable: Equatable, Sendable {
         statesByHostID[host.id]?.cardsByID.count ?? 0
     }
 
+    func hostIdentityResolver(hosts: [DockHostConfiguration]) -> DockHostIdentityResolver {
+        DockHostIdentityResolver(
+            hosts: hosts,
+            observations: identityObservations(hosts: hosts),
+            hostStatuses: Dictionary(
+                uniqueKeysWithValues: hosts.map { host in
+                    (host.id, statesByHostID[host.id]?.status ?? .checking)
+                }
+            )
+        )
+    }
+
     private func sortedCards(for host: DockHostConfiguration) -> [DockThreadCardDTO] {
         guard let state = statesByHostID[host.id] else {
             return []
@@ -265,6 +293,21 @@ struct ThreadCardTable: Equatable, Sendable {
                 }
                 return lhs.id < rhs.id
             }
+    }
+
+    private func identityObservations(hosts: [DockHostConfiguration]) -> [DockHostIdentityObservation] {
+        hosts.flatMap { host in
+            guard let state = statesByHostID[host.id] else {
+                return [DockHostIdentityObservation]()
+            }
+            let hostObservations = state.streamHosts.map { streamHost in
+                DockHostIdentityObservation(configuredHostID: host.id, streamHost: streamHost)
+            }
+            let cardObservations = state.cardsByID.values.map { card in
+                DockHostIdentityObservation(configuredHostID: host.id, card: card)
+            }
+            return hostObservations + cardObservations
+        }
     }
 
     private func isCheckingOrPartial(_ host: DockHostConfiguration) -> Bool {
