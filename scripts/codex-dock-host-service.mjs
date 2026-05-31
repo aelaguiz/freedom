@@ -30,6 +30,7 @@ const DEFAULT_APP_SERVER_LABEL = "com.aelaguiz.codex-dock.app-server";
 const DEFAULT_RELAY_LABEL = "com.aelaguiz.codex-dock.relay";
 const VALUE_OPTIONS = new Set([
   "app-server-label",
+  "codex-home",
   "codex-bin",
   "command",
   "format",
@@ -49,6 +50,7 @@ const VALUE_OPTIONS = new Set([
   "relay-port",
   "relay-public-url",
   "relay-script",
+  "relay-state-db",
   "runtime-dir",
   "service-env-file",
 ]);
@@ -254,6 +256,8 @@ function createHostServiceConfig({
   const servicesDir = path.join(runtimeDir, "services");
   const hostID = String(optionValue(options, "host-id", env, "CODEX_DOCK_REAL_HOST_ID", os.hostname())).trim();
   const hostName = String(optionValue(options, "host-name", env, "CODEX_DOCK_REAL_HOST_NAME", hostID)).trim();
+  const codexHomeValue = optionValue(options, "codex-home", env, "CODEX_HOME", null);
+  const codexHome = codexHomeValue ? path.resolve(cwd, String(codexHomeValue)) : null;
   const rawAppServerListen = validateWebSocketURL(
     optionValue(options, "raw-app-server-listen", env, "APP_SERVER_LISTEN", DEFAULT_RAW_APP_SERVER_LISTEN),
     "raw app-server listen URL",
@@ -294,6 +298,10 @@ function createHostServiceConfig({
     optionValue(options, "host-env-file", env, "CODEX_DOCK_HOST_ENV_FILE", path.join(runtimeDir, "host.env")),
   );
   const relayScript = path.resolve(cwd, optionValue(options, "relay-script", env, "CODEX_DOCK_RELAY_SCRIPT", "scripts/dock-relay.mjs"));
+  const relayStateDatabasePath = path.resolve(
+    cwd,
+    optionValue(options, "relay-state-db", env, "CODEX_DOCK_RELAY_STATE_DB", path.join(runtimeDir, "relay-state.sqlite")),
+  );
 
   return {
     version: 1,
@@ -304,6 +312,7 @@ function createHostServiceConfig({
       displayName: hostName,
       envSuffix: hostIDToEnvSuffix(hostID),
     },
+    codexHome,
     cwd,
     runtimeDir,
     logsDir,
@@ -331,6 +340,7 @@ function createHostServiceConfig({
       publicURL: relayPublicURL,
       appEndpoint,
       phoneAuth,
+      stateDatabasePath: relayStateDatabasePath,
       envFile,
       hostEnvFile,
       stdoutLog: path.join(logsDir, "dock-relay.log"),
@@ -433,8 +443,15 @@ function systemdUnit({
   ].join("\n");
 }
 
-function commonEnvironment() {
-  return { HOME: os.homedir(), PATH: `${os.homedir()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` };
+function commonEnvironment(config = {}) {
+  const environment = {
+    HOME: os.homedir(),
+    PATH: `${os.homedir()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
+  };
+  if (config.codexHome) {
+    environment.CODEX_HOME = config.codexHome;
+  }
+  return environment;
 }
 
 function appServerArgs(config) {
@@ -470,6 +487,8 @@ function relayArgs(config) {
     config.host.displayName,
     "--host-endpoint",
     config.relay.appEndpoint.serialized,
+    "--relay-state-db",
+    config.relay.stateDatabasePath,
     "--history-url",
     config.relay.historyURL,
     "--history-auth-token-file",
@@ -478,7 +497,7 @@ function relayArgs(config) {
 }
 
 function renderHostServices(config) {
-  const environment = commonEnvironment();
+  const environment = commonEnvironment(config);
   if (config.platform === "macos") {
     return [
       {

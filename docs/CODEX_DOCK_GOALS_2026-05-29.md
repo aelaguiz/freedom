@@ -5,6 +5,7 @@ status: active
 doc_type: goals
 owners: [Amir, Codex]
 related:
+  - docs/CODEX_DOCK_RELAY_STATE_ENGINE_ARCHITECTURE_2026-05-30.md
   - docs/CODEX_DOCK_RELAY_STATE_PARITY_WORKLOG_2026-05-30.md
   - docs/CODEX_DOCK_RELAY_THREAD_FIDELITY_WORKLOG_2026-05-29.md
   - docs/CODEX_APP_SERVER_THREAD_TYPES_AND_STATE_2026-05-29.md
@@ -29,18 +30,24 @@ the wrong kind of work.
 
 ## Objectives
 
-- Every underlying Codex thread is represented by the relay on a one-to-one
-  basis.
-- Every state and every detail that exists in Codex sessions is available
-  through the relay, with no missing data.
+- Every app-server-exposed Codex thread is represented by the runtime relay on
+  a one-to-one basis.
+- Every app-server-exposed state and detail that exists in Codex sessions is
+  available through the runtime relay, with no missing data.
 - Every relay state and detail has an exact known meaning in Codex terms, with
   no guessed definitions.
-- The client can trust the relay as the complete source of truth.
+- The client can trust the relay as the complete source of app-server-exposed
+  runtime truth.
+- Disk/SQLite-only facts are still cross-checked through explicit audit tooling
+  and are not silently mixed into normal app rows.
 
 ## Fundamental Relay Requirements
 
-- The relay knows every real Codex thread that exists.
-- The relay represents each Codex thread exactly once.
+- The runtime relay knows every app-server-exposed Codex thread that exists.
+- The runtime relay represents each app-server-exposed Codex thread exactly
+  once.
+- The audit lane can detect Codex disk/SQLite threads that the app-server does
+  not expose and report them as explicit source gaps.
 - The relay knows the true lifecycle state of each thread: active, archived,
   deleted/missing, ephemeral, loaded/live, or stored/not-loaded.
 - The relay knows the true origin of each thread: human-created, spawned agent,
@@ -50,8 +57,8 @@ the wrong kind of work.
   restored work, or unknown.
 - The relay preserves the real relationships between threads, including
   spawned parent/child sessions, forks, and host ownership.
-- The relay exposes every state and detail that exists in the underlying Codex
-  session, or explicitly marks the gap as unknown.
+- The relay exposes every app-server-exposed state and detail that exists in
+  the underlying Codex session, or explicitly marks the gap as unknown.
 - The relay defines the meaning of each represented state and detail.
 - The relay knows how fresh and complete its view is.
 - The relay can explain every inclusion and exclusion.
@@ -78,8 +85,12 @@ a relay workaround target.
 - `dock/subscribe` shows loaded/live sessions as live, not dormant.
 - Spawned parent/child relationships match the app-server-listable spawned
   thread rows.
-- `thread/turns/list` is exhaustively drained for every app-server-listable
-  thread, preserving returned app-server page order.
+- Runtime thread detail drains `thread/turns/list` exhaustively for the opened
+  thread, preserving returned app-server page order, or marks exactly where the
+  drain stopped.
+- Audit tooling can exhaustively drain `thread/turns/list` for every
+  app-server-listable thread to prove full app-server turn coverage without
+  requiring the runtime relay to mirror every turn item persistently.
 - Current thread goals returned by `thread/goal/get` match goal rows for
   materialized thread IDs.
 - The relay records a deterministic app-server metadata projection and states
@@ -199,6 +210,10 @@ a relay workaround target.
 
 ## Related Docs
 
+- [Relay state engine architecture](CODEX_DOCK_RELAY_STATE_ENGINE_ARCHITECTURE_2026-05-30.md):
+  proposes the replacement relay architecture: SQLite-backed state engine,
+  app-server-backed runtime state, disk/SQLite audit lane, materialized views,
+  bounded subscriptions, and explicit provenance.
 - [Relay state parity worklog](CODEX_DOCK_RELAY_STATE_PARITY_WORKLOG_2026-05-30.md):
   tracks the relay-only work toward exhaustive app-server-backed state parity.
 - [Relay thread fidelity worklog](CODEX_DOCK_RELAY_THREAD_FIDELITY_WORKLOG_2026-05-29.md):

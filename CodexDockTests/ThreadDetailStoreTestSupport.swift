@@ -22,6 +22,7 @@ actor FakeThreadDetailSession: ThreadDetailSession {
     private var resumeResults: [Result<ThreadResumeResponseDTO, FakeThreadDetailError>]
     private let turnStartResult: Result<TurnStartResponseDTO, FakeThreadDetailError>
     private let turnSteerResult: Result<TurnSteerResponseDTO, FakeThreadDetailError>
+    private let resumeDelay: Duration?
     private var readParams: [ThreadReadParams] = []
     private var turnsListParams: [ThreadTurnsListParams] = []
     private var resumeParams: [ThreadResumeParams] = []
@@ -46,6 +47,7 @@ actor FakeThreadDetailSession: ThreadDetailSession {
         turnSteerResult: Result<TurnSteerResponseDTO, FakeThreadDetailError> = .success(
             TurnSteerResponseDTO(turnId: "turn-started")
         ),
+        resumeDelay: Duration? = nil,
         readResults: [Result<ThreadReadResponseDTO, FakeThreadDetailError>]? = nil,
         turnsListResults: [Result<ThreadTurnsListResponseDTO, FakeThreadDetailError>]? = nil,
         resumeResults: [Result<ThreadResumeResponseDTO, FakeThreadDetailError>]? = nil
@@ -64,6 +66,7 @@ actor FakeThreadDetailSession: ThreadDetailSession {
         self.resumeResults = resumeResults ?? [resumeResult]
         self.turnStartResult = turnStartResult
         self.turnSteerResult = turnSteerResult
+        self.resumeDelay = resumeDelay
     }
 
     func connectAndInitialize(
@@ -103,6 +106,9 @@ actor FakeThreadDetailSession: ThreadDetailSession {
         timeout: Duration
     ) async throws -> ThreadResumeResponseDTO {
         resumeParams.append(params)
+        if let resumeDelay {
+            try await Task.sleep(for: resumeDelay)
+        }
         let result = resumeResults.count > 1 ? resumeResults.removeFirst() : resumeResults[0]
         return try result.get()
     }

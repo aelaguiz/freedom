@@ -234,6 +234,106 @@ test("relay state store emits Dock changes and keeps rows when a scope goes stal
   }
 });
 
+test("relay state store publishes client-projected status changes from live leases", () => {
+  const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
+  const store = new RelayStateStore({ relayStateDatabasePath: ":memory:" });
+  const session = normalizeThread({
+    id: "thread-1",
+    sessionId: "session-1",
+    preview: "Build Dock",
+    updatedAt: 10,
+    source: "cli",
+    status: { type: "notLoaded" },
+  }, host, "human");
+  try {
+    store.applyDockReconciliation({
+      host,
+      cards: [session],
+      scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
+      complete: true,
+    });
+    const previousVisible = store.listDockCards({ hostID: host.id }).cards;
+    assert.equal(previousVisible[0].status, "dormant");
+
+    store.upsertLiveLease(host.id, {
+      threadID: "thread-1",
+      backendSessionID: "session-1",
+      status: "dormant",
+      expiresAtMs: Date.now() - 1_000,
+    });
+    const update = store.applyDockReconciliation({
+      host,
+      cards: [session],
+      scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
+      complete: true,
+      previousCards: previousVisible,
+    });
+    assert.deepEqual(update.upsertCards.map((row) => row.status), ["unknown"]);
+    assert.equal(store.listDockCards({ hostID: host.id }).cards[0].status, "unknown");
+
+    const steadyUpdate = store.applyDockReconciliation({
+      host,
+      cards: [session],
+      scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
+      complete: true,
+    });
+    assert.deepEqual(steadyUpdate.upsertCards, []);
+  } finally {
+    store.close();
+  }
+});
+
+test("relay state store publishes live lease expiry even after fresh snapshots project it expired", async () => {
+  const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
+  const store = new RelayStateStore({ relayStateDatabasePath: ":memory:" });
+  const session = normalizeThread({
+    id: "thread-1",
+    sessionId: "session-1",
+    preview: "Build Dock",
+    updatedAt: 10,
+    source: "cli",
+    status: { type: "notLoaded" },
+  }, host, "human");
+  const scope = { name: "active:dock", archived: false, sourceScope: "dock", complete: true };
+  try {
+    store.applyDockReconciliation({
+      host,
+      cards: [session],
+      scopes: [scope],
+      complete: true,
+    });
+    store.upsertLiveLease(host.id, {
+      threadID: "thread-1",
+      backendSessionID: "session-1",
+      status: "running",
+      expiresAtMs: Date.now() + 20,
+    });
+    assert.equal(store.listDockCards({ hostID: host.id }).cards[0].status, "running");
+    await sleepMs(40);
+
+    const previousAtReconcileStart = store.listDockCards({ hostID: host.id }).cards;
+    assert.equal(previousAtReconcileStart[0].status, "unknown");
+    const expiryUpdate = store.applyDockReconciliation({
+      host,
+      cards: [session],
+      scopes: [scope],
+      complete: true,
+      previousCards: previousAtReconcileStart,
+    });
+    assert.deepEqual(expiryUpdate.upsertCards.map((row) => row.status), ["unknown"]);
+
+    const steadyUpdate = store.applyDockReconciliation({
+      host,
+      cards: [session],
+      scopes: [scope],
+      complete: true,
+    });
+    assert.deepEqual(steadyUpdate.upsertCards, []);
+  } finally {
+    store.close();
+  }
+});
+
 test("relay state store removes archived Dock rows through state mutation", () => {
   const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
   const store = new RelayStateStore({ relayStateDatabasePath: ":memory:" });
@@ -252,6 +352,71 @@ test("relay state store removes archived Dock rows through state mutation", () =
       complete: true,
     });
     store.applyArchiveMutation({ hostID: host.id, threadID: "thread-1", archived: true });
+    assert.deepEqual(store.listDockCards({ hostID: host.id }).cards, []);
+    assert.deepEqual(store.listArchiveCards({ hostID: host.id }).cards.map((row) => row.threadID), ["thread-1"]);
+  } finally {
+    store.close();
+  }
+});
+
+test("relay state archive mutation projects live leases into unarchive deltas", () => {
+  const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
+  const store = new RelayStateStore({ relayStateDatabasePath: ":memory:" });
+  const session = normalizeThread({
+    id: "thread-1",
+    preview: "Build Dock",
+    updatedAt: 10,
+    source: "cli",
+    status: { type: "notLoaded" },
+  }, host, "human");
+  try {
+    store.applyDockReconciliation({
+      host,
+      cards: [session],
+      scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
+      complete: true,
+    });
+    store.upsertLiveLease(host.id, {
+      threadID: "thread-1",
+      backendSessionID: "session-1",
+      status: "running",
+      expiresAtMs: Date.now() + 5_000,
+    });
+    store.applyArchiveMutation({ hostID: host.id, threadID: "thread-1", archived: true });
+    const restored = store.applyArchiveMutation({ hostID: host.id, threadID: "thread-1", archived: false });
+
+    assert.equal(restored.dockUpsertCards[0].status, "running");
+    assert.equal(store.listDockCards({ hostID: host.id }).cards[0].status, "running");
+  } finally {
+    store.close();
+  }
+});
+
+test("relay state store does not immediately resurrect locally archived rows from stale active reconciliation", () => {
+  const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
+  const store = new RelayStateStore({ relayStateDatabasePath: ":memory:" });
+  const session = normalizeThread({
+    id: "thread-1",
+    preview: "Build Dock",
+    updatedAt: 10,
+    source: "cli",
+    status: { type: "notLoaded" },
+  }, host, "human");
+  try {
+    store.applyDockReconciliation({
+      host,
+      cards: [session],
+      scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
+      complete: true,
+    });
+    store.applyArchiveMutation({ hostID: host.id, threadID: "thread-1", archived: true });
+    const staleActiveList = store.applyDockReconciliation({
+      host,
+      cards: [session],
+      scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
+      complete: true,
+    });
+    assert.deepEqual(staleActiveList.upsertCards, []);
     assert.deepEqual(store.listDockCards({ hostID: host.id }).cards, []);
     assert.deepEqual(store.listArchiveCards({ hostID: host.id }).cards.map((row) => row.threadID), ["thread-1"]);
   } finally {
@@ -333,21 +498,122 @@ test("relay state streams remaining Dock windows after a partial snapshot", asyn
     assert.equal(response.kind, "snapshot");
     assert.equal(response.complete, false);
     assert.ok(response.window.nextOffset > 0);
-    const updates = notifications
+    const catchupUpdates = () => notifications
       .filter((message) => message.method === "dock/update")
-      .map((message) => message.params);
-    const catchupUpdates = updates.filter((update) => (
+      .map((message) => message.params)
+      .filter((update) => (
       update.baseSeq === response.seq
       && update.seq === response.seq
       && Number(update.window?.offset || 0) > 0
     ));
-    assert.ok(catchupUpdates.length >= 1);
-    assert.equal(catchupUpdates.at(-1).complete, true);
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline && catchupUpdates().at(-1)?.complete !== true) {
+      await sleepMs(10);
+    }
+    const updates = catchupUpdates();
+    assert.ok(updates.length >= 1);
+    assert.equal(updates.at(-1).complete, true);
     const receivedThreadIDs = new Set([
       ...response.cards.map((row) => row.threadID),
-      ...catchupUpdates.flatMap((update) => update.upsertCards.map((row) => row.threadID)),
+      ...updates.flatMap((update) => update.upsertCards.map((row) => row.threadID)),
     ]);
     assert.deepEqual([...receivedThreadIDs].sort(), ["thread-1", "thread-2", "thread-3", "thread-4"]);
+  } finally {
+    await engine.close();
+  }
+});
+
+test("relay state restarts Dock window catchup when store seq changes mid-catchup", async () => {
+  const host = { id: "Amir-M5", displayName: "Amir M5", endpoint: "amir-m5.local:4510" };
+  const engine = new RelayStateEngine({
+    hostId: host.id,
+    hostName: host.displayName,
+    hostEndpoint: host.endpoint,
+    relayStateDatabasePath: ":memory:",
+    relayStateSnapshotSoftLimitBytes: 1_200,
+  });
+  try {
+    const cards = Array.from({ length: 6 }, (_, index) => normalizeThread({
+      id: `thread-${index + 1}`,
+      preview: `Window row ${index + 1}`,
+      latestSummary: "x".repeat(400),
+      updatedAt: 100 - index,
+      source: "cli",
+      status: { type: "notLoaded" },
+    }, host, "human"));
+    engine.store.applyDockReconciliation({
+      host,
+      cards,
+      scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
+      complete: true,
+    });
+
+    const notifications = [];
+    let advancedSeq = false;
+    const response = await engine.subscribeDock({
+      session: {},
+      downstreamWs: {},
+      sendJson: (_ws, message) => {
+        notifications.push(message);
+        const update = message?.params;
+        if (!advancedSeq && update?.kind === "delta" && Number(update.window?.offset || 0) > 0) {
+          advancedSeq = true;
+          const changedCards = [
+            normalizeThread({
+              id: "thread-new",
+              preview: "New row while catchup is in flight",
+              latestSummary: "x".repeat(400),
+              updatedAt: 200,
+              source: "cli",
+              status: { type: "notLoaded" },
+            }, host, "human"),
+            ...cards,
+          ];
+          engine.store.applyDockReconciliation({
+            host,
+            cards: changedCards,
+            scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
+            complete: true,
+            previousCards: cards,
+          });
+        }
+      },
+    });
+    assert.equal(response.kind, "snapshot");
+    assert.equal(response.complete, false);
+    let updates = [];
+    let restartedSnapshot = null;
+    let restartedCatchupUpdates = [];
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      updates = notifications
+        .filter((message) => message.method === "dock/update")
+        .map((message) => message.params);
+      restartedSnapshot = updates.find((update) => (
+        update.kind === "snapshot"
+        && Number(update.seq) > Number(response.seq)
+      ));
+      restartedCatchupUpdates = restartedSnapshot
+        ? updates.filter((update) => (
+          update.kind === "delta"
+          && update.baseSeq === restartedSnapshot.seq
+          && update.seq === restartedSnapshot.seq
+          && Number(update.window?.offset || 0) > 0
+        ))
+        : [];
+      if (restartedCatchupUpdates.at(-1)?.complete === true) {
+        break;
+      }
+      await sleepMs(10);
+    }
+    assert.equal(advancedSeq, true);
+    assert.ok(restartedSnapshot);
+    assert.ok(restartedCatchupUpdates.length >= 1);
+    assert.equal(restartedCatchupUpdates.at(-1).complete, true);
+    const receivedThreadIDs = new Set([
+      ...restartedSnapshot.cards.map((row) => row.threadID),
+      ...restartedCatchupUpdates.flatMap((update) => update.upsertCards.map((row) => row.threadID)),
+    ]);
+    assert.deepEqual([...receivedThreadIDs].sort(), ["thread-new", ...cards.map((card) => card.threadID)].sort());
   } finally {
     await engine.close();
   }

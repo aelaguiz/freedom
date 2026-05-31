@@ -170,6 +170,7 @@ class RelayStateEngine {
       scheduleReconciliation: (request) => this.scheduleReconciliation(request),
       logger: this.logger,
     });
+    this.liveLeaseExpiryTimer = null;
     this.started = false;
   }
 
@@ -182,12 +183,38 @@ class RelayStateEngine {
   }
 
   async close() {
+    if (this.liveLeaseExpiryTimer) {
+      clearTimeout(this.liveLeaseExpiryTimer);
+      this.liveLeaseExpiryTimer = null;
+    }
     await this.reconciler.stop();
     this.store.close();
   }
 
   scheduleReconciliation(request = {}) {
     return this.reconciler.schedule(request);
+  }
+
+  scheduleLiveLeaseExpiryReconciliation(hostID) {
+    if (this.liveLeaseExpiryTimer) {
+      clearTimeout(this.liveLeaseExpiryTimer);
+      this.liveLeaseExpiryTimer = null;
+    }
+    const expiresAtMs = this.store.nextUnpublishedLiveLeaseExpiryMs(hostID);
+    if (!expiresAtMs) {
+      return;
+    }
+    const delayMs = Math.max(0, expiresAtMs - Date.now() + 1);
+    this.liveLeaseExpiryTimer = setTimeout(() => {
+      this.liveLeaseExpiryTimer = null;
+      this.reconciler.schedule({ reason: "live-lease-expiry", immediate: true }).catch((error) => {
+        this.logger?.warn?.("state.reconcile_failed", {
+          reason: "live-lease-expiry",
+          error,
+        });
+      });
+    }, delayMs);
+    this.liveLeaseExpiryTimer.unref?.();
   }
 
   shouldReconcileAfterResponse() {
@@ -226,6 +253,7 @@ class RelayStateEngine {
         sortDirection: "desc",
         modelProviders: [],
       };
+      const previousDockCards = this.store.listDockCards({ hostID: host.id }).cards;
       const [liveRows, primaryScope, defaultScope] = await Promise.all([
         this.refreshLiveLeases(),
         drainThreadListScope(this.config, baseParams, ACTIVE_ARCHIVE_SCOPE, ACTIVE_ALL_SOURCE_SCOPE),
@@ -247,6 +275,7 @@ class RelayStateEngine {
         scopes: [primaryScope, defaultScope],
         complete,
         error: primaryScope.error || defaultScope.error || null,
+        previousCards: previousDockCards,
       });
       const freshness = this.store.freshnessForHost(host.id);
       const totalRows = this.store.listDockCards({ hostID: host.id }).totalRows;
@@ -280,6 +309,7 @@ class RelayStateEngine {
           error: primaryScope.error || defaultScope.error || error,
         });
       }
+      this.scheduleLiveLeaseExpiryReconciliation(host.id);
       return result;
     } catch (error) {
       this.store.upsertHost(host);
@@ -300,6 +330,7 @@ class RelayStateEngine {
         hostId: host.id,
         error,
       });
+      this.scheduleLiveLeaseExpiryReconciliation(host.id);
       return { seq, upsertCards: [], deleteCardIDs: [], error };
     }
   }
@@ -501,13 +532,15 @@ class RelayStateEngine {
     session[unsubscribeKey] = null;
     let subscriptionReady = false;
     const bufferedUpdates = [];
-    const sendUpdate = (update) => {
+    const sendUpdate = (update, { scheduleCatchup = true } = {}) => {
       sendJson(downstreamWs, {
         jsonrpc: "2.0",
         method: updateMethod,
         params: update,
       });
-      this.scheduleCardWindowCatchupAfterResponse(update, sendUpdate, updateReason);
+      if (scheduleCatchup) {
+        this.scheduleCardWindowCatchupAfterResponse(update, sendUpdate, updateReason);
+      }
     };
     session[unsubscribeKey] = this.subscriptions.subscribe(view, (update) => {
       if (!subscriptionReady) {
@@ -567,13 +600,15 @@ class RelayStateEngine {
   } = {}) {
     const snapshot = await this.subscriptions.snapshot(view);
     if (downstreamWs && sendJson) {
-      const sendUpdate = (update) => {
+      const sendUpdate = (update, { scheduleCatchup = true } = {}) => {
         sendJson(downstreamWs, {
           jsonrpc: "2.0",
           method: updateMethod,
           params: update,
         });
-        this.scheduleCardWindowCatchupAfterResponse(update, sendUpdate, updateReason);
+        if (scheduleCatchup) {
+          this.scheduleCardWindowCatchupAfterResponse(update, sendUpdate, updateReason);
+        }
       };
       this.scheduleCardWindowCatchupAfterResponse(snapshot, sendUpdate, resyncReason, { after });
     } else {
@@ -613,12 +648,16 @@ class RelayStateEngine {
     const preferredLimit = Math.max(1, Number(snapshot.window?.limit || RELAY_STATE_DOCK_WINDOW_SIZE));
     while (Number.isInteger(nextOffset)) {
       if (this.store.currentSeq() !== baseSeq) {
+        const restartSnapshot = await this.subscriptions.snapshot(snapshot.view);
         this.logger?.info?.("state.catchup_abandoned", {
           reason,
           hostId: host.id,
           baseSeq,
           currentSeq: this.store.currentSeq(),
+          restartedSeq: restartSnapshot?.seq ?? null,
         });
+        sendUpdate(restartSnapshot, { scheduleCatchup: false });
+        await this.sendCardWindowCatchup({ snapshot: restartSnapshot, sendUpdate, reason });
         return;
       }
       let limit = preferredLimit;

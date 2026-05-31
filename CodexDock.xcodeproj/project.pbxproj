@@ -74,6 +74,7 @@
 		715D24A6FE0389A4DF3B207C /* CodexDockAutomationSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BDD9186F027807209C9C257 /* CodexDockAutomationSmokeTests.swift */; };
 		72A9847E37965B2C3A61D166 /* ThreadDetailDataEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 643835CB6E8EC275F893831B /* ThreadDetailDataEngine.swift */; };
 		7520AD89B337EFFB8DA25310 /* DockHostIdentityResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 697AACC0294675D2D8427398 /* DockHostIdentityResolverTests.swift */; };
+		7586F5666955ABA557727510 /* CodexDockDisplayedSyncProofTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0688F93E9EE6E132CD5E2703 /* CodexDockDisplayedSyncProofTests.swift */; };
 		7620B7A25D86E81210477475 /* AppServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABDB5847612728C391956985 /* AppServerClient.swift */; };
 		763F61037E061541DFDC5EC7 /* ThreadDetailStoreTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AEFC520C4BAC0B3AE2B1174 /* ThreadDetailStoreTestSupport.swift */; };
 		784A1FB6B03951EB800DD60E /* ThreadCardTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44E0DDCC4DD790E92D0FDC3C /* ThreadCardTable.swift */; };
@@ -226,6 +227,7 @@
 		0549BF0ED081727D34323CBA /* TurnDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnDTO.swift; sourceTree = "<group>"; };
 		056F8C4CC7919C3F3EE29D9F /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
 		05AB72F72AC4A6E97D56205D /* ArchiveScreenStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveScreenStoreTests.swift; sourceTree = "<group>"; };
+		0688F93E9EE6E132CD5E2703 /* CodexDockDisplayedSyncProofTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexDockDisplayedSyncProofTests.swift; sourceTree = "<group>"; };
 		08704B25134B1064DED004F8 /* ComposerVoiceControlsPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerVoiceControlsPresentationTests.swift; sourceTree = "<group>"; };
 		0AC49015E8B9106FA9F6FBD7 /* AppConnectivityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConnectivityStore.swift; sourceTree = "<group>"; };
 		14340ACB98A499C52DDFA40E /* ScriptedDockStreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptedDockStreamClient.swift; sourceTree = "<group>"; };
@@ -481,6 +483,7 @@
 			isa = PBXGroup;
 			children = (
 				8BDD9186F027807209C9C257 /* CodexDockAutomationSmokeTests.swift */,
+				0688F93E9EE6E132CD5E2703 /* CodexDockDisplayedSyncProofTests.swift */,
 			);
 			path = CodexDockUITests;
 			sourceTree = "<group>";
@@ -944,6 +947,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				715D24A6FE0389A4DF3B207C /* CodexDockAutomationSmokeTests.swift in Sources */,
+				7586F5666955ABA557727510 /* CodexDockDisplayedSyncProofTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

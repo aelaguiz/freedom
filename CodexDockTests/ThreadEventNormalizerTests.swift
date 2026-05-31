@@ -307,6 +307,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             [
                 "Run the tests",
                 "I am checking the suite.",
+                "File changes are available on desktop.",
             ]
         )
         XCTAssertEqual(

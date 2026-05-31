@@ -94,6 +94,16 @@ blocked by device tooling, record the exact skipped command and exact blocker.
 Simulator, local relay, service-status, and generated-artifact proof only prove
 the parts they actually exercise.
 
+## Exhaustive Sync Harness
+
+The repeatable over-time sync proof is documented in
+`docs/CODEX_DOCK_EXHAUSTIVE_SYNC_RUNBOOK_2026-05-31.md`.
+
+Use it when checking whether Codex storage, app-server state, relay projection,
+client-used routes, and the literal `iPhone 17` simulator display stay in sync.
+The harness treats lag over the configured budget as a failure, even if a later
+sample eventually catches up.
+
 ## Canonical Service Start
 
 Use this target for local Dock development instead of manually starting and

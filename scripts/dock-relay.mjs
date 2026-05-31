@@ -1259,6 +1259,7 @@ function main() {
     hostId: args["host-id"] || process.env.CODEX_DOCK_REAL_HOST_ID || os.hostname(),
     hostName: args["host-name"] || process.env.CODEX_DOCK_REAL_HOST_NAME || args["bonjour-name"],
     hostEndpoint: args["host-endpoint"] || process.env.CODEX_DOCK_HOST_ENDPOINT || null,
+    relayStateDatabasePath: args["relay-state-db"] || process.env.CODEX_DOCK_RELAY_STATE_DB || null,
     bonjourName: args["bonjour-name"] || process.env.CODEX_DOCK_BONJOUR_NAME || `Codex Dock ${os.hostname()}`,
     advertiseBonjour: (args["advertise-bonjour"] || process.env.CODEX_DOCK_ADVERTISE_BONJOUR || "1") !== "0",
     openAIAPIKey: process.env.OPENAI_API_KEY,

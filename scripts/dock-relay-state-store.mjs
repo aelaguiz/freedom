@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import {
+  RELAY_STATE_ARCHIVE_MUTATION_GRACE_MS,
   RELAY_STATE_CHANGE_RETENTION,
   RELAY_STATE_DB_FILE,
   RELAY_STATE_SCHEMA_VERSION,
@@ -22,6 +23,27 @@ function nowISOString() {
 
 function nowMs() {
   return Date.now();
+}
+
+function dateMs(value) {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isFreshLocalArchiveMutation(row, atMs) {
+  if (!row || row.archive_state !== "archived" || row.freshness_status !== "stale") {
+    return false;
+  }
+  const updatedAtMs = dateMs(row.updated_at);
+  if (updatedAtMs === null) {
+    return false;
+  }
+  return atMs - updatedAtMs >= 0
+    && atMs - updatedAtMs <= RELAY_STATE_ARCHIVE_MUTATION_GRACE_MS;
+}
+
+function isLeaseExpired(lease, atMs) {
+  return Boolean(lease?.expires_at_ms) && Number(lease.expires_at_ms) < atMs;
 }
 
 function sortedJSONString(value) {
@@ -158,6 +180,7 @@ class RelayStateStore {
         validation_at TEXT NOT NULL,
         validation_at_ms INTEGER NOT NULL,
         expires_at_ms INTEGER NOT NULL,
+        expired_published_at TEXT,
         PRIMARY KEY (host_id, thread_id)
       );
 
@@ -226,6 +249,7 @@ class RelayStateStore {
         ON changes(view, seq);
     `);
     this.ensureThreadColumns();
+    this.ensureLiveLeaseColumns();
     this.db.prepare(`
       INSERT OR IGNORE INTO schema_migrations (version, applied_at)
       VALUES (?, ?)
@@ -251,6 +275,18 @@ class RelayStateStore {
     for (const [column, definition] of Object.entries(definitions)) {
       if (!columns.has(column)) {
         this.db.exec(`ALTER TABLE threads ADD COLUMN ${column} ${definition}`);
+      }
+    }
+  }
+
+  ensureLiveLeaseColumns() {
+    const columns = new Set(this.db.prepare("PRAGMA table_info(live_leases)").all().map((row) => row.name));
+    const definitions = {
+      expired_published_at: "TEXT",
+    };
+    for (const [column, definition] of Object.entries(definitions)) {
+      if (!columns.has(column)) {
+        this.db.exec(`ALTER TABLE live_leases ADD COLUMN ${column} ${definition}`);
       }
     }
   }
@@ -477,17 +513,49 @@ class RelayStateStore {
     };
   }
 
-  applyDockReconciliation({ host, cards, scopes = [], complete = true, error = null }) {
-    const at = nowISOString();
+  applyDockReconciliation({ host, cards, scopes = [], complete = true, error = null, previousCards = null }) {
+    const atMs = nowMs();
+    const at = new Date(atMs).toISOString();
     return this.transaction(() => {
       this.upsertHost(host, at);
-      const previousRows = this.listDockCards({ hostID: host.id }).cards;
+      const previousRows = Array.isArray(previousCards)
+        ? previousCards
+        : this.listDockCards({ hostID: host.id }).cards;
       const previousByID = new Map(previousRows.map((row) => [row.id, row]));
+      const existingRows = this.db.prepare(`
+        SELECT thread_id, archive_state, freshness_status, updated_at
+        FROM threads
+        WHERE host_id = ?
+      `).all(host.id);
+      const existingByThreadID = new Map(existingRows.map((row) => [row.thread_id, row]));
+      const leaseRows = this.db.prepare(`
+        SELECT thread_id, backend_session_id AS lease_backend_session_id,
+               status AS lease_status, expires_at_ms, expired_published_at
+        FROM live_leases
+        WHERE host_id = ?
+      `).all(host.id);
+      const leasesByThreadID = new Map(leaseRows.map((row) => [row.thread_id, row]));
+      const currentMs = nowMs();
+      const projectCardForClient = (card) => {
+        const lease = leasesByThreadID.get(card.threadID);
+        if (!lease) {
+          return card;
+        }
+        return applyLeaseToCard(card, {
+          backend_session_id: lease.lease_backend_session_id,
+          status: lease.lease_status,
+          expires_at_ms: lease.expires_at_ms,
+        }, currentMs);
+      };
       const nextByID = new Map();
       const upsertCards = [];
       const deleteCardIDs = [];
 
       cards.forEach((card, index) => {
+        const existing = existingByThreadID.get(card.threadID);
+        if (isFreshLocalArchiveMutation(existing, atMs)) {
+          return;
+        }
         const cardWithOrder = {
           ...card,
           orderKey: card.orderKey || dockOrderKey(index, card.threadID),
@@ -495,14 +563,20 @@ class RelayStateStore {
         };
         nextByID.set(cardWithOrder.id, cardWithOrder);
         const previous = previousByID.get(cardWithOrder.id);
-        if (sortedJSONString(previous) !== sortedJSONString(cardWithOrder)) {
-          upsertCards.push(cardWithOrder);
+        const clientCard = projectCardForClient(cardWithOrder);
+        const lease = leasesByThreadID.get(cardWithOrder.threadID);
+        const expiredLeaseNeedsPublish = isLeaseExpired(lease, currentMs) && !lease.expired_published_at;
+        if (expiredLeaseNeedsPublish || sortedJSONString(previous) !== sortedJSONString(clientCard)) {
+          upsertCards.push(clientCard);
         }
         this.upsertThreadCard(host.id, cardWithOrder, {
           archiveState: "active",
           activeScopePresent: true,
           at,
         });
+        if (expiredLeaseNeedsPublish) {
+          this.markLiveLeaseExpiryPublished(host.id, cardWithOrder.threadID, at);
+        }
       });
 
       if (complete) {
@@ -677,12 +751,23 @@ class RelayStateStore {
 
   cardForThread({ hostID, threadID }) {
     const row = this.db.prepare(`
-      SELECT *
-      FROM threads
-      WHERE host_id = ? AND thread_id = ?
+      SELECT t.*, l.endpoint_label, l.endpoint_url, l.backend_session_id AS lease_backend_session_id,
+             l.status AS lease_status, l.waiting_state, l.validation_at_ms, l.expires_at_ms
+      FROM threads t
+      LEFT JOIN live_leases l
+        ON l.host_id = t.host_id AND l.thread_id = t.thread_id
+      WHERE t.host_id = ? AND t.thread_id = ?
       LIMIT 1
     `).get(hostID, threadID);
-    return normalizeStoredCard(row);
+    const card = normalizeStoredCard(row);
+    if (!card || !row?.lease_status) {
+      return card;
+    }
+    return applyLeaseToCard(card, {
+      backend_session_id: row.lease_backend_session_id,
+      status: row.lease_status,
+      expires_at_ms: row.expires_at_ms,
+    }, nowMs());
   }
 
   upsertLiveLease(hostID, lease, at = nowISOString()) {
@@ -690,9 +775,9 @@ class RelayStateStore {
       INSERT INTO live_leases (
         host_id, thread_id, endpoint_label, endpoint_url, backend_session_id,
         status, waiting_state, command_capability, validation_at,
-        validation_at_ms, expires_at_ms
+        validation_at_ms, expires_at_ms, expired_published_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
       ON CONFLICT(host_id, thread_id) DO UPDATE SET
         endpoint_label = excluded.endpoint_label,
         endpoint_url = excluded.endpoint_url,
@@ -702,7 +787,8 @@ class RelayStateStore {
         command_capability = excluded.command_capability,
         validation_at = excluded.validation_at,
         validation_at_ms = excluded.validation_at_ms,
-        expires_at_ms = excluded.expires_at_ms
+        expires_at_ms = excluded.expires_at_ms,
+        expired_published_at = NULL
     `).run(
       hostID,
       lease.threadID,
@@ -716,6 +802,26 @@ class RelayStateStore {
       Number(lease.validationAtMs || nowMs()),
       Number(lease.expiresAtMs || (nowMs() + 5_000)),
     );
+  }
+
+  markLiveLeaseExpiryPublished(hostID, threadID, at = nowISOString()) {
+    this.db.prepare(`
+      UPDATE live_leases
+      SET expired_published_at = COALESCE(expired_published_at, ?)
+      WHERE host_id = ? AND thread_id = ?
+    `).run(at, hostID, threadID);
+  }
+
+  nextUnpublishedLiveLeaseExpiryMs(hostID, atMs = nowMs()) {
+    const row = this.db.prepare(`
+      SELECT MIN(expires_at_ms) AS expires_at_ms
+      FROM live_leases
+      WHERE host_id = ?
+        AND expires_at_ms >= ?
+        AND expired_published_at IS NULL
+    `).get(hostID, Number(atMs));
+    const expiresAtMs = Number(row?.expires_at_ms || 0);
+    return Number.isFinite(expiresAtMs) && expiresAtMs > 0 ? expiresAtMs : null;
   }
 
   recordSyncScope(hostID, scope, at = nowISOString()) {

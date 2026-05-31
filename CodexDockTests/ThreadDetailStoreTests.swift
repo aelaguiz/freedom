@@ -48,6 +48,63 @@ final class ThreadDetailStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testLoadBuffersLiveNotificationsUntilReadTurnsAndResumeFinish() async throws {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            readResult: .success(
+                ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))
+            ),
+            turnsListResult: .success(
+                ThreadTurnsListResponseDTO(data: makeDetailThread("thread-1", text: "Paged turn").turns ?? [])
+            ),
+            resumeResult: .success(
+                ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))
+            ),
+            resumeDelay: .milliseconds(100)
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session),
+            now: { Date(timeIntervalSince1970: 3_000) }
+        )
+
+        let loadTask = Task {
+            await store.load()
+        }
+        let start = ContinuousClock.now
+        var resumeStarted = false
+        while start.duration(to: .now) < .seconds(2) {
+            if await !session.resumeParamsSnapshot().isEmpty {
+                resumeStarted = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(resumeStarted)
+
+        await session.emitNotification(
+            JSONRPCNotification(
+                method: "item/agentMessage/delta",
+                params: .object([
+                    "threadId": .string("thread-1"),
+                    "turnId": .string("turn-live"),
+                    "itemId": .string("agent-live"),
+                    "delta": .string("Buffered live"),
+                ])
+            )
+        )
+        await loadTask.value
+
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.liveState, .live)
+        XCTAssertEqual(snapshot.events.map(\.body), ["Buffered live", "Paged turn"])
+    }
+
+    @MainActor
     func testLoadPagesAllTurnsAndPublishesNewestFirstForDisplay() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")

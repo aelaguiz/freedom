@@ -127,6 +127,37 @@ test("macOS render emits launchd services with raw app-server loopback by defaul
   assert.match(relay.contents, /<string>Home<\/string>/);
   assert.match(relay.contents, /<string>--host-endpoint<\/string>/);
   assert.match(relay.contents, /<string>home\.local:4510<\/string>/);
+  assert.match(relay.contents, /<string>--relay-state-db<\/string>/);
+  assert.match(relay.contents, /<string>\/tmp\/codex-client-host-service-test\/\.codex-dock-home\/relay-state\.sqlite<\/string>/);
+});
+
+test("render can point both services at an explicit Codex home", () => {
+  const config = makeConfig({
+    options: {
+      "codex-home": "/tmp/codex-client/isolated-home",
+    },
+  });
+  const files = renderHostServices(config);
+  const appServer = files.find((file) => file.role === "raw-app-server");
+  const relay = files.find((file) => file.role === "dock-relay");
+
+  assert.equal(config.codexHome, "/tmp/codex-client/isolated-home");
+  assert.match(appServer.contents, /<key>CODEX_HOME<\/key>\n    <string>\/tmp\/codex-client\/isolated-home<\/string>/);
+  assert.match(relay.contents, /<key>CODEX_HOME<\/key>\n    <string>\/tmp\/codex-client\/isolated-home<\/string>/);
+  assert.equal(config.relay.stateDatabasePath, "/tmp/codex-client-host-service-test/.codex-dock-home/relay-state.sqlite");
+});
+
+test("render can isolate relay state under an explicit database path", () => {
+  const config = makeConfig({
+    options: {
+      "relay-state-db": "/tmp/codex-client/isolated-service/relay-state.sqlite",
+    },
+  });
+  const relay = renderHostServices(config).find((file) => file.role === "dock-relay");
+
+  assert.equal(config.relay.stateDatabasePath, "/tmp/codex-client/isolated-service/relay-state.sqlite");
+  assert.match(relay.contents, /<string>--relay-state-db<\/string>/);
+  assert.match(relay.contents, /<string>\/tmp\/codex-client\/isolated-service\/relay-state\.sqlite<\/string>/);
 });
 
 test("Linux render emits systemd user services without requiring systemd to run", () => {

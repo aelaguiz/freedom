@@ -127,8 +127,11 @@ public enum ThreadDetailMessageFilter: Equatable, Sendable, Identifiable, CaseIt
 
 public enum ThreadMessageSemantics {
     public static func isDefaultVisibleMessage(_ event: ThreadEvent) -> Bool {
-        event.visibilityCategory == .message
-            && (event.kind == .userMessage || event.kind == .agentMessage)
+        event.visibilityCategory == .request
+            || (
+                event.visibilityCategory == .message
+                    && (event.kind == .userMessage || event.kind == .agentMessage)
+            )
     }
 
     public static func latestMessage(in events: [ThreadEvent]) -> ThreadEvent? {
