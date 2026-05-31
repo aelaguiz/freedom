@@ -108,7 +108,6 @@ public final class ThreadDetailStore: ObservableObject {
     }
 
     private static let turnPageLimit = CodexDockConstants.Dock.turnPageLimit
-
     @Published public private(set) var state: ThreadDetailStoreState
     @Published public private(set) var requestCards: [ServerRequestCard] = []
 
@@ -907,6 +906,9 @@ public final class ThreadDetailStore: ObservableObject {
     }
 
     private func message(from error: Error) -> String {
+        if let message = ThreadDetailHumanOnlyRejection.message(for: error) {
+            return message
+        }
         if let localizedError = error as? LocalizedError,
            let description = localizedError.errorDescription {
             return description

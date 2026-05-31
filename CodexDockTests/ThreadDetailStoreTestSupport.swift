@@ -17,11 +17,11 @@ actor FakeThreadDetailSession: ThreadDetailSession {
     private let connectionStateContinuation: AsyncStream<AppServerConnectionState>.Continuation
     private let notificationContinuation: AsyncStream<JSONRPCNotification>.Continuation
     private let serverRequestContinuation: AsyncStream<JSONRPCRequest>.Continuation
-    private var readResults: [Result<ThreadReadResponseDTO, FakeThreadDetailError>]
-    private var turnsListResults: [Result<ThreadTurnsListResponseDTO, FakeThreadDetailError>]
-    private var resumeResults: [Result<ThreadResumeResponseDTO, FakeThreadDetailError>]
-    private let turnStartResult: Result<TurnStartResponseDTO, FakeThreadDetailError>
-    private let turnSteerResult: Result<TurnSteerResponseDTO, FakeThreadDetailError>
+    private var readResults: [Result<ThreadReadResponseDTO, any Error>]
+    private var turnsListResults: [Result<ThreadTurnsListResponseDTO, any Error>]
+    private var resumeResults: [Result<ThreadResumeResponseDTO, any Error>]
+    private let turnStartResult: Result<TurnStartResponseDTO, any Error>
+    private let turnSteerResult: Result<TurnSteerResponseDTO, any Error>
     private let resumeDelay: Duration?
     private var readParams: [ThreadReadParams] = []
     private var turnsListParams: [ThreadTurnsListParams] = []
@@ -31,12 +31,12 @@ actor FakeThreadDetailSession: ThreadDetailSession {
     private var sentResponses: [SentServerResponse] = []
 
     init(
-        readResult: Result<ThreadReadResponseDTO, FakeThreadDetailError>,
-        turnsListResult: Result<ThreadTurnsListResponseDTO, FakeThreadDetailError> = .success(
+        readResult: Result<ThreadReadResponseDTO, any Error>,
+        turnsListResult: Result<ThreadTurnsListResponseDTO, any Error> = .success(
             ThreadTurnsListResponseDTO(data: [])
         ),
-        resumeResult: Result<ThreadResumeResponseDTO, FakeThreadDetailError>,
-        turnStartResult: Result<TurnStartResponseDTO, FakeThreadDetailError> = .success(
+        resumeResult: Result<ThreadResumeResponseDTO, any Error>,
+        turnStartResult: Result<TurnStartResponseDTO, any Error> = .success(
             TurnStartResponseDTO(
                 turn: .object([
                     "id": .string("turn-started"),
@@ -44,13 +44,13 @@ actor FakeThreadDetailSession: ThreadDetailSession {
                 ])
             )
         ),
-        turnSteerResult: Result<TurnSteerResponseDTO, FakeThreadDetailError> = .success(
+        turnSteerResult: Result<TurnSteerResponseDTO, any Error> = .success(
             TurnSteerResponseDTO(turnId: "turn-started")
         ),
         resumeDelay: Duration? = nil,
-        readResults: [Result<ThreadReadResponseDTO, FakeThreadDetailError>]? = nil,
-        turnsListResults: [Result<ThreadTurnsListResponseDTO, FakeThreadDetailError>]? = nil,
-        resumeResults: [Result<ThreadResumeResponseDTO, FakeThreadDetailError>]? = nil
+        readResults: [Result<ThreadReadResponseDTO, any Error>]? = nil,
+        turnsListResults: [Result<ThreadTurnsListResponseDTO, any Error>]? = nil,
+        resumeResults: [Result<ThreadResumeResponseDTO, any Error>]? = nil
     ) {
         let connectionStates = AsyncStream.makeStream(of: AppServerConnectionState.self)
         let notifications = AsyncStream.makeStream(of: JSONRPCNotification.self)

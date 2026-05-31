@@ -418,10 +418,10 @@ Pinned metadata is also lossy. It stores only broad `human`, `automation`, or
 | Is it waiting on the user? | Yes from active flags or pending server requests. | Yes as `needsInput` or `needsApproval`. | High for current projection, subject to freshness. |
 | Does it have a goal? | Yes through `thread/goal/get` or goals DB. | No. | High if goal route/DB is consulted. |
 
-## Draft Self-Started Classification
+## Current Self-Started Classification
 
-This is the current draft rule for the UX question: "Did I start this, or did
-something else start it?"
+This is the current implemented rule for the UX question: "Did I start this,
+or did something else start it?"
 
 `self_started` means the raw source proves an interactive human-facing source:
 
@@ -449,8 +449,8 @@ self-started bucket until we add better evidence.
 This is a draft classification, not a permanent product taxonomy. It is meant
 to be easy to revise as real examples make the boundary clearer.
 
-Implementation note on `2026-05-31`: this draft classification is now enforced
-for app-facing Codex Dock behavior by
+Implementation note on `2026-05-31`: this classification is now enforced for
+app-facing Codex Dock behavior by
 `scripts/dock-relay-human-thread-filter.mjs`. The canonical relay predicates
 are named to state the policy directly:
 

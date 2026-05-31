@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - Human-Only Thread Filtering - Architecture Plan"
 date: 2026-05-31
-status: implemented
+status: complete
 fallback_policy: forbidden
 owners: [Amir, Codex]
 reviewers: [fresh-consult, thermo-nuclear-code-quality-review]
@@ -11,6 +11,8 @@ related:
   - /tmp/fresh-consult/human-only-thread-filter-20260531T113112Z-w8uhbk/final.txt
   - /tmp/fresh-consult/human-only-thread-filter-r2-20260531T113408Z-NieUSV/final.txt
   - /tmp/fresh-consult/human-only-implementation-20260531T122616Z-sSlkaH/final.txt
+  - /tmp/fresh-consult/human-only-final-signoff-r3-20260531T130712Z-OOZPrO/final.txt
+  - docs/CODEX_DOCK_HUMAN_ONLY_THREAD_FILTERING_PLAN_2026-05-31_WORKLOG.md
 ---
 
 # TL;DR
@@ -21,9 +23,73 @@ related:
 - Plan: prove the classifier first, cut over Dock and Archive state to human-only inputs, gate raw/detail/live routes, add Swift rejection defenses, then update contracts, fixtures, simulator proof, and live proof.
 - Non-negotiables: no app-facing non-human cards, no all-source Dock hot-path paging, no treating unknown as human, no archive/detail/live-routing back doors, no prompt text or raw payload logging, and no runtime fallback that silently reintroduces non-human rows.
 
+<!-- arch_skill:block:implementation_audit:start -->
+# Implementation Audit (authoritative)
+
+Date: 2026-05-31
+Verdict (code): COMPLETE
+Manual QA: complete (non-blocking)
+
+## Code blockers (why code is not done)
+
+- None.
+
+## Reopened phases (false-complete fixes)
+
+- None.
+
+## Missing items (code gaps; evidence-anchored; no tables)
+
+- None.
+
+## Non-blocking follow-ups (manual QA / screenshots / human verification)
+
+- None.
+
+## Verified code evidence
+
+- `rtk npm run test:relay` passed: 216 tests, 0 failures.
+- `rtk swift test --filter DockStoreTests` passed: 48 tests, 0 failures.
+- `rtk swift test --filter DockStoreStreamTests` passed: 12 tests, 0 failures.
+- `rtk swift test --filter DockDataEngineTests` passed: 3 tests, 0 failures.
+- `rtk swift test --filter DockRenderProjectorTests` passed: 4 tests, 0 failures.
+- `rtk swift test --filter ArchiveDataEngineTests` passed: 3 tests, 0 failures.
+- `rtk swift test --filter ThreadDetailStoreTests` passed on 2026-05-31: 55
+  tests, 0 failures.
+- `rtk swift test --filter AppServerClientTests` passed on 2026-05-31: 53
+  tests, 5 expected env-gated skips, 0 failures.
+- `rtk npm run test:relay` passed after adding the `state/query` visibility
+  marker: 216 tests, 0 failures.
+- `rtk make dock-relay-restart` completed on 2026-05-31 so live proof tested
+  the current relay MJS code, not a stale launchd process.
+- `rtk make app-server-status` passed on 2026-05-31 with host-service status
+  `ready`.
+- `rtk make dock-relay-status` passed on 2026-05-31 with host-service status
+  `ready`.
+- `rtk make relay-doctor` passed on 2026-05-31 with no reported problems.
+- Live JSON-RPC proof on 2026-05-31 showed 186 Dock cards and 1 Archive card;
+  all sampled app-facing cards had `lane: human` and `sourceKind: human`, and
+  `state/query` reported `visibility.mode:
+  app_facing_human_base_threads_only`.
+- Live diagnostic proof on 2026-05-31 sampled rejected thread
+  `019e7de1-161d-79f0-b10d-551eb0890a4e`; both `thread/read` and
+  `thread/resume` rejected it with `-32043`.
+- Live SQLite proof on 2026-05-31 showed 186 active human cards, 1 archived
+  human card, 0 rejected cards, 10 live leases, and 0 rejected live leases.
+- Thermo-nuclear line-count check kept `scripts/dock-relay-state-store.mjs` at
+  995 lines and `CodexDock/State/ThreadDetailStore.swift` at 993 lines by
+  extracting focused policy helpers.
+- `rtk git diff --check` passed on 2026-05-31.
+
+## Clean handoff
+
+- Use `$arch-docs` for later evergreen doc consolidation or plan retirement.
+<!-- arch_skill:block:implementation_audit:end -->
+
 # Implementation Status
 
-Implemented on 2026-05-31.
+Implemented on 2026-05-31. Worklog:
+`docs/CODEX_DOCK_HUMAN_ONLY_THREAD_FILTERING_PLAN_2026-05-31_WORKLOG.md`.
 
 The relay now uses self-documenting policy names in
 `scripts/dock-relay-human-thread-filter.mjs`:
@@ -56,6 +122,9 @@ App-facing relay behavior is human-only by default:
 - Swift stream ingestion drops non-human stream cards, one-shot snapshot
   collection completes final windows after defensive filtering, and cached
   pinned rows are revived only when the cached display proves a human origin.
+- Thread Detail maps relay `-32043` human-only rejections to
+  `Thread unavailable.` through `ThreadDetailHumanOnlyRejection` and does not
+  call `thread/resume` after a rejected `thread/read`.
 
 Verification completed on 2026-05-31:
 
@@ -65,7 +134,28 @@ Verification completed on 2026-05-31:
 - `rtk swift test --filter DockDataEngineTests` passed: 3 tests, 0 failures.
 - `rtk swift test --filter DockRenderProjectorTests` passed: 4 tests, 0 failures.
 - `rtk swift test --filter ArchiveDataEngineTests` passed: 3 tests, 0 failures.
+- `rtk swift test --filter ThreadDetailStoreTests` passed: 55 tests, 0
+  failures.
+- `rtk swift test --filter AppServerClientTests` passed: 53 tests, 5 expected
+  env-gated skips, 0 failures.
 - `rtk git diff --check` passed.
+- `rtk make dock-relay-restart` completed so live proof tested the current
+  relay MJS code, not a stale launchd process.
+- `rtk make app-server-status` passed with host-service status `ready`.
+- `rtk make dock-relay-status` passed with host-service status `ready`.
+- `rtk make relay-doctor` passed with no reported problems.
+- Live JSON-RPC proof showed 186 Dock cards and 1 Archive card; all sampled
+  app-facing cards had `lane: human` and `sourceKind: human`, and
+  `state/query` reported `visibility.mode:
+  app_facing_human_base_threads_only`.
+- Live diagnostic proof sampled rejected thread
+  `019e7de1-161d-79f0-b10d-551eb0890a4e`; both `thread/read` and
+  `thread/resume` rejected it with `-32043`.
+- Live SQLite proof showed 186 active human cards, 1 archived human card, 0
+  rejected cards, 10 live leases, and 0 rejected live leases.
+- Thermo-nuclear line-count check kept `scripts/dock-relay-state-store.mjs` at
+  995 lines and `CodexDock/State/ThreadDetailStore.swift` at 993 lines by
+  extracting focused policy helpers.
 
 Post-implementation fresh consult at
 `/tmp/fresh-consult/human-only-implementation-20260531T122616Z-sSlkaH/final.txt`
@@ -75,13 +165,17 @@ highest-signal notes were folded back into the implementation: direct
 visibility labeling, human-only spawn-edge diagnostics, `active:interactiveDefault`
 parity wording, and Swift projection/pinned-display guards.
 
-No contract files, generated DTO files, app target settings, assets, or
-physical-device paths changed in this implementation. `ThreadDetailStoreTests`,
-`AppServerClientTests`, `contract:check`, and simulator/device Makefile checks
-were not required for the touched surfaces. The relay now owns direct-ID
-rejection before Thread Detail can load non-human data; a dedicated Thread
-Detail unavailable-state polish pass can be added later without changing this
-human-only boundary.
+Final pre-commit fresh consult at
+`/tmp/fresh-consult/human-only-final-signoff-r3-20260531T130712Z-OOZPrO/final.txt`
+returned `pass-with-notes`, `BLOCKING: none`, and high confidence after
+reviewing the final working tree, including the Thread Detail follow-up,
+`state/query` visibility marker, worklog, self-documenting policy helpers, and
+thermo-nuclear maintainability evidence.
+
+No contract files, generated DTO files, app target settings, assets,
+Makefile targets, README runbook text, or physical-device paths changed in
+this implementation. `contract:check` and simulator/device Makefile checks were
+not required for the touched surfaces.
 
 <!-- arch_skill:block:planning_passes:start -->
 <!--

@@ -1178,6 +1178,54 @@ final class AppServerClientTests: XCTestCase {
         }
     }
 
+    func testThreadReadHumanOnlyRejectionSurfacesTypedServerCode() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let task = Task {
+            try await client.threadRead(
+                params: ThreadReadParams(threadId: "spawned-child", includeTurns: false),
+                timeout: .seconds(1)
+            )
+        }
+        let request = try await transport.nextSentRequest()
+        XCTAssertEqual(request.method, AppServerMethods.threadRead)
+
+        await transport.enqueue(
+            .error(
+                JSONRPCErrorResponse(
+                    error: JSONRPCErrorObject(
+                        code: -32043,
+                        message: "thread rejected by human-only filter",
+                        data: .object([
+                            "threadId": .string("spawned-child"),
+                            "reason": .string("sub_agent_thread_spawn"),
+                        ])
+                    ),
+                    id: request.id
+                )
+            )
+        )
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected human-only server rejection")
+        } catch AppServerClientError.server(let error) {
+            XCTAssertEqual(error.code, -32043)
+            XCTAssertEqual(error.message, "thread rejected by human-only filter")
+            XCTAssertEqual(
+                error.data,
+                .object([
+                    "threadId": .string("spawned-child"),
+                    "reason": .string("sub_agent_thread_spawn"),
+                ])
+            )
+        } catch {
+            XCTFail("Expected server error, got \(error)")
+        }
+    }
+
     func testThreadReadAndResumeSendTypedRequests() async throws {
         let transport = ScriptedAppServerTransport()
         let client = AppServerClient(transport: transport)

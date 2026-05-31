@@ -53,6 +53,14 @@ const ACTIVE_ARCHIVE_SCOPE = {
   archived: false,
 };
 
+function appFacingHumanOnlyVisibility() {
+  return {
+    mode: "app_facing_human_base_threads_only",
+    includeRejectedThreads: false,
+    rejectedThreadsRequireDiagnosticSnapshotOptIn: true,
+  };
+}
+
 function liveLeaseFromRow(row, endpoint, maxAgeMs) {
   const threadID = row?.id;
   if (!threadID) {
@@ -493,6 +501,7 @@ class RelayStateEngine {
       totalRows,
       window,
       asOf: nowISOString(),
+      visibility: appFacingHumanOnlyVisibility(),
       freshness,
       hosts: this.store.hostRows(),
       cards,
@@ -760,11 +769,7 @@ class RelayStateEngine {
     return {
       ok: true,
       schema: "codexdock.relayState.v1",
-      visibility: {
-        mode: "app_facing_human_base_threads_only",
-        includeRejectedThreads: false,
-        rejectedThreadsRequireDiagnosticSnapshotOptIn: true,
-      },
+      visibility: appFacingHumanOnlyVisibility(),
       db: this.store.dbHealth(),
       counts: this.store.stateCounts(),
       syncScopes: this.store.syncScopes(),

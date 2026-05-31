@@ -1350,11 +1350,22 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
     assert.equal(response.error, undefined);
     assert.equal(response.result.kind, "snapshot");
     assert.equal(response.result.view, "dock");
+    assert.deepEqual(response.result.visibility, {
+      mode: "app_facing_human_base_threads_only",
+      includeRejectedThreads: false,
+      rejectedThreadsRequireDiagnosticSnapshotOptIn: true,
+    });
     assert.deepEqual(response.result.cards, []);
     assert.equal(observedThreadListParams.length, 0);
 
     const update = await waitForRelayMessage(ws, (message) => message.method === "dock/update");
     const params = update.params;
+    const stateQuery = await jsonRpcRequest(ws, "state/query", { view: "dock" });
+    assert.deepEqual(stateQuery.result.visibility, {
+      mode: "app_facing_human_base_threads_only",
+      includeRejectedThreads: false,
+      rejectedThreadsRequireDiagnosticSnapshotOptIn: true,
+    });
     assert.equal(observedAuthorization, "Bearer history-token");
     assert.equal(observedThreadListParams.length, 1);
     assert.deepEqual(observedThreadListParams.map((params) => params.archived), [false]);

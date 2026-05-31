@@ -369,7 +369,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
             readResults: [
                 .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-                .failure(.resumeFailed),
+                .failure(FakeThreadDetailError.resumeFailed),
             ]
         )
         let store = ThreadDetailStore(
@@ -440,7 +440,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
             turnsListResult: .success(ThreadTurnsListResponseDTO(data: [])),
             resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnStartResult: .failure(.turnFailed),
+            turnStartResult: .failure(FakeThreadDetailError.turnFailed),
             turnsListResults: [
                 .success(ThreadTurnsListResponseDTO(data: [])),
                 .success(ThreadTurnsListResponseDTO(data: [])),

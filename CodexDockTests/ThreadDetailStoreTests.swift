@@ -215,7 +215,7 @@ final class ThreadDetailStoreTests: XCTestCase {
             turnsListResult: .success(
                 ThreadTurnsListResponseDTO(data: makeDetailThread("thread-1", text: "Stored turn").turns ?? [])
             ),
-            resumeResult: .failure(.resumeFailed)
+            resumeResult: .failure(FakeThreadDetailError.resumeFailed)
         )
         let store = ThreadDetailStore(
             host: host,
@@ -234,6 +234,41 @@ final class ThreadDetailStoreTests: XCTestCase {
             return XCTFail("Expected stale detail, got \(snapshot.liveState)")
         }
         XCTAssertTrue(message.contains("resume failed"))
+    }
+
+    @MainActor
+    func testHumanOnlyThreadRejectionShowsUnavailableAndDoesNotResume() async {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "spawned-child")
+        let rejected = AppServerClientError.server(
+            JSONRPCErrorObject(
+                code: -32043,
+                message: "thread rejected by human-only filter",
+                data: .object([
+                    "threadId": .string("spawned-child"),
+                    "reason": .string("sub_agent_thread_spawn"),
+                ])
+            )
+        )
+        let session = FakeThreadDetailSession(
+            readResult: .failure(rejected),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "spawned-child", turns: [])))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session)
+        )
+
+        await store.load()
+
+        guard case let .error(header, message) = store.state else {
+            return XCTFail("Expected unavailable detail, got \(store.state)")
+        }
+        XCTAssertEqual(header.threadID, "spawned-child")
+        XCTAssertEqual(message, "Thread unavailable.")
+        let resumeParams = await session.resumeParamsSnapshot()
+        XCTAssertEqual(resumeParams, [])
     }
 
     @MainActor
@@ -722,7 +757,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         let session = FakeThreadDetailSession(
             readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
             resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnStartResult: .failure(.turnFailed)
+            turnStartResult: .failure(FakeThreadDetailError.turnFailed)
         )
         let store = ThreadDetailStore(
             host: host,
