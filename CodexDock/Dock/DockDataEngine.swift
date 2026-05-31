@@ -2,7 +2,7 @@ import Foundation
 
 actor DockDataEngine {
     private var hosts: [DockHostConfiguration]
-    private var sessionTable = DockSessionTable()
+    private var cardTable = ThreadCardTable()
     private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata]
 
     init(
@@ -11,12 +11,12 @@ actor DockDataEngine {
     ) {
         self.hosts = registry.hosts
         self.localMetadata = localMetadata
-        self.sessionTable.reset(hosts: registry.hosts)
+        self.cardTable.reset(hosts: registry.hosts)
     }
 
     func updateRegistry(_ registry: HostRegistry) {
         hosts = registry.hosts
-        sessionTable.reset(hosts: registry.hosts)
+        cardTable.reset(hosts: registry.hosts)
     }
 
     func updateLocalMetadata(_ values: [LocalThreadMetadataKey: LocalThreadMetadata]) {
@@ -24,33 +24,33 @@ actor DockDataEngine {
     }
 
     func ensureHosts() {
-        sessionTable.ensureHosts(hosts)
+        cardTable.ensureHosts(hosts)
     }
 
     func markChecking(host: DockHostConfiguration) {
-        sessionTable.markChecking(host: host)
+        cardTable.markChecking(host: host)
     }
 
-    func markFailure(_ failure: DockLoadFailure, host: DockHostConfiguration) {
-        sessionTable.markFailure(failure, host: host)
+    func markFailure(_ failure: DockRequestFailure, host: DockHostConfiguration) {
+        cardTable.markFailure(failure, host: host)
     }
 
     func applySnapshot(
-        _ update: DockStreamUpdateDTO,
+        _ update: ThreadCardStreamUpdateDTO,
         host: DockHostConfiguration
-    ) -> DockSessionTableApplyResult {
-        sessionTable.applySnapshot(update, host: host)
+    ) -> ThreadCardTableApplyResult {
+        cardTable.applySnapshot(update, host: host)
     }
 
     func applyUpdate(
-        _ update: DockStreamUpdateDTO,
+        _ update: ThreadCardStreamUpdateDTO,
         host: DockHostConfiguration
-    ) -> DockSessionTableApplyResult {
-        sessionTable.applyUpdate(update, host: host)
+    ) -> ThreadCardTableApplyResult {
+        cardTable.applyUpdate(update, host: host)
     }
 
     func rowCount(for host: DockHostConfiguration) -> Int {
-        sessionTable.rowCount(for: host)
+        cardTable.rowCount(for: host)
     }
 
     func snapshot(now: @escaping @Sendable () -> Date = Date.init) -> DockSnapshot? {
@@ -58,7 +58,7 @@ actor DockDataEngine {
             return nil
         }
         return DockRenderProjector(now: now).snapshot(
-            from: sessionTable.renderInput(hosts: hosts),
+            from: cardTable.renderInput(hosts: hosts),
             localMetadata: localMetadata
         )
     }

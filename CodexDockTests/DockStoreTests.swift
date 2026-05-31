@@ -6,8 +6,8 @@ final class DockStoreTests: XCTestCase {
     func testLoadPublishesRowsGroupedByBranch() async {
         let host = makeHost()
         let now = Date(timeIntervalSince1970: 2_000)
-        let summaries = [
-            makeSummary(
+        let fixtures = [
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "thread-a",
                 branch: "feature/dock",
@@ -15,7 +15,7 @@ final class DockStoreTests: XCTestCase {
                 lastActivity: Date(timeIntervalSince1970: 1_880),
                 prompt: "Build the Dock shell"
             ),
-            makeSummary(
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "thread-b",
                 branch: "main",
@@ -26,8 +26,8 @@ final class DockStoreTests: XCTestCase {
         ]
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(
-                loader: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: summaries)))
+            streamClient: LoaderBackedThreadCardStreamClient(
+                loader: FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: fixtures)))
             ),
             now: { now }
         )
@@ -49,8 +49,8 @@ final class DockStoreTests: XCTestCase {
     @MainActor
     func testLoadOrdersNotLoadedRowsByNewestActivity() async {
         let host = makeHost()
-        let summaries = [
-            makeSummary(
+        let fixtures = [
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "old-history",
                 branch: "aaa-old-history",
@@ -58,7 +58,7 @@ final class DockStoreTests: XCTestCase {
                 lastActivity: Date(timeIntervalSince1970: 1_990),
                 prompt: "Stored history row"
             ),
-            makeSummary(
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "live-running",
                 branch: "zzz-live-work",
@@ -69,8 +69,8 @@ final class DockStoreTests: XCTestCase {
         ]
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(
-                loader: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: summaries)))
+            streamClient: LoaderBackedThreadCardStreamClient(
+                loader: FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: fixtures)))
             ),
             now: { Date(timeIntervalSince1970: 2_000) }
         )
@@ -89,9 +89,9 @@ final class DockStoreTests: XCTestCase {
     @MainActor
     func testRefreshUpdatesLoadedRows() async {
         let host = makeHost()
-        let loader = SequencedDockSessionLoader(results: [
-            .success(DockLoadResult(summaries: [
-                makeSummary(
+        let loader = SequencedThreadCardFixtureLoader(results: [
+            .success(ThreadCardFixtureResult(fixtures: [
+                makeThreadCardFixtureSummary(
                     hostID: host.id,
                     threadID: "thread-a",
                     branch: "main",
@@ -100,8 +100,8 @@ final class DockStoreTests: XCTestCase {
                     prompt: "Initial row"
                 )
             ])),
-            .success(DockLoadResult(summaries: [
-                makeSummary(
+            .success(ThreadCardFixtureResult(fixtures: [
+                makeThreadCardFixtureSummary(
                     hostID: host.id,
                     threadID: "thread-b",
                     branch: "feature/refresh",
@@ -111,7 +111,7 @@ final class DockStoreTests: XCTestCase {
                 )
             ]))
         ])
-        let store = DockStore(host: host, streamClient: LoaderBackedDockStreamClient(loader: loader))
+        let store = DockStore(host: host, streamClient: LoaderBackedThreadCardStreamClient(loader: loader))
 
         await store.load()
         await store.refresh()
@@ -136,28 +136,28 @@ final class DockStoreTests: XCTestCase {
     @MainActor
     func testFailedSubscribeResyncDropsConnectionSoRefreshCanReconnect() async throws {
         let host = makeHost()
-        let badConnection = ManualDockStreamConnection(
+        let badConnection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "bad-epoch",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: host, threadID: "bad-row", title: "Bad row", updatedAt: 1_000)
+                cards: [
+                    threadCardFixture(host: host, threadID: "bad-row", title: "Bad row", updatedAt: 1_000)
                 ],
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion + 1
             )
         )
-        let goodConnection = ManualDockStreamConnection(
+        let goodConnection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "good-epoch",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: host, threadID: "recovered-row", title: "Recovered row", updatedAt: 1_200)
+                cards: [
+                    threadCardFixture(host: host, threadID: "recovered-row", title: "Recovered row", updatedAt: 1_200)
                 ]
             )
         )
-        let streamClient = SequencedManualDockStreamClient(connections: [badConnection, goodConnection])
+        let streamClient = SequencedManualThreadCardStreamClient(connections: [badConnection, goodConnection])
         let store = DockStore(host: host, streamClient: streamClient)
 
         await store.load()
@@ -179,8 +179,8 @@ final class DockStoreTests: XCTestCase {
         let host = makeHost()
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(
-                loader: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [])))
+            streamClient: LoaderBackedThreadCardStreamClient(
+                loader: FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: [])))
             )
         )
 
@@ -195,40 +195,12 @@ final class DockStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testLiveOverlayDegradationPublishesPartialHostState() async {
-        let host = makeHost()
-        let store = DockStore(
-            host: host,
-            streamClient: LoaderBackedDockStreamClient(
-                loader: FakeDockSessionLoader(
-                    mode: .success(
-                        DockLoadResult(
-                            summaries: [],
-                            liveOverlay: ThreadListLiveOverlayDTO(ok: false, state: "disabled")
-                        )
-                    )
-                )
-            )
-        )
-
-        await store.load()
-
-        guard case let .loaded(snapshot) = store.state else {
-            return XCTFail("Expected loaded snapshot, got \(store.state)")
-        }
-        XCTAssertEqual(
-            snapshot.hostStates.map(\.status),
-            [.empty]
-        )
-    }
-
-    @MainActor
     func testOfflineHostPublishesOfflineState() async {
         let host = makeHost()
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(
-                loader: FakeDockSessionLoader(mode: .failure(.offline("Connection refused")))
+            streamClient: LoaderBackedThreadCardStreamClient(
+                loader: FakeThreadCardFixtureLoader(mode: .failure(.offline("Connection refused")))
             )
         )
 
@@ -245,8 +217,8 @@ final class DockStoreTests: XCTestCase {
         let host = makeHost()
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(
-                loader: FakeDockSessionLoader(mode: .failure(.error("Invalid response")))
+            streamClient: LoaderBackedThreadCardStreamClient(
+                loader: FakeThreadCardFixtureLoader(mode: .failure(.error("Invalid response")))
             )
         )
 
@@ -277,9 +249,9 @@ final class DockStoreTests: XCTestCase {
         let amir = makeHost()
         let home = makeHost(url: "ws://100.66.11.7:4510")
         let registry = try HostRegistry(hosts: [amir, home])
-        let loader = HostRoutedDockSessionLoader(results: [
-            amir.id: .success(DockLoadResult(summaries: [
-                makeSummary(
+        let loader = HostRoutedThreadCardFixtureLoader(results: [
+            amir.id: .success(ThreadCardFixtureResult(fixtures: [
+                makeThreadCardFixtureSummary(
                     hostID: amir.id,
                     threadID: "live-running",
                     branch: "main",
@@ -290,7 +262,7 @@ final class DockStoreTests: XCTestCase {
             ])),
             home.id: .failure(.offline("Home unreachable"))
         ])
-        let store = DockStore(registry: registry, streamClient: LoaderBackedDockStreamClient(loader: loader))
+        let store = DockStore(registry: registry, streamClient: LoaderBackedThreadCardStreamClient(loader: loader))
 
         await store.load()
 
@@ -312,11 +284,11 @@ final class DockStoreTests: XCTestCase {
         let amir = makeHost()
         let home = makeHost(url: "ws://100.66.11.7:4510")
         let registry = try HostRegistry(hosts: [amir, home])
-        let loader = DelayedHostRoutedDockSessionLoader(
+        let loader = DelayedHostRoutedThreadCardFixtureLoader(
             delayedHostID: home.id,
             results: [
-                amir.id: .success(DockLoadResult(summaries: [
-                    makeSummary(
+                amir.id: .success(ThreadCardFixtureResult(fixtures: [
+                    makeThreadCardFixtureSummary(
                         hostID: amir.id,
                         threadID: "amir-loaded",
                         branch: "main",
@@ -325,8 +297,8 @@ final class DockStoreTests: XCTestCase {
                         prompt: "Amir loaded first"
                     )
                 ])),
-                home.id: .success(DockLoadResult(summaries: [
-                    makeSummary(
+                home.id: .success(ThreadCardFixtureResult(fixtures: [
+                    makeThreadCardFixtureSummary(
                         hostID: home.id,
                         threadID: "home-delayed",
                         branch: "main",
@@ -337,7 +309,7 @@ final class DockStoreTests: XCTestCase {
                 ]))
             ]
         )
-        let store = DockStore(registry: registry, streamClient: LoaderBackedDockStreamClient(loader: loader))
+        let store = DockStore(registry: registry, streamClient: LoaderBackedThreadCardStreamClient(loader: loader))
 
         let loadTask = Task { await store.load() }
         await loader.waitForDelayedRequests(2)
@@ -377,9 +349,9 @@ final class DockStoreTests: XCTestCase {
         let amir = makeHost()
         let home = makeHost(url: "ws://100.66.11.7:4510")
         let registry = try HostRegistry(hosts: [amir, home])
-        let loader = HostRoutedDockSessionLoader(results: [
-            amir.id: .success(DockLoadResult(summaries: [
-                makeSummary(
+        let loader = HostRoutedThreadCardFixtureLoader(results: [
+            amir.id: .success(ThreadCardFixtureResult(fixtures: [
+                makeThreadCardFixtureSummary(
                     hostID: amir.id,
                     threadID: "amir-main",
                     branch: "main",
@@ -388,8 +360,8 @@ final class DockStoreTests: XCTestCase {
                     prompt: "Amir main row"
                 )
             ])),
-            home.id: .success(DockLoadResult(summaries: [
-                makeSummary(
+            home.id: .success(ThreadCardFixtureResult(fixtures: [
+                makeThreadCardFixtureSummary(
                     hostID: home.id,
                     threadID: "home-main",
                     branch: "main",
@@ -399,7 +371,7 @@ final class DockStoreTests: XCTestCase {
                 )
             ]))
         ])
-        let store = DockStore(registry: registry, streamClient: LoaderBackedDockStreamClient(loader: loader))
+        let store = DockStore(registry: registry, streamClient: LoaderBackedThreadCardStreamClient(loader: loader))
 
         await store.load()
 
@@ -441,8 +413,8 @@ final class DockStoreTests: XCTestCase {
     func testLocalMetadataDecoratesRowsAndSurvivesReload() async {
         let host = makeHost()
         let metadataStore = InMemoryLocalThreadMetadataStore()
-        let loader = FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [
-            makeSummary(
+        let loader = FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: [
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "thread-a",
                 branch: "main",
@@ -453,7 +425,7 @@ final class DockStoreTests: XCTestCase {
         ])))
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             metadataStore: metadataStore
         )
         await store.load()
@@ -468,7 +440,7 @@ final class DockStoreTests: XCTestCase {
 
         let reloaded = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             metadataStore: metadataStore
         )
         await reloaded.load()
@@ -485,8 +457,8 @@ final class DockStoreTests: XCTestCase {
     func testSetPinnedPersistsAndReprojectsPinnedRowsAfterReload() async {
         let host = makeHost()
         let metadataStore = InMemoryLocalThreadMetadataStore()
-        let loader = FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [
-            makeSummary(
+        let loader = FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: [
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "thread-pin",
                 branch: "main",
@@ -497,7 +469,7 @@ final class DockStoreTests: XCTestCase {
         ])))
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             metadataStore: metadataStore,
             now: { Date(timeIntervalSince1970: 2_000) }
         )
@@ -517,7 +489,7 @@ final class DockStoreTests: XCTestCase {
 
         let reloaded = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             metadataStore: metadataStore,
             now: { Date(timeIntervalSince1970: 2_100) }
         )
@@ -536,8 +508,8 @@ final class DockStoreTests: XCTestCase {
     func testSetPinnedFalseClearsPinFieldsButPreservesLabelAndRail() async throws {
         let host = makeHost()
         let metadataStore = InMemoryLocalThreadMetadataStore()
-        let loader = FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [
-            makeSummary(
+        let loader = FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: [
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "thread-unpin",
                 branch: "main",
@@ -548,7 +520,7 @@ final class DockStoreTests: XCTestCase {
         ])))
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             metadataStore: metadataStore,
             now: { Date(timeIntervalSince1970: 2_000) }
         )
@@ -584,8 +556,8 @@ final class DockStoreTests: XCTestCase {
     func testSetPinnedAppendsNewPinsAfterExistingPinnedOrder() async throws {
         let host = makeHost()
         let metadataStore = InMemoryLocalThreadMetadataStore()
-        let loader = FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [
-            makeSummary(
+        let loader = FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: [
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "thread-a",
                 branch: "main",
@@ -593,7 +565,7 @@ final class DockStoreTests: XCTestCase {
                 lastActivity: Date(timeIntervalSince1970: 1_900),
                 prompt: "Thread A"
             ),
-            makeSummary(
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "thread-b",
                 branch: "main",
@@ -604,7 +576,7 @@ final class DockStoreTests: XCTestCase {
         ])))
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             metadataStore: metadataStore,
             now: { Date(timeIntervalSince1970: 2_000) }
         )
@@ -629,8 +601,8 @@ final class DockStoreTests: XCTestCase {
     func testReorderPinnedRowsPreservesHiddenScopedSlotsAndWritesContiguousOrder() async throws {
         let host = makeHost()
         let metadataStore = InMemoryLocalThreadMetadataStore()
-        let loader = FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [
-            makeSummary(
+        let loader = FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: [
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "thread-a",
                 branch: "main",
@@ -638,7 +610,7 @@ final class DockStoreTests: XCTestCase {
                 lastActivity: Date(timeIntervalSince1970: 1_900),
                 prompt: "Thread A"
             ),
-            makeSummary(
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "thread-b",
                 branch: "main",
@@ -646,7 +618,7 @@ final class DockStoreTests: XCTestCase {
                 lastActivity: Date(timeIntervalSince1970: 1_800),
                 prompt: "Thread B"
             ),
-            makeSummary(
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "thread-c",
                 branch: "main",
@@ -657,7 +629,7 @@ final class DockStoreTests: XCTestCase {
         ])))
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             metadataStore: metadataStore,
             now: { Date(timeIntervalSince1970: 2_000) }
         )
@@ -695,8 +667,8 @@ final class DockStoreTests: XCTestCase {
     func testSetPinnedSaveFailureKeepsDockLoadedAndShowsActionError() async {
         let host = makeHost()
         let metadataStore = FailingLocalThreadMetadataStore()
-        let loader = FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [
-            makeSummary(
+        let loader = FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: [
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "thread-fail",
                 branch: "main",
@@ -707,7 +679,7 @@ final class DockStoreTests: XCTestCase {
         ])))
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             metadataStore: metadataStore
         )
         await store.load()
@@ -810,9 +782,9 @@ final class DockStoreTests: XCTestCase {
     @MainActor
     func testArchiveRemovesDockRowOnlyAfterServerSuccessAndRefresh() async {
         let host = makeHost()
-        let loader = SequencedDockSessionLoader(results: [
-            .success(DockLoadResult(summaries: [
-                makeSummary(
+        let loader = SequencedThreadCardFixtureLoader(results: [
+            .success(ThreadCardFixtureResult(fixtures: [
+                makeThreadCardFixtureSummary(
                     hostID: host.id,
                     threadID: "thread-archive",
                     branch: "main",
@@ -821,12 +793,12 @@ final class DockStoreTests: XCTestCase {
                     prompt: "Archive me"
                 )
             ])),
-            .success(DockLoadResult(summaries: []))
+            .success(ThreadCardFixtureResult(fixtures: []))
         ])
-        let archiver = RecordingDockArchiver()
+        let archiver = RecordingThreadArchiver()
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: archiver
         )
 
@@ -851,8 +823,8 @@ final class DockStoreTests: XCTestCase {
     @MainActor
     func testFailedArchiveKeepsDockRowRecoverable() async {
         let host = makeHost()
-        let loader = FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: [
-            makeSummary(
+        let loader = FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: [
+            makeThreadCardFixtureSummary(
                 hostID: host.id,
                 threadID: "thread-keep",
                 branch: "main",
@@ -861,10 +833,10 @@ final class DockStoreTests: XCTestCase {
                 prompt: "Keep me"
             )
         ])))
-        let archiver = RecordingDockArchiver(mode: .failure(.error("archive failed")))
+        let archiver = RecordingThreadArchiver(mode: .failure(.error("archive failed")))
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(loader: loader),
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: archiver
         )
 
@@ -888,9 +860,9 @@ final class DockStoreTests: XCTestCase {
     func testArchiveStoreLoadsArchivedRowsAndRestoreRefreshes() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
-        let loader = RecordingDockSessionLoader(results: [
-            .success(DockLoadResult(summaries: [
-                makeSummary(
+        let loader = RecordingThreadCardFixtureLoader(results: [
+            .success(ThreadCardFixtureResult(fixtures: [
+                makeThreadCardFixtureSummary(
                     hostID: host.id,
                     threadID: "thread-restore",
                     branch: "main",
@@ -899,10 +871,14 @@ final class DockStoreTests: XCTestCase {
                     prompt: "Restore me"
                 )
             ])),
-            .success(DockLoadResult(summaries: []))
+            .success(ThreadCardFixtureResult(fixtures: []))
         ])
-        let archiver = RecordingDockArchiver()
-        let store = ArchiveStore(registry: registry, loader: loader, archiver: archiver)
+        let archiver = RecordingThreadArchiver()
+        let store = ArchiveStore(
+            registry: registry,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader, view: .archive),
+            archiver: archiver
+        )
 
         await store.load()
 
@@ -929,10 +905,13 @@ final class DockStoreTests: XCTestCase {
     func testArchiveStoreShowsUnavailableWhenAllHostsFail() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
-        let loader = RecordingDockSessionLoader(results: [
+        let loader = RecordingThreadCardFixtureLoader(results: [
             .failure(.offline("relay stopped")),
         ])
-        let store = ArchiveStore(registry: registry, loader: loader)
+        let store = ArchiveStore(
+            registry: registry,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader, view: .archive)
+        )
 
         await store.load()
 
@@ -947,9 +926,9 @@ final class DockStoreTests: XCTestCase {
     func testHostSettingsSaveEditAndTestUseSharedRegistry() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
-        let loader = HostRoutedDockSessionLoader(results: [
-            host.id: .success(DockLoadResult(summaries: [
-                makeSummary(
+        let loader = HostRoutedThreadCardFixtureLoader(results: [
+            host.id: .success(ThreadCardFixtureResult(fixtures: [
+                makeThreadCardFixtureSummary(
                     hostID: host.id,
                     threadID: "thread-live",
                     branch: "main",
@@ -1010,7 +989,7 @@ final class DockStoreTests: XCTestCase {
         let configurationStore = InMemoryLocalDockConfigurationStore()
         let store = HostSettingsStore(
             registry: registry,
-            tester: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: []))),
+            tester: FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: []))),
             configurationStore: configurationStore
         )
 
@@ -1061,7 +1040,7 @@ final class DockStoreTests: XCTestCase {
         let registry = try HostRegistry(hosts: [host])
         let store = HostSettingsStore(
             registry: registry,
-            tester: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: []))),
+            tester: FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: []))),
             configurationStore: InMemoryLocalDockConfigurationStore()
         )
 
@@ -1086,7 +1065,7 @@ final class DockStoreTests: XCTestCase {
         let registry = try HostRegistry(hosts: [host])
         let store = HostSettingsStore(
             registry: registry,
-            tester: FakeDockSessionLoader(mode: .success(DockLoadResult(summaries: []))),
+            tester: FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: []))),
             configurationStore: InMemoryLocalDockConfigurationStore()
         )
 

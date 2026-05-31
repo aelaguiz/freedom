@@ -10,8 +10,8 @@ final class DockDataEngineTests: XCTestCase {
             host: host,
             epoch: "epoch-a",
             seq: 1,
-            sessions: [
-                dockStreamSession(
+            cards: [
+                threadCardFixture(
                     host: host,
                     threadID: "thread-a",
                     title: "Thread A",
@@ -36,8 +36,8 @@ final class DockDataEngineTests: XCTestCase {
             host: host,
             epoch: "epoch-a",
             seq: 2,
-            sessions: [
-                dockStreamSession(
+            cards: [
+                threadCardFixture(
                     host: host,
                     threadID: "thread-a",
                     title: "Thread A",
@@ -45,10 +45,10 @@ final class DockDataEngineTests: XCTestCase {
                 )
             ]
         )
-        let staleDelta = DockStreamUpdateDTO(
+        let staleDelta = ThreadCardStreamUpdateDTO(
             kind: .delta,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
-            view: "dock",
+            view: .dock,
             complete: nil,
             totalRows: nil,
             window: nil,
@@ -56,15 +56,15 @@ final class DockDataEngineTests: XCTestCase {
             epoch: "epoch-a",
             baseSeq: 1,
             seq: 3,
-            upsertSessions: [],
-            deleteSessionIDs: []
+            upsertCards: [],
+            deleteCardIDs: []
         )
 
         _ = await engine.applySnapshot(snapshot, host: host)
         let result = await engine.applyUpdate(staleDelta, host: host)
         let rowCount = await engine.rowCount(for: host)
 
-        XCTAssertEqual(result, DockSessionTableApplyResult.needsResync(.sequenceGap))
+        XCTAssertEqual(result, ThreadCardTableApplyResult.needsResync(.sequenceGap))
         XCTAssertEqual(rowCount, 1)
     }
 

@@ -6,11 +6,11 @@ final class ArchiveScreenStoreTests: XCTestCase {
     func testArchiveStorePublishesRenderStateThroughScreenStore() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
-        let loader = RecordingDockSessionLoader(results: [
+        let loader = RecordingThreadCardFixtureLoader(results: [
             .success(
-                DockLoadResult(
-                    summaries: [
-                        makeSummary(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "thread-a",
                             branch: "main",
@@ -22,7 +22,7 @@ final class ArchiveScreenStoreTests: XCTestCase {
                 )
             )
         ])
-        let store = ArchiveStore(registry: registry, loader: loader)
+        let store = ArchiveStore(registry: registry, streamClient: LoaderBackedThreadCardStreamClient(loader: loader, view: .archive))
 
         await store.load()
 
@@ -37,11 +37,11 @@ final class ArchiveScreenStoreTests: XCTestCase {
     func testArchiveStoreBatchRestoreTracksPartialFailureWithoutFalseSuccess() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
-        let loader = RecordingDockSessionLoader(results: [
+        let loader = RecordingThreadCardFixtureLoader(results: [
             .success(
-                DockLoadResult(
-                    summaries: [
-                        makeSummary(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "restore-ok",
                             branch: "main",
@@ -49,7 +49,7 @@ final class ArchiveScreenStoreTests: XCTestCase {
                             lastActivity: Date(timeIntervalSince1970: 3_000),
                             prompt: "Restore ok"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "restore-fails",
                             branch: "main",
@@ -61,9 +61,9 @@ final class ArchiveScreenStoreTests: XCTestCase {
                 )
             ),
             .success(
-                DockLoadResult(
-                    summaries: [
-                        makeSummary(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "restore-fails",
                             branch: "main",
@@ -76,7 +76,7 @@ final class ArchiveScreenStoreTests: XCTestCase {
             )
         ])
         let archiver = SelectiveRestoreArchiver(failingThreadIDs: ["restore-fails"])
-        let store = ArchiveStore(registry: registry, loader: loader, archiver: archiver)
+        let store = ArchiveStore(registry: registry, streamClient: LoaderBackedThreadCardStreamClient(loader: loader, view: .archive), archiver: archiver)
 
         await store.load()
         guard case .loaded(let snapshot) = store.state else {
@@ -99,11 +99,11 @@ final class ArchiveScreenStoreTests: XCTestCase {
     func testArchiveStoreBatchRestoreStopRemainingSkipsRowsNotStarted() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
-        let loader = RecordingDockSessionLoader(results: [
+        let loader = RecordingThreadCardFixtureLoader(results: [
             .success(
-                DockLoadResult(
-                    summaries: [
-                        makeSummary(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "restore-one",
                             branch: "main",
@@ -111,7 +111,7 @@ final class ArchiveScreenStoreTests: XCTestCase {
                             lastActivity: Date(timeIntervalSince1970: 4_000),
                             prompt: "Restore one"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "restore-two",
                             branch: "main",
@@ -119,7 +119,7 @@ final class ArchiveScreenStoreTests: XCTestCase {
                             lastActivity: Date(timeIntervalSince1970: 3_000),
                             prompt: "Restore two"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "restore-three",
                             branch: "main",
@@ -130,10 +130,10 @@ final class ArchiveScreenStoreTests: XCTestCase {
                     ]
                 )
             ),
-            .success(DockLoadResult(summaries: []))
+            .success(ThreadCardFixtureResult(fixtures: []))
         ])
         let archiver = SelectiveRestoreArchiver()
-        let store = ArchiveStore(registry: registry, loader: loader, archiver: archiver)
+        let store = ArchiveStore(registry: registry, streamClient: LoaderBackedThreadCardStreamClient(loader: loader, view: .archive), archiver: archiver)
 
         await store.load()
         guard case .loaded(let snapshot) = store.state else {
@@ -160,7 +160,7 @@ final class ArchiveScreenStoreTests: XCTestCase {
     }
 }
 
-private actor SelectiveRestoreArchiver: DockSessionArchiving {
+private actor SelectiveRestoreArchiver: ThreadArchiveCommanding {
     private let failingThreadIDs: Set<String>
     private var unarchived: [String] = []
 
@@ -177,7 +177,7 @@ private actor SelectiveRestoreArchiver: DockSessionArchiving {
     func unarchiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
         unarchived.append(threadID)
         if failingThreadIDs.contains(threadID) {
-            throw DockLoadFailure.error("restore failed")
+            throw DockRequestFailure.error("restore failed")
         }
     }
 }

@@ -1,7 +1,62 @@
 import Foundation
 @testable import CodexDock
 
-private enum DockSessionTestScope: String, CaseIterable, Hashable, Sendable {
+struct ThreadCardFixtureResult: Equatable, Sendable {
+    let fixtures: [ThreadCardFixtureSummary]
+
+    init(fixtures: [ThreadCardFixtureSummary]) {
+        self.fixtures = fixtures
+    }
+}
+
+struct ThreadCardFixtureQuery: Equatable, Sendable {
+    let archived: Bool
+    let sourceKinds: [ThreadSourceKind]?
+    let maxPages: Int?
+
+    init(
+        archived: Bool = false,
+        sourceKinds: [ThreadSourceKind]? = nil,
+        maxPages: Int? = nil
+    ) {
+        self.archived = archived
+        self.sourceKinds = sourceKinds
+        self.maxPages = maxPages
+    }
+
+    static let activeHuman = ThreadCardFixtureQuery(
+        archived: false,
+        sourceKinds: nil,
+        maxPages: CodexDockConstants.Dock.activeSessionMaxPages
+    )
+    static let activeHumanFullScan = ThreadCardFixtureQuery(
+        archived: false,
+        sourceKinds: nil,
+        maxPages: nil
+    )
+    static let archivedHuman = ThreadCardFixtureQuery(archived: true, sourceKinds: nil)
+    static let activeAgents = ThreadCardFixtureQuery(
+        archived: false,
+        sourceKinds: ThreadSourceKind.dockAgentScopeKinds,
+        maxPages: CodexDockConstants.Dock.activeSessionMaxPages
+    )
+}
+
+protocol ThreadCardFixtureLoading: Sendable {
+    func loadFixtures(
+        for host: DockHostConfiguration,
+        query: ThreadCardFixtureQuery
+    ) async throws -> ThreadCardFixtureResult
+}
+
+extension ThreadCardFixtureLoading {
+    func testConnectionResult(to host: DockHostConfiguration) async throws -> HostConnectionTestResult {
+        let result = try await loadFixtures(for: host, query: .activeHuman)
+        return HostConnectionTestResult(rowCount: result.fixtures.count)
+    }
+}
+
+private enum ThreadCardFixtureScope: String, CaseIterable, Hashable, Sendable {
     case human
     case agents
 
@@ -14,7 +69,7 @@ private enum DockSessionTestScope: String, CaseIterable, Hashable, Sendable {
         }
     }
 
-    var query: DockSessionQuery {
+    var query: ThreadCardFixtureQuery {
         switch self {
         case .human:
             return .activeHuman
@@ -41,41 +96,47 @@ func waitForLoadedSnapshot(
 }
 
 enum FakeMode: Sendable {
-    case success(DockLoadResult)
-    case failure(DockLoadFailure)
+    case success(ThreadCardFixtureResult)
+    case failure(DockRequestFailure)
 }
 
-struct LoaderBackedDockStreamClient: DockStreamConnecting {
-    let loader: any DockSessionLoading
+struct LoaderBackedThreadCardStreamClient: ThreadCardStreamConnecting {
+    let loader: any ThreadCardFixtureLoading
+    let view: ThreadCardStreamView
 
-    func connect(to host: DockHostConfiguration) async throws -> any DockStreamConnection {
-        LoaderBackedDockStreamConnection(host: host, loader: loader)
+    init(loader: any ThreadCardFixtureLoading, view: ThreadCardStreamView = .dock) {
+        self.loader = loader
+        self.view = view
+    }
+
+    func connect(to host: DockHostConfiguration) async throws -> any ThreadCardStreamConnection {
+        LoaderBackedThreadCardStreamConnection(host: host, loader: loader, view: view)
     }
 }
 
-final class ManualDockStreamClient: DockStreamConnecting, @unchecked Sendable {
-    let connection: ManualDockStreamConnection
+final class ManualThreadCardStreamClient: ThreadCardStreamConnecting, @unchecked Sendable {
+    let connection: ManualThreadCardStreamConnection
 
-    init(connection: ManualDockStreamConnection) {
+    init(connection: ManualThreadCardStreamConnection) {
         self.connection = connection
     }
 
-    func connect(to host: DockHostConfiguration) async throws -> any DockStreamConnection {
+    func connect(to host: DockHostConfiguration) async throws -> any ThreadCardStreamConnection {
         connection
     }
 }
 
-actor SequencedManualDockStreamClient: DockStreamConnecting {
-    private var connections: [ManualDockStreamConnection]
+actor SequencedManualThreadCardStreamClient: ThreadCardStreamConnecting {
+    private var connections: [ManualThreadCardStreamConnection]
     private var count = 0
 
-    init(connections: [ManualDockStreamConnection]) {
+    init(connections: [ManualThreadCardStreamConnection]) {
         self.connections = connections
     }
 
-    func connect(to host: DockHostConfiguration) async throws -> any DockStreamConnection {
+    func connect(to host: DockHostConfiguration) async throws -> any ThreadCardStreamConnection {
         guard !connections.isEmpty else {
-            throw DockLoadFailure.offline("No scripted stream connection")
+            throw DockRequestFailure.offline("No scripted stream connection")
         }
         count += 1
         return connections.removeFirst()
@@ -86,39 +147,39 @@ actor SequencedManualDockStreamClient: DockStreamConnecting {
     }
 }
 
-actor ManualDockStreamConnection: DockStreamConnection {
-    private var subscribeSnapshot: DockStreamUpdateDTO
-    private var resyncSnapshots: [DockStreamUpdateDTO]
-    private let updateStream: AsyncThrowingStream<DockStreamUpdateDTO, Error>
-    private let updateContinuation: AsyncThrowingStream<DockStreamUpdateDTO, Error>.Continuation
+actor ManualThreadCardStreamConnection: ThreadCardStreamConnection {
+    private var subscribeSnapshot: ThreadCardStreamUpdateDTO
+    private var resyncSnapshots: [ThreadCardStreamUpdateDTO]
+    private let updateStream: AsyncThrowingStream<ThreadCardStreamUpdateDTO, Error>
+    private let updateContinuation: AsyncThrowingStream<ThreadCardStreamUpdateDTO, Error>.Continuation
 
     init(
-        subscribeSnapshot: DockStreamUpdateDTO,
-        resyncSnapshots: [DockStreamUpdateDTO] = []
+        subscribeSnapshot: ThreadCardStreamUpdateDTO,
+        resyncSnapshots: [ThreadCardStreamUpdateDTO] = []
     ) {
         self.subscribeSnapshot = subscribeSnapshot
         self.resyncSnapshots = resyncSnapshots
-        let stream = AsyncThrowingStream<DockStreamUpdateDTO, Error>.makeStream()
+        let stream = AsyncThrowingStream<ThreadCardStreamUpdateDTO, Error>.makeStream()
         self.updateStream = stream.stream
         self.updateContinuation = stream.continuation
     }
 
-    func subscribe() async throws -> DockStreamUpdateDTO {
+    func subscribe() async throws -> ThreadCardStreamUpdateDTO {
         subscribeSnapshot
     }
 
-    func resync() async throws -> DockStreamUpdateDTO {
+    func resync() async throws -> ThreadCardStreamUpdateDTO {
         if resyncSnapshots.isEmpty {
             return subscribeSnapshot
         }
         return resyncSnapshots.removeFirst()
     }
 
-    nonisolated func updates() -> AsyncThrowingStream<DockStreamUpdateDTO, Error> {
+    nonisolated func updates() -> AsyncThrowingStream<ThreadCardStreamUpdateDTO, Error> {
         updateStream
     }
 
-    func send(_ update: DockStreamUpdateDTO) {
+    func send(_ update: ThreadCardStreamUpdateDTO) {
         updateContinuation.yield(update)
     }
 
@@ -131,40 +192,50 @@ actor ManualDockStreamConnection: DockStreamConnection {
     }
 }
 
-actor LoaderBackedDockStreamConnection: DockStreamConnection {
+actor LoaderBackedThreadCardStreamConnection: ThreadCardStreamConnection {
     private let host: DockHostConfiguration
-    private let loader: any DockSessionLoading
+    private let loader: any ThreadCardFixtureLoading
+    private let view: ThreadCardStreamView
     private var seq: Int64 = 0
 
-    init(host: DockHostConfiguration, loader: any DockSessionLoading) {
+    init(host: DockHostConfiguration, loader: any ThreadCardFixtureLoading, view: ThreadCardStreamView) {
         self.host = host
         self.loader = loader
+        self.view = view
     }
 
-    func subscribe() async throws -> DockStreamUpdateDTO {
+    func subscribe() async throws -> ThreadCardStreamUpdateDTO {
         try await snapshot()
     }
 
-    func resync() async throws -> DockStreamUpdateDTO {
+    func resync() async throws -> ThreadCardStreamUpdateDTO {
         try await snapshot()
     }
 
-    nonisolated func updates() -> AsyncThrowingStream<DockStreamUpdateDTO, Error> {
+    nonisolated func updates() -> AsyncThrowingStream<ThreadCardStreamUpdateDTO, Error> {
         AsyncThrowingStream { _ in }
     }
 
     func close() async {}
 
-    private func snapshot() async throws -> DockStreamUpdateDTO {
+    private func snapshot() async throws -> ThreadCardStreamUpdateDTO {
         seq += 1
+        if view == .archive {
+            let result = try await loader.loadFixtures(for: host, query: .archivedHuman)
+            let cards = result.fixtures.map {
+                streamCard(from: $0, archiveState: .archived)
+            }
+            return update(cards: cards, freshness: DockStreamFreshnessDTO(status: .fresh))
+        }
+
         let scopedResults = await loadScopes()
-        let successes = scopedResults.compactMap { scope, result -> (DockSessionTestScope, DockLoadResult)? in
+        let successes = scopedResults.compactMap { scope, result -> (ThreadCardFixtureScope, ThreadCardFixtureResult)? in
             if case .success(let value) = result {
                 return (scope, value)
             }
             return nil
         }
-        let failures = scopedResults.compactMap { scope, result -> (DockSessionTestScope, DockLoadFailure)? in
+        let failures = scopedResults.compactMap { scope, result -> (ThreadCardFixtureScope, DockRequestFailure)? in
             if case .failure(let value) = result {
                 return (scope, value)
             }
@@ -172,11 +243,11 @@ actor LoaderBackedDockStreamConnection: DockStreamConnection {
         }
 
         guard !successes.isEmpty else {
-            throw failures.first?.1 ?? DockLoadFailure.error("No stream rows loaded")
+            throw failures.first?.1 ?? DockRequestFailure.error("No stream rows loaded")
         }
 
-        let sessions = deduplicated(successes.flatMap { scope, result in
-            result.summaries.map { summary in
+        let fixtures = deduplicated(successes.flatMap { scope, result in
+            result.fixtures.map { summary in
                 (scope, summary)
             }
         })
@@ -190,55 +261,65 @@ actor LoaderBackedDockStreamConnection: DockStreamConnection {
             freshness = DockStreamFreshnessDTO(status: .stale, lastError: message)
         }
 
-        return DockStreamUpdateDTO(
+        return update(
+            cards: fixtures.map { streamCard(from: $0) },
+            freshness: freshness
+        )
+    }
+
+    private func update(
+        cards: [DockThreadCardDTO],
+        freshness: DockStreamFreshnessDTO
+    ) -> ThreadCardStreamUpdateDTO {
+        ThreadCardStreamUpdateDTO(
             kind: .snapshot,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
-            view: "dock",
+            view: view,
             complete: true,
-            totalRows: sessions.count,
-            window: DockStreamWindowDTO(offset: 0, limit: sessions.count, rowCount: sessions.count),
+            totalRows: cards.count,
+            window: DockStreamWindowDTO(offset: 0, limit: cards.count, rowCount: cards.count),
             stateGeneration: seq,
             epoch: host.id,
             seq: seq,
             freshness: freshness,
-            hosts: [DockStreamHostDTO(id: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
-            sessions: sessions.map { streamSession(from: $0) }
+            hosts: [DockStreamHostDTO(id: host.id, logicalHostID: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
+            cards: cards
         )
     }
 
-    private func loadScopes() async -> [(DockSessionTestScope, Result<DockLoadResult, DockLoadFailure>)] {
+    private func loadScopes() async -> [(ThreadCardFixtureScope, Result<ThreadCardFixtureResult, DockRequestFailure>)] {
         let host = self.host
         let loader = self.loader
-        return await withTaskGroup(of: (DockSessionTestScope, Result<DockLoadResult, DockLoadFailure>).self) { group in
-            for scope in DockSessionTestScope.allCases {
+        return await withTaskGroup(of: (ThreadCardFixtureScope, Result<ThreadCardFixtureResult, DockRequestFailure>).self) { group in
+            for scope in ThreadCardFixtureScope.allCases {
                 group.addTask {
                     do {
-                        let result = try await loader.loadSessions(for: host, query: scope.query)
+                        let result = try await loader.loadFixtures(for: host, query: scope.query)
                         return (scope, .success(result))
                     } catch {
-                        if let failure = error as? DockLoadFailure {
+                        if let failure = error as? DockRequestFailure {
                             return (scope, .failure(failure))
                         }
                         return (scope, .failure(.error(error.localizedDescription)))
                     }
                 }
             }
-            var results: [(DockSessionTestScope, Result<DockLoadResult, DockLoadFailure>)] = []
+            var results: [(ThreadCardFixtureScope, Result<ThreadCardFixtureResult, DockRequestFailure>)] = []
             for await result in group {
                 results.append(result)
             }
             return results.sorted { lhs, rhs in
-                let lhsIndex = DockSessionTestScope.allCases.firstIndex(of: lhs.0) ?? Int.max
-                let rhsIndex = DockSessionTestScope.allCases.firstIndex(of: rhs.0) ?? Int.max
+                let lhsIndex = ThreadCardFixtureScope.allCases.firstIndex(of: lhs.0) ?? Int.max
+                let rhsIndex = ThreadCardFixtureScope.allCases.firstIndex(of: rhs.0) ?? Int.max
                 return lhsIndex < rhsIndex
             }
         }
     }
 
-    private func deduplicated(_ summaries: [(DockSessionTestScope, SessionSummary)]) -> [SessionSummary] {
+    private func deduplicated(_ fixtures: [(ThreadCardFixtureScope, ThreadCardFixtureSummary)]) -> [ThreadCardFixtureSummary] {
         var orderedIDs: [HostScopedThreadID] = []
-        var summariesByID: [HostScopedThreadID: SessionSummary] = [:]
-        for (scope, summary) in summaries {
+        var summariesByID: [HostScopedThreadID: ThreadCardFixtureSummary] = [:]
+        for (scope, summary) in fixtures {
             if summariesByID[summary.id] == nil {
                 orderedIDs.append(summary.id)
                 summariesByID[summary.id] = summary
@@ -254,28 +335,39 @@ actor LoaderBackedDockStreamConnection: DockStreamConnection {
         return orderedIDs.compactMap { summariesByID[$0] }
     }
 
-    private func streamSession(from summary: SessionSummary) -> DockStreamSessionDTO {
-        DockStreamSessionDTO(
+    private func streamCard(
+        from summary: ThreadCardFixtureSummary,
+        archiveState: DockThreadCardArchiveState = .active
+    ) -> DockThreadCardDTO {
+        let activity = summary.cardActivityDate ?? summary.lastActivity
+        let activityAtMs = Int64(activity.timeIntervalSince1970 * 1_000)
+        let sourceKind = streamSource(from: summary.origin)
+        return DockThreadCardDTO(
             id: "\(host.id)::\(summary.id.threadID)",
-            hostID: host.id,
+            logicalHostID: host.id,
             threadID: summary.id.threadID,
             backendSessionID: summary.backendSessionID,
+            hostDisplayName: host.displayName,
+            hostEndpoint: host.endpoint.displayEndpoint,
+            orderKey: orderKey(activityAtMs: activityAtMs, threadID: summary.id.threadID),
+            activityAt: ISO8601DateFormatter().string(from: activity),
+            activityAtMs: activityAtMs,
+            displaySummary: string(from: summary.displaySummary) ?? summary.displayTitle,
             title: summary.displayTitle,
             status: streamStatus(from: summary.status),
+            sourceKind: sourceKind,
             lane: streamLane(from: summary.origin),
-            kindLabel: streamKindLabel(from: summary.origin),
+            archiveState: archiveState,
+            freshness: .fresh,
+            completeness: .complete,
             repository: string(from: summary.repository),
             workingDirectory: string(from: summary.workingDirectory),
             branch: string(from: summary.branch),
-            updatedAt: Int64(summary.lastActivity.timeIntervalSince1970),
-            summary: string(from: summary.shortEventSummary),
-            messageSummary: string(from: summary.shortEventSummary),
-            messageUpdatedAt: Int64((summary.messageActivityDate ?? summary.lastActivity).timeIntervalSince1970),
-            source: DockStreamSourceDTO(kind: streamSource(from: summary.origin))
+            summarySource: "test"
         )
     }
 
-    private func streamStatus(from status: SessionStatus) -> DockStreamSessionStatus {
+    private func streamStatus(from status: ThreadCardFixtureStatus) -> DockThreadCardStatus {
         switch status {
         case .unknown:
             return .unknown
@@ -296,7 +388,7 @@ actor LoaderBackedDockStreamConnection: DockStreamConnection {
         }
     }
 
-    private func streamSource(from origin: SessionOrigin) -> DockStreamSourceKind {
+    private func streamSource(from origin: SessionOrigin) -> DockThreadCardSourceKind {
         switch origin.kind {
         case .humanInteractive:
             return .human
@@ -307,7 +399,7 @@ actor LoaderBackedDockStreamConnection: DockStreamConnection {
         }
     }
 
-    private func streamLane(from origin: SessionOrigin) -> DockStreamLane {
+    private func streamLane(from origin: SessionOrigin) -> DockThreadCardLane {
         switch origin.kind {
         case .humanInteractive:
             return .human
@@ -318,18 +410,7 @@ actor LoaderBackedDockStreamConnection: DockStreamConnection {
         }
     }
 
-    private func streamKindLabel(from origin: SessionOrigin) -> String {
-        switch origin.kind {
-        case .humanInteractive:
-            return "Human"
-        case .agentOrAutomation:
-            return "Agent"
-        case .unknown:
-            return "Unknown"
-        }
-    }
-
-    private func string(from text: SessionSummaryText) -> String? {
+    private func string(from text: ThreadCardFixtureText) -> String? {
         switch text {
         case .known(let value):
             return value
@@ -337,21 +418,25 @@ actor LoaderBackedDockStreamConnection: DockStreamConnection {
             return nil
         }
     }
+
+    private func orderKey(activityAtMs: Int64, threadID: String) -> String {
+        String(format: "%019lld:%@", Int64.max - activityAtMs, threadID)
+    }
 }
 
-struct FakeDockSessionLoader: DockSessionLoading {
+struct FakeThreadCardFixtureLoader: ThreadCardFixtureLoading {
     private let results: [String: FakeMode]
 
     init(mode: FakeMode) {
         self.results = Self.results(for: mode)
     }
 
-    func loadSessions(
+    func loadFixtures(
         for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult {
+        query: ThreadCardFixtureQuery
+    ) async throws -> ThreadCardFixtureResult {
         guard let mode = results[Self.key(query)] else {
-            throw DockLoadFailure.error("Unexpected query \(Self.queryLabel(query))")
+            throw DockRequestFailure.error("Unexpected query \(Self.queryLabel(query))")
         }
         switch mode {
         case let .success(result):
@@ -366,7 +451,7 @@ struct FakeDockSessionLoader: DockSessionLoading {
         case .success(let result):
             return [
                 key(.activeHuman): .success(result),
-                key(.activeAgents): .success(DockLoadResult(summaries: [])),
+                key(.activeAgents): .success(ThreadCardFixtureResult(fixtures: [])),
                 key(.archivedHuman): .success(result)
             ]
         case .failure(let error):
@@ -378,11 +463,11 @@ struct FakeDockSessionLoader: DockSessionLoading {
         }
     }
 
-    fileprivate static func key(_ query: DockSessionQuery) -> String {
+    fileprivate static func key(_ query: ThreadCardFixtureQuery) -> String {
         queryLabel(query)
     }
 
-    fileprivate static func queryLabel(_ query: DockSessionQuery) -> String {
+    fileprivate static func queryLabel(_ query: ThreadCardFixtureQuery) -> String {
         if query == .activeHuman {
             return "activeHuman"
         }
@@ -396,15 +481,21 @@ struct FakeDockSessionLoader: DockSessionLoading {
     }
 }
 
-actor SequencedDockSessionLoader: DockSessionLoading {
+extension FakeThreadCardFixtureLoader: HostConnectionTesting {
+    func testConnection(to host: DockHostConfiguration) async throws -> HostConnectionTestResult {
+        try await testConnectionResult(to: host)
+    }
+}
+
+actor SequencedThreadCardFixtureLoader: ThreadCardFixtureLoading {
     private var resultsByQuery: [String: [FakeMode]]
-    private var queries: [DockSessionQuery] = []
+    private var queries: [ThreadCardFixtureQuery] = []
 
     init(results: [FakeMode]) {
         self.resultsByQuery = [
             Self.key(.activeHuman): results,
             Self.key(.activeAgents): Array(
-                repeating: .success(DockLoadResult(summaries: [])),
+                repeating: .success(ThreadCardFixtureResult(fixtures: [])),
                 count: results.count
             )
         ]
@@ -414,21 +505,21 @@ actor SequencedDockSessionLoader: DockSessionLoading {
         queries.count
     }
 
-    func recordedQueries() -> [DockSessionQuery] {
+    func recordedQueries() -> [ThreadCardFixtureQuery] {
         queries
     }
 
-    func loadSessions(
+    func loadFixtures(
         for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult {
+        query: ThreadCardFixtureQuery
+    ) async throws -> ThreadCardFixtureResult {
         queries.append(query)
         let key = Self.key(query)
         guard var results = resultsByQuery[key] else {
-            throw DockLoadFailure.error("Unexpected query \(Self.queryLabel(query))")
+            throw DockRequestFailure.error("Unexpected query \(Self.queryLabel(query))")
         }
         guard !results.isEmpty else {
-            throw DockLoadFailure.error("No result configured for query \(Self.queryLabel(query))")
+            throw DockRequestFailure.error("No result configured for query \(Self.queryLabel(query))")
         }
         let result = results.removeFirst()
         resultsByQuery[key] = results
@@ -441,16 +532,16 @@ actor SequencedDockSessionLoader: DockSessionLoading {
         }
     }
 
-    private static func key(_ query: DockSessionQuery) -> String {
-        FakeDockSessionLoader.queryLabel(query)
+    private static func key(_ query: ThreadCardFixtureQuery) -> String {
+        FakeThreadCardFixtureLoader.queryLabel(query)
     }
 
-    private static func queryLabel(_ query: DockSessionQuery) -> String {
-        FakeDockSessionLoader.queryLabel(query)
+    private static func queryLabel(_ query: ThreadCardFixtureQuery) -> String {
+        FakeThreadCardFixtureLoader.queryLabel(query)
     }
 }
 
-actor HostRoutedDockSessionLoader: DockSessionLoading {
+actor HostRoutedThreadCardFixtureLoader: ThreadCardFixtureLoading {
     private let results: [String: FakeMode]
 
     init(results: [String: FakeMode]) {
@@ -460,7 +551,7 @@ actor HostRoutedDockSessionLoader: DockSessionLoading {
             case .success(let result):
                 scopedResults[Self.key(hostID: hostID, query: .activeHuman)] = .success(result)
                 scopedResults[Self.key(hostID: hostID, query: .activeAgents)] = .success(
-                    DockLoadResult(summaries: [])
+                    ThreadCardFixtureResult(fixtures: [])
                 )
             case .failure(let error):
                 scopedResults[Self.key(hostID: hostID, query: .activeHuman)] = .failure(error)
@@ -470,30 +561,36 @@ actor HostRoutedDockSessionLoader: DockSessionLoading {
         self.results = scopedResults
     }
 
-    func loadSessions(
+    func loadFixtures(
         for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult {
+        query: ThreadCardFixtureQuery
+    ) async throws -> ThreadCardFixtureResult {
         switch results[Self.key(hostID: host.id, query: query)] {
         case let .success(result):
             return result
         case let .failure(error):
             throw error
         case nil:
-            throw DockLoadFailure.error("Unexpected query \(Self.queryLabel(query)) for host \(host.id)")
+            throw DockRequestFailure.error("Unexpected query \(Self.queryLabel(query)) for host \(host.id)")
         }
     }
 
-    private static func key(hostID: String, query: DockSessionQuery) -> String {
+    private static func key(hostID: String, query: ThreadCardFixtureQuery) -> String {
         "\(hostID)::\(queryLabel(query))"
     }
 
-    private static func queryLabel(_ query: DockSessionQuery) -> String {
-        FakeDockSessionLoader.queryLabel(query)
+    private static func queryLabel(_ query: ThreadCardFixtureQuery) -> String {
+        FakeThreadCardFixtureLoader.queryLabel(query)
     }
 }
 
-actor DelayedHostRoutedDockSessionLoader: DockSessionLoading {
+extension HostRoutedThreadCardFixtureLoader: HostConnectionTesting {
+    func testConnection(to host: DockHostConfiguration) async throws -> HostConnectionTestResult {
+        try await testConnectionResult(to: host)
+    }
+}
+
+actor DelayedHostRoutedThreadCardFixtureLoader: ThreadCardFixtureLoading {
     private let delayedHostID: String
     private let results: [String: FakeMode]
     private var delayedContinuations: [CheckedContinuation<Void, Never>] = []
@@ -506,7 +603,7 @@ actor DelayedHostRoutedDockSessionLoader: DockSessionLoading {
             case .success(let result):
                 scopedResults[Self.key(hostID: hostID, query: .activeHuman)] = .success(result)
                 scopedResults[Self.key(hostID: hostID, query: .activeAgents)] = .success(
-                    DockLoadResult(summaries: [])
+                    ThreadCardFixtureResult(fixtures: [])
                 )
             case .failure(let error):
                 scopedResults[Self.key(hostID: hostID, query: .activeHuman)] = .failure(error)
@@ -528,10 +625,10 @@ actor DelayedHostRoutedDockSessionLoader: DockSessionLoading {
         continuations.forEach { $0.resume() }
     }
 
-    func loadSessions(
+    func loadFixtures(
         for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult {
+        query: ThreadCardFixtureQuery
+    ) async throws -> ThreadCardFixtureResult {
         if host.id == delayedHostID {
             await withCheckedContinuation { continuation in
                 delayedContinuations.append(continuation)
@@ -544,28 +641,28 @@ actor DelayedHostRoutedDockSessionLoader: DockSessionLoading {
         case let .failure(error):
             throw error
         case nil:
-            throw DockLoadFailure.error("Unexpected query \(Self.queryLabel(query)) for host \(host.id)")
+            throw DockRequestFailure.error("Unexpected query \(Self.queryLabel(query)) for host \(host.id)")
         }
     }
 
-    private static func key(hostID: String, query: DockSessionQuery) -> String {
+    private static func key(hostID: String, query: ThreadCardFixtureQuery) -> String {
         "\(hostID)::\(queryLabel(query))"
     }
 
-    private static func queryLabel(_ query: DockSessionQuery) -> String {
-        FakeDockSessionLoader.queryLabel(query)
+    private static func queryLabel(_ query: ThreadCardFixtureQuery) -> String {
+        FakeThreadCardFixtureLoader.queryLabel(query)
     }
 }
 
-actor RecordingDockSessionLoader: DockSessionLoading {
+actor RecordingThreadCardFixtureLoader: ThreadCardFixtureLoading {
     private var results: [FakeMode]
-    private var queries: [DockSessionQuery] = []
+    private var queries: [ThreadCardFixtureQuery] = []
 
     init(results: [FakeMode]) {
         self.results = results
     }
 
-    func recordedQueries() -> [DockSessionQuery] {
+    func recordedQueries() -> [ThreadCardFixtureQuery] {
         queries
     }
 
@@ -573,13 +670,13 @@ actor RecordingDockSessionLoader: DockSessionLoading {
         queries.map(\.archived)
     }
 
-    func loadSessions(
+    func loadFixtures(
         for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult {
+        query: ThreadCardFixtureQuery
+    ) async throws -> ThreadCardFixtureResult {
         queries.append(query)
         guard !results.isEmpty else {
-            throw DockLoadFailure.error("No result configured for query \(FakeDockSessionLoader.queryLabel(query))")
+            throw DockRequestFailure.error("No result configured for query \(FakeThreadCardFixtureLoader.queryLabel(query))")
         }
         let result = results.removeFirst()
 
@@ -592,12 +689,12 @@ actor RecordingDockSessionLoader: DockSessionLoading {
     }
 }
 
-actor RecordingDockArchiver: DockSessionArchiving {
+actor RecordingThreadArchiver: ThreadArchiveCommanding {
     private let mode: FakeMode
     private var archived: [String] = []
     private var unarchived: [String] = []
 
-    init(mode: FakeMode = .success(DockLoadResult(summaries: []))) {
+    init(mode: FakeMode = .success(ThreadCardFixtureResult(fixtures: []))) {
         self.mode = mode
     }
 
@@ -713,13 +810,13 @@ actor InMemoryLocalDockConfigurationStore: LocalDockConfigurationStoring {
     }
 }
 
-func sortedQueries(_ queries: [DockSessionQuery]) -> [DockSessionQuery] {
+func sortedQueries(_ queries: [ThreadCardFixtureQuery]) -> [ThreadCardFixtureQuery] {
     queries.sorted { lhs, rhs in
         querySortKey(lhs) < querySortKey(rhs)
     }
 }
 
-func querySortKey(_ query: DockSessionQuery) -> String {
+func querySortKey(_ query: ThreadCardFixtureQuery) -> String {
     if query == .activeAgents {
         return "0-activeAgents"
     }
@@ -762,16 +859,16 @@ func makeRow(
     )
 }
 
-func makeSummary(
+func makeThreadCardFixtureSummary(
     hostID: String,
     threadID: String,
     branch: String,
-    status: SessionStatus,
+    status: ThreadCardFixtureStatus,
     lastActivity: Date,
     prompt: String,
     origin: SessionOrigin = .humanInteractive(subtype: .cli)
-) -> SessionSummary {
-    SessionSummary(
+) -> ThreadCardFixtureSummary {
+    ThreadCardFixtureSummary(
         id: HostScopedThreadID(hostID: hostID, threadID: threadID),
         backendSessionID: "\(threadID)-session",
         displayTitle: prompt,
@@ -780,8 +877,8 @@ func makeSummary(
         workingDirectory: .known("/Users/aelaguiz/workspace/codex-client"),
         branch: .known(branch),
         lastActivity: lastActivity,
-        shortEventSummary: .known("Assistant update for \(prompt)"),
-        messageActivityDate: lastActivity,
+        displaySummary: .known("Assistant update for \(prompt)"),
+        cardActivityDate: lastActivity,
         origin: origin
     )
 }
@@ -790,57 +887,65 @@ func dockStreamSnapshot(
     host: DockHostConfiguration,
     epoch: String,
     seq: Int64,
-    sessions: [DockStreamSessionDTO],
+    cards: [DockThreadCardDTO],
+    view: ThreadCardStreamView = .dock,
     schemaVersion: Int? = CodexDockConstants.Dock.streamSchemaVersion,
     freshness: DockStreamFreshnessDTO = DockStreamFreshnessDTO(status: .fresh),
     complete: Bool = true,
     totalRows: Int? = nil,
     window: DockStreamWindowDTO? = nil
-) -> DockStreamUpdateDTO {
-    DockStreamUpdateDTO(
+) -> ThreadCardStreamUpdateDTO {
+    ThreadCardStreamUpdateDTO(
         kind: .snapshot,
         schemaVersion: schemaVersion,
-        view: "dock",
+        view: view,
         complete: complete,
-        totalRows: totalRows ?? sessions.count,
+        totalRows: totalRows ?? cards.count,
         window: window ?? DockStreamWindowDTO(
             offset: 0,
-            limit: sessions.count,
-            rowCount: sessions.count,
+            limit: cards.count,
+            rowCount: cards.count,
             nextOffset: nil
         ),
         stateGeneration: seq,
         epoch: epoch,
         seq: seq,
         freshness: freshness,
-        hosts: [DockStreamHostDTO(id: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
-        sessions: sessions
+        hosts: [DockStreamHostDTO(id: host.id, logicalHostID: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
+        cards: cards
     )
 }
 
-func dockStreamSession(
+func threadCardFixture(
     host: DockHostConfiguration,
     threadID: String,
     title: String,
-    status: DockStreamSessionStatus = .running,
+    status: DockThreadCardStatus = .running,
     updatedAt: Int64
-) -> DockStreamSessionDTO {
-    DockStreamSessionDTO(
+) -> DockThreadCardDTO {
+    let activityAt = Date(timeIntervalSince1970: TimeInterval(updatedAt))
+    let activityAtMs = Int64(activityAt.timeIntervalSince1970 * 1_000)
+    return DockThreadCardDTO(
         id: "\(host.id)::\(threadID)",
-        hostID: host.id,
+        logicalHostID: host.id,
         threadID: threadID,
         backendSessionID: "\(threadID)-session",
+        hostDisplayName: host.displayName,
+        hostEndpoint: host.endpoint.displayEndpoint,
+        orderKey: String(format: "%019lld:%@", Int64.max - activityAtMs, threadID),
+        activityAt: ISO8601DateFormatter().string(from: activityAt),
+        activityAtMs: activityAtMs,
+        displaySummary: "Summary for \(title)",
         title: title,
         status: status,
+        sourceKind: .human,
         lane: .human,
-        kindLabel: "Human",
+        archiveState: .active,
+        freshness: .fresh,
+        completeness: .complete,
         repository: "codex-client",
         workingDirectory: "/Users/aelaguiz/workspace/codex-client",
         branch: "main",
-        updatedAt: updatedAt,
-        summary: "Summary for \(title)",
-        messageSummary: "Summary for \(title)",
-        messageUpdatedAt: updatedAt,
-        source: DockStreamSourceDTO(kind: .human)
+        summarySource: "test"
     )
 }

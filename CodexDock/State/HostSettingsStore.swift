@@ -83,7 +83,7 @@ public final class HostSettingsStore: ObservableObject {
 
     public let screenStore: HostSettingsScreenStore
 
-    private let tester: any DockSessionLoading
+    private let tester: any HostConnectionTesting
     private let configurationStore: any LocalDockConfigurationStoring
     private let now: @Sendable () -> Date
     private weak var connectivityReporter: (any AppConnectivityReporting)?
@@ -100,7 +100,7 @@ public final class HostSettingsStore: ObservableObject {
 
     public init(
         registry: HostRegistry,
-        tester: any DockSessionLoading = AppServerDockClient(),
+        tester: any HostConnectionTesting = CardStreamHostConnectionTester(),
         configurationStore: any LocalDockConfigurationStoring = FileLocalDockConfigurationStore(),
         connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
@@ -119,7 +119,7 @@ public final class HostSettingsStore: ObservableObject {
 
     public init(
         configurationError error: Error,
-        tester: any DockSessionLoading = AppServerDockClient(),
+        tester: any HostConnectionTesting = CardStreamHostConnectionTester(),
         configurationStore: any LocalDockConfigurationStoring = FileLocalDockConfigurationStore(),
         connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
@@ -170,13 +170,13 @@ public final class HostSettingsStore: ObservableObject {
         }
 
         do {
-            let result = try await tester.loadSessions(for: host, query: .activeHuman)
-            let status = HostConnectionTestStatus.online(rowCount: result.summaries.count, checkedAt: now())
+            let result = try await tester.testConnection(to: host)
+            let status = HostConnectionTestStatus.online(rowCount: result.rowCount, checkedAt: now())
             statuses[hostID] = status
             publishScreen()
             publishConnectivity(host: host, status: status)
-            DockLog.hostConfiguration.notice("host test finished host_id=\(host.id, privacy: .public) rows=\(result.summaries.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
-        } catch let failure as DockLoadFailure {
+            DockLog.hostConfiguration.notice("host test finished host_id=\(host.id, privacy: .public) rows=\(result.rowCount, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+        } catch let failure as DockRequestFailure {
             let status: HostConnectionTestStatus
             switch failure {
             case .offline(let message):

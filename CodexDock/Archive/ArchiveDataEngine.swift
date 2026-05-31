@@ -1,25 +1,20 @@
 import Foundation
 
 actor ArchiveDataEngine {
-    private struct HostLoadOutcome: Sendable {
-        let host: DockHostConfiguration
-        let result: Result<DockLoadResult, DockLoadFailure>
-    }
-
     private var hosts: [DockHostConfiguration]
-    private let loader: any DockSessionLoading
+    private let streamClient: any ThreadCardStreamConnecting
     private let metadataStore: any LocalThreadMetadataStoring
     private let now: @Sendable () -> Date
     private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
 
     init(
         registry: HostRegistry,
-        loader: any DockSessionLoading,
+        streamClient: any ThreadCardStreamConnecting,
         metadataStore: any LocalThreadMetadataStoring,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.hosts = registry.hosts
-        self.loader = loader
+        self.streamClient = streamClient
         self.metadataStore = metadataStore
         self.now = now
     }
@@ -41,51 +36,29 @@ actor ArchiveDataEngine {
         return makeSnapshot(results: results)
     }
 
-    private func loadAllHosts() async -> [HostLoadOutcome] {
-        let hosts = self.hosts
-        return await withTaskGroup(of: HostLoadOutcome.self) { group in
-            for host in hosts {
-                group.addTask { [loader] in
-                    let startedAt = Date()
-                    DockLog.archive.debug("archive host load started host_id=\(host.id, privacy: .public)")
-                    do {
-                        let result = try await loader.loadSessions(for: host, query: .archivedHuman)
-                        DockLog.archive.debug("archive host load finished host_id=\(host.id, privacy: .public) rows=\(result.summaries.count, privacy: .public) mapping_failures=\(result.mappingFailures.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
-                        return HostLoadOutcome(host: host, result: .success(result))
-                    } catch {
-                        DockLog.archive.warning("archive host load failed host_id=\(host.id, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-                        return HostLoadOutcome(host: host, result: .failure(Self.mapLoadFailure(error)))
-                    }
-                }
-            }
-
-            var outcomes: [HostLoadOutcome] = []
-            for await outcome in group {
-                outcomes.append(outcome)
-            }
-            return outcomes.sorted { lhs, rhs in
-                Self.hostIndex(lhs.host.id, hosts: hosts) < Self.hostIndex(rhs.host.id, hosts: hosts)
-            }
-        }
+    private func loadAllHosts() async -> [ThreadCardHostLoadOutcome] {
+        await ThreadCardHostSnapshotLoader(
+            streamClient: streamClient,
+            expectedView: .archive,
+            operation: "archive"
+        ).loadAll(hosts: hosts)
     }
 
-    private func makeSnapshot(results: [HostLoadOutcome]) -> ArchiveSnapshot {
-        var summaries: [SessionSummary] = []
-        var mappingFailures: [SessionSummaryMappingFailure] = []
+    private func makeSnapshot(results: [ThreadCardHostLoadOutcome]) -> ArchiveSnapshot {
+        var cards: [DockThreadCardDTO] = []
         var hostStates: [DockHostStateViewModel] = []
 
         for outcome in results {
             let host = DockHostViewModel(host: outcome.host)
             switch outcome.result {
-            case .success(let result):
-                summaries.append(contentsOf: result.summaries)
-                mappingFailures.append(contentsOf: result.mappingFailures)
+            case .success(let hostCards):
+                cards.append(contentsOf: hostCards)
                 hostStates.append(
                     DockHostStateViewModel(
                         host: host,
-                        status: result.summaries.isEmpty
+                        status: hostCards.isEmpty
                             ? .empty
-                            : .loaded(rowCount: result.summaries.count)
+                            : .loaded(rowCount: hostCards.count)
                     )
                 )
             case .failure(let failure):
@@ -98,31 +71,17 @@ actor ArchiveDataEngine {
             }
         }
 
-        let sections = ArchiveSessionProjector(
+        let sections = ArchiveThreadCardProjector(
             hosts: hosts,
             localMetadata: localMetadata,
             now: now
-        ).sections(from: summaries)
+        ).sections(from: cards)
 
         return ArchiveSnapshot(
             hosts: hosts.map(DockHostViewModel.init),
             hostStates: hostStates,
-            sections: sections,
-            mappingFailures: mappingFailures
+            sections: sections
         )
     }
 
-    private nonisolated static func mapLoadFailure(_ error: Error) -> DockLoadFailure {
-        if let failure = error as? DockLoadFailure {
-            return failure
-        }
-        return .error(error.localizedDescription)
-    }
-
-    private nonisolated static func hostIndex(
-        _ hostID: String,
-        hosts: [DockHostConfiguration]
-    ) -> Int {
-        hosts.firstIndex { $0.id == hostID } ?? Int.max
-    }
 }

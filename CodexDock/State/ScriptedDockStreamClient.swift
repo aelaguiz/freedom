@@ -8,44 +8,44 @@ enum ScriptedDockStreamScenario: String, Sendable {
     case schemaMismatch
 }
 
-struct ScriptedDockStreamClient: DockStreamConnecting {
+struct ScriptedDockStreamClient: ThreadCardStreamConnecting {
     let scenario: ScriptedDockStreamScenario
 
-    func connect(to host: DockHostConfiguration) async throws -> any DockStreamConnection {
-        ScriptedDockStreamConnection(host: host, scenario: scenario)
+    func connect(to host: DockHostConfiguration) async throws -> any ThreadCardStreamConnection {
+        ScriptedThreadCardStreamConnection(host: host, scenario: scenario)
     }
 }
 
-actor ScriptedDockStreamConnection: DockStreamConnection {
+actor ScriptedThreadCardStreamConnection: ThreadCardStreamConnection {
     private let host: DockHostConfiguration
     private let scenario: ScriptedDockStreamScenario
-    private let updateStream: AsyncThrowingStream<DockStreamUpdateDTO, Error>
-    private let updateContinuation: AsyncThrowingStream<DockStreamUpdateDTO, Error>.Continuation
+    private let updateStream: AsyncThrowingStream<ThreadCardStreamUpdateDTO, Error>
+    private let updateContinuation: AsyncThrowingStream<ThreadCardStreamUpdateDTO, Error>.Continuation
     private var updateTask: Task<Void, Never>?
 
     init(host: DockHostConfiguration, scenario: ScriptedDockStreamScenario) {
         self.host = host
         self.scenario = scenario
-        let stream = AsyncThrowingStream<DockStreamUpdateDTO, Error>.makeStream()
+        let stream = AsyncThrowingStream<ThreadCardStreamUpdateDTO, Error>.makeStream()
         self.updateStream = stream.stream
         self.updateContinuation = stream.continuation
     }
 
-    func subscribe() async throws -> DockStreamUpdateDTO {
+    func subscribe() async throws -> ThreadCardStreamUpdateDTO {
         DockLog.dock.notice("dock stream subscribe started host_id=\(self.host.id, privacy: .public) scripted_scenario=\(self.scenario.rawValue, privacy: .public)")
         startScriptIfNeeded()
-        let snapshot = snapshot(seq: 1, freshness: .fresh, sessions: initialSessions())
+        let snapshot = snapshot(seq: 1, freshness: .fresh, cards: initialCards())
         DockLog.dock.notice("dock stream subscribe finished host_id=\(self.host.id, privacy: .public) seq=\(snapshot.seq, privacy: .public) scripted_scenario=\(self.scenario.rawValue, privacy: .public)")
         return snapshot
     }
 
-    func resync() async throws -> DockStreamUpdateDTO {
-        let snapshot = snapshot(seq: 4, freshness: .fresh, sessions: resyncedSessions())
-        DockLog.dock.notice("dock stream scripted resync finished host_id=\(self.host.id, privacy: .public) seq=\(snapshot.seq, privacy: .public) rows=\(snapshot.sessions?.count ?? 0, privacy: .public)")
+    func resync() async throws -> ThreadCardStreamUpdateDTO {
+        let snapshot = snapshot(seq: 4, freshness: .fresh, cards: resyncedCards())
+        DockLog.dock.notice("dock stream scripted resync finished host_id=\(self.host.id, privacy: .public) seq=\(snapshot.seq, privacy: .public) rows=\(snapshot.cards?.count ?? 0, privacy: .public)")
         return snapshot
     }
 
-    nonisolated func updates() -> AsyncThrowingStream<DockStreamUpdateDTO, Error> {
+    nonisolated func updates() -> AsyncThrowingStream<ThreadCardStreamUpdateDTO, Error> {
         updateStream
     }
 
@@ -87,7 +87,7 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
                 baseSeq: 1,
                 seq: 2,
                 freshness: .fresh,
-                upsertSessions: [approvalSession()]
+                upsertCards: [approvalCard()]
             )
         )
 
@@ -100,7 +100,7 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
                 baseSeq: 99,
                 seq: 3,
                 freshness: .fresh,
-                upsertSessions: [needsInputSession()]
+                upsertCards: [needsInputCard()]
             )
         )
 
@@ -122,7 +122,7 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
                 baseSeq: 1,
                 seq: 2,
                 freshness: .fresh,
-                upsertSessions: [schemaRecoveredSession()]
+                upsertCards: [schemaRecoveredCard()]
             )
         )
     }
@@ -137,7 +137,7 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         yield(heartbeat(seq: 1, freshness: .fresh))
     }
 
-    private func yield(_ update: DockStreamUpdateDTO) {
+    private func yield(_ update: ThreadCardStreamUpdateDTO) {
         guard !Task.isCancelled else {
             return
         }
@@ -152,15 +152,15 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         seq: Int64,
         freshness: DockStreamFreshnessStatus,
         message: String? = nil,
-        sessions: [DockStreamSessionDTO]
-    ) -> DockStreamUpdateDTO {
-        DockStreamUpdateDTO(
+        cards: [DockThreadCardDTO]
+    ) -> ThreadCardStreamUpdateDTO {
+        ThreadCardStreamUpdateDTO(
             kind: .snapshot,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
-            view: "dock",
+            view: .dock,
             complete: true,
-            totalRows: sessions.count,
-            window: DockStreamWindowDTO(offset: 0, limit: sessions.count, rowCount: sessions.count),
+            totalRows: cards.count,
+            window: DockStreamWindowDTO(offset: 0, limit: cards.count, rowCount: cards.count),
             stateGeneration: seq,
             epoch: host.id,
             seq: seq,
@@ -169,11 +169,12 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
             hosts: [
                 DockStreamHostDTO(
                     id: host.id,
+                    logicalHostID: host.displayName,
                     displayName: host.displayName,
                     endpoint: host.endpoint.displayEndpoint
                 )
             ],
-            sessions: sessions
+            cards: cards
         )
     }
 
@@ -183,23 +184,23 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         seq: Int64,
         freshness: DockStreamFreshnessStatus,
         message: String? = nil,
-        upsertSessions: [DockStreamSessionDTO]
-    ) -> DockStreamUpdateDTO {
-        DockStreamUpdateDTO(
+        upsertCards: [DockThreadCardDTO]
+    ) -> ThreadCardStreamUpdateDTO {
+        ThreadCardStreamUpdateDTO(
             kind: .delta,
             schemaVersion: schemaVersion,
-            view: "dock",
+            view: .dock,
             complete: true,
-            totalRows: upsertSessions.count,
-            window: DockStreamWindowDTO(offset: 0, limit: upsertSessions.count, rowCount: upsertSessions.count),
+            totalRows: upsertCards.count,
+            window: DockStreamWindowDTO(offset: 0, limit: upsertCards.count, rowCount: upsertCards.count),
             stateGeneration: seq,
             epoch: host.id,
             baseSeq: baseSeq,
             seq: seq,
             asOf: iso8601(seq: seq),
             freshness: freshnessDTO(status: freshness, seq: seq, message: message),
-            upsertSessions: upsertSessions,
-            deleteSessionIDs: []
+            upsertCards: upsertCards,
+            deleteCardIDs: []
         )
     }
 
@@ -207,11 +208,11 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         seq: Int64,
         freshness: DockStreamFreshnessStatus,
         message: String? = nil
-    ) -> DockStreamUpdateDTO {
-        DockStreamUpdateDTO(
+    ) -> ThreadCardStreamUpdateDTO {
+        ThreadCardStreamUpdateDTO(
             kind: .heartbeat,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
-            view: "dock",
+            view: .dock,
             complete: true,
             stateGeneration: seq,
             epoch: host.id,
@@ -234,42 +235,42 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         )
     }
 
-    private func initialSessions() -> [DockStreamSessionDTO] {
+    private func initialCards() -> [DockThreadCardDTO] {
         if scenario == .messageNoise {
-            return messageNoiseSessions()
+            return messageNoiseCards()
         }
         if scenario == .pinnedOrder {
-            return pinnedOrderSessions()
+            return pinnedOrderCards()
         }
         return [
-            runningSession(),
-            dormantSession()
+            runningCard(),
+            dormantCard()
         ]
     }
 
-    private func resyncedSessions() -> [DockStreamSessionDTO] {
+    private func resyncedCards() -> [DockThreadCardDTO] {
         if scenario == .messageNoise {
-            return messageNoiseSessions()
+            return messageNoiseCards()
         }
         if scenario == .pinnedOrder {
-            return pinnedOrderSessions()
+            return pinnedOrderCards()
         }
         if scenario == .schemaMismatch {
             return [
-                schemaRecoveredSession(),
-                dormantSession(),
-                needsInputSession()
+                schemaRecoveredCard(),
+                dormantCard(),
+                needsInputCard()
             ]
         }
         return [
-            approvalSession(),
-            dormantSession(),
-            needsInputSession()
+            approvalCard(),
+            dormantCard(),
+            needsInputCard()
         ]
     }
 
-    private func runningSession() -> DockStreamSessionDTO {
-        session(
+    private func runningCard() -> DockThreadCardDTO {
+        card(
             key: "running",
             title: "Scripted running \(host.displayName)",
             status: .running,
@@ -279,8 +280,8 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         )
     }
 
-    private func approvalSession() -> DockStreamSessionDTO {
-        session(
+    private func approvalCard() -> DockThreadCardDTO {
+        card(
             key: "running",
             title: "Scripted approval \(host.displayName)",
             status: .needsApproval,
@@ -290,8 +291,8 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         )
     }
 
-    private func dormantSession() -> DockStreamSessionDTO {
-        session(
+    private func dormantCard() -> DockThreadCardDTO {
+        card(
             key: "background",
             title: "Scripted background \(host.displayName)",
             status: .dormant,
@@ -301,8 +302,8 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         )
     }
 
-    private func needsInputSession() -> DockStreamSessionDTO {
-        session(
+    private func needsInputCard() -> DockThreadCardDTO {
+        card(
             key: "needs-input",
             title: "Scripted input \(host.displayName)",
             status: .needsInput,
@@ -312,8 +313,8 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         )
     }
 
-    private func schemaRecoveredSession() -> DockStreamSessionDTO {
-        session(
+    private func schemaRecoveredCard() -> DockThreadCardDTO {
+        card(
             key: "schema-recovered",
             title: "Scripted schema recovered \(host.displayName)",
             status: .needsApproval,
@@ -323,9 +324,9 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         )
     }
 
-    private func pinnedOrderSessions() -> [DockStreamSessionDTO] {
+    private func pinnedOrderCards() -> [DockThreadCardDTO] {
         [
-            session(
+            card(
                 key: "alpha",
                 title: "Pinned Alpha visible \(host.displayName)",
                 status: .running,
@@ -333,7 +334,7 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
                 summary: "Alpha visible true message.",
                 source: .human
             ),
-            session(
+            card(
                 key: "bravo",
                 title: "Pinned Bravo hidden \(host.displayName)",
                 status: .needsInput,
@@ -341,7 +342,7 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
                 summary: "Bravo hidden true message.",
                 source: .human
             ),
-            session(
+            card(
                 key: "charlie",
                 title: "Pinned Charlie visible \(host.displayName)",
                 status: .needsApproval,
@@ -349,7 +350,7 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
                 summary: "Charlie visible true message.",
                 source: .automation
             ),
-            session(
+            card(
                 key: "delta",
                 title: "Pinned Delta hidden \(host.displayName)",
                 status: .running,
@@ -360,9 +361,9 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
         ]
     }
 
-    private func messageNoiseSessions() -> [DockStreamSessionDTO] {
+    private func messageNoiseCards() -> [DockThreadCardDTO] {
         [
-            session(
+            card(
                 key: "newer-message",
                 title: "True Newer \(host.displayName)",
                 status: .running,
@@ -370,47 +371,53 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
                 summary: "Newer true message keeps first place.",
                 source: .human
             ),
-            session(
+            card(
                 key: "noise",
                 title: "Noisy Tool \(host.displayName)",
                 status: .running,
                 updatedAt: 1_779_990_900,
                 summary: "TOOL OUTPUT SHOULD NOT DISPLAY",
                 source: .automation,
-                messageSummary: "Stable true message before tool noise.",
-                messageUpdatedAt: 1_779_990_200
+                displaySummary: "Stable true message before tool noise.",
+                activityAt: 1_779_990_200
             )
         ]
     }
 
-    private func session(
+    private func card(
         key: String,
         title: String,
-        status: DockStreamSessionStatus,
+        status: DockThreadCardStatus,
         updatedAt: Int64,
         summary: String,
-        source: DockStreamSourceKind,
-        messageSummary: String? = nil,
-        messageUpdatedAt: Int64? = nil
-    ) -> DockStreamSessionDTO {
+        source: DockThreadCardSourceKind,
+        displaySummary: String? = nil,
+        activityAt: Int64? = nil
+    ) -> DockThreadCardDTO {
         let threadID = "\(slug)-\(key)"
-        return DockStreamSessionDTO(
+        let activitySeconds = activityAt ?? updatedAt
+        return DockThreadCardDTO(
             id: "\(host.id)::\(key)",
-            hostID: host.id,
+            logicalHostID: host.displayName,
             threadID: threadID,
             backendSessionID: "scripted-\(threadID)",
+            hostDisplayName: host.displayName,
+            hostEndpoint: host.endpoint.displayEndpoint,
+            orderKey: orderKey(activitySeconds: activitySeconds, key: key),
+            activityAt: iso8601(timestamp: activitySeconds),
+            activityAtMs: activitySeconds * 1_000,
+            displaySummary: displaySummary ?? summary,
             title: title,
             status: status,
+            sourceKind: source,
             lane: source == .automation ? .agent : .human,
-            kindLabel: source == .automation ? "Agent" : "Human",
+            archiveState: .active,
+            freshness: .fresh,
+            completeness: .complete,
             repository: "codex-client",
             workingDirectory: "/tmp/codex-client/scripted",
             branch: "feature/relay-aggregator",
-            updatedAt: updatedAt,
-            summary: summary,
-            messageSummary: messageSummary ?? summary,
-            messageUpdatedAt: messageUpdatedAt ?? updatedAt,
-            source: DockStreamSourceDTO(kind: source)
+            summarySource: displaySummary == nil ? "scripted_summary" : "scripted_display"
         )
     }
 
@@ -425,6 +432,16 @@ actor ScriptedDockStreamConnection: DockStreamConnection {
     private func iso8601(seq: Int64) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(1_779_990_000 + seq))
         return ISO8601DateFormatter().string(from: date)
+    }
+
+    private func iso8601(timestamp: Int64) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(timestamp))
+        return ISO8601DateFormatter().string(from: date)
+    }
+
+    private func orderKey(activitySeconds: Int64, key: String) -> String {
+        let inverted = Int64.max - activitySeconds
+        return String(format: "%019lld:%@", inverted, key)
     }
 }
 #endif

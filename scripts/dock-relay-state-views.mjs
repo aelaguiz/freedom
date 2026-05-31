@@ -43,8 +43,10 @@ function optionalNumber(value) {
 }
 
 function publicHostFromConfig(config) {
+  const logicalHostID = config.hostId || os.hostname();
   return {
-    id: config.hostId || os.hostname(),
+    id: logicalHostID,
+    logicalHostID,
     displayName: config.hostName || config.hostId || os.hostname(),
     endpoint: config.hostEndpoint || null,
   };
@@ -155,6 +157,60 @@ function rowTimestamp(thread) {
   return optionalNumber(thread?.updatedAt ?? thread?.createdAt) ?? 0;
 }
 
+function timestampToMs(value) {
+  const number = optionalNumber(value);
+  if (number === null) {
+    return 0;
+  }
+  return number > 10_000_000_000 ? Math.trunc(number) : Math.trunc(number * 1000);
+}
+
+function timestampToISO(value) {
+  const ms = timestampToMs(value);
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return new Date(0).toISOString();
+  }
+  return new Date(ms).toISOString();
+}
+
+function dockOrderKey(index, threadID) {
+  const prefix = String(Math.max(0, Number(index || 0))).padStart(12, "0");
+  return `${prefix}:${threadID}`;
+}
+
+function archiveOrderKey(activityAtMs, threadID) {
+  const inverted = Number.MAX_SAFE_INTEGER - Math.max(0, Number(activityAtMs || 0));
+  return `${String(Math.max(0, inverted)).padStart(16, "0")}:${threadID}`;
+}
+
+function displaySummaryForThread(thread) {
+  return firstBoundedText([
+    thread?.displaySummary,
+    thread?.latestSummary,
+    thread?.summary,
+    thread?.preview,
+  ]) || titleForThread(thread);
+}
+
+function summarySourceForThread(thread) {
+  if (boundedText(thread?.summarySource)) {
+    return boundedText(thread.summarySource, RELAY_STATE_TITLE_MAX_CHARS);
+  }
+  if (boundedText(thread?.displaySummary)) {
+    return "assistant_label";
+  }
+  if (boundedText(thread?.latestSummary)) {
+    return "latest_summary";
+  }
+  if (boundedText(thread?.summary)) {
+    return "summary";
+  }
+  if (boundedText(thread?.preview)) {
+    return "preview";
+  }
+  return "title";
+}
+
 function statusPriority(thread) {
   const status = thread?.status;
   if (status?.type === "active") {
@@ -239,75 +295,86 @@ function orderedDockRows(primaryRows, interactiveRows, liveRows = []) {
   return orderedThreadIDs.map((threadID) => byThreadID.get(threadID)).filter(Boolean);
 }
 
-function normalizeThread(thread, host, lane = "human") {
+function normalizeThread(thread, host, lane = "human", options = {}) {
   const threadID = nonEmpty(thread?.id);
   if (!threadID) {
     return null;
   }
   const sessionID = nonEmpty(thread?.sessionId) || threadID;
-  const updatedAt = rowTimestamp(thread);
+  const activityAtMs = timestampToMs(thread?.activityAt ?? rowTimestamp(thread));
   const sourceKind = sourceKindFromThread(thread, lane);
+  const orderKey = options.orderKey
+    || (options.archiveState === "archived"
+      ? archiveOrderKey(activityAtMs, threadID)
+      : dockOrderKey(options.dockOrder || 0, threadID));
   return {
     id: `${host.id}::${threadID}`,
-    hostID: host.id,
+    logicalHostID: host.logicalHostID || host.id,
     threadID,
     backendSessionID: sessionID,
+    hostDisplayName: host.displayName || host.id,
+    hostEndpoint: host.endpoint || null,
+    orderKey,
+    activityAt: timestampToISO(activityAtMs),
+    activityAtMs,
+    displaySummary: displaySummaryForThread(thread),
     title: titleForThread(thread),
     status: normalizedStatus(thread),
+    sourceKind,
     lane,
-    kindLabel: boundedText(kindLabelForThread(thread, lane), RELAY_STATE_TITLE_MAX_CHARS),
+    archiveState: options.archiveState || "active",
+    freshness: options.freshness || "fresh",
+    completeness: options.completeness || "complete",
     repository: boundedText(repositoryForThread(thread), RELAY_STATE_TITLE_MAX_CHARS),
     workingDirectory: firstBoundedText([thread?.cwd, thread?.path]),
     branch: boundedText(thread?.gitInfo?.branch, RELAY_STATE_TITLE_MAX_CHARS),
-    updatedAt,
-    summary: firstBoundedText([thread?.latestSummary, thread?.preview]) || titleForThread(thread),
-    messageSummary: boundedText(thread?.messageSummary),
-    messageUpdatedAt: optionalNumber(thread?.messageUpdatedAt),
-    source: {
-      kind: sourceKind,
-    },
+    summarySource: summarySourceForThread(thread),
   };
 }
 
-function normalizeStoredSession(row) {
+function normalizeStoredCard(row) {
   if (!row) {
     return null;
   }
+  const activityAtMs = Number(row.activity_at_ms || row.updated_at_ms || 0);
   return {
     id: row.dock_id,
-    hostID: row.host_id,
+    logicalHostID: row.logical_host_id || row.host_id,
     threadID: row.thread_id,
     backendSessionID: row.backend_session_id,
+    hostDisplayName: row.host_display_name || row.host_id,
+    hostEndpoint: row.host_endpoint || null,
+    orderKey: row.order_key || dockOrderKey(0, row.thread_id),
+    activityAt: row.activity_at || timestampToISO(activityAtMs),
+    activityAtMs,
+    displaySummary: row.display_summary || row.summary || row.title || "No summary",
     title: row.title,
     status: row.status,
+    sourceKind: row.source_kind || "unknown",
     lane: row.lane,
-    kindLabel: row.kind_label,
+    archiveState: row.archive_state || "unknown",
+    freshness: row.freshness_status || "unknown",
+    completeness: row.completeness || "complete",
     repository: row.repository,
     workingDirectory: row.working_directory,
     branch: row.branch,
-    updatedAt: row.updated_at_ms,
-    summary: row.summary,
-    messageSummary: row.message_summary,
-    messageUpdatedAt: row.message_updated_at_ms,
-    source: {
-      kind: row.source_kind || "unknown",
-    },
+    summarySource: row.summary_source || null,
   };
 }
 
-function applyLeaseToSession(session, lease, nowMs = Date.now()) {
-  if (!session || !lease) {
-    return session;
+function applyLeaseToCard(card, lease, nowMs = Date.now()) {
+  if (!card || !lease) {
+    return card;
   }
   if (lease.expires_at_ms && Number(lease.expires_at_ms) < nowMs) {
-    return session.status === "dormant"
-      ? { ...session, status: "unknown" }
-      : session;
+    return card.status === "dormant"
+      ? { ...card, status: "unknown" }
+      : card;
   }
   const status = lease.status || "unknown";
   return {
-    ...session,
-    backendSessionID: lease.backend_session_id || session.backendSessionID,
+    ...card,
+    backendSessionID: lease.backend_session_id || card.backendSessionID,
     status: status === "waiting" ? "needsInput" : status,
   };
 }
@@ -335,12 +402,16 @@ function estimateJSONBytes(value) {
 export {
   ARCHIVE_VIEW,
   DOCK_VIEW,
-  applyLeaseToSession,
+  applyLeaseToCard,
+  archiveOrderKey,
   buildWindow,
+  dockOrderKey,
   estimateJSONBytes,
   normalizedStatus,
-  normalizeStoredSession,
+  normalizeStoredCard,
   normalizeThread,
   orderedDockRows,
   publicHostFromConfig,
+  timestampToISO,
+  timestampToMs,
 };

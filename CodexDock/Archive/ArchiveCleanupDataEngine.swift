@@ -1,25 +1,20 @@
 import Foundation
 
 actor ArchiveCleanupDataEngine {
-    private struct HostLoadOutcome: Sendable {
-        let host: DockHostConfiguration
-        let result: Result<DockLoadResult, DockLoadFailure>
-    }
-
     private var hosts: [DockHostConfiguration]
-    private let loader: any DockSessionLoading
+    private let streamClient: any ThreadCardStreamConnecting
     private let metadataStore: any LocalThreadMetadataStoring
     private let now: @Sendable () -> Date
     private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
 
     init(
         registry: HostRegistry,
-        loader: any DockSessionLoading,
+        streamClient: any ThreadCardStreamConnecting,
         metadataStore: any LocalThreadMetadataStoring,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.hosts = registry.hosts
-        self.loader = loader
+        self.streamClient = streamClient
         self.metadataStore = metadataStore
         self.now = now
     }
@@ -40,48 +35,30 @@ actor ArchiveCleanupDataEngine {
         return makePreview(outcomes: outcomes, rule: rule)
     }
 
-    private func loadAllHosts() async -> [HostLoadOutcome] {
-        let hosts = self.hosts
-        return await withTaskGroup(of: HostLoadOutcome.self) { group in
-            for host in hosts {
-                group.addTask { [loader] in
-                    do {
-                        let result = try await loader.loadSessions(for: host, query: .activeHumanFullScan)
-                        return HostLoadOutcome(host: host, result: .success(result))
-                    } catch {
-                        return HostLoadOutcome(host: host, result: .failure(Self.mapLoadFailure(error)))
-                    }
-                }
-            }
-
-            var outcomes: [HostLoadOutcome] = []
-            for await outcome in group {
-                outcomes.append(outcome)
-            }
-            return outcomes.sorted { lhs, rhs in
-                Self.hostIndex(lhs.host.id, hosts: hosts) < Self.hostIndex(rhs.host.id, hosts: hosts)
-            }
-        }
+    private func loadAllHosts() async -> [ThreadCardHostLoadOutcome] {
+        await ThreadCardHostSnapshotLoader(
+            streamClient: streamClient,
+            expectedView: .dock,
+            operation: "archive cleanup"
+        ).loadAll(hosts: hosts)
     }
 
     private func makePreview(
-        outcomes: [HostLoadOutcome],
+        outcomes: [ThreadCardHostLoadOutcome],
         rule: ArchiveCleanupRule
     ) -> ArchiveCleanupPreviewSnapshot {
-        var summaries: [SessionSummary] = []
-        var mappingFailures: [SessionSummaryMappingFailure] = []
+        var cards: [DockThreadCardDTO] = []
         var hostStates: [DockHostStateViewModel] = []
 
         for outcome in outcomes {
             let host = DockHostViewModel(host: outcome.host)
             switch outcome.result {
-            case .success(let result):
-                summaries.append(contentsOf: result.summaries)
-                mappingFailures.append(contentsOf: result.mappingFailures)
+            case .success(let hostCards):
+                cards.append(contentsOf: hostCards)
                 hostStates.append(
                     DockHostStateViewModel(
                         host: host,
-                        status: result.summaries.isEmpty ? .empty : .loaded(rowCount: result.summaries.count)
+                        status: hostCards.isEmpty ? .empty : .loaded(rowCount: hostCards.count)
                     )
                 )
             case .failure(let failure):
@@ -94,12 +71,11 @@ actor ArchiveCleanupDataEngine {
             }
         }
 
-        let rows = SessionRowProjector(
+        let rows = ThreadCardRowProjector(
             hosts: hosts,
             localMetadata: localMetadata,
-            now: now,
-            activityMode: .raw
-        ).rows(from: summaries)
+            now: now
+        ).rows(from: cards)
 
         var candidates: [DockRowViewModel] = []
         var excluded: [ArchiveCleanupExcludedRow] = []
@@ -117,8 +93,8 @@ actor ArchiveCleanupDataEngine {
             ArchiveCleanupHostSummary(
                 id: host.id,
                 displayName: host.displayName,
-                candidateCount: groupedCandidates[host.id]?.count ?? 0,
-                excludedCount: groupedExcluded[host.id]?.count ?? 0
+                candidateCount: countRows(groupedCandidates, for: host),
+                excludedCount: countExcluded(groupedExcluded, for: host)
             )
         }
 
@@ -126,10 +102,23 @@ actor ArchiveCleanupDataEngine {
             hosts: hosts.map(DockHostViewModel.init),
             hostStates: hostStates,
             hostSummaries: hostSummaries,
-            candidates: candidates.sorted { $0.lastActivityDate > $1.lastActivityDate },
-            excluded: excluded.sorted { $0.row.lastActivityDate > $1.row.lastActivityDate },
-            mappingFailures: mappingFailures
+            candidates: candidates.sorted(by: rowPrecedes),
+            excluded: excluded.sorted { lhs, rhs in
+                rowPrecedes(lhs.row, rhs.row)
+            }
         )
+    }
+
+    private func rowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
+        if let lhsOrderKey = lhs.orderKey,
+           let rhsOrderKey = rhs.orderKey,
+           lhsOrderKey != rhsOrderKey {
+            return lhsOrderKey < rhsOrderKey
+        }
+        if lhs.lastActivityDate != rhs.lastActivityDate {
+            return lhs.lastActivityDate > rhs.lastActivityDate
+        }
+        return "\(lhs.id.hostID)::\(lhs.id.threadID)" < "\(rhs.id.hostID)::\(rhs.id.threadID)"
     }
 
     private func exclusionReason(
@@ -161,17 +150,25 @@ actor ArchiveCleanupDataEngine {
         return nil
     }
 
-    private nonisolated static func mapLoadFailure(_ error: Error) -> DockLoadFailure {
-        if let failure = error as? DockLoadFailure {
-            return failure
+    private func countRows(
+        _ grouped: [String: [DockRowViewModel]],
+        for host: DockHostConfiguration
+    ) -> Int {
+        hostAliases(host).reduce(0) { count, alias in
+            count + (grouped[alias]?.count ?? 0)
         }
-        return .error(error.localizedDescription)
     }
 
-    private nonisolated static func hostIndex(
-        _ hostID: String,
-        hosts: [DockHostConfiguration]
+    private func countExcluded(
+        _ grouped: [String: [ArchiveCleanupExcludedRow]],
+        for host: DockHostConfiguration
     ) -> Int {
-        hosts.firstIndex { $0.id == hostID } ?? Int.max
+        hostAliases(host).reduce(0) { count, alias in
+            count + (grouped[alias]?.count ?? 0)
+        }
+    }
+
+    private func hostAliases(_ host: DockHostConfiguration) -> Set<String> {
+        [host.id, host.displayName, host.endpoint.displayEndpoint]
     }
 }

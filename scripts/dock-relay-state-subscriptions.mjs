@@ -13,19 +13,22 @@ import {
 const DOCK_SUBSCRIBE_METHOD = "dock/subscribe";
 const DOCK_RESYNC_METHOD = "dock/resync";
 const DOCK_UPDATE_METHOD = "dock/update";
+const ARCHIVE_SUBSCRIBE_METHOD = "archive/subscribe";
+const ARCHIVE_RESYNC_METHOD = "archive/resync";
+const ARCHIVE_UPDATE_METHOD = "archive/update";
 
 function sequenceFields(store, view) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     epoch: view.epoch,
     seq: store.currentSeq(),
     stateGeneration: store.currentSeq(),
   };
 }
 
-function dockDeltaClearlyTooLarge(delta) {
-  const changedRows = Number(delta.upsertSessions?.length || 0)
-    + Number(delta.deleteSessionIDs?.length || 0)
+function cardDeltaClearlyTooLarge(delta) {
+  const changedRows = Number(delta.upsertCards?.length || 0)
+    + Number(delta.deleteCardIDs?.length || 0)
     + Number(delta.upsertHosts?.length || 0);
   return changedRows > RELAY_STATE_DOCK_WINDOW_SIZE;
 }
@@ -47,9 +50,10 @@ class StateSubscriptionHub {
     this.epoch = crypto.randomUUID();
   }
 
-  subscribe(listener) {
+  subscribe(view, listener) {
     const subscriber = {
       id: crypto.randomUUID(),
+      view,
       listener,
     };
     this.subscribers.add(subscriber);
@@ -66,13 +70,14 @@ class StateSubscriptionHub {
     });
   }
 
-  dockDelta({
+  cardDelta({
+    view,
     baseSeq,
     seq,
     freshness,
     upsertHosts = undefined,
-    upsertSessions = [],
-    deleteSessionIDs = [],
+    upsertCards = [],
+    deleteCardIDs = [],
     totalRows,
     complete = undefined,
     window = undefined,
@@ -93,25 +98,28 @@ class StateSubscriptionHub {
       baseSeq,
       seq,
       stateGeneration: seq,
-      view: "dock",
+      view,
       complete,
       totalRows,
       window: effectiveWindow,
       freshness,
       upsertHosts,
-      upsertSessions,
-      deleteSessionIDs,
+      upsertCards,
+      deleteCardIDs,
     };
   }
 
-  async publishDockDelta(delta) {
-    const payloadBytes = dockDeltaClearlyTooLarge(delta)
+  async publishDelta(delta) {
+    const payloadBytes = cardDeltaClearlyTooLarge(delta)
       ? Number.POSITIVE_INFINITY
       : estimateJSONBytes(delta);
     const update = payloadBytes > this.updateSoftLimitBytes
-      ? await this.snapshot("dock")
+      ? await this.snapshot(delta.view)
       : delta;
     for (const subscriber of this.subscribers) {
+      if (subscriber.view !== update.view) {
+        continue;
+      }
       try {
         subscriber.listener(update);
       } catch (error) {
@@ -122,6 +130,9 @@ class StateSubscriptionHub {
 }
 
 export {
+  ARCHIVE_RESYNC_METHOD,
+  ARCHIVE_SUBSCRIBE_METHOD,
+  ARCHIVE_UPDATE_METHOD,
   DOCK_RESYNC_METHOD,
   DOCK_SUBSCRIBE_METHOD,
   DOCK_UPDATE_METHOD,

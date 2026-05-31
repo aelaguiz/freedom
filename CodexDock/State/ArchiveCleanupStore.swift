@@ -12,12 +12,12 @@ public final class ArchiveCleanupStore: ObservableObject {
 
     private var hosts: [DockHostConfiguration]
     private var dataEngine: ArchiveCleanupDataEngine?
-    private let archiver: any DockSessionArchiving
+    private let archiver: any ThreadArchiveCommanding
 
     public init(
         registry: HostRegistry,
-        loader: any DockSessionLoading = AppServerDockClient(),
-        archiver: any DockSessionArchiving = AppServerDockClient(),
+        streamClient: any ThreadCardStreamConnecting = AppServerThreadCardStreamClient(),
+        archiver: any ThreadArchiveCommanding = AppServerThreadCommandClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
@@ -25,7 +25,7 @@ public final class ArchiveCleanupStore: ObservableObject {
         self.archiver = archiver
         self.dataEngine = ArchiveCleanupDataEngine(
             registry: registry,
-            loader: loader,
+            streamClient: streamClient,
             metadataStore: metadataStore,
             now: now
         )
@@ -34,7 +34,7 @@ public final class ArchiveCleanupStore: ObservableObject {
 
     public init(configurationError error: Error) {
         self.hosts = []
-        self.archiver = AppServerDockClient()
+        self.archiver = AppServerThreadCommandClient()
         self.dataEngine = nil
         self.state = .configurationError(error.localizedDescription)
     }

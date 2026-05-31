@@ -5,13 +5,13 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testSequenceGapRequestsResyncAndKeepsHostRows() async throws {
         let host = makeHost()
-        let connection = ManualDockStreamConnection(
+        let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
                 ]
             ),
             resyncSnapshots: [
@@ -19,25 +19,25 @@ final class DockStoreStreamTests: XCTestCase {
                     host: host,
                     epoch: "epoch-1",
                     seq: 3,
-                    sessions: [
-                        dockStreamSession(host: host, threadID: "thread-resynced", title: "Resynced row", updatedAt: 1_100)
+                    cards: [
+                        threadCardFixture(host: host, threadID: "thread-resynced", title: "Resynced row", updatedAt: 1_100)
                     ]
                 )
             ]
         )
-        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
 
         await store.load()
         await connection.send(
-            DockStreamUpdateDTO(
+            ThreadCardStreamUpdateDTO(
                 kind: .delta,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
-                view: "dock",
+                view: .dock,
                 epoch: "epoch-1",
                 baseSeq: 99,
                 seq: 100,
-                upsertSessions: [
-                    dockStreamSession(host: host, threadID: "bad-delta", title: "Bad delta", updatedAt: 1_200)
+                upsertCards: [
+                    threadCardFixture(host: host, threadID: "bad-delta", title: "Bad delta", updatedAt: 1_200)
                 ]
             )
         )
@@ -54,13 +54,13 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testSchemaMismatchRequestsResyncAndKeepsHostRows() async throws {
         let host = makeHost()
-        let connection = ManualDockStreamConnection(
+        let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
                 ]
             ),
             resyncSnapshots: [
@@ -68,25 +68,25 @@ final class DockStoreStreamTests: XCTestCase {
                     host: host,
                     epoch: "epoch-1",
                     seq: 3,
-                    sessions: [
-                        dockStreamSession(host: host, threadID: "thread-resynced", title: "Schema resynced row", updatedAt: 1_100)
+                    cards: [
+                        threadCardFixture(host: host, threadID: "thread-resynced", title: "Schema resynced row", updatedAt: 1_100)
                     ]
                 )
             ]
         )
-        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
 
         await store.load()
         await connection.send(
-            DockStreamUpdateDTO(
+            ThreadCardStreamUpdateDTO(
                 kind: .delta,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion + 1,
-                view: "dock",
+                view: .dock,
                 epoch: "epoch-1",
                 baseSeq: 1,
                 seq: 2,
-                upsertSessions: [
-                    dockStreamSession(host: host, threadID: "bad-schema", title: "Bad schema delta", updatedAt: 1_200)
+                upsertCards: [
+                    threadCardFixture(host: host, threadID: "bad-schema", title: "Bad schema delta", updatedAt: 1_200)
                 ]
             )
         )
@@ -104,13 +104,13 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testMissingSchemaRequestsResync() async throws {
         let host = makeHost()
-        let connection = ManualDockStreamConnection(
+        let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
                 ]
             ),
             resyncSnapshots: [
@@ -118,24 +118,24 @@ final class DockStoreStreamTests: XCTestCase {
                     host: host,
                     epoch: "epoch-1",
                     seq: 3,
-                    sessions: [
-                        dockStreamSession(host: host, threadID: "thread-resynced", title: "Missing schema resynced row", updatedAt: 1_100)
+                    cards: [
+                        threadCardFixture(host: host, threadID: "thread-resynced", title: "Missing schema resynced row", updatedAt: 1_100)
                     ]
                 )
             ]
         )
-        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
 
         await store.load()
         await connection.send(
-            DockStreamUpdateDTO(
+            ThreadCardStreamUpdateDTO(
                 kind: .delta,
-                view: "dock",
+                view: .dock,
                 epoch: "epoch-1",
                 baseSeq: 1,
                 seq: 2,
-                upsertSessions: [
-                    dockStreamSession(host: host, threadID: "missing-schema", title: "Missing schema delta", updatedAt: 1_200)
+                upsertCards: [
+                    threadCardFixture(host: host, threadID: "missing-schema", title: "Missing schema delta", updatedAt: 1_200)
                 ]
             )
         )
@@ -154,13 +154,13 @@ final class DockStoreStreamTests: XCTestCase {
         let amir = makeHost()
         let home = makeHost(url: "ws://100.66.11.7:4510")
         let registry = try HostRegistry(hosts: [amir, home])
-        let amirConnection = ManualDockStreamConnection(
+        let amirConnection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: amir,
                 epoch: "amir-epoch",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: amir, threadID: "amir-initial", title: "Amir initial", updatedAt: 1_000)
+                cards: [
+                    threadCardFixture(host: amir, threadID: "amir-initial", title: "Amir initial", updatedAt: 1_000)
                 ]
             ),
             resyncSnapshots: [
@@ -168,36 +168,36 @@ final class DockStoreStreamTests: XCTestCase {
                     host: amir,
                     epoch: "amir-epoch",
                     seq: 3,
-                    sessions: [
-                        dockStreamSession(host: amir, threadID: "amir-resynced", title: "Amir resynced", updatedAt: 1_300)
+                    cards: [
+                        threadCardFixture(host: amir, threadID: "amir-resynced", title: "Amir resynced", updatedAt: 1_300)
                     ]
                 )
             ]
         )
-        let homeConnection = ManualDockStreamConnection(
+        let homeConnection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: home,
                 epoch: "home-epoch",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: home, threadID: "home-row", title: "Home row", updatedAt: 1_200)
+                cards: [
+                    threadCardFixture(host: home, threadID: "home-row", title: "Home row", updatedAt: 1_200)
                 ]
             )
         )
-        let streamClient = SequencedManualDockStreamClient(connections: [amirConnection, homeConnection])
+        let streamClient = SequencedManualThreadCardStreamClient(connections: [amirConnection, homeConnection])
         let store = DockStore(registry: registry, streamClient: streamClient)
 
         await store.load()
         await amirConnection.send(
-            DockStreamUpdateDTO(
+            ThreadCardStreamUpdateDTO(
                 kind: .delta,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion + 1,
-                view: "dock",
+                view: .dock,
                 epoch: "amir-epoch",
                 baseSeq: 1,
                 seq: 2,
-                upsertSessions: [
-                    dockStreamSession(host: amir, threadID: "bad-schema", title: "Bad schema delta", updatedAt: 1_400)
+                upsertCards: [
+                    threadCardFixture(host: amir, threadID: "bad-schema", title: "Bad schema delta", updatedAt: 1_400)
                 ]
             )
         )
@@ -218,24 +218,24 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testStaleHeartbeatRetainsLastGoodRows() async throws {
         let host = makeHost()
-        let connection = ManualDockStreamConnection(
+        let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: host, threadID: "thread-a", title: "Last good", updatedAt: 1_000)
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Last good", updatedAt: 1_000)
                 ]
             )
         )
-        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
 
         await store.load()
         await connection.send(
-            DockStreamUpdateDTO(
+            ThreadCardStreamUpdateDTO(
                 kind: .heartbeat,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
-                view: "dock",
+                view: .dock,
                 epoch: "epoch-1",
                 seq: 1,
                 freshness: DockStreamFreshnessDTO(status: .stale, lastError: "refresh failed")
@@ -255,20 +255,20 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testWindowedSnapshotIsExplicitlyPartial() async throws {
         let host = makeHost()
-        let connection = ManualDockStreamConnection(
+        let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: host, threadID: "thread-a", title: "Window row", updatedAt: 1_000)
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Window row", updatedAt: 1_000)
                 ],
                 complete: false,
                 totalRows: 3,
                 window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1, nextOffset: 1)
             )
         )
-        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
 
         await store.load()
 
@@ -285,27 +285,27 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testWindowedSnapshotCompletesWithStreamedCatchupDeltas() async throws {
         let host = makeHost()
-        let connection = ManualDockStreamConnection(
+        let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: host, threadID: "thread-a", title: "Window row A", updatedAt: 1_000)
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Window row A", updatedAt: 1_000)
                 ],
                 complete: false,
                 totalRows: 3,
                 window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1, nextOffset: 1)
             )
         )
-        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
 
         await store.load()
         await connection.send(
-            DockStreamUpdateDTO(
+            ThreadCardStreamUpdateDTO(
                 kind: .delta,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
-                view: "dock",
+                view: .dock,
                 complete: false,
                 totalRows: 3,
                 window: DockStreamWindowDTO(offset: 1, limit: 1, rowCount: 1, nextOffset: 2),
@@ -313,17 +313,17 @@ final class DockStoreStreamTests: XCTestCase {
                 epoch: "epoch-1",
                 baseSeq: 1,
                 seq: 1,
-                upsertSessions: [
-                    dockStreamSession(host: host, threadID: "thread-b", title: "Window row B", updatedAt: 900)
+                upsertCards: [
+                    threadCardFixture(host: host, threadID: "thread-b", title: "Window row B", updatedAt: 900)
                 ],
-                deleteSessionIDs: []
+                deleteCardIDs: []
             )
         )
         await connection.send(
-            DockStreamUpdateDTO(
+            ThreadCardStreamUpdateDTO(
                 kind: .delta,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
-                view: "dock",
+                view: .dock,
                 complete: true,
                 totalRows: 3,
                 window: DockStreamWindowDTO(offset: 2, limit: 1, rowCount: 1),
@@ -331,10 +331,10 @@ final class DockStoreStreamTests: XCTestCase {
                 epoch: "epoch-1",
                 baseSeq: 1,
                 seq: 1,
-                upsertSessions: [
-                    dockStreamSession(host: host, threadID: "thread-c", title: "Window row C", updatedAt: 800)
+                upsertCards: [
+                    threadCardFixture(host: host, threadID: "thread-c", title: "Window row C", updatedAt: 800)
                 ],
-                deleteSessionIDs: []
+                deleteCardIDs: []
             )
         )
 
@@ -351,13 +351,13 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testSnapshotMissingWindowContractRequestsResync() async throws {
         let host = makeHost()
-        let connection = ManualDockStreamConnection(
+        let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
                 ]
             ),
             resyncSnapshots: [
@@ -365,25 +365,25 @@ final class DockStoreStreamTests: XCTestCase {
                     host: host,
                     epoch: "epoch-2",
                     seq: 1,
-                    sessions: [
-                        dockStreamSession(host: host, threadID: "thread-resynced", title: "Contract row", updatedAt: 1_200)
+                    cards: [
+                        threadCardFixture(host: host, threadID: "thread-resynced", title: "Contract row", updatedAt: 1_200)
                     ]
                 )
             ]
         )
-        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
 
         await store.load()
         await connection.send(
-            DockStreamUpdateDTO(
+            ThreadCardStreamUpdateDTO(
                 kind: .snapshot,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
                 epoch: "legacy-epoch",
                 seq: 2,
                 freshness: DockStreamFreshnessDTO(status: .fresh),
-                hosts: [DockStreamHostDTO(id: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
-                sessions: [
-                    dockStreamSession(host: host, threadID: "legacy-row", title: "Legacy row", updatedAt: 1_100)
+                hosts: [DockStreamHostDTO(id: host.id, logicalHostID: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
+                cards: [
+                    threadCardFixture(host: host, threadID: "legacy-row", title: "Legacy row", updatedAt: 1_100)
                 ]
             )
         )
@@ -400,17 +400,17 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testClosedStreamMarksHostOfflineAndRetainsRows() async throws {
         let host = makeHost()
-        let connection = ManualDockStreamConnection(
+        let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: host, threadID: "thread-a", title: "Last good", updatedAt: 1_000)
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Last good", updatedAt: 1_000)
                 ]
             )
         )
-        let store = DockStore(host: host, streamClient: ManualDockStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
 
         await store.load()
         await connection.finish()
@@ -428,27 +428,27 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testClosedStreamReconnectsAndReplacesHostRows() async throws {
         let host = makeHost()
-        let firstConnection = ManualDockStreamConnection(
+        let firstConnection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: host, threadID: "thread-a", title: "Last good", updatedAt: 1_000)
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Last good", updatedAt: 1_000)
                 ]
             )
         )
-        let secondConnection = ManualDockStreamConnection(
+        let secondConnection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-2",
                 seq: 1,
-                sessions: [
-                    dockStreamSession(host: host, threadID: "thread-b", title: "Reconnected row", updatedAt: 1_200)
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-b", title: "Reconnected row", updatedAt: 1_200)
                 ]
             )
         )
-        let streamClient = SequencedManualDockStreamClient(connections: [firstConnection, secondConnection])
+        let streamClient = SequencedManualThreadCardStreamClient(connections: [firstConnection, secondConnection])
         let store = DockStore(
             host: host,
             streamClient: streamClient,

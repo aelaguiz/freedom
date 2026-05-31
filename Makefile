@@ -73,10 +73,12 @@ HOST_SERVICE_ARGS = --platform "$(HOST_SERVICE_PLATFORM)" --runtime-dir "$(APP_S
 
 .DEFAULT_GOAL := help
 
-.PHONY: help app app-test sim-config-verify device-install device-install-iphone-17-pro device-install-iphone-14 iphone-17-pro iphone-14 device-install-all device-config device-config-verify device-config-verify-all device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart relay-probe relay-thread-fidelity relay-leak-check relay-doctor relay-debug-bundle relay-host-compare sim-debug-bundle device-debug-bundle app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
+.PHONY: help contract-generate contract-check app app-test sim-config-verify device-install device-install-iphone-17-pro device-install-iphone-14 iphone-17-pro iphone-14 device-install-all device-config device-config-verify device-config-verify-all device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart relay-probe relay-thread-fidelity relay-leak-check relay-doctor relay-debug-bundle relay-host-compare sim-debug-bundle device-debug-bundle app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
 
 help:
 	@printf "%s\n" "Codex Dock commands:"
+	@printf "%s\n" "  rtk make contract-generate Regenerate generated contract DTOs"
+	@printf "%s\n" "  rtk make contract-check    Check DockThreadCard contract fixtures and generated DTOs"
 	@printf "%s\n" "  rtk make app SIM='iPhone 17' Reuse a running simulator app; otherwise build/install/launch"
 	@printf "%s\n" "  FORCE_LAUNCH=1 rtk make app SIM=<UDID> Fresh build/install/relaunch by simulator ID"
 	@printf "%s\n" "  rtk make app-test SIM='iPhone 17' Run generated-project app tests in a simulator"
@@ -111,6 +113,12 @@ help:
 	@printf "%s\n" "  rtk make sims              List available simulators"
 	@printf "%s\n" "  rtk make sim SIM='iPhone 17' Boot/open a simulator by name"
 	@printf "%s\n" "  rtk make sim SIM=<UDID>    Boot/open a simulator by ID"
+
+contract-generate:
+	@rtk npm run contract:generate
+
+contract-check:
+	@rtk npm run contract:check
 
 services: host-service-install host-service-start host-service-wait
 

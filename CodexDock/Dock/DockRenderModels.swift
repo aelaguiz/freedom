@@ -3,18 +3,18 @@ import Foundation
 struct DockRenderInput: Equatable, Sendable {
     let hosts: [DockHostConfiguration]
     let hostStates: [DockHostStateViewModel]
-    let sessionsByHostID: [String: [DockStreamSessionDTO]]
+    let cardsByHostID: [String: [DockThreadCardDTO]]
     let isPartial: Bool
 
     init(
         hosts: [DockHostConfiguration],
         hostStates: [DockHostStateViewModel],
-        sessionsByHostID: [String: [DockStreamSessionDTO]],
+        cardsByHostID: [String: [DockThreadCardDTO]],
         isPartial: Bool
     ) {
         self.hosts = hosts
         self.hostStates = hostStates
-        self.sessionsByHostID = sessionsByHostID
+        self.cardsByHostID = cardsByHostID
         self.isPartial = isPartial
     }
 }
@@ -22,5 +22,5 @@ struct DockRenderInput: Equatable, Sendable {
 struct DockRenderSnapshot: Equatable, Sendable {
     let revision: RenderRevision
     let snapshot: DockSnapshot
-    let projection: DockSessionProjection
+    let projection: DockCardProjection
 }

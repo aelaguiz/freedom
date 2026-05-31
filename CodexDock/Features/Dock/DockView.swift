@@ -53,8 +53,8 @@ public struct CodexDockRootView: View {
 
     public init(
         registry: HostRegistry,
-        client: AppServerDockClient = AppServerDockClient(),
-        streamClient: any DockStreamConnecting = AppServerDockStreamClient(),
+        client: AppServerThreadCommandClient = AppServerThreadCommandClient(),
+        streamClient: any ThreadCardStreamConnecting = AppServerThreadCardStreamClient(),
         threadDetailFactory: any ThreadDetailSessionMaking = AppServerThreadDetailSessionFactory(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         lifecycleCoordinator: AppLifecycleCoordinator = AppLifecycleCoordinator(),
@@ -74,8 +74,8 @@ public struct CodexDockRootView: View {
 
     public init(
         runtime: ClientRuntime,
-        client: AppServerDockClient = AppServerDockClient(),
-        streamClient: any DockStreamConnecting = AppServerDockStreamClient(),
+        client: AppServerThreadCommandClient = AppServerThreadCommandClient(),
+        streamClient: any ThreadCardStreamConnecting = AppServerThreadCardStreamClient(),
         threadDetailFactory: any ThreadDetailSessionMaking = AppServerThreadDetailSessionFactory(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         lifecycleCoordinator: AppLifecycleCoordinator = AppLifecycleCoordinator(),
@@ -95,7 +95,7 @@ public struct CodexDockRootView: View {
         )
         _archiveStore = StateObject(
             wrappedValue: runtime.makeArchiveStore(
-                loader: client,
+                streamClient: AppServerThreadCardStreamClient(view: .archive),
                 archiver: client,
                 metadataStore: metadataStore
             )
@@ -103,16 +103,14 @@ public struct CodexDockRootView: View {
         _archiveCleanupStore = StateObject(
             wrappedValue: ArchiveCleanupStore(
                 registry: registry,
-                loader: client,
+                streamClient: streamClient,
                 archiver: client,
                 metadataStore: metadataStore,
                 now: runtime.currentDate
             )
         )
         _hostsStore = StateObject(
-            wrappedValue: runtime.makeHostSettingsStore(
-                tester: client
-            )
+            wrappedValue: runtime.makeHostSettingsStore()
         )
         _connectivityStore = StateObject(wrappedValue: connectivityStore)
         _connectivityScreenStore = StateObject(wrappedValue: runtime.makeConnectivityScreenStore())
@@ -564,7 +562,7 @@ public struct DockView: View {
         )
     }
 
-    private var currentProjection: DockSessionProjection? {
+    private var currentProjection: DockCardProjection? {
         if case .loaded(let renderSnapshot) = screenStore.state {
             return renderSnapshot.projection
         }
@@ -657,13 +655,6 @@ public struct DockView: View {
                 )
             }
 
-            if !snapshot.mappingFailures.isEmpty {
-                MappingFailureBanner(
-                    count: snapshot.mappingFailures.count,
-                    automationID: AutomationID.Dock.state(.mappingFailure)
-                )
-            }
-
             if let emptyReason = projection.emptyReason {
                 if shouldShowPinnedHiddenHint(projection) {
                     DockPinnedHiddenHintView(projection: projection, searchText: searchText)
@@ -690,7 +681,7 @@ public struct DockView: View {
 
     @ViewBuilder
     private func projectedContent(
-        _ projection: DockSessionProjection,
+        _ projection: DockCardProjection,
         snapshot: DockSnapshot,
         revision: RenderRevision
     ) -> some View {
@@ -759,12 +750,12 @@ public struct DockView: View {
         }
     }
 
-    private func shouldShowPinnedHiddenHint(_ projection: DockSessionProjection) -> Bool {
+    private func shouldShowPinnedHiddenHint(_ projection: DockCardProjection) -> Bool {
         projection.pinnedRows.isEmpty && projection.pinnedSummary.hiddenByScopeCount > 0
     }
 
     private func shouldShowPinnedBodyDivider(
-        _ projection: DockSessionProjection,
+        _ projection: DockCardProjection,
         snapshot: DockSnapshot
     ) -> Bool {
         if !contextualHostStates(in: snapshot).isEmpty {

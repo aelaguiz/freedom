@@ -181,21 +181,20 @@ test("dock stream status normalization has product-facing names", () => {
   );
 });
 
-test("relay state projection bounds oversized thread list text fields", () => {
+test("relay state projection bounds oversized thread card text fields", () => {
   const host = { id: "home", displayName: "Home", endpoint: "home.fairy-salmon.ts.net:4510" };
   const session = normalizeThread({
     id: "thread-large-preview",
     preview: "p".repeat(RELAY_STATE_TEXT_FIELD_MAX_CHARS + 1_000),
     latestSummary: "s".repeat(RELAY_STATE_TEXT_FIELD_MAX_CHARS + 1_000),
-    messageSummary: "m".repeat(RELAY_STATE_TEXT_FIELD_MAX_CHARS + 1_000),
+    displaySummary: "m".repeat(RELAY_STATE_TEXT_FIELD_MAX_CHARS + 1_000),
     updatedAt: 10,
     source: "cli",
     status: { type: "notLoaded" },
   }, host, "human");
 
   assert.equal(session.title.length, RELAY_STATE_TITLE_MAX_CHARS);
-  assert.equal(session.summary.length, RELAY_STATE_TEXT_FIELD_MAX_CHARS);
-  assert.equal(session.messageSummary.length, RELAY_STATE_TEXT_FIELD_MAX_CHARS);
+  assert.equal(session.displaySummary.length, RELAY_STATE_TEXT_FIELD_MAX_CHARS);
 });
 
 test("relay state store emits Dock changes and keeps rows when a scope goes stale", () => {
@@ -212,13 +211,13 @@ test("relay state store emits Dock changes and keeps rows when a scope goes stal
   try {
     const update = store.applyDockReconciliation({
       host,
-      sessions: [session],
+      cards: [session],
       scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
       complete: true,
     });
     assert.equal(update.seq, 1);
-    assert.deepEqual(update.upsertSessions.map((row) => row.threadID), ["thread-1"]);
-    assert.deepEqual(store.listDockSessions({ hostID: host.id }).sessions.map((row) => row.threadID), ["thread-1"]);
+    assert.deepEqual(update.upsertCards.map((row) => row.threadID), ["thread-1"]);
+    assert.deepEqual(store.listDockCards({ hostID: host.id }).cards.map((row) => row.threadID), ["thread-1"]);
     const change = store.db.prepare("SELECT payload_json FROM changes WHERE seq = ?").get(update.seq);
     assert.deepEqual(JSON.parse(change.payload_json), {
       upsertCount: 1,
@@ -229,7 +228,7 @@ test("relay state store emits Dock changes and keeps rows when a scope goes stal
     store.markScopeStale(host.id, "active:dock", new Error("upstream unavailable"));
     assert.equal(store.freshnessForHost(host.id).status, "stale");
     assert.match(store.freshnessForHost(host.id).lastError, /upstream unavailable/);
-    assert.deepEqual(store.listDockSessions({ hostID: host.id }).sessions.map((row) => row.threadID), ["thread-1"]);
+    assert.deepEqual(store.listDockCards({ hostID: host.id }).cards.map((row) => row.threadID), ["thread-1"]);
   } finally {
     store.close();
   }
@@ -248,13 +247,13 @@ test("relay state store removes archived Dock rows through state mutation", () =
   try {
     store.applyDockReconciliation({
       host,
-      sessions: [session],
+      cards: [session],
       scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
       complete: true,
     });
     store.applyArchiveMutation({ hostID: host.id, threadID: "thread-1", archived: true });
-    assert.deepEqual(store.listDockSessions({ hostID: host.id }).sessions, []);
-    assert.deepEqual(store.listArchiveSessions({ hostID: host.id }).sessions.map((row) => row.threadID), ["thread-1"]);
+    assert.deepEqual(store.listDockCards({ hostID: host.id }).cards, []);
+    assert.deepEqual(store.listArchiveCards({ hostID: host.id }).cards.map((row) => row.threadID), ["thread-1"]);
   } finally {
     store.close();
   }
@@ -269,7 +268,7 @@ test("relay state snapshot windows oversized Dock results explicitly", async () 
     relayStateDatabasePath: ":memory:",
   });
   try {
-    const sessions = Array.from({ length: 4 }, (_, index) => normalizeThread({
+    const cards = Array.from({ length: 4 }, (_, index) => normalizeThread({
       id: `thread-${index + 1}`,
       preview: `Window row ${index + 1}`,
       latestSummary: "x".repeat(400),
@@ -279,7 +278,7 @@ test("relay state snapshot windows oversized Dock results explicitly", async () 
     }, host, "human"));
     engine.store.applyDockReconciliation({
       host,
-      sessions,
+      cards,
       scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
       complete: true,
     });
@@ -292,7 +291,7 @@ test("relay state snapshot windows oversized Dock results explicitly", async () 
     assert.equal(snapshot.totalRows, 4);
     assert.ok(snapshot.window.rowCount < snapshot.totalRows);
     assert.equal(snapshot.window.nextOffset, snapshot.window.rowCount);
-    assert.equal(snapshot.sessions.length, snapshot.window.rowCount);
+    assert.equal(snapshot.cards.length, snapshot.window.rowCount);
   } finally {
     await engine.close();
   }
@@ -308,7 +307,7 @@ test("relay state streams remaining Dock windows after a partial snapshot", asyn
     relayStateSnapshotSoftLimitBytes: 1_200,
   });
   try {
-    const sessions = Array.from({ length: 4 }, (_, index) => normalizeThread({
+    const cards = Array.from({ length: 4 }, (_, index) => normalizeThread({
       id: `thread-${index + 1}`,
       preview: `Window row ${index + 1}`,
       latestSummary: "x".repeat(400),
@@ -318,7 +317,7 @@ test("relay state streams remaining Dock windows after a partial snapshot", asyn
     }, host, "human"));
     engine.store.applyDockReconciliation({
       host,
-      sessions,
+      cards,
       scopes: [{ name: "active:dock", archived: false, sourceScope: "dock", complete: true }],
       complete: true,
     });
@@ -345,8 +344,8 @@ test("relay state streams remaining Dock windows after a partial snapshot", asyn
     assert.ok(catchupUpdates.length >= 1);
     assert.equal(catchupUpdates.at(-1).complete, true);
     const receivedThreadIDs = new Set([
-      ...response.sessions.map((row) => row.threadID),
-      ...catchupUpdates.flatMap((update) => update.upsertSessions.map((row) => row.threadID)),
+      ...response.cards.map((row) => row.threadID),
+      ...catchupUpdates.flatMap((update) => update.upsertCards.map((row) => row.threadID)),
     ]);
     assert.deepEqual([...receivedThreadIDs].sort(), ["thread-1", "thread-2", "thread-3", "thread-4"]);
   } finally {
@@ -377,7 +376,7 @@ test("dock/subscribe does not refresh already fresh relay state just to serve ca
     }, host, "human");
     engine.store.applyDockReconciliation({
       host,
-      sessions: [session],
+      cards: [session],
       scopes: [
         { name: "active:allSourceKinds", archived: false, sourceScope: "allSourceKinds", complete: true },
         { name: "active:interactiveDefault", archived: false, sourceScope: "interactiveDefault", complete: true },
@@ -393,7 +392,7 @@ test("dock/subscribe does not refresh already fresh relay state just to serve ca
     await sleepMs(20);
 
     assert.equal(response.complete, true);
-    assert.equal(response.sessions.length, 1);
+    assert.equal(response.cards.length, 1);
     assert.equal(scheduledReconciliations, 0);
   } finally {
     await engine.close();
@@ -425,7 +424,7 @@ test("thread summary cache keeps the last useful summary while a row version war
   cache.remember("thread-1", {
     version: "10",
     summary: "Latest known useful update",
-    messageUpdatedAt: 9,
+    activityAt: 9,
     checkedAtMs: 1,
   });
 
@@ -438,8 +437,8 @@ test("thread summary cache keeps the last useful summary while a row version war
   ]);
 
   assert.equal(decorated[0].latestSummary, "Latest known useful update");
-  assert.equal(decorated[0].messageSummary, "Latest known useful update");
-  assert.equal(decorated[0].messageUpdatedAt, 9);
+  assert.equal(decorated[0].displaySummary, "Latest known useful update");
+  assert.equal(decorated[0].activityAt, 9);
 });
 
 test("phase 2 live overlay is explicit degraded metadata", () => {
@@ -943,8 +942,8 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
                 sessionId: "history-session",
                 preview: "History thread",
                 latestSummary: "Stored history row",
-                messageSummary: "Stored history message",
-                messageUpdatedAt: 1_780_000_090,
+                displaySummary: "Stored history message",
+                activityAt: 1_780_000_090,
                 updatedAt: 1_780_000_100,
                 status: {
                   type: "notLoaded",
@@ -990,7 +989,7 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
     assert.equal(response.error, undefined);
     assert.equal(response.result.kind, "snapshot");
     assert.equal(response.result.view, "dock");
-    assert.deepEqual(response.result.sessions, []);
+    assert.deepEqual(response.result.cards, []);
     assert.equal(observedThreadListParams.length, 0);
 
     const update = await waitForRelayMessage(ws, (message) => message.method === "dock/update");
@@ -1012,16 +1011,15 @@ test("dock/subscribe returns a normalized relay-owned session snapshot", async (
     assert.equal(typeof params.stateGeneration, "number");
     assert.equal(params.upsertHosts[0].id, "Amir-M5");
     assert.deepEqual(
-      params.upsertSessions.map((row) => [row.threadID, row.status, row.lane, row.kindLabel, row.source.kind]),
+      params.upsertCards.map((row) => [row.threadID, row.status, row.lane, row.sourceKind]),
       [
-        ["agent-thread", "needsApproval", "agent", "exec", "automation"],
-        ["history-thread", "dormant", "human", "cli", "human"],
+        ["agent-thread", "needsApproval", "agent", "automation"],
+        ["history-thread", "dormant", "human", "human"],
       ],
     );
-    const historySession = params.upsertSessions.find((row) => row.threadID === "history-thread");
-    assert.equal(historySession.summary, "Stored history row");
-    assert.equal(historySession.messageSummary, "Stored history message");
-    assert.equal(historySession.messageUpdatedAt, 1_780_000_090);
+    const historySession = params.upsertCards.find((row) => row.threadID === "history-thread");
+    assert.equal(historySession.displaySummary, "Stored history message");
+    assert.equal(historySession.activityAtMs, 1_780_000_090_000);
     assert.equal(JSON.stringify(params).includes("notLoaded"), false);
     assert.equal(JSON.stringify(params).includes("must-not-leak"), false);
   } finally {
@@ -1102,8 +1100,8 @@ test("dock/subscribe overlays live status without changing stored Codex order", 
                 sessionId: "stored-session",
                 preview: "Stored summary",
                 latestSummary: "Stored summary",
-                messageSummary: "Stored message",
-                messageUpdatedAt: 250,
+                displaySummary: "Stored message",
+                activityAt: 250,
                 updatedAt: 300,
                 source: "cli",
                 status: { type: "notLoaded" },
@@ -1152,21 +1150,19 @@ test("dock/subscribe overlays live status without changing stored Codex order", 
   try {
     const response = await jsonRpcRequest(ws, "dock/subscribe");
     assert.equal(response.error, undefined);
-    assert.deepEqual(response.result.sessions, []);
+    assert.deepEqual(response.result.cards, []);
     const update = await waitForRelayMessage(ws, (message) => message.method === "dock/update");
-    const sessions = update.params.upsertSessions;
-    assert.deepEqual(sessions.map((session) => session.threadID), [
+    const cards = update.params.upsertCards;
+    assert.deepEqual(cards.map((card) => card.threadID), [
       "live-thread",
       "stored-thread",
     ]);
-    const liveSession = sessions.find((session) => session.threadID === "live-thread");
+    const liveSession = cards.find((card) => card.threadID === "live-thread");
     assert.equal(liveSession.status, "needsInput");
     assert.equal(liveSession.backendSessionID, "live-session");
-    assert.equal(liveSession.updatedAt, 300);
-    assert.equal(liveSession.summary, "Stored summary");
-    assert.equal(liveSession.messageSummary, "Stored message");
-    assert.equal(liveSession.messageUpdatedAt, 250);
-    assert.equal(sessions.find((session) => session.threadID === "stored-thread").status, "dormant");
+    assert.equal(liveSession.activityAtMs, 250_000);
+    assert.equal(liveSession.displaySummary, "Stored message");
+    assert.equal(cards.find((card) => card.threadID === "stored-thread").status, "dormant");
   } finally {
     ws.close();
     await relay.close();
@@ -1246,10 +1242,10 @@ test("dock/subscribe drains combined source pages before default interactive ext
     const response = await jsonRpcRequest(ws, "dock/subscribe");
 
     assert.equal(response.error, undefined);
-    assert.deepEqual(response.result.sessions, []);
+    assert.deepEqual(response.result.cards, []);
     const update = await waitForRelayMessage(ws, (message) => message.method === "dock/update");
     assert.deepEqual(
-      update.params.upsertSessions.map((row) => row.threadID),
+      update.params.upsertCards.map((row) => row.threadID),
       ["agent-page-1", "agent-page-2", "human-page-1", "human-page-2"],
     );
     assert.equal(observedThreadListParams.length, 4);

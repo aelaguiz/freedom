@@ -1,0 +1,369 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-dock.local/contract/dock/dock-thread-card.schema.json",
+  "title": "Codex Dock Thread Card Stream",
+  "type": "object",
+  "required": [
+    "kind",
+    "schemaVersion",
+    "view",
+    "epoch",
+    "seq"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "snapshot",
+        "delta",
+        "heartbeat"
+      ]
+    },
+    "schemaVersion": {
+      "const": 2
+    },
+    "view": {
+      "enum": [
+        "dock",
+        "archive"
+      ]
+    },
+    "complete": {
+      "type": "boolean"
+    },
+    "totalRows": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "window": {
+      "$ref": "#/$defs/window"
+    },
+    "stateGeneration": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "epoch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "baseSeq": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "asOf": {
+      "type": "string"
+    },
+    "freshness": {
+      "$ref": "#/$defs/freshness"
+    },
+    "hosts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/host"
+      }
+    },
+    "cards": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/card"
+      }
+    },
+    "upsertHosts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/host"
+      }
+    },
+    "upsertCards": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/card"
+      }
+    },
+    "deleteCardIDs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "required": [
+          "sessions"
+        ]
+      },
+      {
+        "required": [
+          "upsertSessions"
+        ]
+      },
+      {
+        "required": [
+          "deleteSessionIDs"
+        ]
+      },
+      {
+        "required": [
+          "messageSummary"
+        ]
+      },
+      {
+        "required": [
+          "messageUpdatedAt"
+        ]
+      }
+    ]
+  },
+  "$defs": {
+    "window": {
+      "type": "object",
+      "required": [
+        "offset",
+        "limit",
+        "rowCount"
+      ],
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rowCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "nextOffset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "freshness": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "unknown",
+            "fresh",
+            "stale",
+            "offline",
+            "error"
+          ]
+        },
+        "lastAttemptAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastSyncAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastError": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "host": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "logicalHostID": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "displayName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "endpoint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "card": {
+      "type": "object",
+      "required": [
+        "id",
+        "logicalHostID",
+        "threadID",
+        "backendSessionID",
+        "hostDisplayName",
+        "orderKey",
+        "activityAt",
+        "displaySummary",
+        "title",
+        "status",
+        "sourceKind",
+        "lane",
+        "archiveState",
+        "freshness",
+        "completeness"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "logicalHostID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "threadID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "backendSessionID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hostDisplayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hostEndpoint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "orderKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "activityAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "activityAtMs": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "displaySummary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "running",
+            "needsInput",
+            "needsApproval",
+            "idle",
+            "error",
+            "dormant",
+            "unknown"
+          ]
+        },
+        "sourceKind": {
+          "enum": [
+            "human",
+            "automation",
+            "unknown"
+          ]
+        },
+        "lane": {
+          "enum": [
+            "human",
+            "agent",
+            "unknown"
+          ]
+        },
+        "archiveState": {
+          "enum": [
+            "active",
+            "archived",
+            "unknown"
+          ]
+        },
+        "freshness": {
+          "enum": [
+            "unknown",
+            "fresh",
+            "stale",
+            "offline",
+            "error"
+          ]
+        },
+        "completeness": {
+          "enum": [
+            "complete",
+            "partial",
+            "unknown"
+          ]
+        },
+        "repository": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workingDirectory": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summarySource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -7,21 +7,21 @@ final class DockStoreScopeTests: XCTestCase {
         let amir = makeHost()
         let home = makeHost(url: "ws://100.66.11.7:4510")
         let registry = try HostRegistry(hosts: [amir, home])
-        let loader = QueryRoutedDockSessionLoader(results: [
-            QueryRoutedDockSessionLoader.key(hostID: amir.id, query: .activeHuman): .success(
-                DockLoadResult(summaries: [])
+        let loader = QueryRoutedThreadCardFixtureLoader(results: [
+            QueryRoutedThreadCardFixtureLoader.key(hostID: amir.id, query: .activeHuman): .success(
+                ThreadCardFixtureResult(fixtures: [])
             ),
-            QueryRoutedDockSessionLoader.key(hostID: amir.id, query: .activeAgents): .success(
-                DockLoadResult(summaries: [])
+            QueryRoutedThreadCardFixtureLoader.key(hostID: amir.id, query: .activeAgents): .success(
+                ThreadCardFixtureResult(fixtures: [])
             ),
-            QueryRoutedDockSessionLoader.key(hostID: home.id, query: .activeHuman): .success(
-                DockLoadResult(summaries: [])
+            QueryRoutedThreadCardFixtureLoader.key(hostID: home.id, query: .activeHuman): .success(
+                ThreadCardFixtureResult(fixtures: [])
             ),
-            QueryRoutedDockSessionLoader.key(hostID: home.id, query: .activeAgents): .success(
-                DockLoadResult(summaries: [])
+            QueryRoutedThreadCardFixtureLoader.key(hostID: home.id, query: .activeAgents): .success(
+                ThreadCardFixtureResult(fixtures: [])
             )
         ])
-        let store = DockStore(registry: registry, streamClient: LoaderBackedDockStreamClient(loader: loader))
+        let store = DockStore(registry: registry, streamClient: LoaderBackedThreadCardStreamClient(loader: loader))
 
         await store.load()
 
@@ -39,7 +39,7 @@ final class DockStoreScopeTests: XCTestCase {
     }
 
     func testAgentsQueryUsesExplicitNonInternalSourceKinds() {
-        XCTAssertEqual(DockSessionQuery.activeAgents.sourceKinds, [
+        XCTAssertEqual(ThreadCardFixtureQuery.activeAgents.sourceKinds, [
             .exec,
             .appServer,
             .subAgentReview,
@@ -53,10 +53,10 @@ final class DockStoreScopeTests: XCTestCase {
     @MainActor
     func testDockSnapshotSourceFiltersAndNoNeedsMeStatus() async {
         let host = makeHost()
-        let loader = QueryRoutedDockSessionLoader(results: [
-            QueryRoutedDockSessionLoader.key(hostID: host.id, query: .activeHuman): .success(
-                DockLoadResult(summaries: [
-                    makeSummary(
+        let loader = QueryRoutedThreadCardFixtureLoader(results: [
+            QueryRoutedThreadCardFixtureLoader.key(hostID: host.id, query: .activeHuman): .success(
+                ThreadCardFixtureResult(fixtures: [
+                    makeThreadCardFixtureSummary(
                         hostID: host.id,
                         threadID: "human-waiting",
                         branch: "main",
@@ -64,7 +64,7 @@ final class DockStoreScopeTests: XCTestCase {
                         lastActivity: Date(timeIntervalSince1970: 1_900),
                         prompt: "Human waiting"
                     ),
-                    makeSummary(
+                    makeThreadCardFixtureSummary(
                         hostID: host.id,
                         threadID: "human-not-loaded",
                         branch: "main",
@@ -74,9 +74,9 @@ final class DockStoreScopeTests: XCTestCase {
                     )
                 ])
             ),
-            QueryRoutedDockSessionLoader.key(hostID: host.id, query: .activeAgents): .success(
-                DockLoadResult(summaries: [
-                    makeSummary(
+            QueryRoutedThreadCardFixtureLoader.key(hostID: host.id, query: .activeAgents): .success(
+                ThreadCardFixtureResult(fixtures: [
+                    makeThreadCardFixtureSummary(
                         hostID: host.id,
                         threadID: "agent-running",
                         branch: "main",
@@ -85,7 +85,7 @@ final class DockStoreScopeTests: XCTestCase {
                         prompt: "Agent running",
                         origin: .agentOrAutomation(subtype: .exec)
                     ),
-                    makeSummary(
+                    makeThreadCardFixtureSummary(
                         hostID: host.id,
                         threadID: "unknown-origin",
                         branch: "main",
@@ -97,7 +97,7 @@ final class DockStoreScopeTests: XCTestCase {
                 ])
             )
         ])
-        let store = DockStore(host: host, streamClient: LoaderBackedDockStreamClient(loader: loader))
+        let store = DockStore(host: host, streamClient: LoaderBackedThreadCardStreamClient(loader: loader))
 
         await store.load()
 
@@ -134,10 +134,10 @@ final class DockStoreScopeTests: XCTestCase {
     @MainActor
     func testDockDeduplicatesScopesAndPrefersAgentOrigin() async {
         let host = makeHost()
-        let loader = QueryRoutedDockSessionLoader(results: [
-            QueryRoutedDockSessionLoader.key(hostID: host.id, query: .activeHuman): .success(
-                DockLoadResult(summaries: [
-                    makeSummary(
+        let loader = QueryRoutedThreadCardFixtureLoader(results: [
+            QueryRoutedThreadCardFixtureLoader.key(hostID: host.id, query: .activeHuman): .success(
+                ThreadCardFixtureResult(fixtures: [
+                    makeThreadCardFixtureSummary(
                         hostID: host.id,
                         threadID: "shared-thread",
                         branch: "main",
@@ -147,9 +147,9 @@ final class DockStoreScopeTests: XCTestCase {
                     )
                 ])
             ),
-            QueryRoutedDockSessionLoader.key(hostID: host.id, query: .activeAgents): .success(
-                DockLoadResult(summaries: [
-                    makeSummary(
+            QueryRoutedThreadCardFixtureLoader.key(hostID: host.id, query: .activeAgents): .success(
+                ThreadCardFixtureResult(fixtures: [
+                    makeThreadCardFixtureSummary(
                         hostID: host.id,
                         threadID: "shared-thread",
                         branch: "main",
@@ -161,7 +161,7 @@ final class DockStoreScopeTests: XCTestCase {
                 ])
             )
         ])
-        let store = DockStore(host: host, streamClient: LoaderBackedDockStreamClient(loader: loader))
+        let store = DockStore(host: host, streamClient: LoaderBackedThreadCardStreamClient(loader: loader))
 
         await store.load()
 
@@ -171,7 +171,6 @@ final class DockStoreScopeTests: XCTestCase {
 
         let agentRows = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .agents))).rows
         XCTAssertEqual(snapshot.rowCount, 1)
-        XCTAssertEqual(snapshot.mappingFailures, [])
         XCTAssertEqual(agentRows.map(\.title), ["Agent copy"])
         XCTAssertEqual(agentRows.map(\.origin.kind), [.agentOrAutomation])
         XCTAssertTrue(snapshot.project(options: .init(lens: .newest, filters: DockFilterState(source: .human))).rows.isEmpty)
@@ -180,10 +179,10 @@ final class DockStoreScopeTests: XCTestCase {
     @MainActor
     func testDockReportsPartialWhenAgentsScopeFails() async {
         let host = makeHost()
-        let loader = QueryRoutedDockSessionLoader(results: [
-            QueryRoutedDockSessionLoader.key(hostID: host.id, query: .activeHuman): .success(
-                DockLoadResult(summaries: [
-                    makeSummary(
+        let loader = QueryRoutedThreadCardFixtureLoader(results: [
+            QueryRoutedThreadCardFixtureLoader.key(hostID: host.id, query: .activeHuman): .success(
+                ThreadCardFixtureResult(fixtures: [
+                    makeThreadCardFixtureSummary(
                         hostID: host.id,
                         threadID: "human-row",
                         branch: "main",
@@ -193,11 +192,11 @@ final class DockStoreScopeTests: XCTestCase {
                     )
                 ])
             ),
-            QueryRoutedDockSessionLoader.key(hostID: host.id, query: .activeAgents): .failure(
+            QueryRoutedThreadCardFixtureLoader.key(hostID: host.id, query: .activeAgents): .failure(
                 .offline("Agents unreachable")
             )
         ])
-        let store = DockStore(host: host, streamClient: LoaderBackedDockStreamClient(loader: loader))
+        let store = DockStore(host: host, streamClient: LoaderBackedThreadCardStreamClient(loader: loader))
 
         await store.load()
 
@@ -214,13 +213,13 @@ final class DockStoreScopeTests: XCTestCase {
     @MainActor
     func testDockReportsPartialWhenHumanScopeFailsButAgentsLoad() async {
         let host = makeHost()
-        let loader = QueryRoutedDockSessionLoader(results: [
-            QueryRoutedDockSessionLoader.key(hostID: host.id, query: .activeHuman): .failure(
+        let loader = QueryRoutedThreadCardFixtureLoader(results: [
+            QueryRoutedThreadCardFixtureLoader.key(hostID: host.id, query: .activeHuman): .failure(
                 .offline("Dock unreachable")
             ),
-            QueryRoutedDockSessionLoader.key(hostID: host.id, query: .activeAgents): .success(
-                DockLoadResult(summaries: [
-                    makeSummary(
+            QueryRoutedThreadCardFixtureLoader.key(hostID: host.id, query: .activeAgents): .success(
+                ThreadCardFixtureResult(fixtures: [
+                    makeThreadCardFixtureSummary(
                         hostID: host.id,
                         threadID: "agent-row",
                         branch: "main",
@@ -232,7 +231,7 @@ final class DockStoreScopeTests: XCTestCase {
                 ])
             )
         ])
-        let store = DockStore(host: host, streamClient: LoaderBackedDockStreamClient(loader: loader))
+        let store = DockStore(host: host, streamClient: LoaderBackedThreadCardStreamClient(loader: loader))
 
         await store.load()
 
@@ -252,10 +251,10 @@ final class DockStoreScopeTests: XCTestCase {
     func testHostSettingsTestUsesDefaultHumanQuery() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
-        let loader = QueryRoutedDockSessionLoader(results: [
-            QueryRoutedDockSessionLoader.key(hostID: host.id, query: .activeHuman): .success(
-                DockLoadResult(summaries: [
-                    makeSummary(
+        let loader = QueryRoutedThreadCardFixtureLoader(results: [
+            QueryRoutedThreadCardFixtureLoader.key(hostID: host.id, query: .activeHuman): .success(
+                ThreadCardFixtureResult(fixtures: [
+                    makeThreadCardFixtureSummary(
                         hostID: host.id,
                         threadID: "human-row",
                         branch: "main",
@@ -265,7 +264,7 @@ final class DockStoreScopeTests: XCTestCase {
                     )
                 ])
             ),
-            QueryRoutedDockSessionLoader.key(hostID: host.id, query: .activeAgents): .failure(
+            QueryRoutedThreadCardFixtureLoader.key(hostID: host.id, query: .activeAgents): .failure(
                 .error("Should not load Agents scope")
             )
         ])
@@ -286,22 +285,22 @@ final class DockStoreScopeTests: XCTestCase {
     }
 }
 
-private actor QueryRoutedDockSessionLoader: DockSessionLoading {
+private actor QueryRoutedThreadCardFixtureLoader: ThreadCardFixtureLoading {
     private let results: [String: FakeMode]
-    private var queriesByHost: [String: [DockSessionQuery]] = [:]
+    private var queriesByHost: [String: [ThreadCardFixtureQuery]] = [:]
 
     init(results: [String: FakeMode]) {
         self.results = results
     }
 
-    func recordedQueries(for hostID: String) -> [DockSessionQuery] {
+    func recordedQueries(for hostID: String) -> [ThreadCardFixtureQuery] {
         queriesByHost[hostID] ?? []
     }
 
-    func loadSessions(
+    func loadFixtures(
         for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult {
+        query: ThreadCardFixtureQuery
+    ) async throws -> ThreadCardFixtureResult {
         var queries = queriesByHost[host.id] ?? []
         queries.append(query)
         queriesByHost[host.id] = queries
@@ -318,11 +317,11 @@ private actor QueryRoutedDockSessionLoader: DockSessionLoading {
         }
     }
 
-    static func key(hostID: String, query: DockSessionQuery) -> String {
+    static func key(hostID: String, query: ThreadCardFixtureQuery) -> String {
         "\(hostID)::\(queryLabel(query))"
     }
 
-    private static func queryLabel(_ query: DockSessionQuery) -> String {
+    private static func queryLabel(_ query: ThreadCardFixtureQuery) -> String {
         if query == .activeHuman {
             return "activeHuman"
         }
@@ -333,5 +332,11 @@ private actor QueryRoutedDockSessionLoader: DockSessionLoading {
             return "archivedHuman"
         }
         return "\(query.archived)::\(query.sourceKinds?.map(\.rawValue).joined(separator: ",") ?? "nil")"
+    }
+}
+
+extension QueryRoutedThreadCardFixtureLoader: HostConnectionTesting {
+    func testConnection(to host: DockHostConfiguration) async throws -> HostConnectionTestResult {
+        try await testConnectionResult(to: host)
     }
 }

@@ -103,7 +103,6 @@ public struct ArchiveCleanupPreviewSnapshot: Equatable, Sendable {
     public let hostSummaries: [ArchiveCleanupHostSummary]
     public let candidates: [DockRowViewModel]
     public let excluded: [ArchiveCleanupExcludedRow]
-    public let mappingFailures: [SessionSummaryMappingFailure]
 
     public var candidateCount: Int { candidates.count }
     public var excludedCount: Int { excluded.count }

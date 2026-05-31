@@ -53,6 +53,9 @@ final class DiagnosticsLoggingTests: XCTestCase {
             AppServerMethods.dockSubscribe,
             AppServerMethods.dockUpdate,
             AppServerMethods.dockResync,
+            AppServerMethods.archiveSubscribe,
+            AppServerMethods.archiveUpdate,
+            AppServerMethods.archiveResync,
             AppServerMethods.turnStart,
             AppServerMethods.turnSteer,
             AppServerMethods.turnInterrupt,
@@ -72,6 +75,7 @@ final class DiagnosticsLoggingTests: XCTestCase {
         XCTAssertEqual(ObservabilityContract.config(for: AppServerMethods.threadArchive).probeSafety, .passiveOnly)
         XCTAssertEqual(ObservabilityContract.config(for: AppServerMethods.audioTranscriptionStart).probeSafety, .passiveOnly)
         XCTAssertTrue(ObservabilityContract.config(for: AppServerMethods.dockSubscribe).appCritical)
+        XCTAssertTrue(ObservabilityContract.config(for: AppServerMethods.archiveSubscribe).appCritical)
     }
 
     func testRelayDiagnosticsClientDerivesSiblingDiagnosticURLs() throws {

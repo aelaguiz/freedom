@@ -215,13 +215,6 @@ public struct ArchiveView: View {
                 )
             }
 
-            if !snapshot.mappingFailures.isEmpty {
-                MappingFailureBanner(
-                    count: snapshot.mappingFailures.count,
-                    automationID: AutomationID.Archive.state(.mappingFailure)
-                )
-            }
-
             archiveControls(snapshot: snapshot, visibleRows: visibleRows)
 
             if let batchProgress {

@@ -163,8 +163,8 @@ function measurementSummaryForResult(routeName, result) {
     return summary;
   }
 
-  const rows = Array.isArray(result.sessions)
-    ? result.sessions
+  const rows = Array.isArray(result.cards)
+    ? result.cards
     : Array.isArray(result.data)
       ? result.data
       : Array.isArray(result.rows)

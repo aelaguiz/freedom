@@ -16,7 +16,7 @@ struct DockProjectionOptions: Equatable, Sendable {
     }
 }
 
-struct DockSessionProjection: Equatable, Sendable {
+struct DockCardProjection: Equatable, Sendable {
     let lens: DockLensID
     let pinnedRows: [DockRowViewModel]
     let allPinnedRows: [DockRowViewModel]
@@ -32,16 +32,16 @@ struct DockSessionProjection: Equatable, Sendable {
 }
 
 extension DockSnapshot {
-    func project(options: DockProjectionOptions) -> DockSessionProjection {
-        DockSessionProjectionProjector(snapshot: self, options: options).project()
+    func project(options: DockProjectionOptions) -> DockCardProjection {
+        DockCardProjectionProjector(snapshot: self, options: options).project()
     }
 }
 
-private struct DockSessionProjectionProjector {
+private struct DockCardProjectionProjector {
     let snapshot: DockSnapshot
     let options: DockProjectionOptions
 
-    func project() -> DockSessionProjection {
+    func project() -> DockCardProjection {
         let searchedRows = snapshot.rows.filter(matchesSearch)
         let filteredIgnoringIdle = searchedRows.filter(matchesNonIdleFilters)
         let pinnedRows = filteredIgnoringIdle.filter(\.isPinned).sorted(by: pinnedRowPrecedes)
@@ -58,7 +58,7 @@ private struct DockSessionProjectionProjector {
         let groups = groups(for: bodyRows, hiddenIdleRows: hiddenIdleRows)
         let emptyReason = visibleRows.isEmpty ? emptyReason(searchedRows: searchedRows, hiddenIdleCount: hiddenIdleCount) : nil
 
-        return DockSessionProjection(
+        return DockCardProjection(
             lens: options.lens,
             pinnedRows: pinnedRows,
             allPinnedRows: allPinnedRows,
@@ -347,6 +347,12 @@ private struct DockSessionProjectionProjector {
     }
 
     private func rowPrecedesByRecency(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
+        if let lhsOrderKey = lhs.orderKey,
+           let rhsOrderKey = rhs.orderKey,
+           lhsOrderKey != rhsOrderKey {
+            return lhsOrderKey < rhsOrderKey
+        }
+
         if lhs.lastActivityDate != rhs.lastActivityDate {
             return lhs.lastActivityDate > rhs.lastActivityDate
         }

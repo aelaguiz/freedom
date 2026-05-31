@@ -12,9 +12,9 @@ final class DockRenderProjectorTests: XCTestCase {
                     status: .loaded(rowCount: 1)
                 )
             ],
-            sessionsByHostID: [
+            cardsByHostID: [
                 host.id: [
-                    dockStreamSession(
+                    threadCardFixture(
                         host: host,
                         threadID: "thread-a",
                         title: "Active row",
@@ -66,7 +66,7 @@ final class DockRenderProjectorTests: XCTestCase {
                     status: .empty
                 )
             ],
-            sessionsByHostID: [host.id: []],
+            cardsByHostID: [host.id: []],
             isPartial: false
         )
         let projector = DockRenderProjector(now: { Date(timeIntervalSince1970: 2_000) })

@@ -6,11 +6,11 @@ final class HostSettingsScreenStoreTests: XCTestCase {
     func testHostSettingsStorePublishesRowsThroughScreenStore() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
-        let tester = FakeDockSessionLoader(
+        let tester = FakeThreadCardFixtureLoader(
             mode: .success(
-                DockLoadResult(
-                    summaries: [
-                        makeSummary(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "thread-a",
                             branch: "main",

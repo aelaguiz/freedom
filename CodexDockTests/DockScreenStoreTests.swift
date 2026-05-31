@@ -7,12 +7,12 @@ final class DockScreenStoreTests: XCTestCase {
         let host = makeHost()
         let store = DockStore(
             host: host,
-            streamClient: LoaderBackedDockStreamClient(
-                loader: FakeDockSessionLoader(
+            streamClient: LoaderBackedThreadCardStreamClient(
+                loader: FakeThreadCardFixtureLoader(
                     mode: .success(
-                        DockLoadResult(
-                            summaries: [
-                                makeSummary(
+                        ThreadCardFixtureResult(
+                            fixtures: [
+                                makeThreadCardFixtureSummary(
                                     hostID: host.id,
                                     threadID: "thread-a",
                                     branch: "main",
@@ -39,7 +39,7 @@ final class DockScreenStoreTests: XCTestCase {
         store.screenStore.setSearchText("missing")
         let filteredRender = await waitForLoadedRender(
             in: store.screenStore,
-            where: { $0.revision.rawValue > (render?.revision.rawValue ?? 0) }
+            where: { $0.projection.emptyReason == .noSearchMatches }
         )
         XCTAssertEqual(filteredRender?.projection.rows, [])
         XCTAssertEqual(filteredRender?.projection.emptyReason, .noSearchMatches)
@@ -145,9 +145,9 @@ final class DockScreenStoreTests: XCTestCase {
                     status: .loaded(rowCount: 1)
                 )
             ],
-            sessionsByHostID: [
+            cardsByHostID: [
                 host.id: [
-                    dockStreamSession(
+                    threadCardFixture(
                         host: host,
                         threadID: "thread-a",
                         title: "Thread A",

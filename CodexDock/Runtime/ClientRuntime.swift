@@ -46,8 +46,8 @@ public struct ClientRuntime: Sendable {
 
     @MainActor
     public func makeDockStore(
-        streamClient: any DockStreamConnecting = AppServerDockStreamClient(),
-        archiver: any DockSessionArchiving = AppServerDockClient(),
+        streamClient: any ThreadCardStreamConnecting = AppServerThreadCardStreamClient(),
+        archiver: any ThreadArchiveCommanding = AppServerThreadCommandClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval
     ) -> DockStore {
@@ -95,13 +95,13 @@ public struct ClientRuntime: Sendable {
 
     @MainActor
     public func makeArchiveStore(
-        loader: any DockSessionLoading = AppServerDockClient(),
-        archiver: any DockSessionArchiving = AppServerDockClient(),
+        streamClient: any ThreadCardStreamConnecting = AppServerThreadCardStreamClient(view: .archive),
+        archiver: any ThreadArchiveCommanding = AppServerThreadCommandClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore()
     ) -> ArchiveStore {
         ArchiveStore(
             registry: registry,
-            loader: loader,
+            streamClient: streamClient,
             archiver: archiver,
             metadataStore: metadataStore,
             connectivityEventSink: connectivityEventSink,
@@ -115,7 +115,7 @@ public struct ClientRuntime: Sendable {
 
     @MainActor
     public func makeHostSettingsStore(
-        tester: any DockSessionLoading = AppServerDockClient(),
+        tester: any HostConnectionTesting = CardStreamHostConnectionTester(),
         configurationStore: any LocalDockConfigurationStoring = FileLocalDockConfigurationStore()
     ) -> HostSettingsStore {
         HostSettingsStore(

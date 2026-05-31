@@ -29,11 +29,14 @@ test("observability contract covers relay app routes and keeps passive routes ou
     "thread/read",
     "thread/resume",
     "thread/turns/list",
-    "thread/archive",
-    "thread/unarchive",
-    "dock/subscribe",
-    "dock/update",
-    "dock/resync",
+  "thread/archive",
+  "thread/unarchive",
+  "dock/subscribe",
+  "dock/update",
+  "dock/resync",
+  "archive/subscribe",
+  "archive/update",
+  "archive/resync",
     "turn/start",
     "turn/steer",
     "turn/interrupt",
@@ -135,7 +138,7 @@ test("relay observability marks stuck in-flight app routes as failed", () => {
 
 test("payload measurement summarizes rows without storing raw payload content", () => {
   const summary = measurementSummaryForResult("thread/list", {
-    sessions: [
+    cards: [
       { id: "thread-1", preview: "first preview", turns: [{ role: "user", text: "omitted in bundle" }] },
       { id: "thread-2", preview: "second preview", turns: [] },
     ],
@@ -165,7 +168,7 @@ test("relay diagnostic bundle carries route evidence and content omission manife
   });
   observability.finishOperation(operation, {
     ok: true,
-    result: { sessions: [{ id: "thread-1" }] },
+    result: { cards: [{ id: "thread-1" }] },
   });
 
   const bundle = observability.bundle();
@@ -195,11 +198,6 @@ test("readyz can pass while dock state freshness is stale after upstream failure
     historyBearerToken: "history-token",
     advertiseBonjour: false,
     observabilityDir: false,
-    dockSessionProvider: {
-      async listSessions() {
-        throw new Error("dock provider offline");
-      },
-    },
   });
   await relay.listening;
   const baseURL = `http://127.0.0.1:${relay.server.address().port}`;
@@ -260,7 +258,7 @@ test("dock/subscribe route health stays healthy when serving stale cached state"
   const store = config.relayStateEngine.store;
   store.applyDockReconciliation({
     host,
-    sessions: [cachedRow],
+    cards: [cachedRow],
     scopes: [
       { name: "active:allSourceKinds", archived: false, sourceScope: "allSourceKinds", complete: true },
       { name: "active:interactiveDefault", archived: false, sourceScope: "interactiveDefault", complete: true },
@@ -274,7 +272,7 @@ test("dock/subscribe route health stays healthy when serving stale cached state"
     const response = await jsonRpcRequest(ws, "dock/subscribe");
     assert.equal(response.error, undefined);
     assert.equal(response.result.freshness.status, "stale");
-    assert.equal(response.result.sessions.length, 1);
+    assert.equal(response.result.cards.length, 1);
 
     const status = await httpGetJson(`${baseURL}/statusz`);
     const state = await httpGetJson(`${baseURL}/statez`);
@@ -314,7 +312,7 @@ test("explainz/thread returns one row explanation without source refresh", async
   }, host, "human");
   config.relayStateEngine.store.applyDockReconciliation({
     host,
-    sessions: [cachedRow],
+    cards: [cachedRow],
     scopes: [
       { name: "active:allSourceKinds", archived: false, sourceScope: "allSourceKinds", complete: true },
       { name: "active:interactiveDefault", archived: false, sourceScope: "interactiveDefault", complete: true },
@@ -348,11 +346,6 @@ test("selftest lists only safe diagnostics and never includes passive mutating r
     historyBearerToken: "history-token",
     advertiseBonjour: false,
     observabilityDir: false,
-    dockSessionProvider: {
-      async listSessions() {
-        return { host: { id: "home", displayName: "Home" }, sessions: [] };
-      },
-    },
   });
   await relay.listening;
   const baseURL = `http://127.0.0.1:${relay.server.address().port}`;
@@ -372,7 +365,6 @@ test("selftest lists only safe diagnostics and never includes passive mutating r
 });
 
 test("selftest reads passive dock state instead of calling dock subscribe", async () => {
-  let dockSessionProviderCalled = false;
   const relay = startServer({
     listenHost: "127.0.0.1",
     port: 0,
@@ -382,12 +374,6 @@ test("selftest reads passive dock state instead of calling dock subscribe", asyn
     advertiseBonjour: false,
     observabilityDir: false,
     selftestRouteTimeoutMs: 20,
-    dockSessionProvider: {
-      async listSessions() {
-        dockSessionProviderCalled = true;
-        await new Promise(() => {});
-      },
-    },
   });
   await relay.listening;
   const baseURL = `http://127.0.0.1:${relay.server.address().port}`;
@@ -404,7 +390,6 @@ test("selftest reads passive dock state instead of calling dock subscribe", asyn
     assert.equal(dockSubscribe.note, "passive state health read; dock/subscribe not called");
     assert.equal(dockSubscribe.failureCategory, undefined);
     assert.equal(dockSubscribe.timeoutMs, undefined);
-    assert.equal(dockSessionProviderCalled, false);
   } finally {
     await relay.close();
   }

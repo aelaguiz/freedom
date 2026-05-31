@@ -103,7 +103,7 @@ struct DockSwipeActionRow<Content: View>: View {
 }
 
 struct DockPinnedSectionView<RowContent: View>: View {
-    let projection: DockSessionProjection
+    let projection: DockCardProjection
     @Binding var isCollapsed: Bool
     let onMove: ([DockRowViewModel]) -> Void
     let onUnpin: (DockRowViewModel) -> Void
@@ -160,7 +160,7 @@ struct DockPinnedSectionView<RowContent: View>: View {
 }
 
 struct DockPinnedHiddenHintView: View {
-    let projection: DockSessionProjection
+    let projection: DockCardProjection
     let searchText: String
 
     var body: some View {

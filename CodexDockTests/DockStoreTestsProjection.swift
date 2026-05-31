@@ -309,14 +309,14 @@ final class DockStoreTestsProjection: XCTestCase {
         )
     }
 
-    func testDockSessionTableAddsCachedPinnedRowsWhenLiveSummaryIsAbsent() {
+    func testThreadCardTableAddsCachedPinnedRowsWhenLiveCardIsAbsent() {
         let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
         let key = LocalThreadMetadataKey(
             hostID: host.id,
             backendSessionID: "cached-session",
             threadID: "cached-thread"
         )
-        var table = DockSessionTable()
+        var table = ThreadCardTable()
         table.reset(hosts: [host])
 
         let snapshot = table.snapshot(
@@ -353,14 +353,14 @@ final class DockStoreTestsProjection: XCTestCase {
         XCTAssertTrue(snapshot.rows[0].isPinned)
     }
 
-    func testDockSessionTableAddsNotLoadedPinnedPlaceholderWithoutCachedDisplay() {
+    func testThreadCardTableAddsNotLoadedPinnedPlaceholderWithoutCachedDisplay() {
         let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
         let key = LocalThreadMetadataKey(
             hostID: host.id,
             backendSessionID: "missing-session",
             threadID: "missing-thread"
         )
-        var table = DockSessionTable()
+        var table = ThreadCardTable()
         table.reset(hosts: [host])
 
         let snapshot = table.snapshot(
@@ -396,7 +396,6 @@ private func makeSnapshot(
             DockHostStateViewModel(host: DockHostViewModel(host: host), status: .loaded(rowCount: rows.filter { $0.id.hostID == host.id }.count))
         },
         rows: rows,
-        mappingFailures: [],
         isPartial: isPartial
     )
 }

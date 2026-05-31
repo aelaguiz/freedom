@@ -1,0 +1,49 @@
+{
+  "kind": "delta",
+  "schemaVersion": 2,
+  "view": "archive",
+  "complete": true,
+  "totalRows": 1,
+  "window": {
+    "offset": 0,
+    "limit": 1,
+    "rowCount": 1,
+    "nextOffset": null
+  },
+  "stateGeneration": 8,
+  "epoch": "fixture-epoch",
+  "baseSeq": 7,
+  "seq": 8,
+  "freshness": {
+    "status": "fresh",
+    "lastAttemptAt": "2026-05-30T00:00:00.000Z",
+    "lastSyncAt": "2026-05-30T00:00:00.000Z",
+    "lastError": null
+  },
+  "upsertCards": [
+    {
+      "id": "Amir-M5::thread-1",
+      "logicalHostID": "Amir-M5",
+      "threadID": "thread-1",
+      "backendSessionID": "session-1",
+      "hostDisplayName": "Amir-M5",
+      "hostEndpoint": "amir-m5.fairy-salmon.ts.net:4510",
+      "orderKey": "9223370256755575807:thread-1",
+      "activityAt": "2026-05-30T00:00:00.000Z",
+      "activityAtMs": 1780099200000,
+      "displaySummary": "Archived a card stream row.",
+      "title": "Thread card fixture",
+      "status": "idle",
+      "sourceKind": "human",
+      "lane": "human",
+      "archiveState": "archived",
+      "freshness": "fresh",
+      "completeness": "complete",
+      "repository": "codex-client",
+      "workingDirectory": "/Users/aelaguiz/workspace/codex-client",
+      "branch": "codex-dock-agents-tab-live-counts",
+      "summarySource": "assistant_label"
+    }
+  ],
+  "deleteCardIDs": []
+}

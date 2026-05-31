@@ -13,6 +13,7 @@ import {
   DOCK_VIEW,
   ARCHIVE_VIEW,
   buildWindow,
+  dockOrderKey,
   estimateJSONBytes,
   normalizeThread,
   normalizedStatus,
@@ -193,7 +194,7 @@ class RelayStateEngine {
     const host = publicHostFromConfig(this.config);
     const counts = this.store.stateCounts();
     const freshness = this.store.freshnessForHost(host.id);
-    const totalRows = this.store.listDockSessions({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
+    const totalRows = this.store.listDockCards({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
     return Number(totalRows || 0) === 0
       || Number(counts.incomplete || 0) > 0
       || freshness.status !== "fresh";
@@ -233,29 +234,33 @@ class RelayStateEngine {
       const primaryRows = primaryScope.rows.map((row) => row.thread).filter(Boolean);
       const interactiveRows = defaultScope.rows.map((row) => row.thread).filter(Boolean);
       const orderedRows = orderedDockRows(primaryRows, interactiveRows, liveRows);
-      const sessions = orderedRows
-        .map(({ row, lane }) => normalizeThread(row, host, lane))
+      const cards = orderedRows
+        .map(({ row, lane }, index) => normalizeThread(row, host, lane, {
+          archiveState: "active",
+          orderKey: dockOrderKey(index, row?.id || ""),
+        }))
         .filter(Boolean);
       const complete = primaryScope.complete && defaultScope.complete;
       const result = this.store.applyDockReconciliation({
         host,
-        sessions,
+        cards,
         scopes: [primaryScope, defaultScope],
         complete,
         error: primaryScope.error || defaultScope.error || null,
       });
       const freshness = this.store.freshnessForHost(host.id);
-      const totalRows = this.store.listDockSessions({ hostID: host.id }).totalRows;
+      const totalRows = this.store.listDockCards({ hostID: host.id }).totalRows;
       const deltaCarriesEveryRow = complete
-        && Number(result.deleteSessionIDs?.length || 0) === 0
-        && Number(result.upsertSessions?.length || 0) === Number(totalRows || 0);
-      await this.subscriptions.publishDockDelta(this.subscriptions.dockDelta({
+        && Number(result.deleteCardIDs?.length || 0) === 0
+        && Number(result.upsertCards?.length || 0) === Number(totalRows || 0);
+      await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
+        view: DOCK_VIEW,
         baseSeq: Math.max(0, Number(result.seq) - 1),
         seq: result.seq,
         freshness,
         upsertHosts: [host],
-        upsertSessions: result.upsertSessions,
-        deleteSessionIDs: result.deleteSessionIDs,
+        upsertCards: result.upsertCards,
+        deleteCardIDs: result.deleteCardIDs,
         totalRows,
         complete: deltaCarriesEveryRow ? true : undefined,
       }));
@@ -263,14 +268,14 @@ class RelayStateEngine {
         this.logger?.info?.("state.reconcile_succeeded", {
           reason,
           hostId: host.id,
-          rows: sessions.length,
+          rows: cards.length,
           seq: result.seq,
         });
       } else {
         this.logger?.warn?.("state.reconcile_incomplete", {
           reason,
           hostId: host.id,
-          rows: sessions.length,
+          rows: cards.length,
           seq: result.seq,
           error: primaryScope.error || defaultScope.error || error,
         });
@@ -281,8 +286,9 @@ class RelayStateEngine {
       this.store.markScopeStale(host.id, "active:allSourceKinds", error);
       this.store.markScopeStale(host.id, "active:interactiveDefault", error);
       const seq = this.store.currentSeq();
-      const totalRows = this.store.listDockSessions({ hostID: host.id }).totalRows;
-      await this.subscriptions.publishDockDelta(this.subscriptions.dockDelta({
+      const totalRows = this.store.listDockCards({ hostID: host.id }).totalRows;
+      await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
+        view: DOCK_VIEW,
         baseSeq: Math.max(0, seq - 1),
         seq,
         freshness: this.store.freshnessForHost(host.id),
@@ -294,7 +300,7 @@ class RelayStateEngine {
         hostId: host.id,
         error,
       });
-      return { seq, upsertSessions: [], deleteSessionIDs: [], error };
+      return { seq, upsertCards: [], deleteCardIDs: [], error };
     }
   }
 
@@ -341,7 +347,7 @@ class RelayStateEngine {
     softLimitBytes = RELAY_STATE_SNAPSHOT_SOFT_LIMIT_BYTES,
   } = {}) {
     const host = publicHostFromConfig(this.config);
-    const totalRows = this.store.listDockSessions({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
+    const totalRows = this.store.listDockCards({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
     if (totalRows === 0) {
       return this.makeSnapshot({
         view: DOCK_VIEW,
@@ -349,45 +355,45 @@ class RelayStateEngine {
         complete: true,
         totalRows: 0,
         window: buildWindow({ offset: 0, limit: 0, rowCount: 0, totalRows: 0 }),
-        sessions: [],
+        cards: [],
         freshness: this.store.freshnessForHost(host.id),
       });
     }
 
     let windowLimit = Math.max(1, Math.min(Number(limit || 1), totalRows));
-    let bounded = this.store.listDockSessions({ hostID: host.id, offset, limit: windowLimit });
+    let bounded = this.store.listDockCards({ hostID: host.id, offset, limit: windowLimit });
     let window = buildWindow({
       offset,
       limit: windowLimit,
-      rowCount: bounded.sessions.length,
+      rowCount: bounded.cards.length,
       totalRows: bounded.totalRows,
     });
     let snapshot = this.makeSnapshot({
       view: DOCK_VIEW,
       epoch,
-      complete: offset + bounded.sessions.length >= bounded.totalRows,
+      complete: offset + bounded.cards.length >= bounded.totalRows,
       totalRows: bounded.totalRows,
       window,
-      sessions: bounded.sessions,
+      cards: bounded.cards,
       freshness: this.store.freshnessForHost(host.id),
     });
 
     while (estimateJSONBytes(snapshot) > softLimitBytes && windowLimit > 1) {
       windowLimit = Math.max(1, Math.floor(windowLimit / 2));
-      bounded = this.store.listDockSessions({ hostID: host.id, offset, limit: windowLimit });
+      bounded = this.store.listDockCards({ hostID: host.id, offset, limit: windowLimit });
       window = buildWindow({
         offset,
         limit: windowLimit,
-        rowCount: bounded.sessions.length,
+        rowCount: bounded.cards.length,
         totalRows: bounded.totalRows,
       });
       snapshot = this.makeSnapshot({
         view: DOCK_VIEW,
         epoch,
-        complete: offset + bounded.sessions.length >= bounded.totalRows,
+        complete: offset + bounded.cards.length >= bounded.totalRows,
         totalRows: bounded.totalRows,
         window,
-        sessions: bounded.sessions,
+        cards: bounded.cards,
         freshness: this.store.freshnessForHost(host.id),
       });
     }
@@ -395,10 +401,10 @@ class RelayStateEngine {
     return this.makeSnapshot({
       view: DOCK_VIEW,
       epoch,
-      complete: offset + bounded.sessions.length >= bounded.totalRows,
+      complete: offset + bounded.cards.length >= bounded.totalRows,
       totalRows: bounded.totalRows,
       window,
-      sessions: bounded.sessions,
+      cards: bounded.cards,
       freshness: this.store.freshnessForHost(host.id),
     });
   }
@@ -409,19 +415,19 @@ class RelayStateEngine {
     limit = RELAY_STATE_DOCK_WINDOW_SIZE,
   } = {}) {
     const host = publicHostFromConfig(this.config);
-    const result = this.store.listArchiveSessions({ hostID: host.id, offset, limit });
+    const result = this.store.listArchiveCards({ hostID: host.id, offset, limit });
     return this.makeSnapshot({
       view: ARCHIVE_VIEW,
       epoch,
-      complete: offset + result.sessions.length >= result.totalRows,
+      complete: offset + result.cards.length >= result.totalRows,
       totalRows: result.totalRows,
       window: buildWindow({
         offset,
         limit,
-        rowCount: result.sessions.length,
+        rowCount: result.cards.length,
         totalRows: result.totalRows,
       }),
-      sessions: result.sessions,
+      cards: result.cards,
       freshness: this.store.freshnessForHost(host.id),
     });
   }
@@ -432,12 +438,12 @@ class RelayStateEngine {
     complete,
     totalRows,
     window,
-    sessions,
+    cards,
     freshness,
   }) {
     return {
       kind: "snapshot",
-      schemaVersion: 1,
+      schemaVersion: 2,
       epoch,
       baseSeq: null,
       seq: this.store.currentSeq(),
@@ -449,74 +455,140 @@ class RelayStateEngine {
       asOf: nowISOString(),
       freshness,
       hosts: this.store.hostRows(),
-      sessions,
+      cards,
     };
   }
 
   async subscribeDock({ session, downstreamWs, sendJson }) {
-    session.dockUnsubscribe?.();
-    session.dockUnsubscribe = null;
+    return this.subscribeCardView({
+      view: DOCK_VIEW,
+      updateMethod: "dock/update",
+      subscribeReason: "dock/subscribe",
+      updateReason: "dock/update",
+      unsubscribeKey: "dockUnsubscribe",
+      session,
+      downstreamWs,
+      sendJson,
+      after: () => this.scheduleReconciliationAfterResponse("dock/subscribe"),
+    });
+  }
+
+  async subscribeArchive({ session, downstreamWs, sendJson }) {
+    return this.subscribeCardView({
+      view: ARCHIVE_VIEW,
+      updateMethod: "archive/update",
+      subscribeReason: "archive/subscribe",
+      updateReason: "archive/update",
+      unsubscribeKey: "archiveUnsubscribe",
+      session,
+      downstreamWs,
+      sendJson,
+    });
+  }
+
+  async subscribeCardView({
+    view,
+    updateMethod,
+    subscribeReason,
+    updateReason,
+    unsubscribeKey,
+    session,
+    downstreamWs,
+    sendJson,
+    after = null,
+  }) {
+    session[unsubscribeKey]?.();
+    session[unsubscribeKey] = null;
     let subscriptionReady = false;
     const bufferedUpdates = [];
-    const sendDockUpdate = (update) => {
+    const sendUpdate = (update) => {
       sendJson(downstreamWs, {
         jsonrpc: "2.0",
-        method: "dock/update",
+        method: updateMethod,
         params: update,
       });
-      this.scheduleDockWindowCatchupAfterResponse(update, sendDockUpdate, "dock/update");
+      this.scheduleCardWindowCatchupAfterResponse(update, sendUpdate, updateReason);
     };
-    session.dockUnsubscribe = this.subscriptions.subscribe((update) => {
+    session[unsubscribeKey] = this.subscriptions.subscribe(view, (update) => {
       if (!subscriptionReady) {
         bufferedUpdates.push(update);
         return;
       }
-      sendDockUpdate(update);
+      sendUpdate(update);
     });
 
-    const snapshot = await this.subscriptions.snapshot(DOCK_VIEW);
+    const snapshot = await this.subscriptions.snapshot(view);
     subscriptionReady = true;
     let catchupTarget = snapshot;
     for (const update of bufferedUpdates) {
       if (update.epoch === snapshot.epoch && Number(update.seq || 0) > Number(snapshot.seq || 0)) {
-        sendDockUpdate(update);
+        sendUpdate(update);
         catchupTarget = update.kind === "snapshot" ? update : null;
       }
     }
     bufferedUpdates.length = 0;
-    this.scheduleDockWindowCatchupAfterResponse(catchupTarget, sendDockUpdate, "dock/subscribe", {
-      after: () => this.scheduleReconciliationAfterResponse("dock/subscribe"),
-    });
+    this.scheduleCardWindowCatchupAfterResponse(catchupTarget, sendUpdate, subscribeReason, { after });
     return snapshot;
   }
 
   async resyncDock({ downstreamWs = null, sendJson = null } = {}) {
-    const snapshot = await this.subscriptions.snapshot(DOCK_VIEW);
+    return this.resyncCardView({
+      view: DOCK_VIEW,
+      updateMethod: "dock/update",
+      resyncReason: "dock/resync",
+      updateReason: "dock/update",
+      downstreamWs,
+      sendJson,
+      after: () => this.scheduleReconciliationAfterResponse("dock/resync"),
+      otherwise: () => this.scheduleReconciliationAfterResponse("dock/resync"),
+    });
+  }
+
+  async resyncArchive({ downstreamWs = null, sendJson = null } = {}) {
+    return this.resyncCardView({
+      view: ARCHIVE_VIEW,
+      updateMethod: "archive/update",
+      resyncReason: "archive/resync",
+      updateReason: "archive/update",
+      downstreamWs,
+      sendJson,
+    });
+  }
+
+  async resyncCardView({
+    view,
+    updateMethod,
+    resyncReason,
+    updateReason,
+    downstreamWs = null,
+    sendJson = null,
+    after = null,
+    otherwise = null,
+  } = {}) {
+    const snapshot = await this.subscriptions.snapshot(view);
     if (downstreamWs && sendJson) {
-      const sendDockUpdate = (update) => {
+      const sendUpdate = (update) => {
         sendJson(downstreamWs, {
           jsonrpc: "2.0",
-          method: "dock/update",
+          method: updateMethod,
           params: update,
         });
-        this.scheduleDockWindowCatchupAfterResponse(update, sendDockUpdate, "dock/update");
+        this.scheduleCardWindowCatchupAfterResponse(update, sendUpdate, updateReason);
       };
-      this.scheduleDockWindowCatchupAfterResponse(snapshot, sendDockUpdate, "dock/resync", {
-        after: () => this.scheduleReconciliationAfterResponse("dock/resync"),
-      });
+      this.scheduleCardWindowCatchupAfterResponse(snapshot, sendUpdate, resyncReason, { after });
     } else {
-      this.scheduleReconciliationAfterResponse("dock/resync");
+      otherwise?.();
     }
     return snapshot;
   }
 
-  scheduleDockWindowCatchupAfterResponse(snapshot, sendDockUpdate, reason, { after = null } = {}) {
-    if (!this.needsDockWindowCatchup(snapshot)) {
+  scheduleCardWindowCatchupAfterResponse(snapshot, sendUpdate, reason, { after = null } = {}) {
+    if (!this.needsCardWindowCatchup(snapshot)) {
       after?.();
       return;
     }
     const timer = setImmediate(() => {
-      this.sendDockWindowCatchup({ snapshot, sendDockUpdate, reason })
+      this.sendCardWindowCatchup({ snapshot, sendUpdate, reason })
         .catch((error) => {
           this.logger?.warn?.("state.catchup_failed", { reason, error });
         })
@@ -527,14 +599,14 @@ class RelayStateEngine {
     timer.unref?.();
   }
 
-  needsDockWindowCatchup(snapshot) {
+  needsCardWindowCatchup(snapshot) {
     return snapshot?.kind === "snapshot"
-      && snapshot.view === DOCK_VIEW
+      && (snapshot.view === DOCK_VIEW || snapshot.view === ARCHIVE_VIEW)
       && snapshot.complete === false
       && Number.isInteger(snapshot.window?.nextOffset);
   }
 
-  async sendDockWindowCatchup({ snapshot, sendDockUpdate, reason }) {
+  async sendCardWindowCatchup({ snapshot, sendUpdate, reason }) {
     const host = publicHostFromConfig(this.config);
     const baseSeq = Number(snapshot.seq || 0);
     let nextOffset = Number(snapshot.window?.nextOffset || 0);
@@ -550,7 +622,7 @@ class RelayStateEngine {
         return;
       }
       let limit = preferredLimit;
-      let delta = this.makeDockWindowDelta({
+      let delta = this.makeCardWindowDelta({
         host,
         snapshot,
         offset: nextOffset,
@@ -558,14 +630,14 @@ class RelayStateEngine {
       });
       while (estimateJSONBytes(delta) > RELAY_STATE_UPDATE_SOFT_LIMIT_BYTES && limit > 1) {
         limit = Math.max(1, Math.floor(limit / 2));
-        delta = this.makeDockWindowDelta({
+        delta = this.makeCardWindowDelta({
           host,
           snapshot,
           offset: nextOffset,
           limit,
         });
       }
-      sendDockUpdate(delta);
+      sendUpdate(delta);
       if (delta.complete === true || !Number.isInteger(delta.window?.nextOffset)) {
         return;
       }
@@ -583,21 +655,24 @@ class RelayStateEngine {
     }
   }
 
-  makeDockWindowDelta({ host, snapshot, offset, limit }) {
-    const bounded = this.store.listDockSessions({ hostID: host.id, offset, limit });
-    const complete = offset + bounded.sessions.length >= bounded.totalRows;
-    return this.subscriptions.dockDelta({
+  makeCardWindowDelta({ host, snapshot, offset, limit }) {
+    const bounded = snapshot.view === ARCHIVE_VIEW
+      ? this.store.listArchiveCards({ hostID: host.id, offset, limit })
+      : this.store.listDockCards({ hostID: host.id, offset, limit });
+    const complete = offset + bounded.cards.length >= bounded.totalRows;
+    return this.subscriptions.cardDelta({
+      view: snapshot.view,
       baseSeq: snapshot.seq,
       seq: snapshot.seq,
       freshness: snapshot.freshness || this.store.freshnessForHost(host.id),
-      upsertSessions: bounded.sessions,
-      deleteSessionIDs: [],
+      upsertCards: bounded.cards,
+      deleteCardIDs: [],
       totalRows: bounded.totalRows,
       complete,
       window: buildWindow({
         offset,
         limit,
-        rowCount: bounded.sessions.length,
+        rowCount: bounded.cards.length,
         totalRows: bounded.totalRows,
       }),
     });
@@ -609,13 +684,26 @@ class RelayStateEngine {
       return;
     }
     const host = publicHostFromConfig(this.config);
-    const totalRows = this.store.listDockSessions({ hostID: host.id }).totalRows;
-    await this.subscriptions.publishDockDelta(this.subscriptions.dockDelta({
+    const dockTotalRows = this.store.listDockCards({ hostID: host.id }).totalRows;
+    await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
+      view: DOCK_VIEW,
       baseSeq: Math.max(0, Number(result.seq) - 1),
       seq: result.seq,
       freshness: this.store.freshnessForHost(host.id),
-      deleteSessionIDs: result.deleteSessionIDs || [],
-      totalRows,
+      upsertCards: result.dockUpsertCards || [],
+      deleteCardIDs: result.dockDeleteCardIDs || [],
+      totalRows: dockTotalRows,
+      complete: true,
+    }));
+    const archiveTotalRows = this.store.listArchiveCards({ hostID: host.id }).totalRows;
+    await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
+      view: ARCHIVE_VIEW,
+      baseSeq: Math.max(0, Number(result.seq) - 1),
+      seq: result.seq,
+      freshness: this.store.freshnessForHost(host.id),
+      upsertCards: result.archiveUpsertCards || [],
+      deleteCardIDs: result.archiveDeleteCardIDs || [],
+      totalRows: archiveTotalRows,
       complete: true,
     }));
   }

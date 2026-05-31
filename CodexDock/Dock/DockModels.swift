@@ -187,6 +187,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
     public let status: DockRowStatusKind
     public let lastActivity: String
     public let lastActivityDate: Date
+    public let orderKey: String?
     public let summary: String
     public let rail: DockRowRail
     public let label: String?
@@ -206,6 +207,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
         status: DockRowStatusKind,
         lastActivity: String,
         lastActivityDate: Date,
+        orderKey: String? = nil,
         summary: String,
         rail: DockRowRail,
         label: String?,
@@ -224,6 +226,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
         self.status = status
         self.lastActivity = lastActivity
         self.lastActivityDate = lastActivityDate
+        self.orderKey = orderKey
         self.summary = summary
         self.rail = rail
         self.label = label
@@ -354,7 +357,6 @@ public struct DockSnapshot: Equatable, Sendable {
     public let hosts: [DockHostViewModel]
     public let hostStates: [DockHostStateViewModel]
     public let rows: [DockRowViewModel]
-    public let mappingFailures: [SessionSummaryMappingFailure]
     public let isPartial: Bool
 
     public var rowCount: Int {
@@ -366,14 +368,12 @@ public struct DockSnapshot: Equatable, Sendable {
         hosts: [DockHostViewModel],
         hostStates: [DockHostStateViewModel],
         rows: [DockRowViewModel],
-        mappingFailures: [SessionSummaryMappingFailure],
         isPartial: Bool = false
     ) {
         self.host = host
         self.hosts = hosts
         self.hostStates = hostStates
         self.rows = rows
-        self.mappingFailures = mappingFailures
         self.isPartial = isPartial
     }
 }

@@ -1063,11 +1063,11 @@ test("state parity reports dock/subscribe missing active listable rows", () => {
     { includeThreadReads: false, includeLoaded: true },
     new Map(),
     { ok: true, rows: [] },
-    { kind: "snapshot", sessions: [] },
+    { kind: "snapshot", cards: [] },
   );
 
   assert.equal(report.summary.dockParity.included, true);
-  assert.equal(report.summary.dockParity.sessionCount, 0);
+  assert.equal(report.summary.dockParity.cardCount, 0);
   assert.equal(report.summary.dockParity.expectedActiveListableCount, 1);
   assert.equal(report.summary.dockParity.missingActiveListableFromDock, 1);
   assert.ok(report.findings.some((finding) => (
@@ -1077,6 +1077,114 @@ test("state parity reports dock/subscribe missing active listable rows", () => {
       && finding.severity === "error"
   )));
   assert.equal(JSON.stringify(report).includes("private prompt"), false);
+});
+
+test("state parity treats dock/subscribe as a windowed card stream", () => {
+  const firstThread = {
+    id: "first-thread",
+    source: "cli",
+    threadSource: "user",
+    cwd: "/repo",
+    path: "/tmp/first.jsonl",
+    modelProvider: "openai",
+    status: { type: "notLoaded" },
+    preview: "private first prompt",
+  };
+  const secondThread = {
+    id: "second-thread",
+    source: "cli",
+    threadSource: "user",
+    cwd: "/repo",
+    path: "/tmp/second.jsonl",
+    modelProvider: "openai",
+    status: { type: "notLoaded" },
+    preview: "private second prompt",
+  };
+  const snapshot = {
+    complete: true,
+    scopes: [
+      {
+        name: "active:allSourceKinds",
+        archive: "active",
+        archived: false,
+        sourceScope: "allSourceKinds",
+        complete: true,
+        rows: [
+          { ordinal: 0, thread: firstThread },
+          { ordinal: 1, thread: secondThread },
+        ],
+        threadIDsInCodexOrder: ["first-thread", "second-thread"],
+      },
+    ],
+    threads: [
+      {
+        threadID: "first-thread",
+        appearances: [
+          { scope: "active:allSourceKinds", archive: "active", archived: false, sourceScope: "allSourceKinds" },
+        ],
+      },
+      {
+        threadID: "second-thread",
+        appearances: [
+          { scope: "active:allSourceKinds", archive: "active", archived: false, sourceScope: "allSourceKinds" },
+        ],
+      },
+    ],
+    loaded: { complete: true, threadIDs: [] },
+  };
+  const sqlite = {
+    ok: true,
+    rows: [
+      {
+        id: "first-thread",
+        source: "cli",
+        thread_source: "user",
+        archived: 0,
+        cwd: "/repo",
+        rollout_path: "/tmp/first.jsonl",
+        model_provider: "openai",
+        preview: "private first prompt",
+      },
+      {
+        id: "second-thread",
+        source: "cli",
+        thread_source: "user",
+        archived: 0,
+        cwd: "/repo",
+        rollout_path: "/tmp/second.jsonl",
+        model_provider: "openai",
+        preview: "private second prompt",
+      },
+    ],
+  };
+
+  const report = compareRelaySnapshotToSQLite(
+    snapshot,
+    sqlite,
+    sqlite,
+    { ok: true, count: 0, rows: [] },
+    [],
+    { includeThreadReads: false, includeLoaded: true },
+    new Map(),
+    { ok: true, rows: [] },
+    {
+      kind: "snapshot",
+      totalRows: 2,
+      window: { offset: 0, limit: 1, rowCount: 1 },
+      cards: [
+        { id: "host::first-thread", threadID: "first-thread", lane: "human", activityAtMs: 200, status: "dormant" },
+      ],
+    },
+  );
+
+  assert.equal(report.summary.dockParity.expectedActiveListableCount, 2);
+  assert.equal(report.summary.dockParity.expectedWindowCount, 1);
+  assert.equal(report.summary.dockParity.missingActiveListableFromDock, 0);
+  assert.equal(report.summary.dockParity.extraDockCards, 0);
+  assert.equal(report.summary.dockParity.codexOrderStableMismatches, 0);
+  assert.equal(report.findings.some((finding) => finding.surface === "dock.subscribe" && finding.field === "threadID"), false);
+  assert.equal(JSON.stringify(report).includes("private first prompt"), false);
+  assert.equal(JSON.stringify(report).includes("private second prompt"), false);
 });
 
 test("state parity compares dock/subscribe status against loaded app-server state", () => {
@@ -1152,17 +1260,17 @@ test("state parity compares dock/subscribe status against loaded app-server stat
     { ok: true, rows: [] },
     {
       kind: "snapshot",
-      sessions: [
-        { id: "host::live-thread", threadID: "live-thread", lane: "human", updatedAt: 100, status: "dormant" },
+      cards: [
+        { id: "host::live-thread", threadID: "live-thread", lane: "human", activityAtMs: 100, status: "dormant" },
       ],
     },
   );
 
   assert.equal(report.summary.dockParity.loadedStatusCompared, true);
   assert.equal(report.summary.dockParity.loadedThreadCount, 1);
-  assert.equal(report.summary.dockParity.loadedDockSessionsCompared, 1);
+  assert.equal(report.summary.dockParity.loadedDockCardsCompared, 1);
   assert.equal(report.summary.dockParity.loadedDockStatusMismatches, 1);
-  assert.equal(report.summary.dockParity.staleLiveDockSessions, 1);
+  assert.equal(report.summary.dockParity.staleLiveDockCards, 1);
   assert.deepEqual(report.summary.dockParity.firstLoadedDockStatusMismatch, {
     threadID: "live-thread",
     expected: "needsInput",
@@ -1277,9 +1385,9 @@ test("state parity checks dock/subscribe order against app-server combined Codex
     { ok: true, rows: [] },
     {
       kind: "snapshot",
-      sessions: [
-        { id: "host::older-thread", threadID: "older-thread", lane: "human", updatedAt: 100 },
-        { id: "host::newer-thread", threadID: "newer-thread", lane: "human", updatedAt: 200 },
+      cards: [
+        { id: "host::older-thread", threadID: "older-thread", lane: "human", activityAtMs: 100 },
+        { id: "host::newer-thread", threadID: "newer-thread", lane: "human", activityAtMs: 200 },
       ],
     },
   );
@@ -1396,9 +1504,9 @@ test("state parity classifies dock/subscribe order changes caused by live timest
     { ok: true, rows: [] },
     {
       kind: "snapshot",
-      sessions: [
-        { id: "host::older-thread", threadID: "older-thread", lane: "human", updatedAt: 250 },
-        { id: "host::newer-thread", threadID: "newer-thread", lane: "human", updatedAt: 200 },
+      cards: [
+        { id: "host::older-thread", threadID: "older-thread", lane: "human", activityAtMs: 250 },
+        { id: "host::newer-thread", threadID: "newer-thread", lane: "human", activityAtMs: 200 },
       ],
     },
   );
@@ -1463,7 +1571,7 @@ test("state parity marks threads added during audit as movement instead of relay
     { includeThreadReads: false, includeLoaded: true },
     new Map(),
     { ok: true, rows: [] },
-    { kind: "snapshot", sessions: [] },
+    { kind: "snapshot", cards: [] },
   );
 
   assert.equal(report.summary.sqliteStableIDsDuringAudit, false);

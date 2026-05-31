@@ -137,7 +137,7 @@ Physical iPhone endpoint expectations:
 Loopback WebSockets such as `ws://127.0.0.1:4500`, Unix sockets, mocks, and
 scripted transports are local development tools. They are not physical-phone
 completion evidence. A real phone-path pass means the installed app connects to
-the relay-backed host path, renders real `SessionSummary` rows, and shows
+the relay-backed host path, renders real `DockThreadCard` rows, and shows
 offline/error UI when that same host path is unavailable.
 
 Prefer status checks during normal verification:

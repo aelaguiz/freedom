@@ -93,7 +93,13 @@ public struct SystemHealthProjector: Sendable {
         case .threadDetail:
             return [AppServerMethods.threadRead, AppServerMethods.threadTurnsList, AppServerMethods.threadResume]
         case .archive:
-            return [AppServerMethods.threadArchive, AppServerMethods.threadUnarchive]
+            return [
+                AppServerMethods.archiveSubscribe,
+                AppServerMethods.archiveUpdate,
+                AppServerMethods.archiveResync,
+                AppServerMethods.threadArchive,
+                AppServerMethods.threadUnarchive
+            ]
         case .voice:
             return [
                 AppServerMethods.audioTranscriptionStart,

@@ -136,7 +136,7 @@ class ThreadSummaryCache {
 
   decorateRows(rows = []) {
     return rows.map((row) => {
-      if (nonEmptyText(row?.messageSummary)) {
+      if (nonEmptyText(row?.displaySummary)) {
         return row;
       }
       const entry = this.entryForRow(row, { allowStale: true });
@@ -146,8 +146,8 @@ class ThreadSummaryCache {
       return {
         ...row,
         latestSummary: nonEmptyText(row?.latestSummary) || entry.summary,
-        messageSummary: entry.summary,
-        messageUpdatedAt: entry.messageUpdatedAt ?? null,
+        displaySummary: entry.summary,
+        activityAt: entry.activityAt ?? null,
       };
     });
   }
@@ -227,7 +227,7 @@ class ThreadSummaryCache {
     this.remember(task.threadId, {
       version: task.version,
       summary: message?.text || null,
-      messageUpdatedAt: message?.timestampSeconds ?? null,
+      activityAt: message?.timestampSeconds ?? null,
       checkedAtMs: Date.now(),
     });
   }

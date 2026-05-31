@@ -54,6 +54,8 @@ import {
   createRelayStatusTracker,
 } from "./dock-relay-status.mjs";
 import {
+  ARCHIVE_RESYNC_METHOD,
+  ARCHIVE_SUBSCRIBE_METHOD,
   DOCK_RESYNC_METHOD,
   DOCK_SUBSCRIBE_METHOD,
 } from "./dock-relay-state-subscriptions.mjs";
@@ -463,6 +465,10 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       return relayStateEngineForConfig(config).subscribeDock({ session, downstreamWs, sendJson });
     case DOCK_RESYNC_METHOD:
       return relayStateEngineForConfig(config).resyncDock({ downstreamWs, sendJson });
+    case ARCHIVE_SUBSCRIBE_METHOD:
+      return relayStateEngineForConfig(config).subscribeArchive({ session, downstreamWs, sendJson });
+    case ARCHIVE_RESYNC_METHOD:
+      return relayStateEngineForConfig(config).resyncArchive({ downstreamWs, sendJson });
     case "relay/state/snapshot":
       return buildRelayStateSnapshot(config, params || {});
     case "thread/loaded/list":
@@ -973,6 +979,7 @@ function startServer(config) {
       pendingServerRequests: new Map(),
       realtimeTranscription: null,
       dockUnsubscribe: null,
+      archiveUnsubscribe: null,
     };
     sessions.add(session);
     session.realtimeTranscription = new RealtimeTranscriptionManager(config, {
@@ -989,6 +996,8 @@ function startServer(config) {
       session.closing = true;
       session.dockUnsubscribe?.();
       session.dockUnsubscribe = null;
+      session.archiveUnsubscribe?.();
+      session.archiveUnsubscribe = null;
       session.realtimeTranscription?.closeAll("downstream_closed");
       session.upstream?.close();
       session.upstream = null;

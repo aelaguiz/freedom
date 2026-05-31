@@ -113,12 +113,12 @@ final class ClientRuntimeTests: XCTestCase {
         let runtime = try makeRuntime(connectivityEventSink: sink)
         let host = runtime.registry.hosts[0]
         let store = runtime.makeDockStore(
-            streamClient: LoaderBackedDockStreamClient(
-                loader: FakeDockSessionLoader(
+            streamClient: LoaderBackedThreadCardStreamClient(
+                loader: FakeThreadCardFixtureLoader(
                     mode: .success(
-                        DockLoadResult(
-                            summaries: [
-                                makeSummary(
+                        ThreadCardFixtureResult(
+                            fixtures: [
+                                makeThreadCardFixtureSummary(
                                     hostID: host.id,
                                     threadID: "thread-a",
                                     branch: "main",

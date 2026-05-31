@@ -115,8 +115,8 @@ first normalized snapshot, `dock/update` pushes deltas and heartbeats, and
 gap. The relay materializes app-server thread projections in SQLite at
 `.codex-dock/relay-state.sqlite`, serves Dock Home from that state store, and
 keeps stale rows visible when a source refresh fails. Raw `thread/list` remains
-available for archive, detail support, and host settings diagnostics; it is no
-longer the Dock Home list contract.
+available for thread detail support, archive command diagnostics, and host
+settings diagnostics; it is no longer the Dock or Archive list contract.
 
 Row text has two separate meanings. Raw history `preview` is preserved as the
 app-server's stored preview and may be the opening message. Dock overview rows
@@ -130,7 +130,7 @@ transcription model is `gpt-realtime-whisper`, with optional Mac-side
 `CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL` and
 `CODEX_DOCK_REALTIME_TRANSCRIPTION_DELAY` overrides.
 
-The Dock filters loaded sessions locally. It opens to `Newest`: one flat
+The Dock filters loaded thread cards locally. It opens to `Newest`: one flat
 newest-first list across configured hosts. Rows carry their own short host
 name, repository or working directory, branch, status, last activity, local
 label, and latest summary. `Host` and `Branch` are Dock lenses, not app-level
@@ -499,8 +499,8 @@ provisioning.
 
 The install target launches Codex Dock after writing the saved host list. If the
 app is closed later, open it from the iPhone home screen; it connects with no
-phone-side bearer token, loads sessions, and sends dictation audio to the relay
-for transcription.
+phone-side bearer token, loads relay-backed thread cards, and sends dictation
+audio to the relay for transcription.
 
 When physical testing resumes, manual physical iPhone 14 testing should cover
 the actual composer path:
@@ -577,7 +577,7 @@ failed make target.
 
 Do not use fixture or SwiftUI preview rows as production evidence. A physical
 phone pass means the installed app connects to the real relay-backed host path,
-renders real `SessionSummary` rows, and shows offline/error UI when that same
+renders real `DockThreadCard` rows, and shows offline/error UI when that same
 host path is unavailable. While physical testing is deferred, the agent-side
 stand-in is simulator plus local/real-relay/service-status proof, with the
 physical checks recorded for Amir.

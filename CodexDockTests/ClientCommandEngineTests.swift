@@ -20,7 +20,7 @@ final class ClientCommandEngineTests: XCTestCase {
             label: nil,
             origin: .humanInteractive(subtype: .cli)
         )
-        let archiver = RecordingDockArchiver()
+        let archiver = RecordingThreadArchiver()
         let engine = ClientCommandEngine(archiver: archiver)
 
         try await engine.archive(row, on: host)

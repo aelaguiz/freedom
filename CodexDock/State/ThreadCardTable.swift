@@ -1,18 +1,18 @@
 import Foundation
 
-enum DockSessionTableResyncReason: String, Equatable, Sendable {
+enum ThreadCardTableResyncReason: String, Equatable, Sendable {
     case schemaMismatch
     case streamContract
     case epochMismatch
     case sequenceGap
 }
 
-enum DockSessionTableApplyResult: Equatable, Sendable {
+enum ThreadCardTableApplyResult: Equatable, Sendable {
     case applied
-    case needsResync(DockSessionTableResyncReason)
+    case needsResync(ThreadCardTableResyncReason)
 }
 
-struct DockSessionTable: Equatable, Sendable {
+struct ThreadCardTable: Equatable, Sendable {
     private struct HostStreamState: Equatable, Sendable {
         var epoch: String?
         var seq: Int64
@@ -21,7 +21,7 @@ struct DockSessionTable: Equatable, Sendable {
         var complete: Bool
         var totalRows: Int?
         var window: DockStreamWindowDTO?
-        var sessionsByID: [String: DockStreamSessionDTO]
+        var cardsByID: [String: DockThreadCardDTO]
 
         init(status: DockHostLoadStatus = .checking) {
             self.epoch = nil
@@ -31,7 +31,7 @@ struct DockSessionTable: Equatable, Sendable {
             self.complete = false
             self.totalRows = nil
             self.window = nil
-            self.sessionsByID = [:]
+            self.cardsByID = [:]
         }
     }
 
@@ -55,17 +55,17 @@ struct DockSessionTable: Equatable, Sendable {
 
     mutating func markChecking(host: DockHostConfiguration) {
         var state = statesByHostID[host.id] ?? HostStreamState()
-        let rowCount = state.sessionsByID.count
+        let rowCount = state.cardsByID.count
         state.status = rowCount > 0
             ? .partial(rowCount: rowCount, message: "Reconnecting")
             : .checking
         statesByHostID[host.id] = state
     }
 
-    mutating func markFailure(_ failure: DockLoadFailure, host: DockHostConfiguration) {
+    mutating func markFailure(_ failure: DockRequestFailure, host: DockHostConfiguration) {
         var state = statesByHostID[host.id] ?? HostStreamState()
         let message = failure.localizedDescription
-        let rowCount = state.sessionsByID.count
+        let rowCount = state.cardsByID.count
         switch failure {
         case .offline:
             state.status = rowCount > 0 ? .partial(rowCount: rowCount, message: "Offline: \(message)") : .offline(message)
@@ -77,7 +77,7 @@ struct DockSessionTable: Equatable, Sendable {
         statesByHostID[host.id] = state
     }
 
-    mutating func applySnapshot(_ update: DockStreamUpdateDTO, host: DockHostConfiguration) -> DockSessionTableApplyResult {
+    mutating func applySnapshot(_ update: ThreadCardStreamUpdateDTO, host: DockHostConfiguration) -> ThreadCardTableApplyResult {
         guard acceptsSchemaVersion(update.schemaVersion) else {
             return .needsResync(.schemaMismatch)
         }
@@ -92,14 +92,14 @@ struct DockSessionTable: Equatable, Sendable {
         state.complete = update.complete ?? false
         state.totalRows = update.totalRows
         state.window = update.window
-        state.sessionsByID = Dictionary(
-            uniqueKeysWithValues: (update.sessions ?? []).map { session in
-                (session.id, session)
+        state.cardsByID = Dictionary(
+            uniqueKeysWithValues: (update.cards ?? []).map { card in
+                (card.id, card)
             }
         )
         state.status = hostStatus(
             freshness: update.freshness,
-            rowCount: state.sessionsByID.count,
+            rowCount: state.cardsByID.count,
             complete: state.complete,
             totalRows: state.totalRows,
             window: state.window
@@ -108,7 +108,7 @@ struct DockSessionTable: Equatable, Sendable {
         return .applied
     }
 
-    mutating func applyUpdate(_ update: DockStreamUpdateDTO, host: DockHostConfiguration) -> DockSessionTableApplyResult {
+    mutating func applyUpdate(_ update: ThreadCardStreamUpdateDTO, host: DockHostConfiguration) -> ThreadCardTableApplyResult {
         guard update.kind != .snapshot else {
             return applySnapshot(update, host: host)
         }
@@ -134,11 +134,11 @@ struct DockSessionTable: Equatable, Sendable {
             guard update.baseSeq == state.seq else {
                 return .needsResync(.sequenceGap)
             }
-            for session in update.upsertSessions ?? [] {
-                state.sessionsByID[session.id] = session
+            for card in update.upsertCards ?? [] {
+                state.cardsByID[card.id] = card
             }
-            for sessionID in update.deleteSessionIDs ?? [] {
-                state.sessionsByID.removeValue(forKey: sessionID)
+            for cardID in update.deleteCardIDs ?? [] {
+                state.cardsByID.removeValue(forKey: cardID)
             }
             state.seq = update.seq
         case .snapshot:
@@ -151,7 +151,7 @@ struct DockSessionTable: Equatable, Sendable {
         state.window = update.window ?? state.window
         state.status = hostStatus(
             freshness: state.freshness,
-            rowCount: state.sessionsByID.count,
+            rowCount: state.cardsByID.count,
             complete: state.complete,
             totalRows: state.totalRows,
             window: state.window
@@ -167,8 +167,8 @@ struct DockSessionTable: Equatable, Sendable {
         return schemaVersion == CodexDockConstants.Dock.streamSchemaVersion
     }
 
-    private func acceptsStreamContract(_ update: DockStreamUpdateDTO) -> Bool {
-        guard update.view == "dock" else {
+    private func acceptsStreamContract(_ update: ThreadCardStreamUpdateDTO) -> Bool {
+        guard update.view == .dock else {
             return false
         }
         switch update.kind {
@@ -182,7 +182,7 @@ struct DockSessionTable: Equatable, Sendable {
                 complete: complete,
                 totalRows: totalRows,
                 window: window,
-                sessionCount: update.sessions?.count ?? 0
+                cardCount: update.cards?.count ?? 0
             )
         case .delta, .heartbeat:
             if update.complete == false {
@@ -194,7 +194,7 @@ struct DockSessionTable: Equatable, Sendable {
                     complete: false,
                     totalRows: totalRows,
                     window: window,
-                    sessionCount: update.upsertSessions?.count ?? 0
+                    cardCount: update.upsertCards?.count ?? 0
                 )
             }
             return true
@@ -205,13 +205,13 @@ struct DockSessionTable: Equatable, Sendable {
         complete: Bool,
         totalRows: Int,
         window: DockStreamWindowDTO,
-        sessionCount: Int
+        cardCount: Int
     ) -> Bool {
         guard totalRows >= 0,
               window.offset >= 0,
               window.limit >= 0,
               window.rowCount >= 0,
-              window.rowCount == sessionCount || !complete else {
+              window.rowCount == cardCount else {
             return false
         }
         if let nextOffset = window.nextOffset,
@@ -241,9 +241,9 @@ struct DockSessionTable: Equatable, Sendable {
                     status: statesByHostID[host.id]?.status ?? .checking
                 )
             },
-            sessionsByHostID: Dictionary(
+            cardsByHostID: Dictionary(
                 uniqueKeysWithValues: hosts.map { host in
-                    (host.id, sortedSessions(for: host))
+                    (host.id, sortedCards(for: host))
                 }
             ),
             isPartial: hosts.contains(where: isCheckingOrPartial)
@@ -251,19 +251,17 @@ struct DockSessionTable: Equatable, Sendable {
     }
 
     func rowCount(for host: DockHostConfiguration) -> Int {
-        statesByHostID[host.id]?.sessionsByID.count ?? 0
+        statesByHostID[host.id]?.cardsByID.count ?? 0
     }
 
-    private func sortedSessions(for host: DockHostConfiguration) -> [DockStreamSessionDTO] {
+    private func sortedCards(for host: DockHostConfiguration) -> [DockThreadCardDTO] {
         guard let state = statesByHostID[host.id] else {
             return []
         }
-        return Array(state.sessionsByID.values)
+        return Array(state.cardsByID.values)
             .sorted { lhs, rhs in
-                let lhsUpdated = lhs.messageUpdatedAt ?? Int64.min
-                let rhsUpdated = rhs.messageUpdatedAt ?? Int64.min
-                if lhsUpdated != rhsUpdated {
-                    return lhsUpdated > rhsUpdated
+                if lhs.orderKey != rhs.orderKey {
+                    return lhs.orderKey < rhs.orderKey
                 }
                 return lhs.id < rhs.id
             }

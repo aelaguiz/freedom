@@ -10,6 +10,8 @@ import { pathToFileURL } from "node:url";
 
 import {
   DEFAULT_RELAY_WS,
+  RELAY_STATE_TEXT_FIELD_MAX_CHARS,
+  RELAY_STATE_TITLE_MAX_CHARS,
   THREAD_LIST_MAX_LIMIT,
 } from "./dock-relay-constants.mjs";
 import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
@@ -34,6 +36,24 @@ function nonEmpty(value) {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function boundedText(value, maxChars) {
+  const text = nonEmpty(value);
+  if (!text) {
+    return null;
+  }
+  return text.length > maxChars ? text.slice(0, maxChars) : text;
+}
+
+function firstBoundedText(values, maxChars) {
+  for (const value of values) {
+    const text = boundedText(value, maxChars);
+    if (text) {
+      return text;
+    }
+  }
+  return null;
 }
 
 function normalizeString(value) {
@@ -956,10 +976,21 @@ function normalizedStatus(thread) {
 }
 
 function titleForThread(thread) {
-  return nonEmpty(thread?.name)
-    || nonEmpty(thread?.preview)
-    || nonEmpty(thread?.cwd?.split("/").filter(Boolean).at(-1))
+  return firstBoundedText([
+    thread?.name,
+    thread?.preview,
+    thread?.cwd?.split("/").filter(Boolean).at(-1),
+  ], RELAY_STATE_TITLE_MAX_CHARS)
     || (nonEmpty(thread?.id) ? `Thread ${thread.id.slice(0, 8)}` : "Thread");
+}
+
+function displaySummaryForThreadCard(thread) {
+  return firstBoundedText([
+    thread?.displaySummary,
+    thread?.latestSummary,
+    thread?.summary,
+    thread?.preview,
+  ], RELAY_STATE_TEXT_FIELD_MAX_CHARS) || titleForThread(thread);
 }
 
 function repositoryForThread(thread) {
@@ -1111,47 +1142,49 @@ function compareRelayThreadToStorage(threadID, relayThread, storage, loadedThrea
   return findings;
 }
 
-function compareDockSessionToRelay(threadID, dockSession, relayThread, storage) {
+function compareDockThreadCardToRelay(threadID, dockCard, relayThread, storage) {
   const findings = [];
-  if (!dockSession) {
+  if (!dockCard) {
     return findings;
   }
 
-  if (dockSession.threadID !== threadID) {
-    addFinding(findings, "error", threadID, "dock.snapshot", "threadID", "dock session threadID differs from expected thread ID", {
-      relay: dockSession.threadID,
+  if (dockCard.threadID !== threadID) {
+    addFinding(findings, "error", threadID, "dock.snapshot", "threadID", "dock card threadID differs from expected thread ID", {
+      relay: dockCard.threadID,
       storage: threadID,
     });
   }
-  if (dockSession.hostID && dockSession.id !== `${dockSession.hostID}::${dockSession.threadID}`) {
-    addFinding(findings, "error", threadID, "dock.snapshot", "id", "dock session id is not hostID::threadID", {
-      relay: dockSession.id,
-      expected: `${dockSession.hostID}::${dockSession.threadID}`,
+  if (dockCard.logicalHostID && dockCard.id !== `${dockCard.logicalHostID}::${dockCard.threadID}`) {
+    addFinding(findings, "error", threadID, "dock.snapshot", "id", "dock card id is not logicalHostID::threadID", {
+      relay: dockCard.id,
+      expected: `${dockCard.logicalHostID}::${dockCard.threadID}`,
     });
   }
 
   if (relayThread) {
     const expectedBackendID = nonEmpty(relayThread.sessionId) || relayThread.id;
-    compareRequiredExact(findings, "error", threadID, "dock.snapshot", "backendSessionID", dockSession.backendSessionID, expectedBackendID, "dock backendSessionID differs from relay thread session ID");
-    compareRequiredExact(findings, "error", threadID, "dock.snapshot", "workingDirectory", dockSession.workingDirectory, nonEmpty(relayThread.cwd) || nonEmpty(relayThread.path), "dock workingDirectory differs from relay thread cwd/path");
-    compareRequiredExact(findings, "error", threadID, "dock.snapshot", "branch", dockSession.branch, relayThread.gitInfo?.branch, "dock branch differs from relay thread git branch");
-    compareRequiredExact(findings, "warning", threadID, "dock.snapshot", "repository", dockSession.repository, repositoryForThread(relayThread), "dock repository differs from relay-derived repository");
-    compareRequiredExact(findings, "error", threadID, "dock.snapshot", "status", dockSession.status, normalizedStatus(relayThread), "dock status differs from relay thread status");
-    compareTimestamp(findings, threadID, "dock.snapshot", "updatedAt", dockSession.updatedAt, relayThread.updatedAt, "dock updatedAt differs from relay thread updatedAt");
-    compareText(findings, threadID, "dock.snapshot", "title", dockSession.title, titleForThread(relayThread), "dock title differs from relay-derived title");
-    compareText(findings, threadID, "dock.snapshot", "summary", dockSession.summary, nonEmpty(relayThread.latestSummary) || nonEmpty(relayThread.preview) || titleForThread(relayThread), "dock summary differs from relay-derived summary");
+    compareRequiredExact(findings, "error", threadID, "dock.snapshot", "backendSessionID", dockCard.backendSessionID, expectedBackendID, "dock backendSessionID differs from relay thread session ID");
+    compareRequiredExact(findings, "error", threadID, "dock.snapshot", "workingDirectory", dockCard.workingDirectory, nonEmpty(relayThread.cwd) || nonEmpty(relayThread.path), "dock workingDirectory differs from relay thread cwd/path");
+    compareRequiredExact(findings, "error", threadID, "dock.snapshot", "branch", dockCard.branch, relayThread.gitInfo?.branch, "dock branch differs from relay thread git branch");
+    compareRequiredExact(findings, "warning", threadID, "dock.snapshot", "repository", dockCard.repository, repositoryForThread(relayThread), "dock repository differs from relay-derived repository");
+    compareRequiredExact(findings, "error", threadID, "dock.snapshot", "status", dockCard.status, normalizedStatus(relayThread), "dock status differs from relay thread status");
+    if (relayThread.activityAt !== null && relayThread.activityAt !== undefined) {
+      compareTimestamp(findings, threadID, "dock.snapshot", "activityAt", dockCard.activityAtMs ?? dockCard.activityAt, relayThread.activityAt, "dock activityAt differs from relay thread activity");
+    }
+    compareText(findings, threadID, "dock.snapshot", "title", dockCard.title, titleForThread(relayThread), "dock title differs from relay-derived title");
+    compareText(findings, threadID, "dock.snapshot", "displaySummary", dockCard.displaySummary, displaySummaryForThreadCard(relayThread), "dock displaySummary differs from relay-derived summary");
   }
 
   const comparable = storageComparable(storage);
   const expected = expectedDockLaneForSource(comparable.sourceNormalized);
   if (expected.lane === "internal") {
-    addFinding(findings, "error", threadID, "dock.snapshot", "lane", "internal storage thread appeared in the dock session snapshot");
+    addFinding(findings, "error", threadID, "dock.snapshot", "lane", "internal storage thread appeared in the dock card snapshot");
   } else {
-    compareRequiredExact(findings, "error", threadID, "dock.snapshot", "lane", dockSession.lane, expected.lane, "dock lane differs from storage source classification");
-    compareRequiredExact(findings, "error", threadID, "dock.snapshot", "source.kind", dockSession.source?.kind, expected.sourceKind, "dock source.kind differs from storage source classification");
+    compareRequiredExact(findings, "error", threadID, "dock.snapshot", "lane", dockCard.lane, expected.lane, "dock lane differs from storage source classification");
+    compareRequiredExact(findings, "error", threadID, "dock.snapshot", "sourceKind", dockCard.sourceKind, expected.sourceKind, "dock sourceKind differs from storage source classification");
   }
-  compareRequiredExact(findings, "error", threadID, "dock.snapshot", "workingDirectory", dockSession.workingDirectory, comparable.cwd, "dock workingDirectory differs from storage cwd");
-  compareRequiredExact(findings, "error", threadID, "dock.snapshot", "branch", dockSession.branch, comparable.gitInfo.branch, "dock branch differs from storage git branch");
+  compareRequiredExact(findings, "error", threadID, "dock.snapshot", "workingDirectory", dockCard.workingDirectory, comparable.cwd, "dock workingDirectory differs from storage cwd");
+  compareRequiredExact(findings, "error", threadID, "dock.snapshot", "branch", dockCard.branch, comparable.gitInfo.branch, "dock branch differs from storage git branch");
   return findings;
 }
 
@@ -1194,25 +1227,25 @@ function sanitizeRelayThread(thread) {
   };
 }
 
-function sanitizeDockSession(session) {
-  if (!session) {
+function sanitizeDockThreadCard(card) {
+  if (!card) {
     return null;
   }
   return {
-    id: session.id || null,
-    hostID: session.hostID || null,
-    threadID: session.threadID || null,
-    backendSessionID: session.backendSessionID || null,
-    title: textFingerprint(session.title),
-    status: session.status || null,
-    lane: session.lane || null,
-    kindLabel: session.kindLabel || null,
-    repository: session.repository || null,
-    workingDirectory: session.workingDirectory || null,
-    branch: session.branch || null,
-    updatedAt: session.updatedAt ?? null,
-    summary: textFingerprint(session.summary),
-    source: session.source || null,
+    id: card.id || null,
+    logicalHostID: card.logicalHostID || null,
+    threadID: card.threadID || null,
+    backendSessionID: card.backendSessionID || null,
+    title: textFingerprint(card.title),
+    status: card.status || null,
+    lane: card.lane || null,
+    sourceKind: card.sourceKind || null,
+    repository: card.repository || null,
+    workingDirectory: card.workingDirectory || null,
+    branch: card.branch || null,
+    activityAt: card.activityAt ?? null,
+    activityAtMs: card.activityAtMs ?? null,
+    displaySummary: textFingerprint(card.displaySummary),
   };
 }
 
@@ -1380,8 +1413,8 @@ async function readRelaySurfaces(options) {
     for (const id of options.threadIDs) {
       pushID(id);
     }
-    for (const session of dockSnapshot?.sessions || []) {
-      pushID(session.threadID);
+    for (const card of dockSnapshot?.cards || []) {
+      pushID(card.threadID);
     }
     for (const list of Object.values(lists)) {
       for (const row of list?.data || []) {
@@ -1413,11 +1446,11 @@ async function readRelaySurfaces(options) {
 }
 
 function buildThreadReport(threadID, relay, storage) {
-  const dockSession = (relay.dockSnapshot?.sessions || []).find((session) => session.threadID === threadID) || null;
+  const dockCard = (relay.dockSnapshot?.cards || []).find((card) => card.threadID === threadID) || null;
   const relayThread = relay.threadReads[threadID] || null;
   const findings = [
     ...compareRelayThreadToStorage(threadID, relayThread, storage, relay.loadedThreadIDs),
-    ...compareDockSessionToRelay(threadID, dockSession, relayThread, storage),
+    ...compareDockThreadCardToRelay(threadID, dockCard, relayThread, storage),
   ];
 
   if (storage.rollout?.path && storage.stateRow?.rollout_path && path.resolve(storage.rollout.path) !== path.resolve(storage.stateRow.rollout_path)) {
@@ -1458,7 +1491,7 @@ function buildThreadReport(threadID, relay, storage) {
   return {
     threadID,
     relay: {
-      dockSession: sanitizeDockSession(dockSession),
+      dockCard: sanitizeDockThreadCard(dockCard),
       threadRead: sanitizeRelayThread(relayThread),
       loaded: relay.loadedThreadIDs.has(threadID),
     },
@@ -1514,7 +1547,7 @@ async function buildReport(options) {
         seq: relay.dockSnapshot.seq ?? null,
         asOf: relay.dockSnapshot.asOf || null,
         hostCount: Array.isArray(relay.dockSnapshot.hosts) ? relay.dockSnapshot.hosts.length : 0,
-        sessionCount: Array.isArray(relay.dockSnapshot.sessions) ? relay.dockSnapshot.sessions.length : 0,
+        cardCount: Array.isArray(relay.dockSnapshot.cards) ? relay.dockSnapshot.cards.length : 0,
         freshness: relay.dockSnapshot.freshness || null,
       } : null,
       loadedThreadCount: relay.loadedThreadIDs.size,
@@ -1566,7 +1599,7 @@ async function main() {
     codexHome: report.config.codexHome,
     sqliteHome: report.config.sqliteHome,
     relay: {
-      dockSessionCount: report.relay.dockSnapshot?.sessionCount ?? null,
+      dockCardCount: report.relay.dockSnapshot?.cardCount ?? null,
       loadedThreadCount: report.relay.loadedThreadCount,
       relayErrors: report.relay.errors.length,
     },
@@ -1593,7 +1626,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
 export {
   buildReport,
-  compareDockSessionToRelay,
+  compareDockThreadCardToRelay,
   compareRelayThreadToStorage,
   expectedDockLaneForSource,
   normalizedStatus,

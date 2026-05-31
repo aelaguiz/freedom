@@ -5,7 +5,6 @@ public struct ArchiveSnapshot: Equatable, Sendable {
     public let hosts: [DockHostViewModel]
     public let hostStates: [DockHostStateViewModel]
     public let sections: [DockSectionViewModel]
-    public let mappingFailures: [SessionSummaryMappingFailure]
 
     public var rowCount: Int {
         sections.reduce(0) { count, section in
@@ -64,8 +63,8 @@ public final class ArchiveStore: ObservableObject {
 
     public init(
         registry: HostRegistry,
-        loader: any DockSessionLoading = AppServerDockClient(),
-        archiver: any DockSessionArchiving = AppServerDockClient(),
+        streamClient: any ThreadCardStreamConnecting = AppServerThreadCardStreamClient(view: .archive),
+        archiver: any ThreadArchiveCommanding = AppServerThreadCommandClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
@@ -75,7 +74,7 @@ public final class ArchiveStore: ObservableObject {
         self.connectivityEventSink = connectivityEventSink
         self.dataEngine = ArchiveDataEngine(
             registry: registry,
-            loader: loader,
+            streamClient: streamClient,
             metadataStore: metadataStore,
             now: now
         )
@@ -86,8 +85,7 @@ public final class ArchiveStore: ObservableObject {
 
     public init(
         configurationError error: Error,
-        loader: any DockSessionLoading = AppServerDockClient(),
-        archiver: any DockSessionArchiving = AppServerDockClient(),
+        archiver: any ThreadArchiveCommanding = AppServerThreadCommandClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
@@ -233,7 +231,7 @@ public final class ArchiveStore: ObservableObject {
             setState(snapshot.rowCount == 0 ? .empty(snapshot) : .loaded(snapshot))
         }
         publishConnectivity(for: state)
-        DockLog.archive.notice("archive reload finished hosts=\(self.hosts.count, privacy: .public) rows=\(snapshot.rowCount, privacy: .public) mapping_failures=\(snapshot.mappingFailures.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+        DockLog.archive.notice("archive reload finished hosts=\(self.hosts.count, privacy: .public) rows=\(snapshot.rowCount, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
     }
 
     private func setState(_ state: ArchiveStoreState) {

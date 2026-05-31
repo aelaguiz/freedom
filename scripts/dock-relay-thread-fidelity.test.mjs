@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  compareDockSessionToRelay,
+  compareDockThreadCardToRelay,
   compareRelayThreadToStorage,
   expectedDockLaneForSource,
   normalizedStatus,
@@ -149,9 +149,9 @@ test("dock snapshot comparison checks client-visible row fields", () => {
       originUrl: "git@github.com:aelaguiz/codex-client.git",
     },
   };
-  const dockSession = {
+  const dockCard = {
     id: "host::thread-1",
-    hostID: "host",
+    logicalHostID: "host",
     threadID: "thread-1",
     backendSessionID: "session-1",
     title: "private title",
@@ -160,17 +160,17 @@ test("dock snapshot comparison checks client-visible row fields", () => {
     repository: "wrong",
     workingDirectory: "/repo",
     branch: "main",
-    updatedAt: 1_780_000_100,
-    summary: "private summary",
-    source: { kind: "automation" },
+    activityAtMs: 1_780_000_100_000,
+    displaySummary: "private summary",
+    sourceKind: "automation",
   };
 
-  const findings = compareDockSessionToRelay("thread-1", dockSession, relayThread, storage);
+  const findings = compareDockThreadCardToRelay("thread-1", dockCard, relayThread, storage);
 
   assert.equal(normalizedStatus(relayThread), "idle");
   assert.ok(findings.some((finding) => finding.field === "status" && finding.severity === "error"));
   assert.ok(findings.some((finding) => finding.field === "lane" && finding.severity === "error"));
-  assert.ok(findings.some((finding) => finding.field === "source.kind" && finding.severity === "error"));
+  assert.ok(findings.some((finding) => finding.field === "sourceKind" && finding.severity === "error"));
   assert.equal(JSON.stringify(findings).includes("private title"), false);
   assert.equal(JSON.stringify(findings).includes("private summary"), false);
 });

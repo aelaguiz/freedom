@@ -1,17 +1,16 @@
 import Foundation
 
-struct ArchiveSessionProjector {
+struct ArchiveThreadCardProjector {
     let hosts: [DockHostConfiguration]
     let localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata]
     let now: @Sendable () -> Date
 
-    func sections(from summaries: [SessionSummary]) -> [DockSectionViewModel] {
-        let rows = SessionRowProjector(
+    func sections(from cards: [DockThreadCardDTO]) -> [DockSectionViewModel] {
+        let rows = ThreadCardRowProjector(
             hosts: hosts,
             localMetadata: localMetadata,
-            now: now,
-            activityMode: .raw
-        ).rows(from: summaries)
+            now: now
+        ).rows(from: cards)
         let groupedRows = Dictionary(grouping: rows, by: sectionID(for:))
 
         return groupedRows
@@ -37,6 +36,12 @@ struct ArchiveSessionProjector {
     }
 
     private func sectionPrecedes(_ lhs: DockSectionViewModel, _ rhs: DockSectionViewModel) -> Bool {
+        if let lhsOrderKey = sectionOrderKey(lhs),
+           let rhsOrderKey = sectionOrderKey(rhs),
+           lhsOrderKey != rhsOrderKey {
+            return lhsOrderKey < rhsOrderKey
+        }
+
         let lhsDate = lhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
         let rhsDate = rhs.rows.map(\.lastActivityDate).max() ?? Date.distantPast
         if lhsDate != rhsDate {
@@ -46,7 +51,17 @@ struct ArchiveSessionProjector {
         return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
     }
 
+    private func sectionOrderKey(_ section: DockSectionViewModel) -> String? {
+        section.rows.compactMap(\.orderKey).min()
+    }
+
     private func rowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
+        if let lhsOrderKey = lhs.orderKey,
+           let rhsOrderKey = rhs.orderKey,
+           lhsOrderKey != rhsOrderKey {
+            return lhsOrderKey < rhsOrderKey
+        }
+
         if lhs.lastActivityDate != rhs.lastActivityDate {
             return lhs.lastActivityDate > rhs.lastActivityDate
         }

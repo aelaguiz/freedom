@@ -1,0 +1,57 @@
+{
+  "kind": "snapshot",
+  "schemaVersion": 2,
+  "view": "dock",
+  "complete": true,
+  "totalRows": 1,
+  "window": {
+    "offset": 0,
+    "limit": 1,
+    "rowCount": 1,
+    "nextOffset": null
+  },
+  "stateGeneration": 7,
+  "epoch": "fixture-epoch",
+  "baseSeq": null,
+  "seq": 7,
+  "asOf": "2026-05-30T00:00:00.000Z",
+  "freshness": {
+    "status": "fresh",
+    "lastAttemptAt": "2026-05-30T00:00:00.000Z",
+    "lastSyncAt": "2026-05-30T00:00:00.000Z",
+    "lastError": null
+  },
+  "hosts": [
+    {
+      "id": "Amir-M5",
+      "logicalHostID": "Amir-M5",
+      "displayName": "Amir-M5",
+      "endpoint": "amir-m5.fairy-salmon.ts.net:4510"
+    }
+  ],
+  "cards": [
+    {
+      "id": "Amir-M5::thread-1",
+      "logicalHostID": "Amir-M5",
+      "threadID": "thread-1",
+      "backendSessionID": "session-1",
+      "hostDisplayName": "Amir-M5",
+      "hostEndpoint": "amir-m5.fairy-salmon.ts.net:4510",
+      "orderKey": "000000000000:thread-1",
+      "activityAt": "2026-05-30T00:00:00.000Z",
+      "activityAtMs": 1780099200000,
+      "displaySummary": "Implemented a focused card stream.",
+      "title": "Thread card fixture",
+      "status": "running",
+      "sourceKind": "human",
+      "lane": "human",
+      "archiveState": "active",
+      "freshness": "fresh",
+      "completeness": "complete",
+      "repository": "codex-client",
+      "workingDirectory": "/Users/aelaguiz/workspace/codex-client",
+      "branch": "codex-dock-agents-tab-live-counts",
+      "summarySource": "assistant_label"
+    }
+  ]
+}

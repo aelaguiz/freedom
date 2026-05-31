@@ -2,7 +2,7 @@ import SwiftUI
 
 struct DockFilterSurfaceView: View {
     @Binding var filters: DockFilterState
-    let projection: DockSessionProjection?
+    let projection: DockCardProjection?
     @State private var branchQuery = ""
 
     var body: some View {

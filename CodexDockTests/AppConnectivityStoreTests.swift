@@ -26,8 +26,7 @@ final class AppConnectivityStoreTests: XCTestCase {
                     hostStates: [
                         DockHostStateViewModel(host: hostViewModel, status: .loaded(rowCount: 2)),
                     ],
-                    rows: [],
-                    mappingFailures: []
+                    rows: []
                 )
             )
         )
@@ -66,7 +65,6 @@ final class AppConnectivityStoreTests: XCTestCase {
                         DockHostStateViewModel(host: homeViewModel, status: .checking),
                     ],
                     rows: [],
-                    mappingFailures: [],
                     isPartial: true
                 )
             )
@@ -93,8 +91,7 @@ final class AppConnectivityStoreTests: XCTestCase {
                             status: .partial(rowCount: 1, message: "Agents: offline")
                         ),
                     ],
-                    rows: [],
-                    mappingFailures: []
+                    rows: []
                 )
             )
         )
@@ -161,8 +158,7 @@ final class AppConnectivityStoreTests: XCTestCase {
                     hostStates: [
                         DockHostStateViewModel(host: hostViewModel, status: .loaded(rowCount: 2)),
                     ],
-                    rows: [],
-                    mappingFailures: []
+                    rows: []
                 )
             )
         )
@@ -296,8 +292,7 @@ final class AppConnectivityStoreTests: XCTestCase {
             hostStates: [
                 DockHostStateViewModel(host: hostViewModel, status: .loaded(rowCount: 2)),
             ],
-            rows: [],
-            mappingFailures: []
+            rows: []
         )
         store.reportDockState(.loaded(snapshot))
         store.reportLifecycle(AppLifecycleSnapshot(phase: .foregroundResuming, resumeGeneration: 1))

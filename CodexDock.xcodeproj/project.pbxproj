@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0101E7A5C30CB4F684602D8C /* ThreadCardHostSnapshotLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E9FEC0FF36247C084155D4 /* ThreadCardHostSnapshotLoader.swift */; };
 		0174B5906E2F8E292E298E2C /* RelayDiagnosticsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E778A4DF97409FC9ABA491D0 /* RelayDiagnosticsClient.swift */; };
 		030B4800DCC13C10C117D54D /* ThreadDetailStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9C3D49CF36AB4945916A749 /* ThreadDetailStoreTests.swift */; };
 		0810930B17557E22FC380186 /* ArchiveCleanupStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D26899310AB9BCFDD274772 /* ArchiveCleanupStoreTests.swift */; };
@@ -19,14 +20,13 @@
 		0F359E7574542DEBD9781C15 /* TurnDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0549BF0ED081727D34323CBA /* TurnDTO.swift */; };
 		1463EC33BFEF2CA641D47CAE /* ArchiveStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA032FF8D4142A8D3461B7DE /* ArchiveStore.swift */; };
 		1BFBBBFFA3E7C5115F4B9897 /* AppServerMethods.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACA75584AA40FC172ED36E9D /* AppServerMethods.swift */; };
-		1E86F12DB4ADEA5C3AE94D88 /* ThreadListMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4487067DBDCABE61793B26B5 /* ThreadListMappingTests.swift */; };
+		1CD3CFC3C4001E4259AC8169 /* ThreadCardFixtureSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 265058BD5A45035905017363 /* ThreadCardFixtureSummary.swift */; };
 		20C85B3C748159B0B528AF6E /* HostSettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A41544D2CBD2C298312F3D3 /* HostSettingsStore.swift */; };
 		21F7E9351060EFE0E4B0D3D2 /* RenderRevision.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEACB0C2284B6B9BDF0DE0D /* RenderRevision.swift */; };
 		24830113F0217C6DEC1EA844 /* ThreadEventNormalizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DC48CE0A2682B2B0F223F12 /* ThreadEventNormalizerTests.swift */; };
 		26596DA66B5E0E175F1F0B36 /* RelayDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B519B818482A64DB1E24B72 /* RelayDiscovery.swift */; };
 		2BABAEC8A947F80D1F3F8766 /* ConnectivityDataEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E27D2080618D6652538B3139 /* ConnectivityDataEngineTests.swift */; };
 		2C45950B4F9D80882CC39CB7 /* RelayRealtimeTranscriptionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CBAEDADA8F53259E8A3C3F9 /* RelayRealtimeTranscriptionClient.swift */; };
-		2D57BC119D465C9AF43246C7 /* AppServerDockStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25F7EB6BEEC87CA667460DED /* AppServerDockStreamClient.swift */; };
 		2D6C12E3188A04C29C5B5E77 /* CodexDockConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66222A9C2D2D0160A6516334 /* CodexDockConstants.swift */; };
 		2F53F8DB6FBC949AA2AF3A96 /* RelayBootstrapStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD386E730F3CFC73F11ED939 /* RelayBootstrapStore.swift */; };
 		3067F6AF69B1677B9B3D2699 /* ClientCommandEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568F05A1CE21B37D32840E6D /* ClientCommandEngine.swift */; };
@@ -34,12 +34,12 @@
 		35669AF25784036EBC1E6FD6 /* DockDataEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D9413006D6433459E7AE56 /* DockDataEngineTests.swift */; };
 		36841086A6452D45B76759DA /* DockModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D651D5F3F7501E91E429965A /* DockModels.swift */; };
 		36AEAB0D1C020E6383F9FB5A /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB8A0894987E6B3EEDB7A78 /* TranscriptionService.swift */; };
+		3804ED0CFB9C44B795432B75 /* ThreadCardStreamSnapshotCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92B71D4044F8DCE29ACF92C /* ThreadCardStreamSnapshotCollector.swift */; };
 		397CF27D33A489C7B7313615 /* HostSettingsScreenStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15055125BD795D0B0011A5E5 /* HostSettingsScreenStoreTests.swift */; };
 		3AB27D218C22102A68404C7D /* ThreadEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37232256608F5A94E813243A /* ThreadEvent.swift */; };
 		3DEBE79DD90F1A3C8D7CBA9F /* ArchiveCleanupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47DC7C8E6F2D7BF0BB126426 /* ArchiveCleanupView.swift */; };
 		43CB12A8A3DF95391ADD2533 /* ServerRequestCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6F98E6722B55832F8AB7E27 /* ServerRequestCard.swift */; };
 		45667271A740635F7DA6A495 /* CodexDock.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		46EE01D2F9B72B3561BED5BF /* ArchiveSessionProjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F10974BD19C78CD0EB7C143 /* ArchiveSessionProjector.swift */; };
 		46FDBC7CB002F6702EBB9870 /* ClientObservabilityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4731CF5D1182A18DCB63A7A9 /* ClientObservabilityStore.swift */; };
 		486650859FCE02D4B036B60B /* DockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A92948E4571E0CEE65CAE35 /* DockView.swift */; };
 		48D9A54C1E505B0CC65E4654 /* CodexDockApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FACDCA51DD66D50C6A6F145 /* CodexDockApp.swift */; };
@@ -49,20 +49,22 @@
 		4D9CD10593ABDDD5F6E74BD9 /* ThreadDetailDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECA148D7F9C96BD5EDF6D709 /* ThreadDetailDTO.swift */; };
 		4DCAAA76D322941F62A21886 /* ClientCommandEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E55D856F5240AE79495CC58B /* ClientCommandEngineTests.swift */; };
 		52195812AEB47949BAC67950 /* DockTaskSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D095B3AFB7982E6A9C8837 /* DockTaskSheet.swift */; };
+		5226B704EE6CA1B592D11AD8 /* ArchiveThreadCardProjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03584C3682D41248EEBABA6D /* ArchiveThreadCardProjector.swift */; };
 		525C4D2542BCD14F9EFDE571 /* JSONRPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9C4FD936A8FB869F14F7F61 /* JSONRPC.swift */; };
 		52F972C9D07E4AB09A6F0EB9 /* ConnectivityRenderModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 311DA8587695EEB13EA380D2 /* ConnectivityRenderModels.swift */; };
 		54185947D767A9A31E000AB1 /* CodexDock.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; };
+		5525450452402EAA37B6BFAB /* AppServerThreadCommandClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDF963DFD7FB1C7BBB9731A6 /* AppServerThreadCommandClient.swift */; };
+		5613D3DB17E1085B0C1AD446 /* DockThreadCardDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C6087DD297C2B96F411427 /* DockThreadCardDTO.swift */; };
 		57B9BC26F12DDA95CC471564 /* ThreadDetailRenderModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38092B7537830C23DDFC89BC /* ThreadDetailRenderModels.swift */; };
 		5AF2B1E51556CCA12BBEA152 /* DockViewPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 608D5336E8EB318A250DEC72 /* DockViewPreview.swift */; };
 		5B1E333BB61734BBCC6410E1 /* DockRenderModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD2BA0DC0588BB0FDD143CF1 /* DockRenderModels.swift */; };
 		5B5103973B19887BEA32843D /* HostRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26B07B009451AB1728472ADB /* HostRegistry.swift */; };
 		5CA4A978F96296E0BD98EF3E /* ThreadDetailStoreLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35E7D89A1C77852FAEB08A81 /* ThreadDetailStoreLifecycleTests.swift */; };
 		5DC04EC084C972BFC2BEE7ED /* ConnectivityRenderProjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3D6F66363B157CE032C8126 /* ConnectivityRenderProjector.swift */; };
+		5E3834B52D4978DC9A25D463 /* ThreadCardRowProjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6DD9D9E114CF2A250BB4F65 /* ThreadCardRowProjector.swift */; };
 		5F045E715AFE5F40D383E82D /* SessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AC280DBF1FD9245AD8CD686 /* SessionDetailView.swift */; };
 		615292E9A60638CE06936F2F /* ThreadDetailScreenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C70DD6022DBA68077BE86671 /* ThreadDetailScreenStore.swift */; };
 		66B4D8E81463A010CA6FCC9E /* DockStoreTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C2487F4A96FAA50B85C1744 /* DockStoreTestSupport.swift */; };
-		68A4924EA66B7E73782296C8 /* SessionSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23406F25CA882A60E01CB56E /* SessionSummary.swift */; };
-		69D02FDE3B2CC81AC588D424 /* DockSessionTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7883392B55EC173F6BC0E456 /* DockSessionTable.swift */; };
 		6B62194AAF786F06DEAB123A /* DockStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E8613594609B20254A5CA44 /* DockStoreTests.swift */; };
 		6D5E2B1582C73AADFE209E1D /* VoiceCaptureControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCC83E79154B50CD8B568FB4 /* VoiceCaptureControllerTests.swift */; };
 		70137F2F9B5FC5A64F66D1DB /* ConnectivityScreenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66F32EDC82DCE4C69A8BA451 /* ConnectivityScreenStore.swift */; };
@@ -71,10 +73,9 @@
 		70F885C2B35239E3BA6A6555 /* DockTaskMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77DE31AFB0CD82A07053CA05 /* DockTaskMenuView.swift */; };
 		715D24A6FE0389A4DF3B207C /* CodexDockAutomationSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BDD9186F027807209C9C257 /* CodexDockAutomationSmokeTests.swift */; };
 		72A9847E37965B2C3A61D166 /* ThreadDetailDataEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 643835CB6E8EC275F893831B /* ThreadDetailDataEngine.swift */; };
-		7430376B939E3611D67885F0 /* AppServerDockClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D76ACB118C0AE566FE1705F5 /* AppServerDockClient.swift */; };
-		74C104A7F7207E4AF17272C5 /* DockSessionProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C81305AA09AC5FF83868663 /* DockSessionProjection.swift */; };
 		7620B7A25D86E81210477475 /* AppServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABDB5847612728C391956985 /* AppServerClient.swift */; };
 		763F61037E061541DFDC5EC7 /* ThreadDetailStoreTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AEFC520C4BAC0B3AE2B1174 /* ThreadDetailStoreTestSupport.swift */; };
+		784A1FB6B03951EB800DD60E /* ThreadCardTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44E0DDCC4DD790E92D0FDC3C /* ThreadCardTable.swift */; };
 		79FDCB72D584D3964DF6E79B /* DockPinnedViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C60772205481B8CBBE5DE8BA /* DockPinnedViews.swift */; };
 		7AB082BC507BD70E34212D1F /* ThreadDetailRenderProjectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4B2D78E1C314E801AC77A7 /* ThreadDetailRenderProjectorTests.swift */; };
 		7AF6F7927F3D73495969D97A /* ObservabilityContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86B811114546025713881F92 /* ObservabilityContract.swift */; };
@@ -103,6 +104,7 @@
 		A100BDC982F075F8A61611AF /* ArchiveDataEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BD7291C2DAC3F7F64E4A352 /* ArchiveDataEngineTests.swift */; };
 		A4D2BF8CB15B9684FE6EB414 /* ArchiveCleanupStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C41DCC2E4D7AAA1795AE5DDA /* ArchiveCleanupStore.swift */; };
 		A6FA51810C90994C623BF3CC /* ArchiveCleanupDataEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F1E6120B1DE5E4FCE274B19 /* ArchiveCleanupDataEngine.swift */; };
+		A896F5E728550655BD0CCF1A /* DockCardProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAA908F3DF922614212EFFDE /* DockCardProjection.swift */; };
 		ACC4A5E54654FC17A6994308 /* ThreadDetailRenderProjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBF61890D9DA519EB1EDE81 /* ThreadDetailRenderProjector.swift */; };
 		AEAC4E8DC982EB5144DAAAC2 /* LocalThreadMetadataStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DC52B300359BB6026278F44 /* LocalThreadMetadataStore.swift */; };
 		AF65691E01922D89D3D0BF20 /* TranscriptionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39B1F88E81E72D64647780E1 /* TranscriptionEngine.swift */; };
@@ -122,8 +124,6 @@
 		D265D19D042CE35098EF5521 /* AppServerClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FABBE94F4FF90D41C42F5683 /* AppServerClientTests.swift */; };
 		D35F6F371609F8CE905FBC36 /* ComposerVoiceControlsPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08704B25134B1064DED004F8 /* ComposerVoiceControlsPresentationTests.swift */; };
 		D675682A0C4B1CFA6F7D74A4 /* LocalMetadataEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 593873CB6132E5E0D452E588 /* LocalMetadataEngine.swift */; };
-		D87C88DC31B028EAA0DF9B92 /* SessionRowProjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14D8A7B3E30C284A3103344B /* SessionRowProjector.swift */; };
-		DCA7E3D5CAE3E822DDCFAFF7 /* DockStreamDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = E97935C9F36B7DD5DEF2F4EA /* DockStreamDTO.swift */; };
 		DDB0A03F1EBE149E4FD5FB06 /* DockStoreTestsProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE68995BF09EC103770E8F3 /* DockStoreTestsProjection.swift */; };
 		DF227D6F259F897153A5D588 /* HostSettingsScreenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54A8DEB9BB4556FB8FC957A2 /* HostSettingsScreenStore.swift */; };
 		DFC2928AD48811AA05A87802 /* SystemHealthProjectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A10C383FC2A103A264489F3 /* SystemHealthProjectorTests.swift */; };
@@ -142,11 +142,13 @@
 		F11E5071EA0DA1EA4CC4A2D1 /* DiagnosticsLoggingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E31AB3877106E108F7A6ECE7 /* DiagnosticsLoggingTests.swift */; };
 		F2F6C61CD4A8F9EAFBD8B174 /* CodexDock.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		F33505F7F0E85BF4C6824E08 /* ScriptedDockStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14340ACB98A499C52DDFA40E /* ScriptedDockStreamClient.swift */; };
+		F39EA0FF31B0095423CE1FFD /* HostConnectionTesting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 198CA6DE97B606E1D3E4423C /* HostConnectionTesting.swift */; };
 		F4B8B3667E12D349FDEE2429 /* VoiceCaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66992E45CF94449CD641D30F /* VoiceCaptureEngine.swift */; };
 		F6228459D4E8A88C2944AA36 /* ArchiveScreenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2D39465D48C7FDF13CE3EB /* ArchiveScreenStore.swift */; };
+		F7B1E2540C9363608E8560B5 /* ThreadIdentityModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D4097615560F0C37163AFEA /* ThreadIdentityModels.swift */; };
 		F8EC4DFA76E5BB5676615A0F /* CodexDock.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 95A38808257E490A715D32C2 /* CodexDock.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		FC1122788ED53BE77D570C31 /* AppServerThreadCardStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32F977877DF5918060FF8CFB /* AppServerThreadCardStreamClient.swift */; };
 		FCCB528C1F9D039F37EA63F2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2E1924934DAB8EC15214B207 /* Assets.xcassets */; };
-		FEA3427B9E20A65467D79334 /* SessionSummaryMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95146D412CB7EB8AAFF12FCC /* SessionSummaryMapper.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -217,30 +219,31 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		03584C3682D41248EEBABA6D /* ArchiveThreadCardProjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveThreadCardProjector.swift; sourceTree = "<group>"; };
 		03D095B3AFB7982E6A9C8837 /* DockTaskSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockTaskSheet.swift; sourceTree = "<group>"; };
 		0549BF0ED081727D34323CBA /* TurnDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnDTO.swift; sourceTree = "<group>"; };
 		056F8C4CC7919C3F3EE29D9F /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
 		05AB72F72AC4A6E97D56205D /* ArchiveScreenStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveScreenStoreTests.swift; sourceTree = "<group>"; };
 		08704B25134B1064DED004F8 /* ComposerVoiceControlsPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerVoiceControlsPresentationTests.swift; sourceTree = "<group>"; };
 		0AC49015E8B9106FA9F6FBD7 /* AppConnectivityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConnectivityStore.swift; sourceTree = "<group>"; };
-		0F10974BD19C78CD0EB7C143 /* ArchiveSessionProjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveSessionProjector.swift; sourceTree = "<group>"; };
 		14340ACB98A499C52DDFA40E /* ScriptedDockStreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptedDockStreamClient.swift; sourceTree = "<group>"; };
-		14D8A7B3E30C284A3103344B /* SessionRowProjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRowProjector.swift; sourceTree = "<group>"; };
 		14F90D2D536D4AA8B4579D10 /* DockDataEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockDataEngine.swift; sourceTree = "<group>"; };
 		15055125BD795D0B0011A5E5 /* HostSettingsScreenStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostSettingsScreenStoreTests.swift; sourceTree = "<group>"; };
 		1947A73C0345BB0BA9EEACB2 /* ResponsivenessContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponsivenessContractTests.swift; sourceTree = "<group>"; };
+		198CA6DE97B606E1D3E4423C /* HostConnectionTesting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostConnectionTesting.swift; sourceTree = "<group>"; };
 		1FFBF6A7AD20DA769D4A91F8 /* ArchiveCleanupModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveCleanupModels.swift; sourceTree = "<group>"; };
 		20C2BA989B12A434DA92B379 /* DockConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockConfigurationTests.swift; sourceTree = "<group>"; };
 		21007B26E118AEEE5C48CD44 /* ThreadDetailStore+Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ThreadDetailStore+Voice.swift"; sourceTree = "<group>"; };
-		23406F25CA882A60E01CB56E /* SessionSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSummary.swift; sourceTree = "<group>"; };
 		24851B7409D24E2D806E1227 /* ThreadDetailScreenStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailScreenStoreTests.swift; sourceTree = "<group>"; };
-		25F7EB6BEEC87CA667460DED /* AppServerDockStreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerDockStreamClient.swift; sourceTree = "<group>"; };
+		265058BD5A45035905017363 /* ThreadCardFixtureSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadCardFixtureSummary.swift; sourceTree = "<group>"; };
 		26B07B009451AB1728472ADB /* HostRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostRegistry.swift; sourceTree = "<group>"; };
 		2966CD9AFD89A069749D260E /* DockRenderProjectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockRenderProjectorTests.swift; sourceTree = "<group>"; };
+		2D4097615560F0C37163AFEA /* ThreadIdentityModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadIdentityModels.swift; sourceTree = "<group>"; };
 		2E1924934DAB8EC15214B207 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		2E8613594609B20254A5CA44 /* DockStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockStoreTests.swift; sourceTree = "<group>"; };
 		311DA8587695EEB13EA380D2 /* ConnectivityRenderModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectivityRenderModels.swift; sourceTree = "<group>"; };
 		3147F4A1FA1367F1D6944AAC /* ConnectivityDataEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectivityDataEngine.swift; sourceTree = "<group>"; };
+		32F977877DF5918060FF8CFB /* AppServerThreadCardStreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerThreadCardStreamClient.swift; sourceTree = "<group>"; };
 		346875A4831B8554A0ADDCC4 /* ArchiveDataEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveDataEngine.swift; sourceTree = "<group>"; };
 		35E7D89A1C77852FAEB08A81 /* ThreadDetailStoreLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailStoreLifecycleTests.swift; sourceTree = "<group>"; };
 		35F0A3FA51E07637B6336FF8 /* ThreadDetailHeaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailHeaderTests.swift; sourceTree = "<group>"; };
@@ -252,7 +255,7 @@
 		3DC48CE0A2682B2B0F223F12 /* ThreadEventNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadEventNormalizerTests.swift; sourceTree = "<group>"; };
 		3F035F07B0BBC9BE740ED620 /* AppServerThreadDetailSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerThreadDetailSession.swift; sourceTree = "<group>"; };
 		40F2C9EC21D726E41BCE5221 /* CodexDockUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CodexDockUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		4487067DBDCABE61793B26B5 /* ThreadListMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadListMappingTests.swift; sourceTree = "<group>"; };
+		44E0DDCC4DD790E92D0FDC3C /* ThreadCardTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadCardTable.swift; sourceTree = "<group>"; };
 		4731CF5D1182A18DCB63A7A9 /* ClientObservabilityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientObservabilityStore.swift; sourceTree = "<group>"; };
 		47DC7C8E6F2D7BF0BB126426 /* ArchiveCleanupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveCleanupView.swift; sourceTree = "<group>"; };
 		4A10C383FC2A103A264489F3 /* SystemHealthProjectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemHealthProjectorTests.swift; sourceTree = "<group>"; };
@@ -281,7 +284,6 @@
 		74E0150C92A43EF9216A31F1 /* VoiceCaptureController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceCaptureController.swift; sourceTree = "<group>"; };
 		77354F6F5E298E22F171218F /* ScriptedThreadDetailSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptedThreadDetailSession.swift; sourceTree = "<group>"; };
 		77DE31AFB0CD82A07053CA05 /* DockTaskMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockTaskMenuView.swift; sourceTree = "<group>"; };
-		7883392B55EC173F6BC0E456 /* DockSessionTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockSessionTable.swift; sourceTree = "<group>"; };
 		7A42B2061F9E45C1B6935F08 /* DockStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockStore.swift; sourceTree = "<group>"; };
 		7B2F9B8D2B9BB539D75F5CDA /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		7BD7291C2DAC3F7F64E4A352 /* ArchiveDataEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveDataEngineTests.swift; sourceTree = "<group>"; };
@@ -295,11 +297,9 @@
 		8BDD9186F027807209C9C257 /* CodexDockAutomationSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexDockAutomationSmokeTests.swift; sourceTree = "<group>"; };
 		8CF772DD0402CB4E1FBB0D39 /* ConnectivityDiagnosticsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectivityDiagnosticsSheet.swift; sourceTree = "<group>"; };
 		8F1E6120B1DE5E4FCE274B19 /* ArchiveCleanupDataEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveCleanupDataEngine.swift; sourceTree = "<group>"; };
-		95146D412CB7EB8AAFF12FCC /* SessionSummaryMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSummaryMapper.swift; sourceTree = "<group>"; };
 		95A38808257E490A715D32C2 /* CodexDock.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = CodexDock.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		9AEFC520C4BAC0B3AE2B1174 /* ThreadDetailStoreTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailStoreTestSupport.swift; sourceTree = "<group>"; };
 		9B519B818482A64DB1E24B72 /* RelayDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayDiscovery.swift; sourceTree = "<group>"; };
-		9C81305AA09AC5FF83868663 /* DockSessionProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockSessionProjection.swift; sourceTree = "<group>"; };
 		9D0EBB21C932928CC08AEA0D /* ThreadDetailStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailStore.swift; sourceTree = "<group>"; };
 		9FACDCA51DD66D50C6A6F145 /* CodexDockApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexDockApp.swift; sourceTree = "<group>"; };
 		9FBF61890D9DA519EB1EDE81 /* ThreadDetailRenderProjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailRenderProjector.swift; sourceTree = "<group>"; };
@@ -307,9 +307,12 @@
 		A210B5FEF921CE9BD7B07766 /* AppConnectivityStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConnectivityStoreTests.swift; sourceTree = "<group>"; };
 		A590A4B3617FA9C7D793CF50 /* DockGroupRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockGroupRows.swift; sourceTree = "<group>"; };
 		A64DD5D79FB32ED53CE9FEDF /* ConnectivityEventSink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectivityEventSink.swift; sourceTree = "<group>"; };
+		AAA908F3DF922614212EFFDE /* DockCardProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockCardProjection.swift; sourceTree = "<group>"; };
 		ABDB5847612728C391956985 /* AppServerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerClient.swift; sourceTree = "<group>"; };
 		ACA75584AA40FC172ED36E9D /* AppServerMethods.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerMethods.swift; sourceTree = "<group>"; };
+		B7E9FEC0FF36247C084155D4 /* ThreadCardHostSnapshotLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadCardHostSnapshotLoader.swift; sourceTree = "<group>"; };
 		BBB8A0894987E6B3EEDB7A78 /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
+		BDF963DFD7FB1C7BBB9731A6 /* AppServerThreadCommandClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerThreadCommandClient.swift; sourceTree = "<group>"; };
 		BF2D39465D48C7FDF13CE3EB /* ArchiveScreenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveScreenStore.swift; sourceTree = "<group>"; };
 		C281E2BC7148818E81A05BDD /* MetricKitDiagnosticsReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitDiagnosticsReporter.swift; sourceTree = "<group>"; };
 		C2F0392B24139409AFA4E47C /* PinnedMetadataOrdering.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinnedMetadataOrdering.swift; sourceTree = "<group>"; };
@@ -318,17 +321,18 @@
 		C640EF6A48CE8D577DCEE0A1 /* ThreadDetailDataEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailDataEngineTests.swift; sourceTree = "<group>"; };
 		C6E2A340406A35F4BAA5D661 /* ThreadDetailStreamingMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailStreamingMergeTests.swift; sourceTree = "<group>"; };
 		C70DD6022DBA68077BE86671 /* ThreadDetailScreenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailScreenStore.swift; sourceTree = "<group>"; };
+		C92B71D4044F8DCE29ACF92C /* ThreadCardStreamSnapshotCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadCardStreamSnapshotCollector.swift; sourceTree = "<group>"; };
 		CA4B2D78E1C314E801AC77A7 /* ThreadDetailRenderProjectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailRenderProjectorTests.swift; sourceTree = "<group>"; };
 		CD2BA0DC0588BB0FDD143CF1 /* DockRenderModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockRenderModels.swift; sourceTree = "<group>"; };
 		CD386E730F3CFC73F11ED939 /* RelayBootstrapStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayBootstrapStore.swift; sourceTree = "<group>"; };
 		D032EB02CBBEC8E90E272104 /* SystemHealthModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemHealthModels.swift; sourceTree = "<group>"; };
+		D0C6087DD297C2B96F411427 /* DockThreadCardDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockThreadCardDTO.swift; sourceTree = "<group>"; };
 		D0ED12D9B6DD8F64B1253A01 /* AppLifecycleCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLifecycleCoordinator.swift; sourceTree = "<group>"; };
 		D2906879671992EF2A2FF563 /* RealtimeTranscriptionDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealtimeTranscriptionDTO.swift; sourceTree = "<group>"; };
 		D5070CB2076B611D53150818 /* ThreadListDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadListDTO.swift; sourceTree = "<group>"; };
 		D651D5F3F7501E91E429965A /* DockModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockModels.swift; sourceTree = "<group>"; };
 		D6F98E6722B55832F8AB7E27 /* ServerRequestCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerRequestCard.swift; sourceTree = "<group>"; };
 		D6FC9B9483DB6F49A90F5EC0 /* ServerRequestCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerRequestCardTests.swift; sourceTree = "<group>"; };
-		D76ACB118C0AE566FE1705F5 /* AppServerDockClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServerDockClient.swift; sourceTree = "<group>"; };
 		D81454B76AF8714B1D58A777 /* LocalMetadataEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalMetadataEngineTests.swift; sourceTree = "<group>"; };
 		D8389C4E022FA4A849D599C5 /* DockStoreScopeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockStoreScopeTests.swift; sourceTree = "<group>"; };
 		DBEB7D888C699B29518EC7DE /* SystemHealthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemHealthView.swift; sourceTree = "<group>"; };
@@ -337,8 +341,8 @@
 		E31AB3877106E108F7A6ECE7 /* DiagnosticsLoggingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsLoggingTests.swift; sourceTree = "<group>"; };
 		E3D6F66363B157CE032C8126 /* ConnectivityRenderProjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectivityRenderProjector.swift; sourceTree = "<group>"; };
 		E55D856F5240AE79495CC58B /* ClientCommandEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientCommandEngineTests.swift; sourceTree = "<group>"; };
+		E6DD9D9E114CF2A250BB4F65 /* ThreadCardRowProjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadCardRowProjector.swift; sourceTree = "<group>"; };
 		E778A4DF97409FC9ABA491D0 /* RelayDiagnosticsClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayDiagnosticsClient.swift; sourceTree = "<group>"; };
-		E97935C9F36B7DD5DEF2F4EA /* DockStreamDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockStreamDTO.swift; sourceTree = "<group>"; };
 		EA29DEE827A4AED8706215BC /* ClientRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientRuntime.swift; sourceTree = "<group>"; };
 		EA72EC35F21039DBC11379FA /* DockStoreStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockStoreStreamTests.swift; sourceTree = "<group>"; };
 		EB38D84A51C0B2DFCD81D1B1 /* DockFilterSurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockFilterSurfaceView.swift; sourceTree = "<group>"; };
@@ -428,9 +432,8 @@
 			isa = PBXGroup;
 			children = (
 				D6F98E6722B55832F8AB7E27 /* ServerRequestCard.swift */,
-				23406F25CA882A60E01CB56E /* SessionSummary.swift */,
-				95146D412CB7EB8AAFF12FCC /* SessionSummaryMapper.swift */,
 				37232256608F5A94E813243A /* ThreadEvent.swift */,
+				2D4097615560F0C37163AFEA /* ThreadIdentityModels.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -572,7 +575,7 @@
 				ABDB5847612728C391956985 /* AppServerClient.swift */,
 				5C93AD4A7645A6C045D62908 /* AppServerHostConnector.swift */,
 				ACA75584AA40FC172ED36E9D /* AppServerMethods.swift */,
-				E97935C9F36B7DD5DEF2F4EA /* DockStreamDTO.swift */,
+				D0C6087DD297C2B96F411427 /* DockThreadCardDTO.swift */,
 				F9C4FD936A8FB869F14F7F61 /* JSONRPC.swift */,
 				D2906879671992EF2A2FF563 /* RealtimeTranscriptionDTO.swift */,
 				ECA148D7F9C96BD5EDF6D709 /* ThreadDetailDTO.swift */,
@@ -599,21 +602,24 @@
 			children = (
 				0AC49015E8B9106FA9F6FBD7 /* AppConnectivityStore.swift */,
 				D0ED12D9B6DD8F64B1253A01 /* AppLifecycleCoordinator.swift */,
-				D76ACB118C0AE566FE1705F5 /* AppServerDockClient.swift */,
-				25F7EB6BEEC87CA667460DED /* AppServerDockStreamClient.swift */,
+				32F977877DF5918060FF8CFB /* AppServerThreadCardStreamClient.swift */,
+				BDF963DFD7FB1C7BBB9731A6 /* AppServerThreadCommandClient.swift */,
 				3F035F07B0BBC9BE740ED620 /* AppServerThreadDetailSession.swift */,
 				C41DCC2E4D7AAA1795AE5DDA /* ArchiveCleanupStore.swift */,
-				0F10974BD19C78CD0EB7C143 /* ArchiveSessionProjector.swift */,
 				FA032FF8D4142A8D3461B7DE /* ArchiveStore.swift */,
-				9C81305AA09AC5FF83868663 /* DockSessionProjection.swift */,
-				7883392B55EC173F6BC0E456 /* DockSessionTable.swift */,
+				03584C3682D41248EEBABA6D /* ArchiveThreadCardProjector.swift */,
+				AAA908F3DF922614212EFFDE /* DockCardProjection.swift */,
 				7A42B2061F9E45C1B6935F08 /* DockStore.swift */,
+				198CA6DE97B606E1D3E4423C /* HostConnectionTesting.swift */,
 				8A41544D2CBD2C298312F3D3 /* HostSettingsStore.swift */,
 				5DC52B300359BB6026278F44 /* LocalThreadMetadataStore.swift */,
 				C2F0392B24139409AFA4E47C /* PinnedMetadataOrdering.swift */,
 				14340ACB98A499C52DDFA40E /* ScriptedDockStreamClient.swift */,
 				77354F6F5E298E22F171218F /* ScriptedThreadDetailSession.swift */,
-				14D8A7B3E30C284A3103344B /* SessionRowProjector.swift */,
+				B7E9FEC0FF36247C084155D4 /* ThreadCardHostSnapshotLoader.swift */,
+				E6DD9D9E114CF2A250BB4F65 /* ThreadCardRowProjector.swift */,
+				C92B71D4044F8DCE29ACF92C /* ThreadCardStreamSnapshotCollector.swift */,
+				44E0DDCC4DD790E92D0FDC3C /* ThreadCardTable.swift */,
 				9D0EBB21C932928CC08AEA0D /* ThreadDetailStore.swift */,
 				21007B26E118AEEE5C48CD44 /* ThreadDetailStore+Voice.swift */,
 			);
@@ -711,6 +717,7 @@
 				1947A73C0345BB0BA9EEACB2 /* ResponsivenessContractTests.swift */,
 				D6FC9B9483DB6F49A90F5EC0 /* ServerRequestCardTests.swift */,
 				4A10C383FC2A103A264489F3 /* SystemHealthProjectorTests.swift */,
+				265058BD5A45035905017363 /* ThreadCardFixtureSummary.swift */,
 				C640EF6A48CE8D577DCEE0A1 /* ThreadDetailDataEngineTests.swift */,
 				35F0A3FA51E07637B6336FF8 /* ThreadDetailHeaderTests.swift */,
 				CA4B2D78E1C314E801AC77A7 /* ThreadDetailRenderProjectorTests.swift */,
@@ -720,7 +727,6 @@
 				9AEFC520C4BAC0B3AE2B1174 /* ThreadDetailStoreTestSupport.swift */,
 				C6E2A340406A35F4BAA5D661 /* ThreadDetailStreamingMergeTests.swift */,
 				3DC48CE0A2682B2B0F223F12 /* ThreadEventNormalizerTests.swift */,
-				4487067DBDCABE61793B26B5 /* ThreadListMappingTests.swift */,
 				FCC83E79154B50CD8B568FB4 /* VoiceCaptureControllerTests.swift */,
 			);
 			path = CodexDockTests;
@@ -912,6 +918,7 @@
 				816F300576B5FDDCEE34FE2B /* ResponsivenessContractTests.swift in Sources */,
 				E259E29A4592D3BF153F087F /* ServerRequestCardTests.swift in Sources */,
 				DFC2928AD48811AA05A87802 /* SystemHealthProjectorTests.swift in Sources */,
+				1CD3CFC3C4001E4259AC8169 /* ThreadCardFixtureSummary.swift in Sources */,
 				B3F4B8DF6EE106A7D7C9DE79 /* ThreadDetailDataEngineTests.swift in Sources */,
 				96BF98647FA20D2C514648B6 /* ThreadDetailHeaderTests.swift in Sources */,
 				7AB082BC507BD70E34212D1F /* ThreadDetailRenderProjectorTests.swift in Sources */,
@@ -921,7 +928,6 @@
 				030B4800DCC13C10C117D54D /* ThreadDetailStoreTests.swift in Sources */,
 				EB59738FA2D8FE25CD5BBA9A /* ThreadDetailStreamingMergeTests.swift in Sources */,
 				24830113F0217C6DEC1EA844 /* ThreadEventNormalizerTests.swift in Sources */,
-				1E86F12DB4ADEA5C3AE94D88 /* ThreadListMappingTests.swift in Sources */,
 				6D5E2B1582C73AADFE209E1D /* VoiceCaptureControllerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -941,10 +947,10 @@
 				804101052873E16E35EA46C3 /* AppConnectivityStore.swift in Sources */,
 				08757DA9CF90EECF74468A35 /* AppLifecycleCoordinator.swift in Sources */,
 				7620B7A25D86E81210477475 /* AppServerClient.swift in Sources */,
-				7430376B939E3611D67885F0 /* AppServerDockClient.swift in Sources */,
-				2D57BC119D465C9AF43246C7 /* AppServerDockStreamClient.swift in Sources */,
 				E5FFD254DE0F4973C405B626 /* AppServerHostConnector.swift in Sources */,
 				1BFBBBFFA3E7C5115F4B9897 /* AppServerMethods.swift in Sources */,
+				FC1122788ED53BE77D570C31 /* AppServerThreadCardStreamClient.swift in Sources */,
+				5525450452402EAA37B6BFAB /* AppServerThreadCommandClient.swift in Sources */,
 				0B0323F75A5305EB84D9B0AB /* AppServerThreadDetailSession.swift in Sources */,
 				A6FA51810C90994C623BF3CC /* ArchiveCleanupDataEngine.swift in Sources */,
 				9DA4B6C0198454BC9F97AFAF /* ArchiveCleanupModels.swift in Sources */,
@@ -952,8 +958,8 @@
 				3DEBE79DD90F1A3C8D7CBA9F /* ArchiveCleanupView.swift in Sources */,
 				4C280F1F481BEDDD0BCFC613 /* ArchiveDataEngine.swift in Sources */,
 				F6228459D4E8A88C2944AA36 /* ArchiveScreenStore.swift in Sources */,
-				46EE01D2F9B72B3561BED5BF /* ArchiveSessionProjector.swift in Sources */,
 				1463EC33BFEF2CA641D47CAE /* ArchiveStore.swift in Sources */,
+				5226B704EE6CA1B592D11AD8 /* ArchiveThreadCardProjector.swift in Sources */,
 				3101E586A0F08E291A67103D /* ArchiveView.swift in Sources */,
 				9831B949551783839A91AFA5 /* AutomationID.swift in Sources */,
 				3067F6AF69B1677B9B3D2699 /* ClientCommandEngine.swift in Sources */,
@@ -968,6 +974,7 @@
 				52F972C9D07E4AB09A6F0EB9 /* ConnectivityRenderModels.swift in Sources */,
 				5DC04EC084C972BFC2BEE7ED /* ConnectivityRenderProjector.swift in Sources */,
 				70137F2F9B5FC5A64F66D1DB /* ConnectivityScreenStore.swift in Sources */,
+				A896F5E728550655BD0CCF1A /* DockCardProjection.swift in Sources */,
 				E305EECD87144069B4EC216D /* DockDataEngine.swift in Sources */,
 				E2000FC36D2227D461E5DD2F /* DockFilterSurfaceView.swift in Sources */,
 				B67F53656DBBB5DAAFBE8051 /* DockGroupRows.swift in Sources */,
@@ -978,16 +985,15 @@
 				8E5B70CECFD6E16F36C86C9C /* DockRenderProjector.swift in Sources */,
 				ED7F9A613BABAC0354D5DD83 /* DockRowContextMenu.swift in Sources */,
 				9FB631A3D69DBCDE93F52788 /* DockScreenStore.swift in Sources */,
-				74C104A7F7207E4AF17272C5 /* DockSessionProjection.swift in Sources */,
-				69D02FDE3B2CC81AC588D424 /* DockSessionTable.swift in Sources */,
 				8C3C7A78B136227B1485019D /* DockSharedViews.swift in Sources */,
 				08C32D79593965966136996A /* DockStore.swift in Sources */,
-				DCA7E3D5CAE3E822DDCFAFF7 /* DockStreamDTO.swift in Sources */,
 				70F885C2B35239E3BA6A6555 /* DockTaskMenuView.swift in Sources */,
 				52195812AEB47949BAC67950 /* DockTaskSheet.swift in Sources */,
+				5613D3DB17E1085B0C1AD446 /* DockThreadCardDTO.swift in Sources */,
 				486650859FCE02D4B036B60B /* DockView.swift in Sources */,
 				5AF2B1E51556CCA12BBEA152 /* DockViewPreview.swift in Sources */,
 				E88D5BF2DC414497611228C9 /* GlobalConnectivityIndicatorView.swift in Sources */,
+				F39EA0FF31B0095423CE1FFD /* HostConnectionTesting.swift in Sources */,
 				5B5103973B19887BEA32843D /* HostRegistry.swift in Sources */,
 				DF227D6F259F897153A5D588 /* HostSettingsScreenStore.swift in Sources */,
 				20C85B3C748159B0B528AF6E /* HostSettingsStore.swift in Sources */,
@@ -1010,12 +1016,13 @@
 				8581F68F9B503403BFDC4A1A /* ScriptedThreadDetailSession.swift in Sources */,
 				43CB12A8A3DF95391ADD2533 /* ServerRequestCard.swift in Sources */,
 				5F045E715AFE5F40D383E82D /* SessionDetailView.swift in Sources */,
-				D87C88DC31B028EAA0DF9B92 /* SessionRowProjector.swift in Sources */,
-				68A4924EA66B7E73782296C8 /* SessionSummary.swift in Sources */,
-				FEA3427B9E20A65467D79334 /* SessionSummaryMapper.swift in Sources */,
 				C9D89E53EBAECE0E59D4904B /* SystemHealthModels.swift in Sources */,
 				8881609D5468C1FEBCEFFDE3 /* SystemHealthProjector.swift in Sources */,
 				EBA25798E4C8F132558135AB /* SystemHealthView.swift in Sources */,
+				0101E7A5C30CB4F684602D8C /* ThreadCardHostSnapshotLoader.swift in Sources */,
+				5E3834B52D4978DC9A25D463 /* ThreadCardRowProjector.swift in Sources */,
+				3804ED0CFB9C44B795432B75 /* ThreadCardStreamSnapshotCollector.swift in Sources */,
+				784A1FB6B03951EB800DD60E /* ThreadCardTable.swift in Sources */,
 				4D9CD10593ABDDD5F6E74BD9 /* ThreadDetailDTO.swift in Sources */,
 				72A9847E37965B2C3A61D166 /* ThreadDetailDataEngine.swift in Sources */,
 				57B9BC26F12DDA95CC471564 /* ThreadDetailRenderModels.swift in Sources */,
@@ -1024,6 +1031,7 @@
 				A0649B72566F4EFCAB2996F2 /* ThreadDetailStore+Voice.swift in Sources */,
 				99B452E9A8D07C40003708BF /* ThreadDetailStore.swift in Sources */,
 				3AB27D218C22102A68404C7D /* ThreadEvent.swift in Sources */,
+				F7B1E2540C9363608E8560B5 /* ThreadIdentityModels.swift in Sources */,
 				D1510D6CA7B7B44EDBB04A96 /* ThreadListDTO.swift in Sources */,
 				D196BBABCC37BD977E49D040 /* ThreadMessageListView.swift in Sources */,
 				AF65691E01922D89D3D0BF20 /* TranscriptionEngine.swift in Sources */,

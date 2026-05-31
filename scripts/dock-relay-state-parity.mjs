@@ -827,22 +827,22 @@ function sanitizeRelayGoal(goal) {
   };
 }
 
-function sanitizeDockSession(session) {
-  if (!session || typeof session !== "object") {
+function sanitizeDockThreadCard(card) {
+  if (!card || typeof card !== "object") {
     return null;
   }
   return {
-    id: session.id || null,
-    hostID: session.hostID || null,
-    threadID: session.threadID || null,
-    backendSessionID: session.backendSessionID || null,
-    status: session.status || null,
-    lane: session.lane || null,
-    kindLabel: session.kindLabel || null,
-    sourceKind: session.source?.kind || null,
-    updatedAt: session.updatedAt ?? null,
-    title: textFingerprint(session.title),
-    summary: textFingerprint(session.summary),
+    id: card.id || null,
+    logicalHostID: card.logicalHostID || null,
+    threadID: card.threadID || null,
+    backendSessionID: card.backendSessionID || null,
+    status: card.status || null,
+    lane: card.lane || null,
+    sourceKind: card.sourceKind || null,
+    activityAt: card.activityAt ?? null,
+    activityAtMs: card.activityAtMs ?? null,
+    title: textFingerprint(card.title),
+    displaySummary: textFingerprint(card.displaySummary),
   };
 }
 
@@ -2026,10 +2026,10 @@ function compareSpawnEdges(findings, snapshot, relayRowsByID, sqliteRowsByID, sp
   };
 }
 
-function laneCountsForDockSessions(sessions) {
+function laneCountsForThreadCards(cards) {
   const counts = {};
-  for (const session of sessions || []) {
-    const lane = session?.lane || "unknown";
+  for (const card of cards || []) {
+    const lane = card?.lane || "unknown";
     counts[lane] = (counts[lane] || 0) + 1;
   }
   return Object.fromEntries(Object.entries(counts).sort(([lhs], [rhs]) => lhs.localeCompare(rhs)));
@@ -2062,11 +2062,11 @@ function orderMismatchCount(expectedIDs, actualIDs) {
   return mismatches;
 }
 
-function dockSessionUpdatedAtByThreadID(sessions) {
+function dockCardActivityAtByThreadID(cards) {
   const byID = new Map();
-  for (const session of sessions || []) {
-    if (session?.threadID) {
-      byID.set(session.threadID, session.updatedAt ?? null);
+  for (const card of cards || []) {
+    if (card?.threadID) {
+      byID.set(card.threadID, card.activityAtMs ?? card.activityAt ?? null);
     }
   }
   return byID;
@@ -2118,7 +2118,7 @@ function dockOrderMismatchMovement(expectedIDs, actualIDs, snapshotUpdatedAt, do
   };
 }
 
-function compareDockCodexOrder(findings, snapshot, sessions, expectedIDs, auditMovement = { addedThreadIDs: new Set() }) {
+function compareDockCodexOrder(findings, snapshot, cards, expectedIDs, auditMovement = { addedThreadIDs: new Set() }) {
   const orderScope = (snapshot?.scopes || []).find((scope) => scope?.name === "active:allSourceKinds");
   if (!orderScope || !Array.isArray(orderScope.threadIDsInCodexOrder)) {
     return {
@@ -2133,7 +2133,7 @@ function compareDockCodexOrder(findings, snapshot, sessions, expectedIDs, auditM
     };
   }
 
-  const dockIDs = sessions.map((session) => session.threadID).filter(Boolean);
+  const dockIDs = cards.map((card) => card.threadID).filter(Boolean);
   const dockIDSet = new Set(dockIDs);
   const codexOrderSet = new Set(orderScope.threadIDsInCodexOrder);
   const comparableIDs = new Set([...expectedIDs].filter((threadID) => (
@@ -2149,7 +2149,7 @@ function compareDockCodexOrder(findings, snapshot, sessions, expectedIDs, auditM
     expectedOrderIDs,
     actualOrderIDs,
     snapshotUpdatedAtByThreadID(orderScope),
-    dockSessionUpdatedAtByThreadID(sessions),
+    dockCardActivityAtByThreadID(cards),
   );
 
   if (movement.firstStableMismatch) {
@@ -2182,40 +2182,40 @@ function compareDockCodexOrder(findings, snapshot, sessions, expectedIDs, auditM
   };
 }
 
-function compareDockLiveStatuses(findings, snapshot, sessions) {
+function compareDockLiveStatuses(findings, snapshot, cards) {
   if (!snapshot?.loaded || snapshot.loaded.complete === false) {
     return {
       compared: false,
       loadedThreadCount: null,
-      loadedDockSessionsCompared: null,
+      loadedDockCardsCompared: null,
       loadedDockStatusMismatches: null,
-      staleLiveDockSessions: null,
+      staleLiveDockCards: null,
       firstLoadedDockStatusMismatch: null,
     };
   }
 
   const loadedIDs = new Set(snapshot.loaded.threadIDs || []);
   const entriesByID = new Map((snapshot.threads || []).map((entry) => [entry.threadID, entry]));
-  let loadedDockSessionsCompared = 0;
+  let loadedDockCardsCompared = 0;
   let loadedDockStatusMismatches = 0;
-  let staleLiveDockSessions = 0;
+  let staleLiveDockCards = 0;
   let firstLoadedDockStatusMismatch = null;
 
-  for (const session of sessions) {
-    if (!session?.threadID || !loadedIDs.has(session.threadID)) {
+  for (const card of cards) {
+    if (!card?.threadID || !loadedIDs.has(card.threadID)) {
       continue;
     }
-    loadedDockSessionsCompared += 1;
-    const evidence = statusEvidenceForRelayEntry(entriesByID.get(session.threadID));
+    loadedDockCardsCompared += 1;
+    const evidence = statusEvidenceForRelayEntry(entriesByID.get(card.threadID));
     const expected = normalizedDockStatusFromThreadStatus(evidence.status);
-    const actual = session.status || "unknown";
+    const actual = card.status || "unknown";
     if (actual === "dormant" || actual === "unknown") {
-      staleLiveDockSessions += 1;
+      staleLiveDockCards += 1;
     }
     if (expected !== "unknown" && actual !== expected) {
       loadedDockStatusMismatches += 1;
       firstLoadedDockStatusMismatch = firstLoadedDockStatusMismatch || {
-        threadID: session.threadID,
+        threadID: card.threadID,
         expected,
         actual,
         statusSource: evidence.source,
@@ -2225,19 +2225,19 @@ function compareDockLiveStatuses(findings, snapshot, sessions) {
 
   if (firstLoadedDockStatusMismatch) {
     addFinding(findings, "error", firstLoadedDockStatusMismatch.threadID, "dock.subscribe", "status", "dock/subscribe status differs from loaded app-server thread status", firstLoadedDockStatusMismatch);
-  } else if (staleLiveDockSessions > 0) {
-    addFinding(findings, "error", null, "dock.subscribe", "status", "dock/subscribe marked loaded app-server sessions as dormant or unknown", {
-      staleLiveDockSessions,
-      loadedDockSessionsCompared,
+  } else if (staleLiveDockCards > 0) {
+    addFinding(findings, "error", null, "dock.subscribe", "status", "dock/subscribe marked loaded app-server cards as dormant or unknown", {
+      staleLiveDockCards,
+      loadedDockCardsCompared,
     });
   }
 
   return {
     compared: true,
     loadedThreadCount: loadedIDs.size,
-    loadedDockSessionsCompared,
+    loadedDockCardsCompared,
     loadedDockStatusMismatches,
-    staleLiveDockSessions,
+    staleLiveDockCards,
     firstLoadedDockStatusMismatch,
   };
 }
@@ -2246,14 +2246,16 @@ function compareDockSubscribe(findings, dockSnapshot, sqliteRows, auditMovement 
   if (!dockSnapshot) {
     return {
       included: false,
-      sessionCount: null,
+      cardCount: null,
       expectedActiveListableCount: null,
+      expectedWindowCount: null,
+      window: null,
       archivedThreadCount: null,
-      duplicateSessionIDs: null,
+      duplicateCardIDs: null,
       duplicateThreadIDs: null,
       missingActiveListableFromDock: null,
       missingActiveListableFromDockDueToAuditMovement: null,
-      extraDockSessions: null,
+      extraDockCards: null,
       codexOrderCompared: null,
       codexOrderComparableThreads: null,
       codexOrderMismatches: null,
@@ -2264,22 +2266,29 @@ function compareDockSubscribe(findings, dockSnapshot, sqliteRows, auditMovement 
       codexOrderFirstMovementMismatch: null,
       loadedStatusCompared: null,
       loadedThreadCount: null,
-      loadedDockSessionsCompared: null,
+      loadedDockCardsCompared: null,
       loadedDockStatusMismatches: null,
-      staleLiveDockSessions: null,
+      staleLiveDockCards: null,
       firstLoadedDockStatusMismatch: null,
       lanes: null,
     };
   }
 
-  const sessions = Array.isArray(dockSnapshot.sessions) ? dockSnapshot.sessions : [];
+  const cards = Array.isArray(dockSnapshot.cards) ? dockSnapshot.cards : [];
+  const window = dockSnapshot.window && typeof dockSnapshot.window === "object"
+    ? {
+      offset: Number.isFinite(Number(dockSnapshot.window.offset)) ? Number(dockSnapshot.window.offset) : 0,
+      limit: Number.isFinite(Number(dockSnapshot.window.limit)) ? Number(dockSnapshot.window.limit) : cards.length,
+      rowCount: Number.isFinite(Number(dockSnapshot.window.rowCount)) ? Number(dockSnapshot.window.rowCount) : cards.length,
+    }
+    : null;
   const sqliteRowsByID = new Map((sqliteRows || []).map((row) => [row.id, row]));
-  const dockIDs = sessions.map((session) => session.threadID).filter(Boolean);
+  const dockIDs = cards.map((card) => card.threadID).filter(Boolean);
   const dockIDSet = new Set(dockIDs);
-  const duplicateSessionIDs = duplicateValues(sessions.map((session) => session.id).filter(Boolean));
+  const duplicateCardIDs = duplicateValues(cards.map((card) => card.id).filter(Boolean));
   const duplicateThreadIDs = duplicateValues(dockIDs);
-  for (const id of duplicateSessionIDs) {
-    addFinding(findings, "error", null, "dock.subscribe", "id", "dock/subscribe returned duplicate session IDs", { id });
+  for (const id of duplicateCardIDs) {
+    addFinding(findings, "error", null, "dock.subscribe", "id", "dock/subscribe returned duplicate card IDs", { id });
   }
   for (const threadID of duplicateThreadIDs) {
     addFinding(findings, "error", threadID, "dock.subscribe", "threadID", "dock/subscribe returned the same thread more than once");
@@ -2292,51 +2301,66 @@ function compareDockSubscribe(findings, dockSnapshot, sqliteRows, auditMovement 
       && expectedSourceScopeNamesForSQLiteThread(row, dockReachableSourceScopes).length > 0
   ));
   const expectedIDs = new Set(expectedRows.map((row) => row.id).filter(Boolean));
-  const allMissing = [...expectedIDs].filter((threadID) => !dockIDSet.has(threadID)).sort();
+  const orderScope = (snapshot?.scopes || []).find((scope) => scope?.name === "active:allSourceKinds");
+  const expectedOrderedIDs = Array.isArray(orderScope?.threadIDsInCodexOrder)
+    ? orderScope.threadIDsInCodexOrder.filter((threadID) => expectedIDs.has(threadID))
+    : expectedRows.map((row) => row.id).filter(Boolean);
+  const windowOffset = window?.offset ?? 0;
+  const windowRowCount = window?.rowCount ?? expectedOrderedIDs.length;
+  const expectedWindowIDs = expectedOrderedIDs.slice(windowOffset, windowOffset + windowRowCount);
+  const expectedWindowIDSet = new Set(expectedWindowIDs);
+  const allMissing = expectedWindowIDs.filter((threadID) => !dockIDSet.has(threadID)).sort();
   const missingDueToAuditMovement = allMissing.filter((threadID) => auditMovement.addedThreadIDs?.has(threadID));
   const missing = allMissing.filter((threadID) => !auditMovement.addedThreadIDs?.has(threadID));
-  const extra = sessions.filter((session) => !expectedIDs.has(session.threadID));
-  const archived = sessions.filter((session) => {
-    const row = sqliteRowsByID.get(session.threadID);
+  const extra = cards.filter((card) => !expectedIDs.has(card.threadID));
+  const archived = cards.filter((card) => {
+    const row = sqliteRowsByID.get(card.threadID);
     return row && sqliteArchived(row);
   });
 
   for (const threadID of missing) {
-    addFinding(findings, "error", threadID, "dock.subscribe", "threadID", "dock/subscribe is missing an active app-server-listable thread", {
+    addFinding(findings, "error", threadID, "dock.subscribe", "threadID", "dock/subscribe returned window is missing an active app-server-listable thread", {
+      window,
       sqlite: sanitizeSQLiteThread(sqliteRowsByID.get(threadID)),
     });
   }
   for (const threadID of missingDueToAuditMovement) {
-    addFinding(findings, "info", threadID, "dock.subscribe", "threadID", "active app-server-listable thread appeared in SQLite after the dock snapshot was captured", {
+    addFinding(findings, "info", threadID, "dock.subscribe", "threadID", "active app-server-listable thread appeared in SQLite after the dock snapshot window was captured", {
+      window,
       sqlite: sanitizeSQLiteThread(sqliteRowsByID.get(threadID)),
     });
   }
-  for (const session of archived) {
-    addFinding(findings, "error", session.threadID, "dock.subscribe", "archived", "dock/subscribe returned a Codex-archived thread", {
-      dock: sanitizeDockSession(session),
-      sqlite: sanitizeSQLiteThread(sqliteRowsByID.get(session.threadID)),
+  for (const card of archived) {
+    addFinding(findings, "error", card.threadID, "dock.subscribe", "archived", "dock/subscribe returned a Codex-archived thread", {
+      dock: sanitizeDockThreadCard(card),
+      sqlite: sanitizeSQLiteThread(sqliteRowsByID.get(card.threadID)),
     });
   }
-  for (const session of extra) {
-    addFinding(findings, "warning", session.threadID || null, "dock.subscribe", "threadID", "dock/subscribe returned a session outside the expected active app-server-listable SQLite set", {
-      dock: sanitizeDockSession(session),
-      sqlite: sanitizeSQLiteThread(sqliteRowsByID.get(session.threadID)),
+  for (const card of extra) {
+    addFinding(findings, "warning", card.threadID || null, "dock.subscribe", "threadID", "dock/subscribe returned a card outside the expected active app-server-listable SQLite set", {
+      dock: sanitizeDockThreadCard(card),
+      sqlite: sanitizeSQLiteThread(sqliteRowsByID.get(card.threadID)),
     });
   }
 
-  const codexOrder = compareDockCodexOrder(findings, snapshot, sessions, expectedIDs, auditMovement);
-  const liveStatuses = compareDockLiveStatuses(findings, snapshot, sessions);
+  const codexOrder = compareDockCodexOrder(findings, snapshot, cards, expectedWindowIDSet, auditMovement);
+  const liveStatuses = compareDockLiveStatuses(findings, snapshot, cards);
 
   return {
     included: true,
-    sessionCount: sessions.length,
+    cardCount: cards.length,
     expectedActiveListableCount: expectedIDs.size,
+    expectedWindowCount: expectedWindowIDs.length,
+    window: window ? {
+      ...window,
+      totalRows: Number.isFinite(Number(dockSnapshot.totalRows)) ? Number(dockSnapshot.totalRows) : expectedIDs.size,
+    } : null,
     archivedThreadCount: archived.length,
-    duplicateSessionIDs: duplicateSessionIDs.length,
+    duplicateCardIDs: duplicateCardIDs.length,
     duplicateThreadIDs: duplicateThreadIDs.length,
     missingActiveListableFromDock: missing.length,
     missingActiveListableFromDockDueToAuditMovement: missingDueToAuditMovement.length,
-    extraDockSessions: extra.length,
+    extraDockCards: extra.length,
     codexOrderCompared: codexOrder.compared,
     codexOrderComparableThreads: codexOrder.comparableThreadCount,
     codexOrderMismatches: codexOrder.mismatches,
@@ -2347,11 +2371,11 @@ function compareDockSubscribe(findings, dockSnapshot, sqliteRows, auditMovement 
     codexOrderFirstMovementMismatch: codexOrder.firstMovementMismatch,
     loadedStatusCompared: liveStatuses.compared,
     loadedThreadCount: liveStatuses.loadedThreadCount,
-    loadedDockSessionsCompared: liveStatuses.loadedDockSessionsCompared,
+    loadedDockCardsCompared: liveStatuses.loadedDockCardsCompared,
     loadedDockStatusMismatches: liveStatuses.loadedDockStatusMismatches,
-    staleLiveDockSessions: liveStatuses.staleLiveDockSessions,
+    staleLiveDockCards: liveStatuses.staleLiveDockCards,
     firstLoadedDockStatusMismatch: liveStatuses.firstLoadedDockStatusMismatch,
-    lanes: laneCountsForDockSessions(sessions),
+    lanes: laneCountsForThreadCards(cards),
   };
 }
 
@@ -2547,20 +2571,20 @@ function buildBlindSpots(options, snapshot, sqliteAfter, goalSummary, reportSumm
     blindSpots.push("At least one missing SQLite thread was not found by relay thread/search safe-term probes.");
   }
   if (!reportSummary.dockParity?.included) {
-    blindSpots.push("This run did not verify the app-facing dock/subscribe session stream.");
+    blindSpots.push("This run did not verify the app-facing dock/subscribe card stream.");
   }
   if (reportSummary.dockParity?.included && (
     reportSummary.dockParity.missingActiveListableFromDock > 0
       || reportSummary.dockParity.archivedThreadCount > 0
-      || reportSummary.dockParity.extraDockSessions > 0
+      || reportSummary.dockParity.extraDockCards > 0
   )) {
-    blindSpots.push("dock/subscribe did not exactly match the active app-server-listable SQLite thread set.");
+    blindSpots.push("dock/subscribe returned window did not exactly match the active app-server-listable SQLite thread window.");
   }
   if (reportSummary.dockParity?.included && reportSummary.dockParity.codexOrderCompared === false) {
     blindSpots.push("dock/subscribe order was not compared against app-server active:allSourceKinds thread/list order.");
   }
   if (reportSummary.dockParity?.included && (reportSummary.dockParity.codexOrderStableMismatches || 0) > 0) {
-    blindSpots.push("dock/subscribe returned the right active session set, but not in the same order as app-server active:allSourceKinds thread/list.");
+    blindSpots.push("dock/subscribe returned the right active card set, but not in the same order as app-server active:allSourceKinds thread/list.");
   }
   if (reportSummary.dockParity?.included && (reportSummary.dockParity.codexOrderMismatchesDueToFreshnessMovement || 0) > 0) {
     blindSpots.push("dock/subscribe order comparison saw app-server row timestamp movement during the audit; stable order mismatches are counted separately.");
@@ -2571,8 +2595,8 @@ function buildBlindSpots(options, snapshot, sqliteAfter, goalSummary, reportSumm
   if (reportSummary.dockParity?.included && (reportSummary.dockParity.loadedDockStatusMismatches || 0) > 0) {
     blindSpots.push("dock/subscribe returned a status that disagreed with loaded app-server thread status.");
   }
-  if (reportSummary.dockParity?.included && (reportSummary.dockParity.staleLiveDockSessions || 0) > 0) {
-    blindSpots.push("dock/subscribe marked at least one loaded app-server session as dormant or unknown.");
+  if (reportSummary.dockParity?.included && (reportSummary.dockParity.staleLiveDockCards || 0) > 0) {
+    blindSpots.push("dock/subscribe marked at least one loaded app-server card as dormant or unknown.");
   }
   if (!reportSummary.turnParity?.included) {
     blindSpots.push("This run did not verify thread/turns/list order or completeness.");
@@ -2645,10 +2669,10 @@ function summarizeCompletionBoundary(reportSummary) {
     dockActiveRowsExact:
       reportSummary.dockParity?.included === true
       && reportSummary.dockParity.archivedThreadCount === 0
-      && reportSummary.dockParity.duplicateSessionIDs === 0
+      && reportSummary.dockParity.duplicateCardIDs === 0
       && reportSummary.dockParity.duplicateThreadIDs === 0
       && reportSummary.dockParity.missingActiveListableFromDock === 0
-      && reportSummary.dockParity.extraDockSessions === 0,
+      && reportSummary.dockParity.extraDockCards === 0,
     dockOrderExact:
       reportSummary.dockParity?.included === true
       && reportSummary.dockParity.codexOrderCompared === true
@@ -2657,7 +2681,7 @@ function summarizeCompletionBoundary(reportSummary) {
       reportSummary.dockParity?.included === true
       && reportSummary.dockParity.loadedStatusCompared === true
       && reportSummary.dockParity.loadedDockStatusMismatches === 0
-      && reportSummary.dockParity.staleLiveDockSessions === 0,
+      && reportSummary.dockParity.staleLiveDockCards === 0,
     canonicalAppServerProjectionComplete:
       reportSummary.relayCanonicalProjection?.included === true
       && reportSummary.relayCanonicalProjection.missingProjectionThreads === 0,
@@ -3191,8 +3215,13 @@ async function buildReport(options) {
     relay: summarizeRelaySnapshot(snapshot),
     dock: dockSnapshot ? {
       kind: dockSnapshot.kind || null,
-      sessionCount: Array.isArray(dockSnapshot.sessions) ? dockSnapshot.sessions.length : null,
-      lanes: laneCountsForDockSessions(dockSnapshot.sessions || []),
+      schemaVersion: dockSnapshot.schemaVersion ?? null,
+      view: dockSnapshot.view || null,
+      complete: dockSnapshot.complete ?? null,
+      totalRows: dockSnapshot.totalRows ?? null,
+      window: dockSnapshot.window || null,
+      cardCount: Array.isArray(dockSnapshot.cards) ? dockSnapshot.cards.length : null,
+      lanes: laneCountsForThreadCards(dockSnapshot.cards || []),
       freshness: dockSnapshot.freshness || null,
     } : null,
     sqlite: {

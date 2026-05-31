@@ -10,11 +10,11 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let olderThan90Days = now.addingTimeInterval(-91 * 86_400)
         let exactly90Days = now.addingTimeInterval(-90 * 86_400)
         let recent = now.addingTimeInterval(-10 * 86_400)
-        let loader = CleanupQueryRecordingLoader(results: [
+        let loader = CleanupCardQueryRecordingLoader(results: [
             host.id: .success(
-                DockLoadResult(
-                    summaries: [
-                        makeSummary(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "old-idle",
                             branch: "main",
@@ -22,7 +22,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             lastActivity: olderThan90Days,
                             prompt: "Old idle"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "old-error",
                             branch: "main",
@@ -30,7 +30,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             lastActivity: olderThan90Days,
                             prompt: "Old error"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "old-pinned",
                             branch: "main",
@@ -38,7 +38,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             lastActivity: olderThan90Days,
                             prompt: "Old pinned"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "old-running",
                             branch: "main",
@@ -46,7 +46,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             lastActivity: olderThan90Days,
                             prompt: "Old running"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "old-needs-input",
                             branch: "main",
@@ -54,7 +54,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             lastActivity: olderThan90Days,
                             prompt: "Old needs input"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "old-needs-approval",
                             branch: "main",
@@ -62,7 +62,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             lastActivity: olderThan90Days,
                             prompt: "Old needs approval"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "old-watch",
                             branch: "main",
@@ -70,7 +70,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             lastActivity: olderThan90Days,
                             prompt: "Old watch"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "old-agent",
                             branch: "main",
@@ -79,7 +79,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             prompt: "Old agent",
                             origin: .agentOrAutomation(subtype: .exec)
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "exactly-cutoff",
                             branch: "main",
@@ -87,7 +87,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             lastActivity: exactly90Days,
                             prompt: "Exactly cutoff"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "recent",
                             branch: "main",
@@ -107,7 +107,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         ])
         let store = ArchiveCleanupStore(
             registry: registry,
-            loader: loader,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: SelectiveArchiveCleanupArchiver(),
             metadataStore: metadataStore,
             now: { now }
@@ -116,7 +116,8 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         await store.loadPreview(rule: ArchiveCleanupRule(age: .days90))
         let recordedQueries = await loader.recordedQueries(for: host.id)
 
-        XCTAssertEqual(recordedQueries, [.activeHumanFullScan])
+        XCTAssertTrue(recordedQueries.contains(.activeHuman))
+        XCTAssertTrue(recordedQueries.contains(.activeAgents))
         guard case .preview(let snapshot) = store.state else {
             return XCTFail("Expected cleanup preview, got \(store.state)")
         }
@@ -140,16 +141,84 @@ final class ArchiveCleanupStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testPreviewCollectsDockCatchupWindowsBeforeApplyingRules() async throws {
+        let host = makeHost()
+        let registry = try HostRegistry(hosts: [host])
+        let now = Date(timeIntervalSince1970: 20_000_000)
+        let olderThan90Days = now.addingTimeInterval(-91 * 86_400)
+        let firstCard = threadCardFixture(
+            host: host,
+            threadID: "old-first",
+            title: "Old first",
+            status: .idle,
+            updatedAt: Int64(olderThan90Days.timeIntervalSince1970)
+        )
+        let secondCard = threadCardFixture(
+            host: host,
+            threadID: "old-second",
+            title: "Old second",
+            status: .idle,
+            updatedAt: Int64(olderThan90Days.timeIntervalSince1970 - 1)
+        )
+        let connection = ManualThreadCardStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "cleanup-catchup",
+                seq: 1,
+                cards: [firstCard],
+                complete: false,
+                totalRows: 2,
+                window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1, nextOffset: 1)
+            )
+        )
+        let store = ArchiveCleanupStore(
+            registry: registry,
+            streamClient: ManualThreadCardStreamClient(connection: connection),
+            archiver: SelectiveArchiveCleanupArchiver(),
+            metadataStore: InMemoryLocalThreadMetadataStore(),
+            now: { now }
+        )
+
+        let previewTask = Task {
+            await store.loadPreview(rule: ArchiveCleanupRule(age: .days90))
+        }
+        await Task.yield()
+        await connection.send(
+            ThreadCardStreamUpdateDTO(
+                kind: .delta,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                view: .dock,
+                complete: true,
+                totalRows: 2,
+                window: DockStreamWindowDTO(offset: 1, limit: 1, rowCount: 1),
+                stateGeneration: 2,
+                epoch: "cleanup-catchup",
+                baseSeq: 1,
+                seq: 2,
+                freshness: DockStreamFreshnessDTO(status: .fresh),
+                upsertCards: [secondCard]
+            )
+        )
+        await previewTask.value
+
+        guard case .preview(let snapshot) = store.state else {
+            return XCTFail("Expected cleanup preview, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.candidates.map(\.title), ["Old first", "Old second"])
+        XCTAssertEqual(snapshot.hostSummaries.first?.candidateCount, 2)
+    }
+
+    @MainActor
     func testPreviewKeepsSuccessfulHostsWhenOneHostFails() async throws {
         let amir = makeHost()
         let home = makeHost(url: "ws://100.66.11.7:4510")
         let registry = try HostRegistry(hosts: [amir, home])
         let now = Date(timeIntervalSince1970: 20_000_000)
-        let loader = CleanupQueryRecordingLoader(results: [
+        let loader = CleanupCardQueryRecordingLoader(results: [
             amir.id: .success(
-                DockLoadResult(
-                    summaries: [
-                        makeSummary(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
                             hostID: amir.id,
                             threadID: "amir-old",
                             branch: "main",
@@ -164,7 +233,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         ])
         let store = ArchiveCleanupStore(
             registry: registry,
-            loader: loader,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: SelectiveArchiveCleanupArchiver(),
             metadataStore: InMemoryLocalThreadMetadataStore(),
             now: { now }
@@ -187,13 +256,13 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let amir = makeHost()
         let home = makeHost(url: "ws://100.66.11.7:4510")
         let registry = try HostRegistry(hosts: [amir, home])
-        let loader = CleanupQueryRecordingLoader(results: [
+        let loader = CleanupCardQueryRecordingLoader(results: [
             amir.id: .failure(.offline("relay stopped")),
             home.id: .failure(.error("bad token"))
         ])
         let store = ArchiveCleanupStore(
             registry: registry,
-            loader: loader,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: SelectiveArchiveCleanupArchiver(),
             metadataStore: InMemoryLocalThreadMetadataStore(),
             now: { Date(timeIntervalSince1970: 20_000_000) }
@@ -214,11 +283,11 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
         let now = Date(timeIntervalSince1970: 20_000_000)
-        let loader = CleanupQueryRecordingLoader(results: [
+        let loader = CleanupCardQueryRecordingLoader(results: [
             host.id: .success(
-                DockLoadResult(
-                    summaries: [
-                        makeSummary(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "archive-ok",
                             branch: "main",
@@ -226,7 +295,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             lastActivity: now.addingTimeInterval(-91 * 86_400),
                             prompt: "Archive ok"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "archive-fails",
                             branch: "main",
@@ -241,7 +310,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let archiver = SelectiveArchiveCleanupArchiver(failingThreadIDs: ["archive-fails"])
         let store = ArchiveCleanupStore(
             registry: registry,
-            loader: loader,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: archiver,
             metadataStore: InMemoryLocalThreadMetadataStore(),
             now: { now }
@@ -269,11 +338,11 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
         let now = Date(timeIntervalSince1970: 20_000_000)
-        let loader = CleanupQueryRecordingLoader(results: [
+        let loader = CleanupCardQueryRecordingLoader(results: [
             host.id: .success(
-                DockLoadResult(
-                    summaries: [
-                        makeSummary(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "archive-one",
                             branch: "main",
@@ -281,7 +350,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             lastActivity: now.addingTimeInterval(-91 * 86_400),
                             prompt: "Archive one"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "archive-two",
                             branch: "main",
@@ -296,7 +365,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let archiver = SelectiveArchiveCleanupArchiver()
         let store = ArchiveCleanupStore(
             registry: registry,
-            loader: loader,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: archiver,
             metadataStore: InMemoryLocalThreadMetadataStore(),
             now: { now }
@@ -318,11 +387,11 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
         let now = Date(timeIntervalSince1970: 20_000_000)
-        let loader = CleanupQueryRecordingLoader(results: [
+        let loader = CleanupCardQueryRecordingLoader(results: [
             host.id: .success(
-                DockLoadResult(
-                    summaries: [
-                        makeSummary(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "archive-ok",
                             branch: "main",
@@ -330,7 +399,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             lastActivity: now.addingTimeInterval(-91 * 86_400),
                             prompt: "Archive ok"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "retry-me",
                             branch: "main",
@@ -345,7 +414,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let archiver = RetryArchiveCleanupArchiver(failuresRemaining: ["retry-me": 1])
         let store = ArchiveCleanupStore(
             registry: registry,
-            loader: loader,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: archiver,
             metadataStore: InMemoryLocalThreadMetadataStore(),
             now: { now }
@@ -374,11 +443,11 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
         let now = Date(timeIntervalSince1970: 20_000_000)
-        let loader = CleanupQueryRecordingLoader(results: [
+        let loader = CleanupCardQueryRecordingLoader(results: [
             host.id: .success(
-                DockLoadResult(
-                    summaries: [
-                        makeSummary(
+                ThreadCardFixtureResult(
+                    fixtures: [
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "archive-one",
                             branch: "main",
@@ -386,7 +455,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             lastActivity: now.addingTimeInterval(-91 * 86_400),
                             prompt: "Archive one"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "archive-two",
                             branch: "main",
@@ -394,7 +463,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                             lastActivity: now.addingTimeInterval(-92 * 86_400),
                             prompt: "Archive two"
                         ),
-                        makeSummary(
+                        makeThreadCardFixtureSummary(
                             hostID: host.id,
                             threadID: "archive-three",
                             branch: "main",
@@ -412,7 +481,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         }
         let store = ArchiveCleanupStore(
             registry: registry,
-            loader: loader,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: archiver,
             metadataStore: InMemoryLocalThreadMetadataStore(),
             now: { now }
@@ -454,40 +523,47 @@ final class ArchiveCleanupStoreTests: XCTestCase {
     }
 }
 
-private actor CleanupQueryRecordingLoader: DockSessionLoading {
+private actor CleanupCardQueryRecordingLoader: ThreadCardFixtureLoading {
     private let results: [String: FakeMode]
-    private var queriesByHost: [String: [DockSessionQuery]] = [:]
+    private var queriesByHost: [String: [ThreadCardFixtureQuery]] = [:]
 
     init(results: [String: FakeMode]) {
         self.results = results
     }
 
-    func recordedQueries(for hostID: String) -> [DockSessionQuery] {
+    func recordedQueries(for hostID: String) -> [ThreadCardFixtureQuery] {
         queriesByHost[hostID] ?? []
     }
 
-    func loadSessions(
+    func loadFixtures(
         for host: DockHostConfiguration,
-        query: DockSessionQuery
-    ) async throws -> DockLoadResult {
+        query: ThreadCardFixtureQuery
+    ) async throws -> ThreadCardFixtureResult {
         var queries = queriesByHost[host.id] ?? []
         queries.append(query)
         queriesByHost[host.id] = queries
 
-        guard query == .activeHumanFullScan else {
-            throw DockLoadFailure.error("Unexpected query \(query) for host \(host.id)")
+        guard query == .activeHuman || query == .activeHumanFullScan || query == .activeAgents else {
+            throw DockRequestFailure.error("Unexpected query \(query) for host \(host.id)")
         }
 
         switch results[host.id] ?? .failure(.error("No result for host \(host.id)")) {
         case .success(let result):
-            return result
+            if query == .activeAgents {
+                return ThreadCardFixtureResult(
+                    fixtures: result.fixtures.filter { $0.origin.kind == .agentOrAutomation }
+                )
+            }
+            return ThreadCardFixtureResult(
+                fixtures: result.fixtures.filter { $0.origin.kind != .agentOrAutomation }
+            )
         case .failure(let failure):
             throw failure
         }
     }
 }
 
-private actor SelectiveArchiveCleanupArchiver: DockSessionArchiving {
+private actor SelectiveArchiveCleanupArchiver: ThreadArchiveCommanding {
     private let failingThreadIDs: Set<String>
     private var archived: [String] = []
 
@@ -502,14 +578,14 @@ private actor SelectiveArchiveCleanupArchiver: DockSessionArchiving {
     func archiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
         archived.append(threadID)
         if failingThreadIDs.contains(threadID) {
-            throw DockLoadFailure.error("archive failed")
+            throw DockRequestFailure.error("archive failed")
         }
     }
 
     func unarchiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {}
 }
 
-private actor RetryArchiveCleanupArchiver: DockSessionArchiving {
+private actor RetryArchiveCleanupArchiver: ThreadArchiveCommanding {
     private var failuresRemaining: [String: Int]
     private var archived: [String] = []
 
@@ -526,7 +602,7 @@ private actor RetryArchiveCleanupArchiver: DockSessionArchiving {
         let remaining = failuresRemaining[threadID] ?? 0
         if remaining > 0 {
             failuresRemaining[threadID] = remaining - 1
-            throw DockLoadFailure.error("archive failed")
+            throw DockRequestFailure.error("archive failed")
         }
     }
 
@@ -538,7 +614,7 @@ private final class CleanupStoreBox {
     var store: ArchiveCleanupStore?
 }
 
-private actor StopAfterFirstArchiveCleanupArchiver: DockSessionArchiving {
+private actor StopAfterFirstArchiveCleanupArchiver: ThreadArchiveCommanding {
     private let onFirstArchive: @MainActor @Sendable () -> Void
     private var archived: [String] = []
 

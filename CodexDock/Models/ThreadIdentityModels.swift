@@ -10,33 +10,6 @@ public struct HostScopedThreadID: Hashable, Codable, Sendable {
     }
 }
 
-public enum SessionSummaryText: Equatable, Sendable {
-    case known(String)
-    case unknown
-}
-
-public enum SessionActiveFlag: Equatable, Sendable {
-    case waitingOnApproval
-    case waitingOnUserInput
-    case unknown(String)
-}
-
-public enum SessionStatus: Equatable, Sendable {
-    case unknown
-    case notLoaded
-    case idle
-    case systemError
-    case active(activeFlags: [SessionActiveFlag])
-
-    public var needsAttention: Bool {
-        guard case .active(let activeFlags) = self else {
-            return false
-        }
-        return activeFlags.contains(.waitingOnApproval)
-            || activeFlags.contains(.waitingOnUserInput)
-    }
-}
-
 public enum SessionOriginKind: Hashable, Sendable {
     case humanInteractive
     case agentOrAutomation
@@ -163,49 +136,5 @@ public enum SessionOrigin: Equatable, Sendable {
         case .unknownOrigin:
             return .unknownOrigin(evidence)
         }
-    }
-}
-
-public struct SessionSummary: Equatable, Sendable {
-    public let id: HostScopedThreadID
-    public let backendSessionID: String
-    public let displayTitle: String
-    public let status: SessionStatus
-    public let repository: SessionSummaryText
-    public let workingDirectory: SessionSummaryText
-    public let branch: SessionSummaryText
-    public let lastActivity: Date
-    public let shortEventSummary: SessionSummaryText
-    public let messageActivityDate: Date?
-    public let origin: SessionOrigin
-
-    public var backendThreadID: String {
-        id.threadID
-    }
-
-    public init(
-        id: HostScopedThreadID,
-        backendSessionID: String,
-        displayTitle: String,
-        status: SessionStatus,
-        repository: SessionSummaryText,
-        workingDirectory: SessionSummaryText,
-        branch: SessionSummaryText,
-        lastActivity: Date,
-        shortEventSummary: SessionSummaryText,
-        messageActivityDate: Date? = nil,
-        origin: SessionOrigin
-    ) {
-        self.id = id
-        self.backendSessionID = backendSessionID
-        self.displayTitle = displayTitle
-        self.status = status
-        self.repository = repository
-        self.workingDirectory = workingDirectory
-        self.branch = branch
-        self.lastActivity = lastActivity
-        self.shortEventSummary = shortEventSummary
-        self.messageActivityDate = messageActivityDate
-        self.origin = origin
     }
 }

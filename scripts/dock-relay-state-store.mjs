@@ -9,8 +9,10 @@ import {
 } from "./dock-relay-constants.mjs";
 import {
   DOCK_VIEW,
-  applyLeaseToSession,
-  normalizeStoredSession,
+  applyLeaseToCard,
+  archiveOrderKey,
+  dockOrderKey,
+  normalizeStoredCard,
 } from "./dock-relay-state-views.mjs";
 
 function nowISOString() {
@@ -91,23 +93,27 @@ class RelayStateStore {
         host_id TEXT NOT NULL,
         thread_id TEXT NOT NULL,
         dock_id TEXT NOT NULL,
+        logical_host_id TEXT,
         backend_session_id TEXT,
+        host_display_name TEXT,
+        host_endpoint TEXT,
+        order_key TEXT,
+        activity_at TEXT,
+        activity_at_ms INTEGER,
+        display_summary TEXT,
         title TEXT,
         status TEXT NOT NULL,
         lane TEXT,
-        kind_label TEXT,
         repository TEXT,
         working_directory TEXT,
         branch TEXT,
         updated_at_ms INTEGER,
-        summary TEXT,
-        message_summary TEXT,
-        message_updated_at_ms INTEGER,
         source_kind TEXT,
         archive_state TEXT NOT NULL DEFAULT 'active',
+        completeness TEXT NOT NULL DEFAULT 'complete',
+        summary_source TEXT,
         active_scope_present INTEGER NOT NULL DEFAULT 0,
         archived_scope_present INTEGER NOT NULL DEFAULT 0,
-        dock_order INTEGER,
         freshness_status TEXT NOT NULL DEFAULT 'unknown',
         last_seen_at TEXT,
         updated_at TEXT NOT NULL,
@@ -212,18 +218,39 @@ class RelayStateStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_threads_dock
-        ON threads(host_id, active_scope_present, archive_state, dock_order, updated_at_ms DESC);
+        ON threads(host_id, active_scope_present, archive_state, order_key);
       CREATE INDEX IF NOT EXISTS idx_threads_archive
-        ON threads(host_id, archive_state, updated_at_ms DESC);
+        ON threads(host_id, archive_state, order_key);
       CREATE INDEX IF NOT EXISTS idx_changes_view_seq
         ON changes(view, seq);
     `);
+    this.ensureThreadColumns();
     this.db.prepare(`
       INSERT OR IGNORE INTO schema_migrations (version, applied_at)
       VALUES (?, ?)
     `).run(RELAY_STATE_SCHEMA_VERSION, nowISOString());
     for (const obsoleteScope of ["active:dock", "active:default"]) {
       this.db.prepare("DELETE FROM sync_scopes WHERE scope = ?").run(obsoleteScope);
+    }
+  }
+
+  ensureThreadColumns() {
+    const columns = new Set(this.db.prepare("PRAGMA table_info(threads)").all().map((row) => row.name));
+    const definitions = {
+      logical_host_id: "TEXT",
+      host_display_name: "TEXT",
+      host_endpoint: "TEXT",
+      order_key: "TEXT",
+      activity_at: "TEXT",
+      activity_at_ms: "INTEGER",
+      display_summary: "TEXT",
+      completeness: "TEXT NOT NULL DEFAULT 'complete'",
+      summary_source: "TEXT",
+    };
+    for (const [column, definition] of Object.entries(definitions)) {
+      if (!columns.has(column)) {
+        this.db.exec(`ALTER TABLE threads ADD COLUMN ${column} ${definition}`);
+      }
     }
   }
 
@@ -283,7 +310,7 @@ class RelayStateStore {
 
   hostRows() {
     return this.db.prepare(`
-      SELECT host_id AS id, display_name AS displayName, endpoint
+      SELECT host_id AS id, host_id AS logicalHostID, display_name AS displayName, endpoint
       FROM hosts
       ORDER BY host_id ASC
     `).all();
@@ -314,7 +341,7 @@ class RelayStateStore {
     };
   }
 
-  listDockSessions({ hostID, offset = 0, limit = null } = {}) {
+  listDockCards({ hostID, offset = 0, limit = null } = {}) {
     const params = [];
     let countWhere = "active_scope_present = 1 AND archive_state != 'archived'";
     let rowWhere = "t.active_scope_present = 1 AND t.archive_state != 'archived'";
@@ -337,18 +364,18 @@ class RelayStateStore {
       LEFT JOIN live_leases l
         ON l.host_id = t.host_id AND l.thread_id = t.thread_id
       WHERE ${rowWhere}
-      ORDER BY t.dock_order ASC, t.updated_at_ms DESC, t.thread_id ASC
+      ORDER BY t.order_key ASC, t.thread_id ASC
       ${limitClause}
     `).all(...queryParams);
     const currentMs = nowMs();
     return {
       totalRows,
-      sessions: rows.map((row) => {
-        const session = normalizeStoredSession(row);
+      cards: rows.map((row) => {
+        const card = normalizeStoredCard(row);
         if (!row.lease_status) {
-          return session;
+          return card;
         }
-        return applyLeaseToSession(session, {
+        return applyLeaseToCard(card, {
           backend_session_id: row.lease_backend_session_id,
           status: row.lease_status,
           expires_at_ms: row.expires_at_ms,
@@ -357,7 +384,7 @@ class RelayStateStore {
     };
   }
 
-  listArchiveSessions({ hostID, offset = 0, limit = null } = {}) {
+  listArchiveCards({ hostID, offset = 0, limit = null } = {}) {
     const params = [];
     let where = "archive_state = 'archived'";
     if (hostID) {
@@ -375,12 +402,12 @@ class RelayStateStore {
       SELECT *
       FROM threads
       WHERE ${where}
-      ORDER BY updated_at_ms DESC, thread_id ASC
+      ORDER BY order_key ASC, thread_id ASC
       ${limitClause}
     `).all(...queryParams);
     return {
       totalRows,
-      sessions: rows.map(normalizeStoredSession).filter(Boolean),
+      cards: rows.map(normalizeStoredCard).filter(Boolean),
     };
   }
 
@@ -427,12 +454,11 @@ class RelayStateStore {
       archiveState: row.archive_state,
       activeScopePresent: row.active_scope_present === 1,
       archivedScopePresent: row.archived_scope_present === 1,
-      dockOrder: row.dock_order,
+      orderKey: row.order_key,
       status: row.status,
       lane: row.lane,
-      kindLabel: row.kind_label,
       sourceKind: row.source_kind || "unknown",
-      updatedAtMs: row.updated_at_ms,
+      activityAtMs: row.activity_at_ms,
       freshnessStatus: row.freshness_status,
       lastSeenAt: row.last_seen_at,
       rowUpdatedAt: row.updated_at,
@@ -450,26 +476,30 @@ class RelayStateStore {
     };
   }
 
-  applyDockReconciliation({ host, sessions, scopes = [], complete = true, error = null }) {
+  applyDockReconciliation({ host, cards, scopes = [], complete = true, error = null }) {
     const at = nowISOString();
     return this.transaction(() => {
       this.upsertHost(host, at);
-      const previousRows = this.listDockSessions({ hostID: host.id }).sessions;
+      const previousRows = this.listDockCards({ hostID: host.id }).cards;
       const previousByID = new Map(previousRows.map((row) => [row.id, row]));
       const nextByID = new Map();
-      const upsertSessions = [];
-      const deleteSessionIDs = [];
+      const upsertCards = [];
+      const deleteCardIDs = [];
 
-      sessions.forEach((session, index) => {
-        nextByID.set(session.id, session);
-        const previous = previousByID.get(session.id);
-        if (sortedJSONString(previous) !== sortedJSONString(session)) {
-          upsertSessions.push(session);
+      cards.forEach((card, index) => {
+        const cardWithOrder = {
+          ...card,
+          orderKey: card.orderKey || dockOrderKey(index, card.threadID),
+          archiveState: "active",
+        };
+        nextByID.set(cardWithOrder.id, cardWithOrder);
+        const previous = previousByID.get(cardWithOrder.id);
+        if (sortedJSONString(previous) !== sortedJSONString(cardWithOrder)) {
+          upsertCards.push(cardWithOrder);
         }
-        this.upsertThreadSession(host.id, session, {
+        this.upsertThreadCard(host.id, cardWithOrder, {
           archiveState: "active",
           activeScopePresent: true,
-          dockOrder: index,
           at,
         });
       });
@@ -477,7 +507,7 @@ class RelayStateStore {
       if (complete) {
         for (const previous of previousRows) {
           if (!nextByID.has(previous.id)) {
-            deleteSessionIDs.push(previous.id);
+            deleteCardIDs.push(previous.id);
             this.markThreadInactive(host.id, previous.threadID, at);
           }
         }
@@ -501,81 +531,89 @@ class RelayStateStore {
         hostID: host.id,
         changeType: "dock-reconcile",
         payload: {
-          upsertCount: upsertSessions.length,
-          deleteCount: deleteSessionIDs.length,
+          upsertCount: upsertCards.length,
+          deleteCount: deleteCardIDs.length,
           complete,
         },
         at,
       });
       this.pruneChanges();
-      return { seq, upsertSessions, deleteSessionIDs };
+      return { seq, upsertCards, deleteCardIDs };
     });
   }
 
-  upsertThreadSession(hostID, session, {
+  upsertThreadCard(hostID, card, {
     archiveState = "active",
     activeScopePresent = true,
     archivedScopePresent = false,
-    dockOrder = null,
     at = nowISOString(),
   } = {}) {
     this.db.prepare(`
       INSERT INTO threads (
-        host_id, thread_id, dock_id, backend_session_id, title, status, lane,
-        kind_label, repository, working_directory, branch, updated_at_ms,
-        summary, message_summary, message_updated_at_ms, source_kind,
-        archive_state, active_scope_present, archived_scope_present, dock_order,
+        host_id, thread_id, dock_id, logical_host_id, backend_session_id,
+        host_display_name, host_endpoint, order_key, activity_at, activity_at_ms,
+        display_summary, title, status, lane, repository, working_directory,
+        branch, updated_at_ms, source_kind, archive_state, completeness,
+        summary_source, active_scope_present, archived_scope_present,
         freshness_status, last_seen_at, updated_at, raw_json
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(host_id, thread_id) DO UPDATE SET
         dock_id = excluded.dock_id,
+        logical_host_id = excluded.logical_host_id,
         backend_session_id = excluded.backend_session_id,
+        host_display_name = excluded.host_display_name,
+        host_endpoint = excluded.host_endpoint,
+        order_key = excluded.order_key,
+        activity_at = excluded.activity_at,
+        activity_at_ms = excluded.activity_at_ms,
+        display_summary = excluded.display_summary,
         title = excluded.title,
         status = excluded.status,
         lane = excluded.lane,
-        kind_label = excluded.kind_label,
         repository = excluded.repository,
         working_directory = excluded.working_directory,
         branch = excluded.branch,
         updated_at_ms = excluded.updated_at_ms,
-        summary = excluded.summary,
-        message_summary = excluded.message_summary,
-        message_updated_at_ms = excluded.message_updated_at_ms,
         source_kind = excluded.source_kind,
         archive_state = excluded.archive_state,
+        completeness = excluded.completeness,
+        summary_source = excluded.summary_source,
         active_scope_present = excluded.active_scope_present,
         archived_scope_present = excluded.archived_scope_present,
-        dock_order = excluded.dock_order,
         freshness_status = excluded.freshness_status,
         last_seen_at = excluded.last_seen_at,
         updated_at = excluded.updated_at,
         raw_json = excluded.raw_json
     `).run(
       hostID,
-      session.threadID,
-      session.id,
-      nullable(session.backendSessionID),
-      nullable(session.title),
-      session.status || "unknown",
-      nullable(session.lane),
-      nullable(session.kindLabel),
-      nullable(session.repository),
-      nullable(session.workingDirectory),
-      nullable(session.branch),
-      nullable(session.updatedAt),
-      nullable(session.summary),
-      nullable(session.messageSummary),
-      nullable(session.messageUpdatedAt),
-      nullable(session.source?.kind),
+      card.threadID,
+      card.id,
+      nullable(card.logicalHostID),
+      nullable(card.backendSessionID),
+      nullable(card.hostDisplayName),
+      nullable(card.hostEndpoint),
+      nullable(card.orderKey),
+      nullable(card.activityAt),
+      nullable(card.activityAtMs),
+      nullable(card.displaySummary),
+      nullable(card.title),
+      card.status || "unknown",
+      nullable(card.lane),
+      nullable(card.repository),
+      nullable(card.workingDirectory),
+      nullable(card.branch),
+      nullable(card.activityAtMs),
+      nullable(card.sourceKind),
       archiveState,
+      nullable(card.completeness || "complete"),
+      nullable(card.summarySource),
       boolInt(activeScopePresent),
       boolInt(archivedScopePresent),
-      nullable(dockOrder),
-      "fresh",
+      card.freshness || "fresh",
       at,
       at,
-      JSON.stringify(session),
+      JSON.stringify(card),
     );
   }
 
@@ -591,33 +629,59 @@ class RelayStateStore {
     const at = nowISOString();
     return this.transaction(() => {
       const dockID = `${hostID}::${threadID}`;
+      const existing = this.db.prepare(`
+        SELECT activity_at_ms
+        FROM threads
+        WHERE host_id = ? AND thread_id = ?
+      `).get(hostID, threadID);
+      const orderKey = archived
+        ? archiveOrderKey(existing?.activity_at_ms || Date.now(), threadID)
+        : dockOrderKey(0, threadID);
       this.db.prepare(`
         UPDATE threads
         SET archive_state = ?, active_scope_present = ?, archived_scope_present = ?,
-            freshness_status = 'stale', updated_at = ?
+            order_key = ?, freshness_status = 'stale', updated_at = ?
         WHERE host_id = ? AND thread_id = ?
       `).run(
         archived ? "archived" : "active",
         archived ? 0 : 1,
         archived ? 1 : 0,
+        orderKey,
         at,
         hostID,
         threadID,
       );
+      const changedCard = this.cardForThread({ hostID, threadID });
       const seq = this.recordChange({
         view: DOCK_VIEW,
         hostID,
         threadID,
         changeType: archived ? "archive" : "unarchive",
         payload: {
-          upsertSessions: [],
-          deleteSessionIDs: archived ? [dockID] : [],
+          upsertCardIDs: !archived && changedCard ? [dockID] : [],
+          deleteCardIDs: archived ? [dockID] : [],
           stale: true,
         },
         at,
       });
-      return { seq, deleteSessionIDs: archived ? [dockID] : [] };
+      return {
+        seq,
+        dockUpsertCards: !archived && changedCard ? [changedCard] : [],
+        dockDeleteCardIDs: archived ? [dockID] : [],
+        archiveUpsertCards: archived && changedCard ? [changedCard] : [],
+        archiveDeleteCardIDs: archived ? [] : [dockID],
+      };
     });
+  }
+
+  cardForThread({ hostID, threadID }) {
+    const row = this.db.prepare(`
+      SELECT *
+      FROM threads
+      WHERE host_id = ? AND thread_id = ?
+      LIMIT 1
+    `).get(hostID, threadID);
+    return normalizeStoredCard(row);
   }
 
   upsertLiveLease(hostID, lease, at = nowISOString()) {

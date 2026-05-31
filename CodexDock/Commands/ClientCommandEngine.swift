@@ -12,13 +12,13 @@ enum ClientCommandEngineError: LocalizedError, Sendable {
 }
 
 actor ClientCommandEngine {
-    private let archiver: (any DockSessionArchiving)?
+    private let archiver: (any ThreadArchiveCommanding)?
 
     init() {
         self.archiver = nil
     }
 
-    init(archiver: any DockSessionArchiving) {
+    init(archiver: any ThreadArchiveCommanding) {
         self.archiver = archiver
     }
 
