@@ -125,7 +125,6 @@ public struct DockFilterState: Equatable, Sendable {
     public var repositoryQuery: String
     public var selectedRepositories: Set<String>
     public var source: DockSourceFilter
-    public var showsIdle: Bool
     public var sortOrder: DockSortOrder
 
     public init(
@@ -135,7 +134,6 @@ public struct DockFilterState: Equatable, Sendable {
         repositoryQuery: String = "",
         selectedRepositories: Set<String> = [],
         source: DockSourceFilter = .any,
-        showsIdle: Bool = false,
         sortOrder: DockSortOrder = .newestActivity
     ) {
         self.selectedHostIDs = selectedHostIDs
@@ -144,7 +142,6 @@ public struct DockFilterState: Equatable, Sendable {
         self.repositoryQuery = repositoryQuery
         self.selectedRepositories = selectedRepositories
         self.source = source
-        self.showsIdle = showsIdle
         self.sortOrder = sortOrder
     }
 
@@ -159,7 +156,6 @@ public struct DockFilterState: Equatable, Sendable {
         if !repositoryQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { count += 1 }
         if !selectedRepositories.isEmpty { count += 1 }
         if source != .any { count += 1 }
-        if showsIdle { count += 1 }
         return count
     }
 
@@ -282,15 +278,10 @@ public struct DockProjectionGroupViewModel: Equatable, Identifiable, Sendable {
     public let orderKey: String?
     public let newestActivityDate: Date?
     public let runningCount: Int
-    public let hiddenIdleCount: Int
     public let isUnavailable: Bool
     public let unavailableMessage: String?
 
     public var count: Int { rows.count }
-}
-
-public struct DockProjectionHiddenCounts: Equatable, Sendable {
-    public let idle: Int
 }
 
 public struct DockPinnedSummary: Equatable, Sendable {
@@ -317,7 +308,6 @@ public enum DockProjectionEmptyReason: Equatable, Sendable {
     case noData
     case noSearchMatches
     case noFilterMatches
-    case idleHidden
     case hostUnavailable
 
     public var title: String {
@@ -328,8 +318,6 @@ public enum DockProjectionEmptyReason: Equatable, Sendable {
             return "No matches"
         case .noFilterMatches:
             return "No filtered sessions"
-        case .idleHidden:
-            return "Idle hidden"
         case .hostUnavailable:
             return "Host unavailable"
         }
@@ -343,8 +331,6 @@ public enum DockProjectionEmptyReason: Equatable, Sendable {
             return "No sessions match this search."
         case .noFilterMatches:
             return "No sessions match the active filters."
-        case .idleHidden:
-            return "Show idle sessions to include matching idle threads."
         case .hostUnavailable:
             return "The selected host is unavailable."
         }

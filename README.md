@@ -150,8 +150,9 @@ name, repository or working directory, branch, status, last activity, local
 label, and latest summary. `Host` and `Branch` are Dock lenses, not app-level
 tabs or a separate sort picker; both preserve newest-first ordering inside
 their groups. `Filters` opens one shared filter surface for host, branch,
-canonical Dock status, repository or working directory, source, idle
-visibility, and the fixed `Newest activity` sort. Search is full-width and
+canonical Dock status, repository or working directory, source, and the fixed
+`Newest activity` sort. Status `Any` includes `Idle`, so idle rows are visible
+by default and can be narrowed through the status filter. Search is full-width and
 matches session title, label, repository or working directory, branch, summary,
 status, host display name, host id, source, and thread id. Codex runtime
 `notLoaded` is normalized by the relay to Dock `dormant`; Dock Home does not

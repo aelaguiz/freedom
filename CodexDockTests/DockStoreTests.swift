@@ -378,12 +378,12 @@ final class DockStoreTests: XCTestCase {
             .loaded(rowCount: 1),
             .loaded(rowCount: 1)
         ])
-        let branchProjection = snapshot.project(options: .init(lens: .branch, filters: DockFilterState(showsIdle: true)))
+        let branchProjection = snapshot.project(options: .init(lens: .branch))
         XCTAssertEqual(branchProjection.groups.map(\.title), ["main"])
         XCTAssertEqual(branchProjection.groups[0].rows.map(\.hostDisplayName), [home.displayName, amir.displayName])
         XCTAssertEqual(branchProjection.groups[0].rows.map(\.status), [.dormant, .idle])
 
-        let hostProjection = snapshot.project(options: .init(lens: .host, filters: DockFilterState(showsIdle: true)))
+        let hostProjection = snapshot.project(options: .init(lens: .host))
         XCTAssertEqual(hostProjection.groups.map(\.title), [home.displayName, amir.displayName])
     }
 

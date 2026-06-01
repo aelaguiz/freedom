@@ -42,9 +42,6 @@ struct DockGroupHeaderView: View {
         if group.runningCount > 0 {
             parts.append("\(group.runningCount) running")
         }
-        if group.hiddenIdleCount > 0 {
-            parts.append(hiddenIdleText)
-        }
         if let newest = group.newestActivityDate {
             parts.append(newest.formatted(date: .abbreviated, time: .shortened))
         }
@@ -53,15 +50,8 @@ struct DockGroupHeaderView: View {
 
     private var accessibilityValue: String {
         var parts = [group.subtitle, "\(group.count) sessions", "running \(group.runningCount)"]
-        if group.hiddenIdleCount > 0 {
-            parts.append(hiddenIdleText)
-        }
         parts.append(isCollapsed ? "collapsed" : "expanded")
         return parts.joined(separator: "; ")
-    }
-
-    private var hiddenIdleText: String {
-        group.hiddenIdleCount == 1 ? "1 idle hidden" : "\(group.hiddenIdleCount) idle hidden"
     }
 }
 

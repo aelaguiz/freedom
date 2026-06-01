@@ -58,14 +58,14 @@ final class DockStoreTestsProjection: XCTestCase {
             hosts: [amir, home]
         )
 
-        let projection = snapshot.project(options: .init(lens: .host, filters: DockFilterState(showsIdle: true)))
+        let projection = snapshot.project(options: .init(lens: .host))
 
         XCTAssertEqual(projection.groups.map(\.title), ["Home", "Amir-M5"])
         XCTAssertEqual(projection.groups[1].rows.map(\.id.threadID), ["amir-new", "amir-old"])
         XCTAssertEqual(projection.groups[1].runningCount, 1)
     }
 
-    func testHostLensExposesHiddenIdleCountPerHost() {
+    func testHostLensIncludesIdleRowsByDefault() {
         let amir = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
         let snapshot = makeSnapshot(
             rows: [
@@ -78,9 +78,7 @@ final class DockStoreTestsProjection: XCTestCase {
         let projection = snapshot.project(options: .init(lens: .host))
 
         XCTAssertEqual(projection.groups.map(\.title), ["Amir-M5"])
-        XCTAssertEqual(projection.groups[0].rows.map(\.id.threadID), ["amir-running"])
-        XCTAssertEqual(projection.groups[0].hiddenIdleCount, 1)
-        XCTAssertEqual(projection.hiddenCounts.idle, 1)
+        XCTAssertEqual(projection.groups[0].rows.map(\.id.threadID), ["amir-idle", "amir-running"])
     }
 
     func testHostLensKeepsUnavailableHostVisibleWithoutRows() {
@@ -150,7 +148,7 @@ final class DockStoreTestsProjection: XCTestCase {
         }
     }
 
-    func testFiltersComposeSourceStatusBranchRepoHostAndIdle() {
+    func testFiltersComposeSourceStatusBranchRepoAndHost() {
         let amir = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
         let home = makeProjectionHost(host: "home.fairy-salmon.ts.net")
         let snapshot = makeSnapshot(
@@ -166,8 +164,7 @@ final class DockStoreTestsProjection: XCTestCase {
             selectedHostIDs: [home.id],
             selectedBranches: ["feature/dock"],
             statusKinds: [.dormant],
-            source: .human,
-            showsIdle: false
+            source: .human
         )
 
         let projection = snapshot.project(options: .init(lens: .newest, filters: filtered))
@@ -179,7 +176,8 @@ final class DockStoreTestsProjection: XCTestCase {
         XCTAssertTrue(projection.summary.text.contains("Branch: feature/dock"))
         XCTAssertTrue(projection.summary.text.contains("Status: Not loaded"))
         XCTAssertTrue(projection.summary.text.contains("Source: Human"))
-        XCTAssertTrue(projection.summary.text.contains("Idle hidden"))
+        XCTAssertFalse(projection.summary.text.contains("Idle hidden"))
+        XCTAssertFalse(projection.summary.text.contains("Idle shown"))
     }
 
     func testActiveSummaryNamesRepoSearchSelectedReposSourceAndSearch() {
@@ -189,33 +187,30 @@ final class DockStoreTestsProjection: XCTestCase {
         let filters = DockFilterState(
             repositoryQuery: "codex",
             selectedRepositories: ["codex-client"],
-            source: .human,
-            showsIdle: true
+            source: .human
         )
 
         let projection = snapshot.project(options: .init(lens: .newest, searchText: "main", filters: filters))
 
         XCTAssertTrue(projection.summary.text.contains("Repos: 1, search: codex"))
         XCTAssertTrue(projection.summary.text.contains("Source: Human"))
-        XCTAssertTrue(projection.summary.text.contains("Idle shown"))
         XCTAssertTrue(projection.summary.text.contains("Search: main"))
+        XCTAssertFalse(projection.summary.text.contains("Idle hidden"))
+        XCTAssertFalse(projection.summary.text.contains("Idle shown"))
     }
 
-    func testIdleHiddenCountUsesFilteredRowSet() {
+    func testDefaultProjectionIncludesIdleRows() {
         let snapshot = makeSnapshot(rows: [
             makeRow(threadID: "running", title: "Running", branch: "main", status: .running, lastActivity: 300),
             makeRow(threadID: "idle", title: "Idle", branch: "main", status: .idle, lastActivity: 400)
         ])
 
-        let hidden = snapshot.project(options: .init(lens: .newest))
-        let visible = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(showsIdle: true)))
+        let projection = snapshot.project(options: .init(lens: .newest))
 
-        XCTAssertEqual(hidden.rows.map(\.id.threadID), ["running"])
-        XCTAssertEqual(hidden.hiddenCounts.idle, 1)
-        XCTAssertEqual(visible.rows.map(\.id.threadID), ["idle", "running"])
+        XCTAssertEqual(projection.rows.map(\.id.threadID), ["idle", "running"])
     }
 
-    func testDefaultIdleHiddenDoesNotHidePinnedRows() {
+    func testPinnedAndBodyIdleRowsAreVisibleByDefault() {
         let snapshot = makeSnapshot(rows: [
             makeRow(threadID: "idle-pinned", title: "Idle pinned", branch: "main", status: .idle, lastActivity: 400, isPinned: true, pinnedAt: 500),
             makeRow(threadID: "idle-body", title: "Idle body", branch: "main", status: .idle, lastActivity: 300)
@@ -224,13 +219,54 @@ final class DockStoreTestsProjection: XCTestCase {
         let projection = snapshot.project(options: .init(lens: .newest))
 
         XCTAssertEqual(projection.pinnedRows.map(\.id.threadID), ["idle-pinned"])
-        XCTAssertEqual(projection.rows, [])
-        XCTAssertEqual(projection.hiddenCounts.idle, 1)
-        XCTAssertEqual(projection.summary.resultCount, 1)
+        XCTAssertEqual(projection.rows.map(\.id.threadID), ["idle-body"])
+        XCTAssertEqual(projection.summary.resultCount, 2)
         XCTAssertEqual(
             projection.pinnedSummary,
             DockPinnedSummary(visibleCount: 1, totalCount: 1, hiddenByScopeCount: 0)
         )
+    }
+
+    func testStatusFilterIdleOnlyShowsIdleRows() {
+        let snapshot = makeSnapshot(rows: [
+            makeRow(threadID: "running", title: "Running", branch: "main", status: .running, lastActivity: 300),
+            makeRow(threadID: "idle", title: "Idle", branch: "main", status: .idle, lastActivity: 400)
+        ])
+
+        let projection = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(statusKinds: [.idle])))
+
+        XCTAssertEqual(projection.rows.map(\.id.threadID), ["idle"])
+        XCTAssertEqual(projection.summary.text.contains("Status: Idle"), true)
+    }
+
+    func testStatusFilterExcludingIdleHidesIdleRowsAndPinnedIdleRows() {
+        let statusKinds = Set(DockRowStatusKind.allCases).subtracting([.idle])
+        let snapshot = makeSnapshot(rows: [
+            makeRow(threadID: "idle-pinned", title: "Idle pinned", branch: "main", status: .idle, lastActivity: 500, isPinned: true, pinnedAt: 500),
+            makeRow(threadID: "idle-body", title: "Idle body", branch: "main", status: .idle, lastActivity: 400),
+            makeRow(threadID: "running", title: "Running", branch: "main", status: .running, lastActivity: 300)
+        ])
+
+        let projection = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(statusKinds: statusKinds)))
+
+        XCTAssertEqual(projection.pinnedRows, [])
+        XCTAssertEqual(projection.rows.map(\.id.threadID), ["running"])
+        XCTAssertEqual(
+            projection.pinnedSummary,
+            DockPinnedSummary(visibleCount: 0, totalCount: 1, hiddenByScopeCount: 1)
+        )
+    }
+
+    func testStatusFilterExcludingIdleUsesNormalEmptyReason() {
+        let statusKinds = Set(DockRowStatusKind.allCases).subtracting([.idle])
+        let snapshot = makeSnapshot(rows: [
+            makeRow(threadID: "idle", title: "Idle", branch: "main", status: .idle, lastActivity: 400)
+        ])
+
+        let projection = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(statusKinds: statusKinds)))
+
+        XCTAssertEqual(projection.emptyReason, .noFilterMatches)
+        XCTAssertEqual(projection.emptyReason?.message, "No sessions match the active filters.")
     }
 
     func testDormantOnlyEmptyReasonUsesNormalFilterCopy() {

@@ -15,7 +15,6 @@ struct DockFilterSurfaceView: View {
                     statusSection
                     repoSection
                     sourceSection
-                    idleSection
                     sortSection
                 }
                 .padding(16)
@@ -145,11 +144,6 @@ struct DockFilterSurfaceView: View {
             .pickerStyle(.segmented)
             .codexAutomationID(AutomationID.Dock.filterSourcePicker)
         }
-    }
-
-    private var idleSection: some View {
-        Toggle("Show idle", isOn: $filters.showsIdle)
-            .codexAutomationID(AutomationID.Dock.filterIdleToggle)
     }
 
     private var sortSection: some View {

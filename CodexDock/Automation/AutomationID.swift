@@ -176,7 +176,6 @@ public extension AutomationID {
         public static let filterStatusAny = AutomationID("codexdock.dock.filters.status.any")
         public static let filterRepoQuery = AutomationID("codexdock.dock.filters.repo.query")
         public static let filterSourcePicker = AutomationID("codexdock.dock.filters.source")
-        public static let filterIdleToggle = AutomationID("codexdock.dock.filters.idle")
         public static let pinnedSection = AutomationID("codexdock.dock.pinned.section")
         public static let pinnedHeader = AutomationID("codexdock.dock.pinned.header")
         public static let pinnedToggleButton = AutomationID("codexdock.dock.pinned.toggle")

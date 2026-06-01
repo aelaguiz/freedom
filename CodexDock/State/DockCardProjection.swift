@@ -24,7 +24,6 @@ struct DockCardProjection: Equatable, Sendable {
     let rows: [DockRowViewModel]
     let groups: [DockProjectionGroupViewModel]
     let summary: DockProjectionSummary
-    let hiddenCounts: DockProjectionHiddenCounts
     let availableFacets: DockProjectionFacets
     let emptyReason: DockProjectionEmptyReason?
     let isPartial: Bool
@@ -43,20 +42,16 @@ private struct DockCardProjectionProjector {
 
     func project() -> DockCardProjection {
         let searchedRows = snapshot.rows.filter(matchesSearch)
-        let filteredIgnoringIdle = searchedRows.filter(matchesNonIdleFilters)
-        let pinnedRows = filteredIgnoringIdle.filter(\.isPinned).sorted(by: pinnedRowPrecedes)
-        let hiddenIdleRows = options.filters.showsIdle
-            ? []
-            : filteredIgnoringIdle.filter { !$0.isPinned && $0.status == .idle }
-        let hiddenIdleCount = hiddenIdleRows.count
-        let bodyRows = filteredIgnoringIdle
+        // Idle is a normal status facet. Do not add a second visibility gate.
+        let filteredRows = searchedRows.filter(matchesFilters)
+        let pinnedRows = filteredRows.filter(\.isPinned).sorted(by: pinnedRowPrecedes)
+        let bodyRows = filteredRows
             .filter { !$0.isPinned }
-            .filter { options.filters.showsIdle || $0.status != .idle }
             .sorted(by: rowPrecedesByRelayOrder)
         let visibleRows = (pinnedRows + bodyRows).sorted(by: rowPrecedesByRelayOrder)
         let allPinnedRows = snapshot.rows.filter(\.isPinned).sorted(by: pinnedRowPrecedes)
-        let groups = groups(for: bodyRows, hiddenIdleRows: hiddenIdleRows)
-        let emptyReason = visibleRows.isEmpty ? emptyReason(searchedRows: searchedRows, hiddenIdleCount: hiddenIdleCount) : nil
+        let groups = groups(for: bodyRows)
+        let emptyReason = visibleRows.isEmpty ? emptyReason(searchedRows: searchedRows) : nil
 
         return DockCardProjection(
             lens: options.lens,
@@ -70,7 +65,6 @@ private struct DockCardProjectionProjector {
             rows: options.lens == .newest ? bodyRows : [],
             groups: groups,
             summary: summary(for: visibleRows),
-            hiddenCounts: DockProjectionHiddenCounts(idle: hiddenIdleCount),
             availableFacets: availableFacets(),
             emptyReason: emptyReason,
             isPartial: snapshot.isPartial,
@@ -79,22 +73,20 @@ private struct DockCardProjectionProjector {
     }
 
     private func groups(
-        for rows: [DockRowViewModel],
-        hiddenIdleRows: [DockRowViewModel]
+        for rows: [DockRowViewModel]
     ) -> [DockProjectionGroupViewModel] {
         switch options.lens {
         case .newest:
             return []
         case .host:
-            return hostGroups(for: rows, hiddenIdleRows: hiddenIdleRows)
+            return hostGroups(for: rows)
         case .branch:
-            return branchGroups(for: rows, hiddenIdleRows: hiddenIdleRows)
+            return branchGroups(for: rows)
         }
     }
 
     private func hostGroups(
-        for rows: [DockRowViewModel],
-        hiddenIdleRows: [DockRowViewModel]
+        for rows: [DockRowViewModel]
     ) -> [DockProjectionGroupViewModel] {
         let stateByHost = Dictionary(uniqueKeysWithValues: snapshot.hostStates.map { ($0.host.id, $0) })
         return snapshot.hosts.compactMap { host in
@@ -106,10 +98,9 @@ private struct DockCardProjectionProjector {
             let hostRows = rows
                 .filter { rowBelongs($0, to: host.id) }
                 .sorted(by: rowPrecedesByRelayOrder)
-            let hiddenIdleCount = hiddenIdleRows.filter { rowBelongs($0, to: host.id) }.count
             let hostState = stateByHost[host.id]
             let isUnavailable = hostState?.status.isUnavailable ?? false
-            guard !hostRows.isEmpty || hiddenIdleCount > 0 || isUnavailable || hostState?.status == .checking else {
+            guard !hostRows.isEmpty || isUnavailable || hostState?.status == .checking else {
                 return nil
             }
 
@@ -123,7 +114,6 @@ private struct DockCardProjectionProjector {
                 orderKey: hostRows.first?.orderKey,
                 newestActivityDate: hostRows.map(\.lastActivityDate).max(),
                 runningCount: hostRows.filter { $0.status == .running }.count,
-                hiddenIdleCount: hiddenIdleCount,
                 isUnavailable: isUnavailable,
                 unavailableMessage: hostState?.status.unavailableMessage
             )
@@ -132,12 +122,9 @@ private struct DockCardProjectionProjector {
     }
 
     private func branchGroups(
-        for rows: [DockRowViewModel],
-        hiddenIdleRows: [DockRowViewModel]
+        for rows: [DockRowViewModel]
     ) -> [DockProjectionGroupViewModel] {
         let groupedRows = Dictionary(grouping: rows, by: \.branch)
-        let hiddenIdleCountsByBranch = Dictionary(grouping: hiddenIdleRows, by: \.branch)
-            .mapValues(\.count)
         return groupedRows.map { branch, rows in
             let sortedRows = rows.sorted(by: rowPrecedesByRelayOrder)
             let hostNames = Set(sortedRows.map(\.hostDisplayName)).sorted()
@@ -151,7 +138,6 @@ private struct DockCardProjectionProjector {
                 orderKey: sortedRows.first?.orderKey,
                 newestActivityDate: sortedRows.map(\.lastActivityDate).max(),
                 runningCount: sortedRows.filter { $0.status == .running }.count,
-                hiddenIdleCount: hiddenIdleCountsByBranch[branch] ?? 0,
                 isUnavailable: false,
                 unavailableMessage: nil
             )
@@ -166,7 +152,6 @@ private struct DockCardProjectionProjector {
         parts.append(statusSummaryText)
         parts.append(repositorySummaryText)
         parts.append("Source: \(options.filters.source.label)")
-        parts.append(options.filters.showsIdle ? "Idle shown" : "Idle hidden")
 
         let query = normalizedQuery(options.searchText)
         if !query.isEmpty {
@@ -256,14 +241,10 @@ private struct DockCardProjectionProjector {
     }
 
     private func emptyReason(
-        searchedRows: [DockRowViewModel],
-        hiddenIdleCount: Int
+        searchedRows: [DockRowViewModel]
     ) -> DockProjectionEmptyReason {
         if snapshot.rows.isEmpty {
             return .noData
-        }
-        if hiddenIdleCount > 0 {
-            return .idleHidden
         }
         if !normalizedQuery(options.searchText).isEmpty, searchedRows.isEmpty {
             return .noSearchMatches
@@ -282,7 +263,7 @@ private struct DockCardProjectionProjector {
         return !states.isEmpty && states.allSatisfy(\.status.isUnavailable)
     }
 
-    private func matchesNonIdleFilters(_ row: DockRowViewModel) -> Bool {
+    private func matchesFilters(_ row: DockRowViewModel) -> Bool {
         if !options.filters.selectedHostIDs.isEmpty,
            !options.filters.selectedHostIDs.contains(where: { selectedHostID in
                rowBelongs(row, to: selectedHostID)

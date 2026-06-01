@@ -636,7 +636,7 @@ public struct DockView: View {
     }
 
     private var activeSummaryText: String {
-        currentProjection?.summary.text ?? "0 shown · Hosts: Any · Branches: Any · Status: Any · Repo: Any · Source: Any · Idle hidden"
+        currentProjection?.summary.text ?? "0 shown · Hosts: Any · Branches: Any · Status: Any · Repo: Any · Source: Any"
     }
 
     @ViewBuilder
