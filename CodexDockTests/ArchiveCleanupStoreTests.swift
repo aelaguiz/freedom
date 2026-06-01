@@ -105,7 +105,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
             metadataKey(hostID: host.id, threadID: "old-watch"):
                 LocalThreadMetadata(label: "Watch")
         ])
-        let store = ArchiveCleanupStore(
+        let (store, provider) = makeCleanupStore(
             registry: registry,
             streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: SelectiveArchiveCleanupArchiver(),
@@ -117,6 +117,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let recordedViews = await loader.recordedViews(for: host.id)
 
         XCTAssertEqual(recordedViews, [.dock])
+        XCTAssertEqual(provider.refreshCount, 1)
         guard case .preview(let snapshot) = store.state else {
             return XCTFail("Expected cleanup preview, got \(store.state)")
         }
@@ -139,7 +140,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testPreviewCollectsDockCatchupWindowsBeforeApplyingRules() async throws {
+    func testPreviewUsesCurrentDockStreamStateWithoutOpeningCleanupStream() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
         let now = Date(timeIntervalSince1970: 20_000_000)
@@ -158,52 +159,28 @@ final class ArchiveCleanupStoreTests: XCTestCase {
             status: .idle,
             updatedAt: Int64(olderThan90Days.timeIntervalSince1970 - 1)
         )
-        let connection = ManualThreadCardStreamConnection(
-            subscribeSnapshot: dockStreamSnapshot(
-                host: host,
-                epoch: "cleanup-catchup",
-                seq: 1,
-                cards: [firstCard],
-                complete: false,
-                totalRows: 2,
-                window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1, nextOffset: 1)
+        let provider = StaticDockCardStateProvider(
+            snapshot: dockSnapshot(
+                registry: registry,
+                cards: [firstCard, secondCard],
+                now: { now }
             )
         )
         let store = ArchiveCleanupStore(
             registry: registry,
-            streamClient: ManualThreadCardStreamClient(connection: connection),
+            cardStateProvider: provider,
             archiver: SelectiveArchiveCleanupArchiver(),
-            metadataStore: InMemoryLocalThreadMetadataStore(),
             now: { now }
         )
 
-        let previewTask = Task {
-            await store.loadPreview(rule: ArchiveCleanupRule(age: .days90))
-        }
-        await Task.yield()
-        await connection.send(
-            ThreadCardStreamUpdateDTO(
-                kind: .delta,
-                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
-                view: .dock,
-                complete: true,
-                totalRows: 2,
-                window: DockStreamWindowDTO(offset: 1, limit: 1, rowCount: 1),
-                stateGeneration: 2,
-                epoch: "cleanup-catchup",
-                baseSeq: 1,
-                seq: 2,
-                freshness: DockStreamFreshnessDTO(status: .fresh),
-                upsertCards: [secondCard]
-            )
-        )
-        await previewTask.value
+        await store.loadPreview(rule: ArchiveCleanupRule(age: .days90))
 
         guard case .preview(let snapshot) = store.state else {
             return XCTFail("Expected cleanup preview, got \(store.state)")
         }
         XCTAssertEqual(snapshot.candidates.map(\.title), ["Old first", "Old second"])
         XCTAssertEqual(snapshot.hostSummaries.first?.candidateCount, 2)
+        XCTAssertEqual(provider.refreshCount, 1)
     }
 
     @MainActor
@@ -229,7 +206,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
             ),
             home.id: .failure(.offline("relay stopped"))
         ])
-        let store = ArchiveCleanupStore(
+        let (store, _) = makeCleanupStore(
             registry: registry,
             streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: SelectiveArchiveCleanupArchiver(),
@@ -258,7 +235,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
             amir.id: .failure(.offline("relay stopped")),
             home.id: .failure(.error("bad token"))
         ])
-        let store = ArchiveCleanupStore(
+        let (store, _) = makeCleanupStore(
             registry: registry,
             streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: SelectiveArchiveCleanupArchiver(),
@@ -306,7 +283,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
             )
         ])
         let archiver = SelectiveArchiveCleanupArchiver(failingThreadIDs: ["archive-fails"])
-        let store = ArchiveCleanupStore(
+        let (store, _) = makeCleanupStore(
             registry: registry,
             streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: archiver,
@@ -353,7 +330,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
             )
         ])
         let archiver = SelectiveArchiveCleanupArchiver()
-        let store = ArchiveCleanupStore(
+        let (store, _) = makeCleanupStore(
             registry: registry,
             streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: archiver,
@@ -418,7 +395,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
             )
         ])
         let archiver = SelectiveArchiveCleanupArchiver()
-        let store = ArchiveCleanupStore(
+        let (store, _) = makeCleanupStore(
             registry: registry,
             streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: archiver,
@@ -467,7 +444,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
             )
         ])
         let archiver = RetryArchiveCleanupArchiver(failuresRemaining: ["retry-me": 1])
-        let store = ArchiveCleanupStore(
+        let (store, _) = makeCleanupStore(
             registry: registry,
             streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: archiver,
@@ -534,7 +511,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let archiver = StopAfterFirstArchiveCleanupArchiver {
             box.store?.stopRemaining()
         }
-        let store = ArchiveCleanupStore(
+        let (store, _) = makeCleanupStore(
             registry: registry,
             streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
             archiver: archiver,
@@ -575,6 +552,101 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         Dictionary(uniqueKeysWithValues: snapshot.excluded.map { excluded in
             (excluded.row.id.threadID, excluded.reason)
         })
+    }
+
+    @MainActor
+    private func makeCleanupStore(
+        registry: HostRegistry,
+        streamClient: any ThreadCardStreamConnecting,
+        archiver: any ThreadArchiveCommanding,
+        metadataStore: any LocalThreadMetadataStoring,
+        now: @escaping @Sendable () -> Date
+    ) -> (ArchiveCleanupStore, TestDockCardStateProvider) {
+        let dockStore = DockStore(
+            registry: registry,
+            streamClient: streamClient,
+            archiver: archiver,
+            metadataStore: metadataStore,
+            streamReconnectDelay: .seconds(60),
+            streamHeartbeatTimeout: .seconds(60),
+            now: now
+        )
+        let provider = TestDockCardStateProvider(store: dockStore)
+        let cleanupStore = ArchiveCleanupStore(
+            registry: registry,
+            cardStateProvider: provider,
+            archiver: archiver,
+            now: now
+        )
+        return (cleanupStore, provider)
+    }
+
+    private func dockSnapshot(
+        registry: HostRegistry,
+        cards: [DockThreadCardDTO],
+        now: @escaping @Sendable () -> Date
+    ) -> DockSnapshot {
+        var table = ThreadCardTable()
+        table.reset(hosts: registry.hosts)
+        guard let host = registry.hosts.first else {
+            return DockRenderProjector(now: now).snapshot(
+                from: DockRenderInput(
+                    hosts: [],
+                    hostStates: [],
+                    hostIdentityResolver: DockHostIdentityResolver(hosts: []),
+                    cardsByHostID: [:],
+                    isPartial: false
+                ),
+                localMetadata: [:]
+            )
+        }
+        _ = table.applySnapshot(
+            dockStreamSnapshot(
+                host: host,
+                epoch: "cleanup-static",
+                seq: 1,
+                cards: cards
+            ),
+            host: host
+        )
+        return table.snapshot(hosts: registry.hosts, localMetadata: [:], now: now)
+    }
+}
+
+@MainActor
+private final class TestDockCardStateProvider: DockCardStateProviding {
+    private let store: DockStore
+    private(set) var refreshCount = 0
+
+    init(store: DockStore) {
+        self.store = store
+    }
+
+    var currentDockSnapshot: DockSnapshot? {
+        store.currentDockSnapshot
+    }
+
+    func refresh() async {
+        refreshCount += 1
+        await store.refresh()
+    }
+}
+
+@MainActor
+private final class StaticDockCardStateProvider: DockCardStateProviding {
+    private let snapshot: DockSnapshot
+    private(set) var refreshCount = 0
+
+    init(snapshot: DockSnapshot) {
+        self.snapshot = snapshot
+    }
+
+    var currentDockSnapshot: DockSnapshot? {
+        snapshot
+    }
+
+    func refresh() async {
+        refreshCount += 1
     }
 }
 

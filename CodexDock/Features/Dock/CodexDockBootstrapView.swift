@@ -117,23 +117,10 @@ public struct CodexDockBootstrapView: View {
     }
 
     private var streamClient: any ThreadCardStreamConnecting {
-        #if DEBUG
-        if let rawScenario = ProcessInfo.processInfo.environment["CODEX_DOCK_UI_DOCK_STREAM_SCENARIO"],
-           let scenario = ScriptedDockStreamScenario(rawValue: rawScenario) {
-            DockLog.dock.notice("dock scripted stream enabled scenario=\(scenario.rawValue, privacy: .public)")
-            return ScriptedDockStreamClient(scenario: scenario)
-        }
-        #endif
         return AppServerThreadCardStreamClient()
     }
 
     private var threadDetailFactory: any ThreadDetailSessionMaking {
-        #if DEBUG
-        if let rawScenario = ProcessInfo.processInfo.environment["CODEX_DOCK_UI_DOCK_STREAM_SCENARIO"],
-           let scenario = ScriptedDockStreamScenario(rawValue: rawScenario) {
-            return ScriptedThreadDetailSessionFactory(scenario: scenario)
-        }
-        #endif
         return AppServerThreadDetailSessionFactory()
     }
 

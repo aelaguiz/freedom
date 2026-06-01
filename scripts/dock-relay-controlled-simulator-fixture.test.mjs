@@ -39,6 +39,29 @@ test("controlled simulator fixture parses thread-activity options", () => {
   assert.equal(options.maxStreamLagMs, 1500);
 });
 
+test("controlled simulator fixture parses archive-toggle options", () => {
+  const options = parseArgs([
+    "--scenario",
+    "archive-toggle",
+    "--ready-out",
+    "/tmp/ready.json",
+    "--ui-ready-in",
+    "/tmp/ui-ready.json",
+    "--stop-in",
+    "/tmp/stop",
+    "--json-out",
+    "/tmp/report.json",
+  ]);
+
+  validateOptions(options);
+
+  assert.equal(options.scenario, "archive-toggle");
+  assert.equal(options.readyOut, "/tmp/ready.json");
+  assert.equal(options.uiReadyIn, "/tmp/ui-ready.json");
+  assert.equal(options.stopIn, "/tmp/stop");
+  assert.equal(options.jsonOut, "/tmp/report.json");
+});
+
 test("controlled simulator fixture parses server-request options", () => {
   const options = parseArgs([
     "--scenario",
@@ -79,6 +102,29 @@ test("controlled simulator fixture parses detail-history-request options", () =>
   validateOptions(options);
 
   assert.equal(options.scenario, "detail-history-request");
+  assert.equal(options.readyOut, "/tmp/ready.json");
+  assert.equal(options.uiReadyIn, "/tmp/ui-ready.json");
+  assert.equal(options.stopIn, "/tmp/stop");
+  assert.equal(options.jsonOut, "/tmp/report.json");
+});
+
+test("controlled simulator fixture parses detail-reconnect options", () => {
+  const options = parseArgs([
+    "--scenario",
+    "detail-reconnect",
+    "--ready-out",
+    "/tmp/ready.json",
+    "--ui-ready-in",
+    "/tmp/ui-ready.json",
+    "--stop-in",
+    "/tmp/stop",
+    "--json-out",
+    "/tmp/report.json",
+  ]);
+
+  validateOptions(options);
+
+  assert.equal(options.scenario, "detail-reconnect");
   assert.equal(options.readyOut, "/tmp/ready.json");
   assert.equal(options.uiReadyIn, "/tmp/ui-ready.json");
   assert.equal(options.stopIn, "/tmp/stop");
@@ -245,7 +291,7 @@ test("controlled simulator fixture parses multi-host-isolation options", () => {
 test("controlled simulator fixture rejects unsupported simulator scenarios", () => {
   const options = parseArgs([
     "--scenario",
-    "archive-toggle",
+    "unsupported-scenario",
     "--ready-out",
     "/tmp/ready.json",
     "--ui-ready-in",
@@ -258,7 +304,7 @@ test("controlled simulator fixture rejects unsupported simulator scenarios", () 
 
   assert.throws(
     () => validateOptions(options),
-    /unsupported controlled simulator scenario archive-toggle/u
+    /unsupported controlled simulator scenario unsupported-scenario/u
   );
 });
 

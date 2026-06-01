@@ -18,11 +18,11 @@ class NotificationIngestor {
     // Archive commands are inputs to the canonical projection. They must not
     // write card order or freshness directly because that recreates a second
     // card-truth path beside dock/* and archive/* streams.
-    this.scheduleReconciliation?.({
+    return {
+      threadId,
+      archived,
       reason: archived ? "thread/archive" : "thread/unarchive",
-      immediate: true,
-    });
-    return null;
+    };
   }
 
   markScopeStale(scopeName, error) {

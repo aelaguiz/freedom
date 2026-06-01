@@ -270,22 +270,30 @@ final class FakeRealtimeTranscriptionSession: @unchecked Sendable, RealtimeTrans
 }
 
 final class FakeLiveVoiceCaptureController: @unchecked Sendable, LiveVoiceCaptureControlling {
-    let session: FakeLiveVoiceCaptureSession
+    private(set) var sessions: [FakeLiveVoiceCaptureSession]
     private let startResult: Result<Void, VoiceCaptureError>
     private(set) var startCount = 0
+
+    var session: FakeLiveVoiceCaptureSession {
+        sessions[0]
+    }
 
     init(
         session: FakeLiveVoiceCaptureSession = FakeLiveVoiceCaptureSession(),
         startResult: Result<Void, VoiceCaptureError> = .success(())
     ) {
-        self.session = session
+        self.sessions = [session]
         self.startResult = startResult
     }
 
     func startCapture() async throws -> any LiveVoiceCaptureSession {
-        startCount += 1
         try startResult.get()
-        return session
+        if startCount >= sessions.count {
+            sessions.append(FakeLiveVoiceCaptureSession())
+        }
+        let nextSession = sessions[startCount]
+        startCount += 1
+        return nextSession
     }
 }
 

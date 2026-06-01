@@ -16,6 +16,10 @@ import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
 import { startServer } from "./dock-relay.mjs";
 import { threadMatchesSourceKinds } from "./dock-relay-source-filter.mjs";
 import { initializeClient } from "./dock-relay-thread-data.mjs";
+import {
+  assertProofReport,
+  finalizeProofReport,
+} from "./proof-report-contracts.mjs";
 
 const MODES = new Set(["one-shot", "read-only-real-home", "soak", "scenario"]);
 const DETAIL_MODES = new Set(["none", "sampled", "all"]);
@@ -44,6 +48,9 @@ const CLIENT_PATH_ROUTES = new Set([
   "dock/subscribe",
   "dock/update",
   "dock/resync",
+  "archive/subscribe",
+  "archive/update",
+  "archive/resync",
   "thread/archive",
   "thread/unarchive",
   "thread/read",
@@ -185,7 +192,7 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
     clientPathOnly: false,
     forceDockResync: false,
     turnSortDirection: "desc",
-    turnItemsView: "notLoaded",
+    turnItemsView: "full",
     turnItemsViewExplicit: false,
     scenario: DEFAULT_SCENARIO,
     scenarioThreadID: null,
@@ -383,6 +390,20 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
   if (!SCENARIOS.has(options.scenario)) {
     throw new Error("--scenario must be archive-toggle, detail-reconnect, live-lease-expiry, multi-host-isolation, resync-gap, server-request, source-refresh, spawn-edge, thread-activity, or all");
   }
+  try {
+    const relayURL = new URL(options.relayUrl);
+    if (!["ws:", "wss:"].includes(relayURL.protocol)) {
+      throw new Error("invalid relay websocket protocol");
+    }
+    if (relayURL.port === "4500") {
+      throw new Error("--relay-url must point at the Dock relay, not the raw app-server :4500 endpoint");
+    }
+  } catch (error) {
+    if (String(error?.message || error).includes("raw app-server")) {
+      throw error;
+    }
+    throw new Error(`--relay-url must be a valid ws:// or wss:// URL: ${options.relayUrl}`);
+  }
 
   options.limit = Math.min(options.limit, THREAD_LIST_MAX_LIMIT);
   options.detailTurnLimit = Math.min(options.detailTurnLimit, THREAD_LIST_MAX_LIMIT);
@@ -498,6 +519,8 @@ function sanitizeCardForReport(card) {
     preview: card?.preview ?? null,
     updatedAt: card?.updatedAt ?? null,
     activityAt: card?.activityAt ?? null,
+    activityAtMs: card?.activityAtMs ?? null,
+    orderKey: card?.orderKey ?? null,
   });
 }
 
@@ -629,11 +652,52 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
     return findings;
   }
 
+  if (payload.kind === "heartbeat") {
+    const seq = Number.isFinite(Number(payload.seq)) ? Number(payload.seq) : null;
+    const totalRows = Number.isFinite(Number(payload.totalRows)) ? Number(payload.totalRows) : null;
+    if (state.epoch && payload.epoch && state.epoch !== payload.epoch) {
+      findings.push({
+        code: "dock_stream_epoch_changed",
+        severity: "warning",
+        message: "dock stream epoch changed; resync is required",
+        previousEpoch: state.epoch,
+        actualEpoch: payload.epoch,
+        receivedAt,
+      });
+      state.needsResync = true;
+    }
+    if (seq !== null && state.seq !== null && seq !== state.seq) {
+      findings.push({
+        code: "dock_stream_heartbeat_sequence_gap",
+        severity: "error",
+        message: "dock/update heartbeat seq does not match current stream seq",
+        expectedSeq: state.seq,
+        actualSeq: seq,
+        receivedAt,
+      });
+      state.needsResync = true;
+    }
+    state.epoch = payload.epoch || state.epoch;
+    state.seq = seq ?? state.seq;
+    state.view = payload.view || state.view;
+    if (payload.complete === true) {
+      state.complete = totalRows === null ? state.complete : state.cardsByID.size >= totalRows;
+    } else if (payload.complete === false) {
+      state.complete = false;
+    }
+    state.totalRows = totalRows ?? state.totalRows;
+    state.window = payload.window || state.window;
+    state.freshness = payload.freshness || state.freshness;
+    state.lastPayloadKind = "heartbeat";
+    state.lastReceivedAt = receivedAt;
+    return findings;
+  }
+
   if (payload.kind !== "delta") {
     findings.push({
       code: "dock_stream_unknown_payload_kind",
       severity: "error",
-      message: "dock stream payload kind is neither snapshot nor delta",
+      message: "dock stream payload kind is neither snapshot, delta, nor heartbeat",
       actual: payload.kind || null,
       receivedAt,
     });
@@ -706,16 +770,16 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
 }
 
 function isDockStreamStateComplete(state, lastUpdate = null) {
+  const totalRows = Number.isFinite(Number(lastUpdate?.totalRows))
+    ? Number(lastUpdate.totalRows)
+    : (Number.isFinite(Number(state.totalRows)) ? Number(state.totalRows) : null);
   if (lastUpdate?.complete === true || state.complete === true) {
-    return true;
+    return totalRows === null ? true : state.cardsByID.size >= totalRows;
   }
   const window = lastUpdate?.window || state.window || null;
   if (!window || window.nextOffset !== null) {
     return false;
   }
-  const totalRows = Number.isFinite(Number(lastUpdate?.totalRows))
-    ? Number(lastUpdate.totalRows)
-    : (Number.isFinite(Number(state.totalRows)) ? Number(state.totalRows) : null);
   return totalRows !== null && state.cardsByID.size >= totalRows;
 }
 
@@ -793,6 +857,17 @@ function compareDockStates(streamSnapshot, freshSnapshot) {
       fresh: freshSnapshot.totalRows,
     });
   }
+  const streamFreshness = comparableFreshness(streamSnapshot.freshness);
+  const freshFreshness = comparableFreshness(freshSnapshot.freshness);
+  if (stableJSONString(streamFreshness) !== stableJSONString(freshFreshness)) {
+    findings.push({
+      code: "dock_stream_freshness_mismatch",
+      severity: "error",
+      message: "long-lived dock stream freshness differs from fresh dock/subscribe snapshot",
+      stream: streamFreshness,
+      fresh: freshFreshness,
+    });
+  }
   for (const id of streamIDs.filter((candidate) => freshCardsByID.has(candidate))) {
     const streamCard = normalizeForComparison(streamCardsByID.get(id));
     const freshCard = normalizeForComparison(freshCardsByID.get(id));
@@ -812,6 +887,16 @@ function compareDockStates(streamSnapshot, freshSnapshot) {
     findings,
     streamCardCount: streamIDs.length,
     freshCardCount: freshIDs.length,
+  };
+}
+
+function comparableFreshness(freshness) {
+  if (!freshness || typeof freshness !== "object") {
+    return null;
+  }
+  return {
+    status: freshness.status || null,
+    lastError: freshness.lastError || null,
   };
 }
 
@@ -1114,9 +1199,12 @@ class DockStreamProbe {
     this.notifications = [];
     this.findings = [];
     this.resyncs = [];
+    this.archiveNotifications = [];
+    this.archiveResyncs = [];
     this.closed = false;
     this.wake = null;
     this.state = emptyDockStreamState();
+    this.archiveState = emptyDockStreamState();
     this.client = new JsonRpcWebSocketClient(options.relayUrl, {
       requestTimeoutMs: options.requestTimeoutMs,
       onNotification: (message) => this.handleNotification(message),
@@ -1136,8 +1224,31 @@ class DockStreamProbe {
     return snapshot;
   }
 
+  async openArchive() {
+    recordRoute(this.routeEvents, "archive/subscribe", "open long-lived Archive stream subscription");
+    const snapshot = await this.client.request("archive/subscribe", {});
+    this.applyArchivePayload(snapshot, "subscribe");
+    return snapshot;
+  }
+
   handleNotification(message) {
     const receivedAt = new Date().toISOString();
+    if (message?.method === "archive/update") {
+      recordRoute(this.routeEvents, "archive/update", "receive long-lived Archive stream update", {
+        kind: message.params?.kind || null,
+        seq: message.params?.seq ?? null,
+        baseSeq: message.params?.baseSeq ?? null,
+      });
+      this.archiveNotifications.push({
+        method: message.method,
+        receivedAt,
+        kind: message.params?.kind || null,
+        seq: message.params?.seq ?? null,
+        baseSeq: message.params?.baseSeq ?? null,
+      });
+      this.applyArchivePayload(message.params, "notification", receivedAt);
+      return;
+    }
     if (message?.method !== "dock/update") {
       return;
     }
@@ -1161,6 +1272,18 @@ class DockStreamProbe {
       .map((finding) => ({
         ...finding,
         source,
+      }));
+    this.findings.push(...findings);
+    this.wakeWaiter();
+    return findings;
+  }
+
+  applyArchivePayload(payload, source, receivedAt = new Date().toISOString()) {
+    const findings = applyDockPayload(this.archiveState, payload, receivedAt)
+      .map((finding) => ({
+        ...finding,
+        source,
+        stream: "archive",
       }));
     this.findings.push(...findings);
     this.wakeWaiter();
@@ -1209,6 +1332,23 @@ class DockStreamProbe {
     return result;
   }
 
+  async archiveResync(reason = "manual") {
+    const startedAt = new Date().toISOString();
+    recordRoute(this.routeEvents, "archive/resync", "resync long-lived Archive stream", { reason });
+    const snapshot = await this.client.request("archive/resync", {});
+    this.applyArchivePayload(snapshot, "resync");
+    this.archiveState.needsResync = false;
+    const result = {
+      reason,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      seq: snapshot?.seq ?? null,
+      cardCount: Array.isArray(snapshot?.cards) ? snapshot.cards.length : null,
+    };
+    this.archiveResyncs.push(result);
+    return result;
+  }
+
   async waitForComplete(timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     while (!isDockStreamStateComplete(this.state)) {
@@ -1245,6 +1385,10 @@ class DockStreamProbe {
 
   snapshot() {
     return snapshotFromStreamState(this.state);
+  }
+
+  archiveSnapshot() {
+    return snapshotFromStreamState(this.archiveState);
   }
 
   async close() {
@@ -1491,6 +1635,7 @@ async function drainThreadTurns(client, threadID, options, routeEvents = null) {
       threadId: threadID,
       cursor,
       limit: options.detailTurnLimit,
+      itemsView: options.turnItemsView,
     });
     pageCount += 1;
     for (const turn of Array.isArray(response?.data) ? response.data : []) {
@@ -4555,13 +4700,17 @@ async function buildScenarioReport(options) {
 }
 
 async function buildSyncAuditReport(options) {
+  const finalize = (report) => finalizeProofReport({
+    kind: "codex-dock-relay-sync-audit-report",
+    ...report,
+  });
   if (options.mode === "soak") {
-    return buildSoakReport(options);
+    return finalize(await buildSoakReport(options));
   }
   if (options.mode === "scenario") {
-    return buildScenarioReport(options);
+    return finalize(await buildScenarioReport(options));
   }
-  return buildOneShotReport(options);
+  return finalize(await buildOneShotReport(options));
 }
 
 function markdownSummary(report) {
@@ -4623,6 +4772,7 @@ function markdownSummary(report) {
 }
 
 function writeReportFiles(report, options) {
+  assertProofReport(report);
   if (options.jsonOut) {
     fs.mkdirSync(path.dirname(options.jsonOut), { recursive: true });
     fs.writeFileSync(options.jsonOut, `${JSON.stringify(report, null, 2)}\n`, "utf8");

@@ -104,11 +104,6 @@ public final class ThreadDetailStore: ObservableObject {
         let turns: [JSONValue]
     }
 
-    private enum BufferedInitialLiveEvent {
-        case notification(JSONRPCNotification)
-        case request(JSONRPCRequest)
-    }
-
     private static let turnPageLimit = CodexDockConstants.Dock.turnPageLimit
     @Published public private(set) var state: ThreadDetailStoreState
     @Published public private(set) var requestCards: [ServerRequestCard] = []
@@ -159,8 +154,7 @@ public final class ThreadDetailStore: ObservableObject {
     private var activeTurnID: String?
     private var didLoad = false
     private var isClosing = false
-    private var isBufferingInitialLiveEvents = false
-    private var initialLiveEventBuffer: [BufferedInitialLiveEvent] = []
+    private var liveEventBuffer = ThreadDetailLiveEventBuffer()
 
     public init(
         host: DockHostConfiguration,
@@ -255,7 +249,7 @@ public final class ThreadDetailStore: ObservableObject {
                 timeout: CodexDockConstants.AppServer.connectInitializeTimeout
             )
             latestConnectionState = .connected
-            beginBufferingInitialLiveEvents()
+            liveEventBuffer.begin()
             startObservation(session: session)
 
             let fullRead = try await readFullThread(session: session)
@@ -268,16 +262,16 @@ public final class ThreadDetailStore: ObservableObject {
                     turns: fullRead.turns
                 )
                 try await replaceEvents(from: liveThread, liveState: .live)
-                await replayBufferedInitialLiveEvents()
+                await replayBufferedLiveEvents()
                 DockLog.threadDetail.notice("thread detail load finished live host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) events=\(self.events.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
             } catch {
-                discardBufferedInitialLiveEvents()
+                liveEventBuffer.discard()
                 liveState = .stale(message(from: error))
                 publishLoaded()
                 DockLog.threadDetail.warning("thread detail resume failed; loaded stale host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             }
         } catch {
-            discardBufferedInitialLiveEvents()
+            liveEventBuffer.discard()
             let message = message(from: error)
             state = .error(header, message)
             screenStore.setError(header: header, message: message)
@@ -297,7 +291,7 @@ public final class ThreadDetailStore: ObservableObject {
         requestTask = nil
         recoveryTask?.cancel()
         recoveryTask = nil
-        discardBufferedInitialLiveEvents()
+        liveEventBuffer.discard()
         lifecycleTask?.cancel()
         lifecycleTask = nil
         transcriptionTask?.cancel()
@@ -589,7 +583,8 @@ public final class ThreadDetailStore: ObservableObject {
                     threadId: row.id.threadID,
                     cursor: cursor,
                     limit: Self.turnPageLimit,
-                    sortDirection: .desc
+                    sortDirection: .desc,
+                    itemsView: .full
                 ),
                 timeout: CodexDockConstants.AppServer.defaultRequestTimeout
             )
@@ -649,15 +644,18 @@ public final class ThreadDetailStore: ObservableObject {
         }
 
         liveState = .reconnecting(reason)
+        liveEventBuffer.begin()
         DockLog.threadDetail.notice("thread detail rehydrate started thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) reason=\(DockLog.redacted(reason), privacy: .public)")
         publishLoaded()
 
         do {
             let fullRead = try await readFullThread(session: session)
             let liveThread = try await resumeCompactThread(session: session, turns: fullRead.turns)
-            try await mergeEvents(from: liveThread, liveState: .live)
+            try await replaceEvents(from: liveThread, liveState: .live)
+            await replayBufferedLiveEvents()
             DockLog.threadDetail.notice("thread detail rehydrate finished thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) events=\(self.events.count, privacy: .public)")
         } catch {
+            liveEventBuffer.discard()
             liveState = .stale(message(from: error))
             publishLoaded()
             DockLog.threadDetail.warning("thread detail rehydrate failed thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
@@ -700,33 +698,24 @@ public final class ThreadDetailStore: ObservableObject {
         publishLoaded()
     }
 
-    private func beginBufferingInitialLiveEvents() {
-        isBufferingInitialLiveEvents = true
-        initialLiveEventBuffer.removeAll()
-    }
-
-    private func discardBufferedInitialLiveEvents() {
-        isBufferingInitialLiveEvents = false
-        initialLiveEventBuffer.removeAll()
-    }
-
-    private func replayBufferedInitialLiveEvents() async {
-        let bufferedEvents = initialLiveEventBuffer
-        discardBufferedInitialLiveEvents()
-        for event in bufferedEvents {
-            switch event {
-            case .notification(let notification):
-                await apply(notification: notification)
-            case .request(let request):
-                await apply(request: request)
+    private func replayBufferedLiveEvents() async {
+        while let bufferedEvents = liveEventBuffer.takeBatch() {
+            for event in bufferedEvents {
+                switch event {
+                case .notification(let notification):
+                    await apply(notification: notification)
+                case .request(let request):
+                    await apply(request: request)
+                }
             }
         }
+        liveEventBuffer.finishReplay()
     }
 
     private func handle(notification: JSONRPCNotification) async {
-        if isBufferingInitialLiveEvents {
-            initialLiveEventBuffer.append(.notification(notification))
-            DockLog.threadDetail.debug("thread notification buffered during initial load method=\(notification.method, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
+        if liveEventBuffer.isBuffering {
+            liveEventBuffer.append(notification: notification)
+            DockLog.threadDetail.debug("thread notification buffered during canonical load method=\(notification.method, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
             return
         }
         await apply(notification: notification)
@@ -755,9 +744,9 @@ public final class ThreadDetailStore: ObservableObject {
     }
 
     private func handle(request: JSONRPCRequest) async {
-        if isBufferingInitialLiveEvents {
-            initialLiveEventBuffer.append(.request(request))
-            DockLog.threadDetail.debug("server request buffered during initial load method=\(request.method, privacy: .public) request_id=\(DockLog.publicID(request.id), privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
+        if liveEventBuffer.isBuffering {
+            liveEventBuffer.append(request: request)
+            DockLog.threadDetail.debug("server request buffered during canonical load method=\(request.method, privacy: .public) request_id=\(DockLog.publicID(request.id), privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
             return
         }
         await apply(request: request)

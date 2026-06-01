@@ -569,6 +569,34 @@ Run generated-project tests on the `iPhone 17` simulator:
 rtk make app-test SIM='iPhone 17'
 ```
 
+Dump the current visible simulator state without relaunching, navigating,
+seeding, or taking screenshots:
+
+```sh
+rtk make sim-ui-dump SIM='iPhone 17'
+```
+
+This writes accessibility-state proof to `/tmp/codex-client/.../sim-ui-dump.json`
+and `/tmp/codex-client/.../sim-ui-dump.md`. The JSON contains the visible
+screen, visible Dock rows or Thread Detail messages when present, rollups, and
+the raw accessibility element list. If the app is not running or the current
+screen cannot be classified, the target writes a blocked/non-fresh report
+instead of silently passing.
+
+Run the controlled over-time simulator proof before claiming live update
+behavior is fixed:
+
+```sh
+rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'
+```
+
+The matrix mutates controlled Codex data, watches relay truth, samples the
+literal simulator accessibility state over time, and fails when the UI does not
+converge within the configured lag budget. It also checks visible Dock row
+order and Thread Detail message order from top-to-bottom accessibility frames
+in the scenarios where ordering matters. The proof reports are schema-checked
+by `rtk npm run contract:check`.
+
 The generated-project test target includes UI automation smoke tests. Those
 tests use the accessibility tree as the primary proof: screens, controls, rows,
 visible state banners, and visible error states expose stable

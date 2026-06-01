@@ -1145,7 +1145,8 @@ final class AppServerClientTests: XCTestCase {
                     threadId: "thread-1",
                     cursor: "page-2",
                     limit: 250,
-                    sortDirection: .desc
+                    sortDirection: .desc,
+                    itemsView: .full
                 ),
                 timeout: .seconds(1)
             )
@@ -1159,6 +1160,7 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(turnsListParams["cursor"], .string("page-2"))
         XCTAssertEqual(turnsListParams["limit"], .integer(250))
         XCTAssertEqual(turnsListParams["sortDirection"], .string("desc"))
+        XCTAssertEqual(turnsListParams["itemsView"], .string("full"))
 
         await transport.enqueue(
             .response(

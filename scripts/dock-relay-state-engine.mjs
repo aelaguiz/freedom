@@ -51,6 +51,17 @@ const ACTIVE_ARCHIVE_SCOPE = {
   archived: false,
 };
 
+const ACTIVE_LIVE_SCOPE = {
+  name: "active:liveLoadedSessions",
+  archived: false,
+  sourceScope: "liveLoadedSessions",
+};
+
+function firstScopeError(scopes, fallback) {
+  const scope = scopes.find((candidate) => candidate?.complete === false && candidate?.error);
+  return scope?.error || fallback;
+}
+
 function appFacingHumanStartedVisibility() {
   return {
     mode: "app_facing_human_started_threads_only",
@@ -143,7 +154,7 @@ class StateReconciler {
     if (this.inFlight) {
       return this.inFlight;
     }
-    this.inFlight = this.engine.reconcileDock({ reason }).finally(() => {
+    this.inFlight = this.engine.reconcileAll({ reason }).finally(() => {
       this.inFlight = null;
     });
     return this.inFlight;
@@ -163,7 +174,9 @@ class RelayStateEngine {
     this.subscriptions = new StateSubscriptionHub({
       store: this.store,
       snapshotForView: (view, params) => this.snapshotForView(view, params),
+      heartbeatForView: (view, params) => this.heartbeatForView(view, params),
       logger: this.logger,
+      heartbeatIntervalMs: config.relayStateHeartbeatIntervalMs,
       snapshotSoftLimitBytes: config.relayStateSnapshotSoftLimitBytes
         || RELAY_STATE_SNAPSHOT_SOFT_LIMIT_BYTES,
     });
@@ -223,7 +236,7 @@ class RelayStateEngine {
   shouldReconcileAfterResponse() {
     const host = publicHostFromConfig(this.config);
     const counts = this.store.stateCounts();
-    const freshness = this.store.freshnessForHost(host.id);
+    const freshness = this.store.freshnessForHost(host.id, { archived: false });
     const totalRows = this.store.listDockCards({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
     return Number(totalRows || 0) === 0
       || Number(counts.incomplete || 0) > 0
@@ -257,13 +270,14 @@ class RelayStateEngine {
         modelProviders: [],
       };
       const previousDockCards = this.store.listDockCards({ hostID: host.id }).cards;
-      const [liveRows, defaultScope] = await Promise.all([
+      const [liveProof, defaultScope] = await Promise.all([
         this.refreshLiveLeases(),
         drainThreadListRows(this.config, baseParams, {
           name: `${ACTIVE_ARCHIVE_SCOPE.name}:${ACTIVE_DEFAULT_SCOPE.name}`,
           sourceScope: ACTIVE_DEFAULT_SCOPE.name,
         }),
       ]);
+      const liveRows = liveProof.rows;
       const interactiveRows = defaultScope.rows.map((row) => row.thread).filter(Boolean);
       const { acceptedRows, rejectedCounts, validationFailures } = await enrichHumanStartedRows(
         this.config,
@@ -300,31 +314,40 @@ class RelayStateEngine {
       const totalValidationFailures = validationFailures
         + supplements.validationFailures
         + canonical.validationFailures;
-      const complete = defaultScope.complete && totalValidationFailures === 0 && canonical.complete;
+      const complete = defaultScope.complete
+        && liveProof.scope.complete
+        && totalValidationFailures === 0
+        && canonical.complete;
       const reconciliationScope = complete
         ? defaultScope
         : {
           ...defaultScope,
-          complete: false,
-          error: defaultScope.error || "human-started thread validation failed",
+          complete: defaultScope.complete,
+          error: defaultScope.complete ? null : (defaultScope.error || "human-started thread validation failed"),
         };
+      const proofScopes = [
+        reconciliationScope,
+        liveProof.scope,
+      ];
       const cleanup = this.store.deleteRejectedThreadCards(host.id);
       const leaseCleanup = this.store.deleteRejectedLiveLeases(host.id);
       const result = this.store.applyDockReconciliation({
         host,
         cards,
-        scopes: [reconciliationScope],
+        scopes: proofScopes,
         complete,
-        error: reconciliationScope.error || null,
+        error: firstScopeError(proofScopes, canonical.complete ? null : "card activity proof incomplete"),
         previousCards: previousDockCards,
       });
-      const freshness = this.store.freshnessForHost(host.id);
+      const failureReason = firstScopeError(proofScopes, canonical.complete ? null : "card activity proof incomplete");
+      const freshness = this.store.freshnessForHost(host.id, { archived: false });
       const totalRows = this.store.listDockCards({ hostID: host.id }).totalRows;
       const truthComplete = freshness.status === "fresh"
         && this.store.cardTruthCompleteForHost(host.id, { archived: false });
+      // A delta that includes every current row is a complete client view even
+      // when it also deletes stale rows from the previous view.
       const deltaCarriesEveryRow = complete
         && truthComplete
-        && Number(result.deleteCardIDs?.length || 0) === 0
         && Number(result.upsertCards?.length || 0) === Number(totalRows || 0);
       await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
         view: DOCK_VIEW,
@@ -360,7 +383,7 @@ class RelayStateEngine {
           supplementedRows: supplements.acceptedRows.length,
           deletedRejectedCards: cleanup.deleted,
           deletedRejectedLiveLeases: leaseCleanup.deleted,
-          error: reconciliationScope.error || null,
+          error: failureReason,
         });
       }
       this.scheduleLiveLeaseExpiryReconciliation(host.id);
@@ -374,7 +397,7 @@ class RelayStateEngine {
         view: DOCK_VIEW,
         baseSeq: Math.max(0, seq - 1),
         seq,
-        freshness: this.store.freshnessForHost(host.id),
+        freshness: this.store.freshnessForHost(host.id, { archived: false }),
         totalRows,
         complete: false,
       }));
@@ -386,6 +409,14 @@ class RelayStateEngine {
       this.scheduleLiveLeaseExpiryReconciliation(host.id);
       return { seq, upsertCards: [], deleteCardIDs: [], error };
     }
+  }
+
+  async reconcileAll({ reason = "manual" } = {}) {
+    const [dock, archive] = await Promise.all([
+      this.reconcileDock({ reason }),
+      this.reconcileArchive({ reason }),
+    ]);
+    return { dock, archive };
   }
 
   async reconcileArchive({ reason = "manual" } = {}) {
@@ -438,7 +469,7 @@ class RelayStateEngine {
         error: complete ? null : (defaultScope.error || "archive card activity proof incomplete"),
         previousCards: previousArchiveCards,
       });
-      const freshness = this.store.freshnessForHost(host.id);
+      const freshness = this.store.freshnessForHost(host.id, { archived: true });
       const totalRows = this.store.listArchiveCards({ hostID: host.id }).totalRows;
       const truthComplete = freshness.status === "fresh"
         && this.store.cardTruthCompleteForHost(host.id, { archived: true });
@@ -471,7 +502,7 @@ class RelayStateEngine {
         view: ARCHIVE_VIEW,
         baseSeq: Math.max(0, seq - 1),
         seq,
-        freshness: this.store.freshnessForHost(host.id),
+        freshness: this.store.freshnessForHost(host.id, { archived: true }),
         totalRows,
         complete: false,
       }));
@@ -511,7 +542,20 @@ class RelayStateEngine {
       }
     }
     this.store.deleteRejectedLiveLeases(host.id);
-    return acceptedRows;
+    const failedEndpoints = Number(live.failedEndpoints || 0);
+    const failedThreadReads = Number(live.failedThreadReads || 0);
+    const complete = failedEndpoints === 0 && failedThreadReads === 0;
+    const error = failedEndpoints > 0
+      ? `live loaded session refresh failed for ${failedEndpoints}/${endpoints.length} endpoints`
+      : (failedThreadReads > 0 ? `live loaded session thread/read failed for ${failedThreadReads}/${live.totalThreadReads || 0} threads` : null);
+    return {
+      rows: acceptedRows,
+      scope: {
+        ...ACTIVE_LIVE_SCOPE,
+        complete,
+        error,
+      },
+    };
   }
 
   snapshotForView(view, {
@@ -526,6 +570,39 @@ class RelayStateEngine {
     return this.snapshotDock({ epoch, offset, limit, softLimitBytes });
   }
 
+  heartbeatForView(view, {
+    epoch = this.subscriptions.epoch,
+  } = {}) {
+    const host = publicHostFromConfig(this.config);
+    const archived = view === ARCHIVE_VIEW;
+    const freshness = this.store.freshnessForHost(host.id, { archived });
+    const truthComplete = freshness.status === "fresh"
+      && this.store.cardTruthCompleteForHost(host.id, { archived });
+    const result = archived
+      ? this.store.listArchiveCards({ hostID: host.id, offset: 0, limit: 0 })
+      : this.store.listDockCards({ hostID: host.id, offset: 0, limit: 0 });
+    const seq = this.store.currentSeq();
+    return {
+      kind: "heartbeat",
+      schemaVersion: 2,
+      epoch,
+      baseSeq: null,
+      seq,
+      stateGeneration: seq,
+      view,
+      complete: truthComplete,
+      totalRows: result.totalRows,
+      window: buildWindow({
+        offset: 0,
+        limit: 0,
+        rowCount: 0,
+        totalRows: result.totalRows,
+      }),
+      asOf: nowISOString(),
+      freshness,
+    };
+  }
+
   snapshotDock({
     epoch = this.subscriptions.epoch,
     offset = 0,
@@ -533,7 +610,7 @@ class RelayStateEngine {
     softLimitBytes = RELAY_STATE_SNAPSHOT_SOFT_LIMIT_BYTES,
   } = {}) {
     const host = publicHostFromConfig(this.config);
-    const freshness = this.store.freshnessForHost(host.id);
+    const freshness = this.store.freshnessForHost(host.id, { archived: false });
     const truthComplete = freshness.status === "fresh"
       && this.store.cardTruthCompleteForHost(host.id, { archived: false });
     const totalRows = this.store.listDockCards({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
@@ -604,7 +681,7 @@ class RelayStateEngine {
     limit = RELAY_STATE_DOCK_WINDOW_SIZE,
   } = {}) {
     const host = publicHostFromConfig(this.config);
-    const freshness = this.store.freshnessForHost(host.id);
+    const freshness = this.store.freshnessForHost(host.id, { archived: true });
     const truthComplete = freshness.status === "fresh"
       && this.store.cardTruthCompleteForHost(host.id, { archived: true });
     const result = this.store.listArchiveCards({ hostID: host.id, offset, limit });
@@ -873,7 +950,7 @@ class RelayStateEngine {
       ? this.store.listArchiveCards({ hostID: host.id, offset, limit })
       : this.store.listDockCards({ hostID: host.id, offset, limit });
     const archived = snapshot.view === ARCHIVE_VIEW;
-    const freshness = this.store.freshnessForHost(host.id);
+    const freshness = this.store.freshnessForHost(host.id, { archived });
     const truthComplete = freshness.status === "fresh"
       && this.store.cardTruthCompleteForHost(host.id, { archived });
     const complete = truthComplete && offset + bounded.cards.length >= bounded.totalRows;
@@ -896,7 +973,34 @@ class RelayStateEngine {
   }
 
   async handleArchiveMutation({ threadId, archived }) {
-    this.ingestor.ingestArchiveMutation({ threadId, archived });
+    const mutation = this.ingestor.ingestArchiveMutation({ threadId, archived });
+    if (!mutation) {
+      return null;
+    }
+    const results = await Promise.allSettled([
+      this.reconcileDock({ reason: mutation.reason }),
+      this.reconcileArchive({ reason: mutation.reason }),
+    ]);
+    for (const [index, result] of results.entries()) {
+      if (result.status !== "rejected" && !result.value?.error) {
+        continue;
+      }
+      this.logger?.warn?.("state.archive_mutation_reconcile_failed", {
+        reason: mutation.reason,
+        view: index === 0 ? DOCK_VIEW : ARCHIVE_VIEW,
+        error: result.status === "rejected" ? result.reason : result.value.error,
+      });
+    }
+    const failed = results.find((result) => result.status === "rejected" || result.value?.error);
+    if (failed) {
+      const reason = failed.status === "rejected" ? failed.reason : failed.value.error;
+      throw reason instanceof Error ? reason : new Error(String(reason || "archive mutation reconcile failed"));
+    }
+    return {
+      reason: mutation.reason,
+      dock: results[0].status === "fulfilled" ? results[0].value : null,
+      archive: results[1].status === "fulfilled" ? results[1].value : null,
+    };
   }
 
   stateHealth() {

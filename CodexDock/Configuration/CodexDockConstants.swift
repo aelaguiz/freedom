@@ -20,6 +20,7 @@ public enum CodexDockConstants {
         public static let activeSessionMaxPages = 1
         public static let turnPageLimit = 250
         public static let autoRefreshInterval: Duration = .seconds(5)
+        public static let streamHeartbeatTimeout: Duration = .seconds(15)
         public static let bonjourResolveTimeout: TimeInterval = 4
     }
 

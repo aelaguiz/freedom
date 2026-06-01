@@ -8,6 +8,7 @@ import {
   jsonRpcRequest,
   onceListening,
   openWebSocket,
+  waitForRelayMessage,
 } from "./dock-relay-test-helpers.mjs";
 
 function appServerResponse(id, result) {
@@ -116,14 +117,14 @@ async function startCanonicalActivityAppServer({
   };
 }
 
-async function withRelay(historyUrl, testFn) {
+async function withRelay(historyUrl, testFn, overrides = {}) {
   const config = {
     listenHost: "127.0.0.1",
     port: 0,
     phoneAuth: "none",
     historyBearerToken: "test-token",
     historyUrl,
-    liveEndpoints: [],
+    liveEndpoints: overrides.liveEndpoints || [],
     advertiseBonjour: false,
     relayStateDatabasePath: ":memory:",
     hostId: "home",
@@ -220,6 +221,32 @@ test("stale thread/read cannot downgrade list activity when turn proof fails", a
   }
 });
 
+test("dock/subscribe marks stream stale when a live source refresh fails", async () => {
+  const appServer = await startCanonicalActivityAppServer();
+  try {
+    await withRelay(
+      appServer.url,
+      async ({ config, wsURL }) => {
+        await config.relayStateEngine.reconcileDock({ reason: "test" });
+        const ws = await openWebSocket(wsURL);
+        try {
+          const response = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+          assert.equal(response.error, undefined);
+          assert.equal(response.result.complete, false);
+          assert.equal(response.result.freshness.status, "stale");
+          assert.match(response.result.freshness.lastError || "", /live loaded session refresh failed/u);
+          assert.deepEqual(response.result.cards.map((card) => card.threadID), ["newer", "older"]);
+        } finally {
+          ws.close();
+        }
+      },
+      { liveEndpoints: [{ label: "missing-live", url: "ws://127.0.0.1:1/" }] },
+    );
+  } finally {
+    await appServer.close();
+  }
+});
+
 test("dock/subscribe marks cards partial and stream stale when newest-turn proof fails", async () => {
   const appServer = await startCanonicalActivityAppServer({ failTurnsFor: new Set(["newer"]) });
   try {
@@ -241,5 +268,94 @@ test("dock/subscribe marks cards partial and stream stale when newest-turn proof
     });
   } finally {
     await appServer.close();
+  }
+});
+
+test("dock/update replacement delta is complete when it carries every current row", async () => {
+  let sourceRows = [{
+    id: "cached",
+    sessionId: "cached-session",
+    preview: "Cached row",
+    createdAt: 100,
+    updatedAt: 100,
+    source: "cli",
+    status: { type: "idle" },
+    cwd: "/tmp/codex-client",
+    gitInfo: { branch: "main" },
+  }];
+  const appServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  const clients = new Set();
+  await onceListening(appServer);
+  appServer.on("connection", (ws) => {
+    clients.add(ws);
+    ws.on("close", () => clients.delete(ws));
+    ws.on("message", (raw) => {
+      const message = JSON.parse(raw.toString());
+      if (message.method === "initialize") {
+        ws.send(appServerResponse(message.id, {
+          userAgent: "test-app-server",
+          codexHome: "/tmp/codex-client-test",
+          platformFamily: "unix",
+          platformOs: "macos",
+        }));
+      } else if (message.method === "thread/list") {
+        ws.send(appServerResponse(message.id, { data: sourceRows, nextCursor: null }));
+      } else if (message.method === "thread/loaded/list") {
+        ws.send(appServerResponse(message.id, { data: [] }));
+      } else if (message.method === "thread/read") {
+        const row = sourceRows.find((candidate) => candidate.id === message.params?.threadId);
+        ws.send(appServerResponse(message.id, { thread: { ...row, turns: [] } }));
+      } else if (message.method === "thread/turns/list") {
+        const row = sourceRows.find((candidate) => candidate.id === message.params?.threadId);
+        ws.send(appServerResponse(message.id, {
+          data: row ? [{ id: `${row.id}-turn`, startedAt: row.updatedAt }] : [],
+          nextCursor: null,
+        }));
+      }
+    });
+  });
+
+  try {
+    await withRelay(`ws://127.0.0.1:${appServer.address().port}`, async ({ config, wsURL }) => {
+      await config.relayStateEngine.reconcileDock({ reason: "test-initial" });
+      const ws = await openWebSocket(wsURL);
+      try {
+        const initial = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(initial.error, undefined);
+        assert.equal(initial.result.complete, true);
+        assert.deepEqual(initial.result.cards.map((card) => card.threadID), ["cached"]);
+
+        sourceRows = [{
+          id: "recovered",
+          sessionId: "recovered-session",
+          preview: "Recovered row",
+          createdAt: 200,
+          updatedAt: 200,
+          source: "cli",
+          status: { type: "idle" },
+          cwd: "/tmp/codex-client",
+          gitInfo: { branch: "main" },
+        }];
+        const updatePromise = waitForRelayMessage(ws, (message) => (
+          message.method === "dock/update"
+          && message.params?.kind === "delta"
+          && (message.params?.upsertCards || []).some((card) => card.threadID === "recovered")
+        ));
+        await config.relayStateEngine.reconcileDock({ reason: "test-recovered" });
+        const update = await updatePromise;
+
+        assert.equal(update.params.complete, true);
+        assert.equal(update.params.totalRows, 1);
+        assert.deepEqual(update.params.upsertCards.map((card) => card.threadID), ["recovered"]);
+        assert.deepEqual(update.params.deleteCardIDs, ["home::cached"]);
+      } finally {
+        ws.close();
+      }
+    });
+  } finally {
+    for (const ws of clients) {
+      ws.close();
+    }
+    await closeWebSocketServer(appServer);
   }
 });

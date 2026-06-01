@@ -30,7 +30,7 @@ public struct CodexDockRootView: View {
             self.runtime = runtime
             self.usesRuntimeConnectivitySink = false
             _archiveStore = StateObject(wrappedValue: ArchiveStore(registry: registry))
-            _archiveCleanupStore = StateObject(wrappedValue: ArchiveCleanupStore(registry: registry))
+            _archiveCleanupStore = StateObject(wrappedValue: ArchiveCleanupStore(registry: registry, cardStateProvider: store))
             _hostsStore = StateObject(wrappedValue: HostSettingsStore(registry: registry))
             _connectivityStore = StateObject(wrappedValue: AppConnectivityStore(registry: registry))
             _connectivityScreenStore = StateObject(
@@ -86,12 +86,13 @@ public struct CodexDockRootView: View {
         self.usesRuntimeConnectivitySink = true
         self.threadDetailFactory = threadDetailFactory
         let connectivityStore = connectivityStore ?? AppConnectivityStore(registry: registry, now: runtime.currentDate)
+        let dockStore = runtime.makeDockStore(
+            streamClient: streamClient,
+            archiver: client,
+            metadataStore: metadataStore
+        )
         _dockStore = StateObject(
-            wrappedValue: runtime.makeDockStore(
-                streamClient: streamClient,
-                archiver: client,
-                metadataStore: metadataStore
-            )
+            wrappedValue: dockStore
         )
         _archiveStore = StateObject(
             wrappedValue: runtime.makeArchiveStore(
@@ -103,9 +104,8 @@ public struct CodexDockRootView: View {
         _archiveCleanupStore = StateObject(
             wrappedValue: ArchiveCleanupStore(
                 registry: registry,
-                streamClient: streamClient,
+                cardStateProvider: dockStore,
                 archiver: client,
-                metadataStore: metadataStore,
                 now: runtime.currentDate
             )
         )

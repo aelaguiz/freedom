@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -18,8 +19,14 @@ import {
   scenarioLagSummary,
   summarizeClientPathEvents,
 } from "./dock-relay-sync-audit.mjs";
+import {
+  assertProofReport,
+  finalizeProofReport,
+} from "./proof-report-contracts.mjs";
 
 const SUPPORTED_SCENARIOS = new Set([
+  "archive-toggle",
+  "detail-reconnect",
   "detail-history-request",
   "large-list-checkpoint",
   "live-lease-expiry",
@@ -42,7 +49,7 @@ const DEFAULT_STREAM_COMPARE_DELAY_MS = 1_000;
 function usage() {
   return [
     "Usage:",
-    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <detail-history-request|large-list-checkpoint|live-lease-expiry|multi-host-isolation|rapid-mutations|resync-gap|server-request|source-refresh|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
+    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <archive-toggle|detail-reconnect|detail-history-request|large-list-checkpoint|live-lease-expiry|multi-host-isolation|rapid-mutations|resync-gap|server-request|source-refresh|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
     "",
     "Options:",
     "  --summary-out <path>                 Write Markdown summary.",
@@ -142,6 +149,20 @@ function writeJSON(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function proofRunIDForReportPath(filePath) {
+  const reportDir = path.resolve(path.dirname(filePath || "."));
+  return crypto.createHash("sha256").update(reportDir).digest("hex").slice(0, 16);
+}
+
+function writeProofReport(filePath, report) {
+  if (!report.proofRunID) {
+    report.proofRunID = proofRunIDForReportPath(filePath);
+  }
+  finalizeProofReport(report);
+  assertProofReport(report);
+  writeJSON(filePath, report);
+}
+
 function writeText(filePath, body) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, body, "utf8");
@@ -199,6 +220,36 @@ function fixtureThreadWithStatus(id, preview, updatedAt, status) {
   };
 }
 
+function fixtureMessageThreadID(message) {
+  return message?.params?.threadId || message?.params?.threadID;
+}
+
+function fixtureRowForMessage(rows, message) {
+  const threadID = fixtureMessageThreadID(message);
+  return (rows || []).find((row) => row.id === threadID) || null;
+}
+
+function sendFixtureThreadRead(ws, message, row) {
+  if (!row) {
+    sendFixtureError(ws, message.id, `unknown thread: ${fixtureMessageThreadID(message) || "missing"}`);
+    return;
+  }
+  sendFixtureResult(ws, message.id, {
+    thread: {
+      ...row,
+      turns: [],
+    },
+  });
+}
+
+function sendFixtureThreadTurnsList(ws, message, row) {
+  sendFixtureResult(ws, message.id, {
+    data: row ? [fixtureTurn(`${row.id}-turn`, row.updatedAt, [])] : [],
+    nextCursor: null,
+    backwardsCursor: null,
+  });
+}
+
 function fixtureTurn(id, startedAt, items) {
   return {
     id,
@@ -252,18 +303,32 @@ function cardThreadID(card) {
   return card?.threadID || card?.threadId || null;
 }
 
-function dockRenderOrderIDs(snapshot) {
+function cardActivityMs(card) {
+  const parsed = Date.parse(card?.activityAt || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function compareDockCardRenderOrder(left, right) {
+  const leftOrder = typeof left?.orderKey === "string" ? left.orderKey : "";
+  const rightOrder = typeof right?.orderKey === "string" ? right.orderKey : "";
+  if (leftOrder !== rightOrder) {
+    return leftOrder.localeCompare(rightOrder);
+  }
+  const activityDelta = cardActivityMs(right) - cardActivityMs(left);
+  if (activityDelta !== 0) {
+    return activityDelta;
+  }
+  return cardID(left).localeCompare(cardID(right));
+}
+
+function dockCardsInRenderOrder(snapshot) {
   return (Array.isArray(snapshot?.cards) ? snapshot.cards : [])
     .slice()
-    .sort((left, right) => {
-      const leftOrder = typeof left?.orderKey === "string" ? left.orderKey : "";
-      const rightOrder = typeof right?.orderKey === "string" ? right.orderKey : "";
-      if (leftOrder !== rightOrder) {
-        return leftOrder.localeCompare(rightOrder);
-      }
-      return cardID(left).localeCompare(cardID(right));
-    })
-    .map(cardID);
+    .sort(compareDockCardRenderOrder);
+}
+
+function dockRenderOrderIDs(snapshot) {
+  return dockCardsInRenderOrder(snapshot).map(cardID);
 }
 
 function dockSnapshotCardForThread(snapshot, threadID) {
@@ -350,6 +415,37 @@ async function freshComparison({ streamProbe, options, routeEvents }) {
   return { freshDock, comparison, attempts };
 }
 
+async function waitForArchiveStreamCondition({ streamProbe, timeoutMs, predicate }) {
+  const deadlineMs = Date.now() + timeoutMs;
+  while (true) {
+    const snapshot = streamProbe.archiveSnapshot();
+    const observedAtMs = observedSnapshotTime(snapshot);
+    if (predicate(snapshot)) {
+      return {
+        ok: true,
+        observedAt: new Date(observedAtMs).toISOString(),
+        observedAtMs,
+        snapshot: sanitizeDockSnapshotForReport(snapshot),
+      };
+    }
+    if (streamProbe.archiveState.needsResync) {
+      await streamProbe.archiveResync("controlled_simulator_fixture_archive_condition");
+      continue;
+    }
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) {
+      return {
+        ok: false,
+        observedAt: null,
+        observedAtMs: null,
+        timeoutMs,
+        snapshot: sanitizeDockSnapshotForReport(snapshot),
+      };
+    }
+    await streamProbe.waitForUpdate(Math.min(remainingMs, 500));
+  }
+}
+
 function transitionFailure(findings, code, message, detail = {}) {
   findings.push({
     code,
@@ -404,6 +500,21 @@ function requiredRouteFindings(clientPathEvidence, routes) {
         { route }
       );
     }
+  }
+  return findings;
+}
+
+function requiredTurnsListFullItemsViewFindings(routeEvents) {
+  const findings = [];
+  const usedFullItemsView = (Array.isArray(routeEvents) ? routeEvents : [])
+    .some((event) => event?.route === "thread/turns/list" && event.itemsView === "full");
+  if (!usedFullItemsView) {
+    transitionFailure(
+      findings,
+      "controlled_simulator_thread_turns_list_full_items_view_missing",
+      "controlled simulator detail scenario did not request thread/turns/list with itemsView=full",
+      { route: "thread/turns/list", expectedItemsView: "full" }
+    );
   }
   return findings;
 }
@@ -509,7 +620,9 @@ function mergeDockSnapshotsForSimulatorReport(snapshots) {
   const normalizedSnapshots = snapshots
     .filter(Boolean)
     .map((snapshot) => sanitizeDockSnapshotForReport(snapshot));
-  const cards = normalizedSnapshots.flatMap((snapshot) => Array.isArray(snapshot.cards) ? snapshot.cards : []);
+  const cards = dockCardsInRenderOrder({
+    cards: normalizedSnapshots.flatMap((snapshot) => Array.isArray(snapshot.cards) ? snapshot.cards : []),
+  });
   const hostsByID = new Map();
   for (const snapshot of normalizedSnapshots) {
     for (const host of Array.isArray(snapshot.hosts) ? snapshot.hosts : []) {
@@ -536,7 +649,7 @@ function mergeDockSnapshotsForSimulatorReport(snapshots) {
     },
     cardCount: rowCount,
     cardIDs,
-    renderOrderCardIDs: cards.map(cardID),
+    renderOrderCardIDs: dockRenderOrderIDs({ cards }),
     cards,
     hosts: [...hostsByID.values()],
     freshness: compositeFreshness(normalizedSnapshots),
@@ -567,6 +680,10 @@ async function createControlledMultiHostFixture({ options, tempDir, host, getRow
         });
       } else if (message.method === "thread/loaded/list") {
         sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
+      } else if (message.method === "thread/read" || message.method === "thread/resume") {
+        sendFixtureThreadRead(ws, message, fixtureRowForMessage(getRows(), message));
+      } else if (message.method === "thread/turns/list") {
+        sendFixtureThreadTurnsList(ws, message, fixtureRowForMessage(getRows(), message));
       }
     });
   });
@@ -612,6 +729,375 @@ async function createControlledMultiHostFixture({ options, tempDir, host, getRow
       detail: "none",
     },
   };
+}
+
+async function runArchiveToggleScenario(options) {
+  const routeEvents = [];
+  const findings = [];
+  const transitions = [];
+  const samples = [];
+  const startedAtMs = Date.now();
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-sim-archive-toggle-"));
+  const hostID = "sim-archive-toggle-fixture";
+  const threadID = "sim-archive-toggle-thread";
+  const existingArchivedID = "sim-archive-toggle-existing-archived";
+  const archivedThreadIDs = new Set([existingArchivedID]);
+  const rows = [
+    fixtureThreadWithStatus(threadID, "Simulator archive-toggle active row", 2_000, { type: "idle" }),
+    fixtureThreadWithStatus(existingArchivedID, "Simulator archive-toggle archived row", 1_000, { type: "idle" }),
+  ];
+
+  const rowForID = (thread) => rows.find((row) => row.id === thread) || null;
+  const visibleRows = (archived) => rows.filter((row) => archivedThreadIDs.has(row.id) === archived);
+
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise((resolve) => historyServer.once("listening", resolve));
+  historyServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        sendFixtureResult(ws, message.id, {
+          userAgent: "codex-sim-archive-toggle-fixture",
+          codexHome: tempDir,
+          platformFamily: "unix",
+          platformOs: "macos",
+        });
+      } else if (message.method === "thread/list") {
+        sendFixtureResult(ws, message.id, {
+          data: visibleRows(message.params?.archived === true),
+          nextCursor: null,
+          backwardsCursor: null,
+        });
+      } else if (message.method === "thread/loaded/list") {
+        sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
+      } else if (message.method === "thread/read" || message.method === "thread/resume") {
+        const thread = rowForID(message.params?.threadId || message.params?.threadID);
+        if (!thread) {
+          sendFixtureError(ws, message.id, "unknown thread");
+          return;
+        }
+        sendFixtureResult(ws, message.id, { thread: { ...thread, turns: [] } });
+      } else if (message.method === "thread/turns/list") {
+        const thread = rowForID(message.params?.threadId || message.params?.threadID);
+        sendFixtureResult(ws, message.id, {
+          data: thread ? [fixtureTurn(`${thread.id}-turn`, thread.updatedAt, [])] : [],
+          nextCursor: null,
+          backwardsCursor: null,
+        });
+      } else if (message.method === "thread/archive") {
+        const thread = rowForID(message.params?.threadId || message.params?.threadID);
+        if (!thread) {
+          sendFixtureError(ws, message.id, "unknown thread");
+          return;
+        }
+        archivedThreadIDs.add(thread.id);
+        sendFixtureResult(ws, message.id, { thread: { ...thread, archived: true } });
+      } else if (message.method === "thread/unarchive") {
+        const thread = rowForID(message.params?.threadId || message.params?.threadID);
+        if (!thread) {
+          sendFixtureError(ws, message.id, "unknown thread");
+          return;
+        }
+        archivedThreadIDs.delete(thread.id);
+        sendFixtureResult(ws, message.id, { thread: { ...thread, archived: false } });
+      }
+    });
+  });
+
+  const relayConfig = {
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    hostId: hostID,
+    hostName: "Simulator Archive Toggle Fixture",
+    hostEndpoint: "127.0.0.1:0",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+    observabilityDir: false,
+    relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
+    relayStateAutoStart: false,
+    logger: {
+      debug() {},
+      info() {},
+      warn() {},
+      error() {},
+      fault() {},
+      fatalSync() {},
+    },
+  };
+  const relay = startServer(relayConfig);
+  await relay.listening;
+  const relayPort = relay.server.address().port;
+  const relayUrl = `ws://127.0.0.1:${relayPort}`;
+  const fixtureOptions = {
+    ...options,
+    relayUrl,
+    codexHome: tempDir,
+    sqliteHome: tempDir,
+    detail: "none",
+  };
+  const streamProbe = new DockStreamProbe(fixtureOptions);
+
+  try {
+    await streamProbe.open();
+    await streamProbe.openArchive();
+    const initialWait = await waitForStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => (
+        dockSnapshotHasThread(snapshot, threadID)
+        && !dockSnapshotHasThread(snapshot, existingArchivedID)
+      ),
+    });
+    const initialArchiveWait = await waitForArchiveStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => (
+        !dockSnapshotHasThread(snapshot, threadID)
+        && dockSnapshotHasThread(snapshot, existingArchivedID)
+      ),
+    });
+    if (!initialWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_archive_toggle_initial_row_missing",
+        "archive-toggle fixture did not start with only the active row visible through the fixture relay stream",
+        { threadID, existingArchivedID }
+      );
+    }
+    if (!initialArchiveWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_archive_toggle_initial_archive_row_missing",
+        "archive-toggle fixture did not start with the existing archived row visible through the fixture Archive stream",
+        { threadID, existingArchivedID }
+      );
+    }
+
+    const initial = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+    findings.push(...scenarioComparisonFindings({ phase: "archive-toggle-initial", comparison: initial.comparison }));
+    samples.push({
+      sampleIndex: 0,
+      startedAt: new Date(startedAtMs).toISOString(),
+      finishedAt: new Date().toISOString(),
+      freshDock: sanitizeDockSnapshotForReport(initial.freshDock),
+    });
+
+    writeJSON(options.readyOut, {
+      ready: true,
+      scenario: "archive-toggle",
+      relayUrl,
+      hosts: `127.0.0.1:${relayPort}`,
+      target: {
+        logicalHostID: hostID,
+        threadID,
+        existingArchivedID,
+      },
+      at: new Date().toISOString(),
+    });
+    await waitForFile(options.uiReadyIn, options.waitTimeoutMs, "simulator UI sampler readiness");
+    await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 1_500));
+
+    const archiveStartedAtMs = Date.now();
+    recordClientRoute(routeEvents, "thread/archive", "controlled archive-toggle archives active row", { threadID });
+    const archiveResponse = await streamProbe.client.request("thread/archive", { threadId: threadID });
+    const archiveAcknowledgedAtMs = Date.now();
+    const archiveWait = await waitForStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => !dockSnapshotHasThread(snapshot, threadID),
+    });
+    const archiveViewWait = await waitForArchiveStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => dockSnapshotHasThread(snapshot, threadID),
+    });
+    const archiveLag = scenarioLagSummary({
+      transition: "archive",
+      startedAtMs: archiveStartedAtMs,
+      acknowledgedAtMs: archiveAcknowledgedAtMs,
+      observedAtMs: archiveWait.observedAtMs,
+      maxStreamLagMs: options.maxStreamLagMs,
+    });
+    if (!archiveWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_archive_toggle_archive_not_seen",
+        "archive-toggle fixture did not remove the archived row from the long-lived Dock stream",
+        { threadID }
+      );
+    }
+    if (!archiveViewWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_archive_toggle_archive_not_seen_in_archive_stream",
+        "archive-toggle fixture did not add the archived row to the long-lived Archive stream",
+        { threadID }
+      );
+    } else if (archiveLag.exceeded) {
+      transitionFailure(
+        findings,
+        "scenario_archive_toggle_archive_lag_exceeded",
+        "archive-toggle archive transition exceeded the stream lag budget",
+        { threadID, observedLagMs: archiveLag.lag_change_to_relay_ms, maxStreamLagMs: options.maxStreamLagMs }
+      );
+    }
+    const afterArchive = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+    findings.push(...scenarioComparisonFindings({ phase: "archive", comparison: afterArchive.comparison }));
+    transitions.push({
+      name: "archive",
+      kind: "archive",
+      route: "thread/archive",
+      response: normalizeForComparison(archiveResponse),
+      wait: archiveWait,
+      lag: archiveLag,
+      freshDock: sanitizeDockSnapshotForReport(afterArchive.freshDock),
+      archiveStreamWait: archiveViewWait,
+      freshArchive: sanitizeDockSnapshotForReport(streamProbe.archiveSnapshot()),
+      streamComparison: afterArchive.comparison,
+    });
+    samples.push({
+      sampleIndex: 1,
+      startedAt: new Date(archiveStartedAtMs).toISOString(),
+      finishedAt: new Date().toISOString(),
+      freshDock: sanitizeDockSnapshotForReport(afterArchive.freshDock),
+    });
+    await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 1_500));
+
+    const unarchiveStartedAtMs = Date.now();
+    recordClientRoute(routeEvents, "thread/unarchive", "controlled archive-toggle unarchives row", { threadID });
+    const unarchiveResponse = await streamProbe.client.request("thread/unarchive", { threadId: threadID });
+    const unarchiveAcknowledgedAtMs = Date.now();
+    const unarchiveWait = await waitForStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => dockSnapshotHasThread(snapshot, threadID),
+    });
+    const unarchiveViewWait = await waitForArchiveStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => !dockSnapshotHasThread(snapshot, threadID),
+    });
+    const unarchiveLag = scenarioLagSummary({
+      transition: "unarchive",
+      startedAtMs: unarchiveStartedAtMs,
+      acknowledgedAtMs: unarchiveAcknowledgedAtMs,
+      observedAtMs: unarchiveWait.observedAtMs,
+      maxStreamLagMs: options.maxStreamLagMs,
+    });
+    if (!unarchiveWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_archive_toggle_unarchive_not_seen",
+        "archive-toggle fixture did not restore the unarchived row to the long-lived Dock stream",
+        { threadID }
+      );
+    }
+    if (!unarchiveViewWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_archive_toggle_unarchive_not_seen_in_archive_stream",
+        "archive-toggle fixture did not remove the unarchived row from the long-lived Archive stream",
+        { threadID }
+      );
+    } else if (unarchiveLag.exceeded) {
+      transitionFailure(
+        findings,
+        "scenario_archive_toggle_unarchive_lag_exceeded",
+        "archive-toggle unarchive transition exceeded the stream lag budget",
+        { threadID, observedLagMs: unarchiveLag.lag_change_to_relay_ms, maxStreamLagMs: options.maxStreamLagMs }
+      );
+    }
+    const afterUnarchive = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+    findings.push(...scenarioComparisonFindings({ phase: "unarchive", comparison: afterUnarchive.comparison }));
+    transitions.push({
+      name: "unarchive",
+      kind: "unarchive",
+      route: "thread/unarchive",
+      response: normalizeForComparison(unarchiveResponse),
+      wait: unarchiveWait,
+      lag: unarchiveLag,
+      freshDock: sanitizeDockSnapshotForReport(afterUnarchive.freshDock),
+      archiveStreamWait: unarchiveViewWait,
+      freshArchive: sanitizeDockSnapshotForReport(streamProbe.archiveSnapshot()),
+      streamComparison: afterUnarchive.comparison,
+    });
+    samples.push({
+      sampleIndex: 2,
+      startedAt: new Date(unarchiveStartedAtMs).toISOString(),
+      finishedAt: new Date().toISOString(),
+      freshDock: sanitizeDockSnapshotForReport(afterUnarchive.freshDock),
+    });
+
+    const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
+    findings.push(...requiredRouteFindings(
+      clientPathEvidence,
+      ["dock/subscribe", "dock/update", "archive/subscribe", "archive/update", "thread/archive", "thread/unarchive"]
+    ));
+    const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
+    const report = {
+      schemaVersion: 1,
+      kind: "codex-dock-controlled-simulator-scenario-relay-report",
+      mode: "scenario",
+      scenario: "archive-toggle",
+      startedAt: new Date(startedAtMs).toISOString(),
+      endedAt: new Date().toISOString(),
+      relayUrl,
+      summary: {
+        ok: scenarioOK,
+        clientPathOK: scenarioOK,
+        scenario: "archive-toggle",
+        scenarioOK,
+        scenarioCount: 1,
+        scenarioTransitionCount: transitions.length,
+        implementedScenarios: ["archive-toggle"],
+        unimplementedRequiredScenarios: [],
+        failures: findings.length,
+        clientPathRouteCounts: clientPathEvidence.routeCounts,
+      },
+      samples,
+      scenarios: [{
+        id: "archive-toggle",
+        ok: scenarioOK,
+        actuator: {
+          type: "controlled archive/unarchive through relay RPC",
+          routes: ["thread/archive", "thread/unarchive"],
+          clientExercised: true,
+        },
+        target: {
+          logicalHostID: hostID,
+          threadID,
+          existingArchivedID,
+        },
+        transitions,
+        findings,
+      }],
+      stream: {
+        notificationCount: streamProbe.notifications.length,
+        archiveNotificationCount: streamProbe.archiveNotifications.length,
+        resyncCount: streamProbe.resyncs.length,
+        archiveResyncCount: streamProbe.archiveResyncs.length,
+        finalState: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
+        finalArchiveState: sanitizeDockSnapshotForReport(streamProbe.archiveSnapshot()),
+      },
+      clientPathEvidence,
+      findings,
+      unsupportedFacts: [],
+    };
+
+    writeProofReport(options.jsonOut, report);
+    if (options.summaryOut) {
+      writeText(options.summaryOut, buildMarkdownSummary(report));
+    }
+    await waitForFile(options.stopIn, options.waitTimeoutMs, "simulator UI sampler completion");
+    return report;
+  } finally {
+    await streamProbe.close().catch(() => null);
+    await relay.close().catch(() => null);
+    await closeWebSocketServer(historyServer).catch(() => null);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 function multiHostIsolationFindings({ label, snapshot, host, expectedThreadIDs, forbiddenThreadIDs = [] }) {
@@ -881,7 +1367,7 @@ async function runLargeListCheckpointScenario(options) {
       unsupportedFacts: [],
     };
 
-    writeJSON(options.jsonOut, report);
+    writeProofReport(options.jsonOut, report);
     if (options.summaryOut) {
       writeText(options.summaryOut, buildMarkdownSummary(report));
     }
@@ -932,6 +1418,10 @@ async function runThreadActivityScenario(options) {
         });
       } else if (message.method === "thread/loaded/list") {
         sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
+      } else if (message.method === "thread/read" || message.method === "thread/resume") {
+        sendFixtureThreadRead(ws, message, fixtureRowForMessage(sourceRows, message));
+      } else if (message.method === "thread/turns/list") {
+        sendFixtureThreadTurnsList(ws, message, fixtureRowForMessage(sourceRows, message));
       }
     });
   });
@@ -1159,7 +1649,7 @@ async function runThreadActivityScenario(options) {
       unsupportedFacts: [],
     };
 
-    writeJSON(options.jsonOut, report);
+    writeProofReport(options.jsonOut, report);
     if (options.summaryOut) {
       writeText(options.summaryOut, buildMarkdownSummary(report));
     }
@@ -1268,6 +1758,10 @@ async function runRapidMutationsScenario(options) {
         });
       } else if (message.method === "thread/loaded/list") {
         sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
+      } else if (message.method === "thread/read" || message.method === "thread/resume") {
+        sendFixtureThreadRead(ws, message, fixtureRowForMessage(sourceRows, message));
+      } else if (message.method === "thread/turns/list") {
+        sendFixtureThreadTurnsList(ws, message, fixtureRowForMessage(sourceRows, message));
       }
     });
   });
@@ -1491,7 +1985,7 @@ async function runRapidMutationsScenario(options) {
       unsupportedFacts: [],
     };
 
-    writeJSON(options.jsonOut, report);
+    writeProofReport(options.jsonOut, report);
     if (options.summaryOut) {
       writeText(options.summaryOut, buildMarkdownSummary(report));
     }
@@ -1544,6 +2038,18 @@ async function runSourceRefreshScenario(options) {
         });
       } else if (message.method === "thread/loaded/list") {
         sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
+      } else if (message.method === "thread/read" || message.method === "thread/resume") {
+        if (!upstreamAvailable) {
+          sendFixtureError(ws, message.id, "controlled source refresh failure");
+          return;
+        }
+        sendFixtureThreadRead(ws, message, fixtureRowForMessage(sourceRows, message));
+      } else if (message.method === "thread/turns/list") {
+        if (!upstreamAvailable) {
+          sendFixtureError(ws, message.id, "controlled source refresh failure");
+          return;
+        }
+        sendFixtureThreadTurnsList(ws, message, fixtureRowForMessage(sourceRows, message));
       }
     });
   });
@@ -1781,7 +2287,7 @@ async function runSourceRefreshScenario(options) {
       unsupportedFacts: [],
     };
 
-    writeJSON(options.jsonOut, report);
+    writeProofReport(options.jsonOut, report);
     if (options.summaryOut) {
       writeText(options.summaryOut, buildMarkdownSummary(report));
     }
@@ -1815,6 +2321,15 @@ async function runLiveLeaseExpiryScenario(options) {
     Math.max(500, controlledLiveStatusMaxAgeMs - options.maxStreamLagMs - 500)
   );
   let liveRowsEnabled = true;
+  const liveThreadRow = {
+    id: threadID,
+    sessionId: sessionID,
+    preview: "Simulator live row before lease expiry",
+    updatedAt: 100,
+    source: "cli",
+    status: { type: "active", activeFlags: [] },
+  };
+  const storedThreadRow = fixtureThread(threadID, "Simulator stored row after lease expiry", 100);
 
   const liveServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -1839,16 +2354,9 @@ async function runLiveLeaseExpiryScenario(options) {
           nextCursor: null,
         });
       } else if (message.method === "thread/read") {
-        sendFixtureResult(ws, message.id, {
-          thread: {
-            id: threadID,
-            sessionId: sessionID,
-            preview: "Simulator live row before lease expiry",
-            updatedAt: 100,
-            source: "cli",
-            status: { type: "active", activeFlags: [] },
-          },
-        });
+        sendFixtureThreadRead(ws, message, liveThreadRow);
+      } else if (message.method === "thread/turns/list") {
+        sendFixtureThreadTurnsList(ws, message, liveThreadRow);
       }
     });
   });
@@ -1865,12 +2373,16 @@ async function runLiveLeaseExpiryScenario(options) {
         });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
-          data: [fixtureThread(threadID, "Simulator stored row after lease expiry", 100)],
+          data: [storedThreadRow],
           nextCursor: null,
           backwardsCursor: null,
         });
       } else if (message.method === "thread/loaded/list") {
         sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
+      } else if (message.method === "thread/read" || message.method === "thread/resume") {
+        sendFixtureThreadRead(ws, message, storedThreadRow);
+      } else if (message.method === "thread/turns/list") {
+        sendFixtureThreadTurnsList(ws, message, storedThreadRow);
       }
     });
   });
@@ -1966,21 +2478,25 @@ async function runLiveLeaseExpiryScenario(options) {
         { threadID }
       );
     }
+    const leaseExpiresAtMs = relayConfig.relayStateEngine.store.nextUnpublishedLiveLeaseExpiryMs(hostID, 0);
     if (liveRunningHoldMs > 0) {
       await sleep(liveRunningHoldMs);
     }
 
     liveRowsEnabled = false;
     const expireStartedAtMs = Date.now();
+    const expiryBoundaryMs = Number.isFinite(Number(leaseExpiresAtMs)) && Number(leaseExpiresAtMs) > 0
+      ? Number(leaseExpiresAtMs)
+      : expireStartedAtMs;
     const expiredWait = await waitForStreamCondition({
       streamProbe,
       timeoutMs: options.dockCollectionTimeoutMs,
-      predicate: (snapshot) => dockSnapshotCardForThread(snapshot, threadID)?.status === "unknown",
+      predicate: (snapshot) => dockSnapshotCardForThread(snapshot, threadID)?.status === "dormant",
     });
     const expiredLag = scenarioLagSummary({
       transition: "live-lease-expiry",
-      startedAtMs: expireStartedAtMs,
-      acknowledgedAtMs: expireStartedAtMs,
+      startedAtMs: expiryBoundaryMs,
+      acknowledgedAtMs: expiryBoundaryMs,
       observedAtMs: expiredWait.observedAtMs,
       maxStreamLagMs: options.maxStreamLagMs,
     });
@@ -2010,7 +2526,7 @@ async function runLiveLeaseExpiryScenario(options) {
     }
     const expiredComparison = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
     const expiredCard = dockSnapshotCardForThread(expiredComparison.freshDock, threadID);
-    if (expiredCard?.status !== "unknown") {
+    if (expiredCard?.status !== "dormant") {
       transitionFailure(
         findings,
         "scenario_live_lease_expiry_fresh_dock_status_mismatch",
@@ -2090,7 +2606,7 @@ async function runLiveLeaseExpiryScenario(options) {
       unsupportedFacts: [],
     };
 
-    writeJSON(options.jsonOut, report);
+    writeProofReport(options.jsonOut, report);
     if (options.summaryOut) {
       writeText(options.summaryOut, buildMarkdownSummary(report));
     }
@@ -2126,13 +2642,15 @@ async function runMultiHostIsolationScenario(options) {
     displayName: "Simulator Multi Host B",
     endpoint: "127.0.0.1:0/b",
   };
+  // Keep activity times distinct so this scenario proves host scoping and live
+  // updates, not an arbitrary cross-host tie-break for equal timestamps.
   let hostARows = [
-    fixtureThread(sharedThreadID, "Simulator shared id from host A", 200),
+    fixtureThread(sharedThreadID, "Simulator shared id from host A", 250),
     fixtureThread(hostAOnlyThreadID, "Simulator only host A", 100),
   ];
   let hostBRows = [
     fixtureThread(sharedThreadID, "Simulator shared id from host B", 200),
-    fixtureThread(hostBOnlyThreadID, "Simulator only host B", 100),
+    fixtureThread(hostBOnlyThreadID, "Simulator only host B", 50),
   ];
   const fixtures = [];
   const streamProbes = [];
@@ -2247,7 +2765,7 @@ async function runMultiHostIsolationScenario(options) {
     const updateStartedAtMs = Date.now();
     hostARows = [
       fixtureThread(hostANewThreadID, "Simulator new host A row", 300),
-      fixtureThread(sharedThreadID, "Simulator shared id from host A", 200),
+      fixtureThread(sharedThreadID, "Simulator shared id from host A", 250),
       fixtureThread(hostAOnlyThreadID, "Simulator only host A", 100),
     ];
     await fixtureA.relayConfig.relayStateEngine.reconcileDock({ reason: "controlled_simulator_multi_host_a_update" });
@@ -2388,7 +2906,7 @@ async function runMultiHostIsolationScenario(options) {
       unsupportedFacts: [],
     };
 
-    writeJSON(options.jsonOut, report);
+    writeProofReport(options.jsonOut, report);
     if (options.summaryOut) {
       writeText(options.summaryOut, buildMarkdownSummary(report));
     }
@@ -2719,7 +3237,7 @@ async function runResyncGapScenario(options) {
       unsupportedFacts: [],
     };
 
-    writeJSON(options.jsonOut, report);
+    writeProofReport(options.jsonOut, report);
     if (options.summaryOut) {
       writeText(options.summaryOut, buildMarkdownSummary(report));
     }
@@ -3001,7 +3519,361 @@ async function runSpawnEdgeScenario(options) {
       unsupportedFacts: [],
     };
 
-    writeJSON(options.jsonOut, report);
+    writeProofReport(options.jsonOut, report);
+    if (options.summaryOut) {
+      writeText(options.summaryOut, buildMarkdownSummary(report));
+    }
+    await waitForFile(options.stopIn, options.waitTimeoutMs, "simulator UI sampler completion");
+    return report;
+  } finally {
+    await streamProbe.close().catch(() => null);
+    await relay.close().catch(() => null);
+    await closeWebSocketServer(historyServer).catch(() => null);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function runDetailReconnectScenario(options) {
+  const routeEvents = [];
+  const findings = [];
+  const transitions = [];
+  const samples = [];
+  const startedAtMs = Date.now();
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-sim-detail-reconnect-"));
+  const hostID = "sim-detail-reconnect-fixture";
+  const threadID = "sim-detail-reconnect-thread";
+  const threadRow = fixtureThread(threadID, "Simulator detail reconnect fixture row", 100);
+  const initialTurn = fixtureTurn("turn-reconnect-initial", 1_700_000_001, [
+    fixtureAgentMessageItem("agent-initial", "Simulator detail before reconnect"),
+  ]);
+  const recoveredTurn = fixtureTurn("turn-reconnect-recovered", 1_700_000_002, [
+    fixtureAgentMessageItem("agent-recovered", "Simulator detail after reconnect"),
+  ]);
+  const expectedInitialEventIDs = ["turn-reconnect-initial-agent-initial-agent"];
+  const expectedRecoveredEventIDs = [
+    "turn-reconnect-recovered-agent-recovered-agent",
+    ...expectedInitialEventIDs,
+  ];
+  let historicalTurns = [initialTurn];
+  let initialDetailWs = null;
+  let readCallCount = 0;
+  let turnsListCallCount = 0;
+  let resumeCallCount = 0;
+  let detailLoadedAtMs = null;
+  let uiReadyAtMs = null;
+  let recoveryStartedAtMs = null;
+  let rehydratedAtMs = null;
+  let resolveDetailLoaded;
+  let resolveRehydrated;
+  const detailLoadedPromise = new Promise((resolve) => {
+    resolveDetailLoaded = resolve;
+  });
+  const rehydratedPromise = new Promise((resolve) => {
+    resolveRehydrated = resolve;
+  });
+
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise((resolve) => historyServer.once("listening", resolve));
+  historyServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        recordClientRoute(routeEvents, "initialize", "simulator app initialized detail-reconnect fixture", { threadID });
+        sendFixtureResult(ws, message.id, {
+          userAgent: "codex-sim-detail-reconnect-fixture",
+          codexHome: tempDir,
+          platformFamily: "unix",
+          platformOs: "macos",
+        });
+      } else if (message.method === "initialized") {
+        recordClientRoute(routeEvents, "initialized", "simulator app sent initialized notification", { threadID });
+      } else if (message.method === "thread/list") {
+        sendFixtureResult(ws, message.id, {
+          data: [threadRow],
+          nextCursor: null,
+          backwardsCursor: null,
+        });
+      } else if (message.method === "thread/loaded/list") {
+        sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
+      } else if (message.method === "thread/read") {
+        readCallCount += 1;
+        recordClientRoute(routeEvents, "thread/read", "simulator app read target thread detail", {
+          threadID: message.params?.threadId || threadID,
+          includeTurns: message.params?.includeTurns ?? null,
+          call: readCallCount,
+        });
+        sendFixtureResult(ws, message.id, {
+          thread: {
+            ...threadRow,
+            id: message.params?.threadId || threadID,
+            turns: [],
+          },
+        });
+      } else if (message.method === "thread/turns/list") {
+        turnsListCallCount += 1;
+        recordClientRoute(routeEvents, "thread/turns/list", "simulator app drained historical thread turns", {
+          threadID: message.params?.threadId || threadID,
+          itemsView: message.params?.itemsView ?? null,
+          call: turnsListCallCount,
+        });
+        sendFixtureResult(ws, message.id, {
+          data: historicalTurns,
+          nextCursor: null,
+          backwardsCursor: null,
+        });
+      } else if (message.method === "thread/resume") {
+        resumeCallCount += 1;
+        recordClientRoute(routeEvents, "thread/resume", "simulator app resumed target thread live detail", {
+          threadID: message.params?.threadId || threadID,
+          excludeTurns: message.params?.excludeTurns ?? null,
+          call: resumeCallCount,
+        });
+        sendFixtureResult(ws, message.id, {
+          thread: {
+            ...threadRow,
+            id: message.params?.threadId || threadID,
+            turns: [],
+          },
+        });
+        if (resumeCallCount === 1) {
+          initialDetailWs = ws;
+          detailLoadedAtMs = Date.now();
+          resolveDetailLoaded({ observedAtMs: detailLoadedAtMs, readCallCount, turnsListCallCount, resumeCallCount });
+        } else if (resumeCallCount >= 3 && !rehydratedAtMs) {
+          rehydratedAtMs = Date.now();
+          resolveRehydrated({ observedAtMs: rehydratedAtMs, readCallCount, turnsListCallCount, resumeCallCount });
+        }
+      }
+    });
+  });
+
+  const relayConfig = {
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    hostId: hostID,
+    hostName: "Simulator Detail Reconnect Fixture",
+    hostEndpoint: "127.0.0.1:0",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+    observabilityDir: false,
+    relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
+    relayStateAutoStart: false,
+    logger: {
+      debug() {},
+      info() {},
+      warn() {},
+      error() {},
+      fault() {},
+      fatalSync() {},
+    },
+  };
+  const relay = startServer(relayConfig);
+  await relay.listening;
+  const relayPort = relay.server.address().port;
+  const relayUrl = `ws://127.0.0.1:${relayPort}`;
+  const fixtureOptions = {
+    ...options,
+    relayUrl,
+    codexHome: tempDir,
+    sqliteHome: tempDir,
+    detail: "none",
+  };
+  const streamProbe = new DockStreamProbe(fixtureOptions);
+
+  try {
+    await streamProbe.open();
+    const initialWait = await waitForStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => dockSnapshotThreadIndex(snapshot, threadID) === 0,
+    });
+    if (!initialWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_detail_reconnect_initial_row_missing",
+        "detail-reconnect fixture row did not appear in the fixture relay stream before simulator launch",
+        { threadID }
+      );
+    }
+    const initial = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+    findings.push(...scenarioComparisonFindings({ phase: "detail-reconnect-initial", comparison: initial.comparison }));
+    samples.push({
+      sampleIndex: 0,
+      startedAt: new Date(startedAtMs).toISOString(),
+      finishedAt: new Date().toISOString(),
+      freshDock: sanitizeDockSnapshotForReport(initial.freshDock),
+    });
+
+    writeJSON(options.readyOut, {
+      ready: true,
+      scenario: "detail-reconnect",
+      relayUrl,
+      hosts: `127.0.0.1:${relayPort}`,
+      target: {
+        logicalHostID: hostID,
+        threadID,
+      },
+      uiConfig: {
+        openHostID: hostID,
+        openThreadID: threadID,
+        detailFilter: "all",
+        detailCheckpointSweep: true,
+      },
+      at: new Date().toISOString(),
+    });
+    await waitForFile(options.uiReadyIn, options.waitTimeoutMs, "simulator UI detail reconnect sampler readiness");
+    uiReadyAtMs = Date.now();
+
+    const detailWaitTimeoutMs = Math.min(options.dockCollectionTimeoutMs, options.waitTimeoutMs);
+    const detailLoadedWait = await waitForAsyncEvent(detailLoadedPromise, detailWaitTimeoutMs);
+    if (!detailLoadedWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_detail_reconnect_not_opened",
+        "simulator app did not open and resume the controlled detail session before reconnect",
+        { threadID, timeoutMs: detailWaitTimeoutMs }
+      );
+    }
+
+    if (detailLoadedWait.ok) {
+      const initialProofAtMs = uiReadyAtMs || detailLoadedAtMs || Date.now();
+      transitions.push({
+        name: "detail-reconnect-initial",
+        kind: "detail-reconnect-initial",
+        iteration: 1,
+        route: "thread/resume",
+        wait: {
+          ok: true,
+          observedAt: new Date(initialProofAtMs).toISOString(),
+          observedAtMs: initialProofAtMs,
+        },
+        lag: scenarioLagSummary({
+          transition: "detail-reconnect-initial",
+          startedAtMs: initialProofAtMs,
+          acknowledgedAtMs: initialProofAtMs,
+          observedAtMs: initialProofAtMs,
+          maxStreamLagMs: options.maxStreamLagMs,
+        }),
+        detailTruth: {
+          kind: "detail-reconnect-initial",
+          logicalHostID: hostID,
+          detailHostID: `127.0.0.1:${relayPort}`,
+          threadID,
+          expectedMessageEventCount: expectedInitialEventIDs.length,
+          expectedLiveState: "Live",
+        },
+      });
+
+      await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 1_500));
+      historicalTurns = [initialTurn, recoveredTurn];
+      recoveryStartedAtMs = Date.now();
+      initialDetailWs?.terminate();
+    }
+
+    const rehydratedWait = await waitForAsyncEvent(rehydratedPromise, detailWaitTimeoutMs);
+    if (!rehydratedWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_detail_reconnect_rehydrate_missing",
+        "simulator app did not reconnect and rehydrate the open detail after relay upstream recovery",
+        {
+          threadID,
+          timeoutMs: detailWaitTimeoutMs,
+          readCallCount,
+          turnsListCallCount,
+          resumeCallCount,
+        }
+      );
+    }
+
+    transitions.push({
+      name: "detail-reconnect-rehydrated",
+      kind: "detail-reconnect-rehydrated",
+      iteration: 1,
+      route: "thread/resume",
+      wait: {
+        ok: rehydratedWait.ok,
+        observedAt: rehydratedAtMs ? new Date(rehydratedAtMs).toISOString() : null,
+        observedAtMs: rehydratedAtMs,
+      },
+      lag: scenarioLagSummary({
+        transition: "detail-reconnect-rehydrated",
+        startedAtMs: recoveryStartedAtMs || detailLoadedAtMs || startedAtMs,
+        acknowledgedAtMs: recoveryStartedAtMs || detailLoadedAtMs || startedAtMs,
+        observedAtMs: rehydratedAtMs,
+        maxStreamLagMs: options.maxStreamLagMs,
+      }),
+      routeCountsAtTransition: { readCallCount, turnsListCallCount, resumeCallCount },
+      detailTruth: {
+        kind: "detail-reconnect-rehydrated",
+        logicalHostID: hostID,
+        detailHostID: `127.0.0.1:${relayPort}`,
+        threadID,
+        expectedMessageEventIDs: expectedRecoveredEventIDs,
+        expectedMessageEventCount: expectedRecoveredEventIDs.length,
+        expectedLiveState: "Live",
+      },
+    });
+
+    const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
+    findings.push(...requiredRouteFindings(clientPathEvidence, ["thread/read", "thread/turns/list", "thread/resume"]));
+    findings.push(...requiredTurnsListFullItemsViewFindings(routeEvents));
+    if (readCallCount < 2 || turnsListCallCount < 2 || resumeCallCount < 3) {
+      transitionFailure(
+        findings,
+        "scenario_detail_reconnect_route_counts_missing",
+        "detail-reconnect did not exercise initial detail, relay upstream recovery, and Swift rehydrate route counts",
+        { readCallCount, turnsListCallCount, resumeCallCount }
+      );
+    }
+
+    const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
+    const report = {
+      schemaVersion: 1,
+      kind: "codex-dock-controlled-simulator-scenario-relay-report",
+      mode: "scenario",
+      scenario: "detail-reconnect",
+      startedAt: new Date(startedAtMs).toISOString(),
+      endedAt: new Date().toISOString(),
+      relayUrl,
+      summary: {
+        ok: scenarioOK,
+        clientPathOK: scenarioOK,
+        scenario: "detail-reconnect",
+        scenarioOK,
+        scenarioCount: 1,
+        scenarioTransitionCount: transitions.length,
+        implementedScenarios: ["detail-reconnect"],
+        unimplementedRequiredScenarios: [],
+        failures: findings.length,
+        clientPathRouteCounts: clientPathEvidence.routeCounts,
+      },
+      samples,
+      scenarios: [{
+        id: "detail-reconnect",
+        ok: scenarioOK,
+        target: {
+          logicalHostID: hostID,
+          threadID,
+          expectedInitialEventIDs,
+          expectedRecoveredEventIDs,
+        },
+        transitions,
+        findings,
+      }],
+      stream: {
+        notificationCount: streamProbe.notifications.length,
+        resyncCount: streamProbe.resyncs.length,
+        finalState: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
+      },
+      clientPathEvidence,
+      findings,
+      unsupportedFacts: [],
+    };
+
+    writeProofReport(options.jsonOut, report);
     if (options.summaryOut) {
       writeText(options.summaryOut, buildMarkdownSummary(report));
     }
@@ -3026,6 +3898,7 @@ async function runDetailHistoryRequestScenario(options) {
   const threadID = "sim-detail-history-request-thread";
   const requestID = "approval-history-1";
   const requestCardID = `request-${requestID}`;
+  const threadRow = fixtureThread(threadID, "Simulator full detail fixture row", 100);
   const historicalTurns = [
     fixtureTurn("turn-history-1", 1_700_000_001, [
       fixtureUserMessageItem("user-seed", "Simulator detail history user seed"),
@@ -3039,13 +3912,13 @@ async function runDetailHistoryRequestScenario(options) {
     ]),
   ];
   const expectedHistoricalEventIDs = [
-    "turn-history-1-user-seed-user",
-    "turn-history-1-agent-seed-agent",
-    "turn-history-1-cmd-seed-command",
-    "turn-history-1-cmd-seed-output",
-    "turn-history-2-plan-seed-plan",
-    "turn-history-2-reason-seed-reasoning",
     "turn-history-2-agent-two-agent",
+    "turn-history-2-reason-seed-reasoning",
+    "turn-history-2-plan-seed-plan",
+    "turn-history-1-cmd-seed-output",
+    "turn-history-1-cmd-seed-command",
+    "turn-history-1-agent-seed-agent",
+    "turn-history-1-user-seed-user",
   ];
   const liveEventID = "turn-live-agent-live-item%2FagentMessage%2Fdelta";
   const liveRawEventID = "turn-live-agent-live-item/agentMessage/delta";
@@ -3096,7 +3969,7 @@ async function runDetailHistoryRequestScenario(options) {
         recordClientRoute(routeEvents, "initialized", "simulator app sent initialized notification", { threadID });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
-          data: [fixtureThread(threadID, "Simulator full detail fixture row", 100)],
+          data: [threadRow],
           nextCursor: null,
           backwardsCursor: null,
         });
@@ -3109,6 +3982,7 @@ async function runDetailHistoryRequestScenario(options) {
         });
         sendFixtureResult(ws, message.id, {
           thread: {
+            ...threadRow,
             id: message.params?.threadId || threadID,
             turns: [],
           },
@@ -3120,6 +3994,7 @@ async function runDetailHistoryRequestScenario(options) {
           threadID: message.params?.threadId || threadID,
           cursor,
           call: turnsListCallCount,
+          itemsView: message.params?.itemsView ?? null,
         });
         if (!cursor) {
           sendFixtureResult(ws, message.id, {
@@ -3149,6 +4024,7 @@ async function runDetailHistoryRequestScenario(options) {
         });
         sendFixtureResult(ws, message.id, {
           thread: {
+            ...threadRow,
             id: message.params?.threadId || threadID,
             turns: [],
           },
@@ -3421,7 +4297,7 @@ async function runDetailHistoryRequestScenario(options) {
       detailTruth: {
         ...baseDetailTruth,
         kind: "detail-history-live-update",
-        expectedMessageEventIDs: [...expectedHistoricalEventIDs, liveRawEventID],
+        expectedMessageEventIDs: [liveRawEventID, ...expectedHistoricalEventIDs],
         expectedMessageEventCount: expectedHistoricalEventIDs.length + 1,
       },
     });
@@ -3440,7 +4316,8 @@ async function runDetailHistoryRequestScenario(options) {
       detailTruth: {
         ...baseDetailTruth,
         kind: "detail-history-request-visible",
-        expectedMessageEventIDs: [],
+        expectedMessageEventIDs: [requestEventID, liveRawEventID, ...expectedHistoricalEventIDs],
+        expectedMessageEventCount: expectedHistoricalEventIDs.length + 2,
         requestID,
         requestCardID,
         expectedStatus: "Pending",
@@ -3463,7 +4340,7 @@ async function runDetailHistoryRequestScenario(options) {
       detailTruth: {
         ...baseDetailTruth,
         kind: "detail-history-request-resolution",
-        expectedMessageEventIDs: [...expectedHistoricalEventIDs, liveRawEventID, requestEventID],
+        expectedMessageEventIDs: [requestEventID, liveRawEventID, ...expectedHistoricalEventIDs],
         expectedMessageEventCount: expectedHistoricalEventIDs.length + 2,
         requestID,
         requestCardID,
@@ -3474,6 +4351,7 @@ async function runDetailHistoryRequestScenario(options) {
 
     const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
     findings.push(...requiredRouteFindings(clientPathEvidence, ["thread/read", "thread/turns/list", "thread/resume"]));
+    findings.push(...requiredTurnsListFullItemsViewFindings(routeEvents));
     const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
     const report = {
       schemaVersion: 1,
@@ -3520,7 +4398,7 @@ async function runDetailHistoryRequestScenario(options) {
       unsupportedFacts: [],
     };
 
-    writeJSON(options.jsonOut, report);
+    writeProofReport(options.jsonOut, report);
     if (options.summaryOut) {
       writeText(options.summaryOut, buildMarkdownSummary(report));
     }
@@ -3545,6 +4423,7 @@ async function runServerRequestScenario(options) {
   const threadID = "sim-server-request-thread";
   const requestID = "approval-1";
   const requestCardID = `request-${requestID}`;
+  const threadRow = fixtureThread(threadID, "Simulator server request fixture row", 100);
   let upstreamRequestSentAtMs = null;
   let upstreamResponseReceivedAtMs = null;
   let resolutionSentAtMs = null;
@@ -3579,7 +4458,7 @@ async function runServerRequestScenario(options) {
         recordClientRoute(routeEvents, "initialized", "simulator app sent initialized notification", { threadID });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
-          data: [fixtureThread(threadID, "Simulator server request fixture row", 100)],
+          data: [threadRow],
           nextCursor: null,
           backwardsCursor: null,
         });
@@ -3591,6 +4470,7 @@ async function runServerRequestScenario(options) {
         });
         sendFixtureResult(ws, message.id, {
           thread: {
+            ...threadRow,
             id: message.params?.threadId || threadID,
             turns: [],
           },
@@ -3598,6 +4478,7 @@ async function runServerRequestScenario(options) {
       } else if (message.method === "thread/turns/list") {
         recordClientRoute(routeEvents, "thread/turns/list", "simulator app drained historical thread turns", {
           threadID: message.params?.threadId || threadID,
+          itemsView: message.params?.itemsView ?? null,
         });
         sendFixtureResult(ws, message.id, {
           data: [],
@@ -3610,6 +4491,7 @@ async function runServerRequestScenario(options) {
         });
         sendFixtureResult(ws, message.id, {
           thread: {
+            ...threadRow,
             id: message.params?.threadId || threadID,
             turns: [],
           },
@@ -3819,6 +4701,7 @@ async function runServerRequestScenario(options) {
         logicalHostID: hostID,
         detailHostID: `127.0.0.1:${relayPort}`,
         threadID,
+        expectedMessageEventCount: 1,
         requestID,
         requestCardID,
         expectedStatus: "Pending",
@@ -3843,6 +4726,7 @@ async function runServerRequestScenario(options) {
         logicalHostID: hostID,
         detailHostID: `127.0.0.1:${relayPort}`,
         threadID,
+        expectedMessageEventCount: 1,
         requestID,
         requestCardID,
         expectedStatus: "Resolved",
@@ -3852,6 +4736,7 @@ async function runServerRequestScenario(options) {
 
     const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
     findings.push(...requiredRouteFindings(clientPathEvidence, ["thread/read", "thread/turns/list", "thread/resume"]));
+    findings.push(...requiredTurnsListFullItemsViewFindings(routeEvents));
     const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
     const report = {
       schemaVersion: 1,
@@ -3896,7 +4781,7 @@ async function runServerRequestScenario(options) {
       unsupportedFacts: [],
     };
 
-    writeJSON(options.jsonOut, report);
+    writeProofReport(options.jsonOut, report);
     if (options.summaryOut) {
       writeText(options.summaryOut, buildMarkdownSummary(report));
     }
@@ -3918,7 +4803,11 @@ async function main() {
   }
   validateOptions(options);
   let report;
-  if (options.scenario === "detail-history-request") {
+  if (options.scenario === "archive-toggle") {
+    report = await runArchiveToggleScenario(options);
+  } else if (options.scenario === "detail-reconnect") {
+    report = await runDetailReconnectScenario(options);
+  } else if (options.scenario === "detail-history-request") {
     report = await runDetailHistoryRequestScenario(options);
   } else if (options.scenario === "large-list-checkpoint") {
     report = await runLargeListCheckpointScenario(options);

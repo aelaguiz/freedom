@@ -58,6 +58,7 @@ public final class ArchiveStore: ObservableObject {
     private var hosts: [DockHostConfiguration]
     private let commandEngine: ClientCommandEngine
     private var dataEngine: ArchiveDataEngine?
+    private var streamLifecycle: ThreadCardStreamLifecycle?
     private var isLoading = false
     private weak var connectivityReporter: (any AppConnectivityReporting)?
     private let connectivityEventSink: ConnectivityEventSink?
@@ -75,13 +76,22 @@ public final class ArchiveStore: ObservableObject {
         self.connectivityEventSink = connectivityEventSink
         self.dataEngine = ArchiveDataEngine(
             registry: registry,
-            streamClient: streamClient,
             metadataStore: metadataStore,
             now: now
         )
+        self.streamLifecycle = nil
         let initialState = ArchiveStoreState.idle(registry.hosts.map(DockHostViewModel.init))
         self.state = initialState
         self.screenStore = ArchiveScreenStore(state: initialState)
+        self.streamLifecycle = ThreadCardStreamLifecycle(
+            view: .archive,
+            streamClient: streamClient,
+            streamReconnectDelay: CodexDockConstants.Dock.autoRefreshInterval,
+            streamHeartbeatTimeout: CodexDockConstants.Dock.streamHeartbeatTimeout,
+            logger: DockLog.archive,
+            logName: "archive",
+            delegate: self
+        )
     }
 
     public init(
@@ -95,12 +105,14 @@ public final class ArchiveStore: ObservableObject {
         self.commandEngine = ClientCommandEngine(archiver: archiver)
         self.connectivityEventSink = connectivityEventSink
         self.dataEngine = nil
+        self.streamLifecycle = nil
         let initialState = ArchiveStoreState.configurationError(error.localizedDescription)
         self.state = initialState
         self.screenStore = ArchiveScreenStore(state: initialState)
     }
 
     public func updateRegistry(_ registry: HostRegistry) async {
+        await streamLifecycle?.closeStreams()
         hosts = registry.hosts
         if let dataEngine {
             await dataEngine.updateRegistry(registry)
@@ -256,14 +268,26 @@ public final class ArchiveStore: ObservableObject {
             return
         }
 
-        let snapshot = await dataEngine.loadSnapshot()
+        await dataEngine.loadLocalMetadata()
+        await dataEngine.ensureHosts()
+        await streamLifecycle?.synchronizeStreams(hosts: hosts)
+        await dataEngine.migrateMetadataHostAliases()
+        await publishSnapshot()
+        if let snapshot = await dataEngine.snapshot() {
+            DockLog.archive.notice("archive stream reload finished hosts=\(self.hosts.count, privacy: .public) rows=\(snapshot.rowCount, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+        }
+    }
+
+    private func publishSnapshot() async {
+        guard let snapshot = await dataEngine?.snapshot() else {
+            return
+        }
         if snapshot.rowCount == 0, let message = snapshot.unavailableMessage {
             setState(.unavailable(snapshot, message))
         } else {
             setState(snapshot.rowCount == 0 ? .empty(snapshot) : .loaded(snapshot))
         }
         publishConnectivity(for: state)
-        DockLog.archive.notice("archive reload finished hosts=\(self.hosts.count, privacy: .public) rows=\(snapshot.rowCount, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
     }
 
     private func setState(_ state: ArchiveStoreState) {
@@ -325,7 +349,7 @@ public final class ArchiveStore: ObservableObject {
                 ConnectivityRuntimeEvent(
                     source: .archive,
                     hostID: host.id,
-                    route: "archive/list",
+                    route: "archive/subscribe",
                     status: "checking",
                     phase: .checking
                 )
@@ -335,7 +359,7 @@ public final class ArchiveStore: ObservableObject {
                 ConnectivityRuntimeEvent(
                     source: .archive,
                     hostID: hostState.host.id,
-                    route: "archive/list",
+                    route: "archive/subscribe",
                     status: hostState.status.subtitle,
                     phase: Self.connectivityPhase(for: hostState.status)
                 )
@@ -360,5 +384,47 @@ public final class ArchiveStore: ObservableObject {
         case .error(let message):
             return .error(message)
         }
+    }
+}
+
+extension ArchiveStore: ThreadCardStreamLifecycleDelegate {
+    func cardStreamLifecycleMarkChecking(host: DockHostConfiguration) async {
+        await dataEngine?.markChecking(host: host)
+    }
+
+    func cardStreamLifecycleMarkFailure(_ failure: DockRequestFailure, host: DockHostConfiguration) async {
+        await dataEngine?.markFailure(failure, host: host)
+    }
+
+    func cardStreamLifecycleApplySnapshot(
+        _ update: ThreadCardStreamUpdateDTO,
+        host: DockHostConfiguration
+    ) async -> ThreadCardTableApplyResult {
+        guard let dataEngine else {
+            return .needsResync(.streamContract)
+        }
+        return await dataEngine.applySnapshot(update, host: host)
+    }
+
+    func cardStreamLifecycleApplyUpdate(
+        _ update: ThreadCardStreamUpdateDTO,
+        host: DockHostConfiguration
+    ) async -> ThreadCardTableApplyResult {
+        guard let dataEngine else {
+            return .needsResync(.streamContract)
+        }
+        return await dataEngine.applyUpdate(update, host: host)
+    }
+
+    func cardStreamLifecycleRowCount(for host: DockHostConfiguration) async -> Int {
+        await dataEngine?.rowCount(for: host) ?? 0
+    }
+
+    func cardStreamLifecyclePublishSnapshot() async {
+        await publishSnapshot()
+    }
+
+    func cardStreamLifecycleMigrateMetadataHostAliases() async {
+        await dataEngine?.migrateMetadataHostAliases()
     }
 }

@@ -12,38 +12,32 @@ public final class ArchiveCleanupStore: ObservableObject {
 
     private var hosts: [DockHostConfiguration]
     private var dataEngine: ArchiveCleanupDataEngine?
+    private let cardStateProvider: (any DockCardStateProviding)?
     private let archiver: any ThreadArchiveCommanding
 
     public init(
         registry: HostRegistry,
-        streamClient: any ThreadCardStreamConnecting = AppServerThreadCardStreamClient(),
+        cardStateProvider: any DockCardStateProviding,
         archiver: any ThreadArchiveCommanding = AppServerThreadCommandClient(),
-        metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.hosts = registry.hosts
         self.archiver = archiver
-        self.dataEngine = ArchiveCleanupDataEngine(
-            registry: registry,
-            streamClient: streamClient,
-            metadataStore: metadataStore,
-            now: now
-        )
+        self.cardStateProvider = cardStateProvider
+        self.dataEngine = ArchiveCleanupDataEngine(now: now)
         self.state = .idle(registry.hosts.map(DockHostViewModel.init))
     }
 
     public init(configurationError error: Error) {
         self.hosts = []
         self.archiver = AppServerThreadCommandClient()
+        self.cardStateProvider = nil
         self.dataEngine = nil
         self.state = .configurationError(error.localizedDescription)
     }
 
     public func updateRegistry(_ registry: HostRegistry) async {
         hosts = registry.hosts
-        if let dataEngine {
-            await dataEngine.updateRegistry(registry)
-        }
         state = .idle(registry.hosts.map(DockHostViewModel.init))
         selectedRowIDs = []
     }
@@ -53,8 +47,19 @@ public final class ArchiveCleanupStore: ObservableObject {
             state = .failed("Archive cleanup is not configured.")
             return
         }
+        guard let cardStateProvider else {
+            state = .failed("Dock stream state is not available.")
+            selectedRowIDs = []
+            return
+        }
         state = .loading(hosts.map(DockHostViewModel.init))
-        let preview = await dataEngine.loadPreview(rule: rule)
+        await cardStateProvider.refresh()
+        guard let dockSnapshot = cardStateProvider.currentDockSnapshot else {
+            state = .failed("Dock stream state is not loaded.")
+            selectedRowIDs = []
+            return
+        }
+        let preview = await dataEngine.makePreview(from: dockSnapshot, rule: rule)
         if let message = preview.unavailableMessage {
             state = .failed(message)
             selectedRowIDs = []

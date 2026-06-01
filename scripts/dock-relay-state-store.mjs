@@ -357,12 +357,15 @@ class RelayStateStore {
     `).all();
   }
 
-  freshnessForHost(hostID) {
+  freshnessForHost(hostID, { archived = null } = {}) {
+    const scopeWhere = archived === null ? "" : " AND archived = ?";
+    const scopeArgs = archived === null ? [hostID] : [hostID, boolInt(archived)];
     const rows = this.db.prepare(`
       SELECT complete, last_attempt_at, last_sync_at, last_error
       FROM sync_scopes
       WHERE host_id = ?
-    `).all(hostID);
+      ${scopeWhere}
+    `).all(...scopeArgs);
     if (rows.length === 0) {
       return {
         status: "unknown",
@@ -372,11 +375,14 @@ class RelayStateStore {
       };
     }
     const failed = rows.find((row) => row.complete === 0);
+    const presenceColumn = archived === true
+      ? "archived_scope_present"
+      : (archived === false ? "active_scope_present" : "(active_scope_present = 1 OR archived_scope_present = 1)");
     const unprovenCards = this.db.prepare(`
       SELECT COUNT(*) AS count
       FROM threads
       WHERE host_id = ?
-        AND (active_scope_present = 1 OR archived_scope_present = 1)
+        AND ${archived === null ? presenceColumn : `${presenceColumn} = 1`}
         AND (activity_proof_status != 'proven' OR completeness != 'complete' OR freshness_status != 'fresh')
     `).get(hostID).count;
     const latestAttempt = rows.map((row) => row.last_attempt_at).filter(Boolean).sort().at(-1) || null;
@@ -822,19 +828,21 @@ class RelayStateStore {
 
   markScopeStale(hostID, scopeName, error) {
     const at = nowISOString();
+    const archived = String(scopeName || "").startsWith("archived:");
     this.db.prepare(`
       INSERT INTO sync_scopes (
         host_id, scope, archived, source_scope, complete, generation,
         last_attempt_at, last_sync_at, last_error
       )
-      VALUES (?, ?, 0, ?, 0, 1, ?, NULL, ?)
+      VALUES (?, ?, ?, ?, 0, 1, ?, NULL, ?)
       ON CONFLICT(host_id, scope) DO UPDATE SET
+        archived = excluded.archived,
         complete = 0,
         last_attempt_at = excluded.last_attempt_at,
         last_error = excluded.last_error
-    `).run(hostID, scopeName, scopeName, at, error?.message || String(error));
+    `).run(hostID, scopeName, boolInt(archived), scopeName, at, error?.message || String(error));
     this.recordChange({
-      view: DOCK_VIEW,
+      view: archived ? ARCHIVE_VIEW : DOCK_VIEW,
       hostID,
       changeType: "scope-stale",
       payload: { scopeName },

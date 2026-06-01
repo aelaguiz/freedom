@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://codex-dock.local/contract/proof/controlled-simulator-matrix-report.schema.json",
+  "title": "Codex Dock Controlled Simulator Matrix Report",
+  "type": "object",
+  "required": ["schemaVersion", "kind", "status", "generatedAt", "config", "summary", "scenarios", "findings"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "codex-dock-controlled-simulator-matrix-report" },
+    "status": { "$ref": "#/definitions/status" },
+    "generatedAt": { "type": "string", "minLength": 1 },
+    "config": {
+      "type": "object",
+      "required": ["requiredScenarios", "minPasses", "maxUiLagMs"],
+      "additionalProperties": true,
+      "properties": {
+        "requiredScenarios": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "minPasses": { "type": "number" },
+        "maxUiLagMs": { "type": "number" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["ok", "reportCount", "requiredScenarioCount", "passingScenarioCount", "missingScenarioCount", "failedScenarioCount", "findings"],
+      "additionalProperties": true,
+      "properties": {
+        "ok": { "type": "boolean" },
+        "reportCount": { "type": "number" },
+        "requiredScenarioCount": { "type": "number" },
+        "passingScenarioCount": { "type": "number" },
+        "missingScenarioCount": { "type": "number" },
+        "failedScenarioCount": { "type": "number" },
+        "findings": { "type": "number" }
+      }
+    },
+    "scenarios": { "type": "array" },
+    "findings": { "type": "array" }
+  },
+  "definitions": {
+    "status": { "enum": ["pass", "fail", "blocked", "not_run"] }
+  }
+}

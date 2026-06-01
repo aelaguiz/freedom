@@ -4,7 +4,14 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
+import {
+  assertProofReport,
+  finalizeProofReport,
+} from "./proof-report-contracts.mjs";
+
 const DEFAULT_REQUIRED_SCENARIOS = [
+  "archive-toggle",
+  "detail-reconnect",
   "detail-history-request",
   "large-list-checkpoint",
   "thread-activity",
@@ -20,16 +27,33 @@ const DEFAULT_REQUIRED_SCENARIOS = [
 const DEFAULT_MAX_UI_LAG_MS = 2_000;
 
 const SCENARIO_REQUIREMENTS = {
+  "archive-toggle": {
+    routes: ["dock/subscribe", "dock/update", "archive/subscribe", "archive/update", "thread/archive", "thread/unarchive"],
+    minScenarioTransitionChecks: 2,
+    minCheckpointSweeps: 1,
+  },
+  "detail-reconnect": {
+    routes: ["thread/read", "thread/turns/list", "thread/resume"],
+    minRouteCounts: { "thread/read": 2, "thread/turns/list": 2, "thread/resume": 3 },
+    minDetailTransitionChecks: 2,
+    minDetailSweeps: 1,
+    minDetailSweepMessageCardChecks: 2,
+    minDetailMessageOrderChecks: 1,
+    requireFullTurnsList: true,
+  },
   "detail-history-request": {
     routes: ["thread/read", "thread/turns/list", "thread/resume"],
     minDetailTransitionChecks: 3,
     minDetailSweeps: 1,
     minDetailSweepMessageCardChecks: 8,
+    minDetailMessageOrderChecks: 2,
+    requireFullTurnsList: true,
   },
   "large-list-checkpoint": {
     routes: ["dock/subscribe"],
     minCheckpointSweeps: 1,
     minCheckpointSweepRowChecks: 12,
+    minDockSweepOrderChecks: 1,
   },
   "thread-activity": {
     routes: ["dock/subscribe", "dock/update"],
@@ -40,6 +64,7 @@ const SCENARIO_REQUIREMENTS = {
     routes: ["thread/read", "thread/turns/list", "thread/resume"],
     minDetailTransitionChecks: 2,
     minCheckpointSweeps: 1,
+    requireFullTurnsList: true,
   },
   "source-refresh": {
     routes: ["dock/subscribe", "dock/update"],
@@ -157,12 +182,18 @@ function readJSON(filePath) {
 }
 
 function readReportDir(reportDir) {
+  const relayReportPath = path.join(reportDir, "relay-client-path.json");
+  const uiReportPath = path.join(reportDir, "simulator-ui-sync.json");
+  const relayReport = readJSON(relayReportPath);
+  const uiReport = readJSON(uiReportPath);
+  assertProofReport(relayReport, { sourcePath: relayReportPath });
+  assertProofReport(uiReport, { sourcePath: uiReportPath });
   return {
     dir: reportDir,
-    relayReportPath: path.join(reportDir, "relay-client-path.json"),
-    uiReportPath: path.join(reportDir, "simulator-ui-sync.json"),
-    relayReport: readJSON(path.join(reportDir, "relay-client-path.json")),
-    uiReport: readJSON(path.join(reportDir, "simulator-ui-sync.json")),
+    relayReportPath,
+    uiReportPath,
+    relayReport,
+    uiReport,
   };
 }
 
@@ -205,12 +236,17 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
   const routeCounts = routeCountsFor(entry);
   const relaySummary = entry.relayReport?.summary || {};
   const uiSummary = entry.uiReport?.summary || {};
+  const relayProofRunID = entry.relayReport?.proofRunID || null;
+  const uiProofRunID = entry.uiReport?.proofRunID || entry.uiReport?.relayReport?.proofRunID || null;
   const scenarioChecks = Number(uiSummary.scenarioTransitionChecks || 0);
   const detailChecks = Number(uiSummary.detailTransitionChecks || 0);
   const checkpointSweeps = Number(uiSummary.checkpointSweepCount || 0);
   const checkpointSweepRowChecks = Number(uiSummary.checkpointSweepRowChecks || 0);
+  const dockVisibleOrderChecks = Number(uiSummary.dockVisibleOrderChecks || 0);
+  const dockSweepOrderChecks = Number(uiSummary.dockSweepOrderChecks || 0);
   const detailSweeps = Number(uiSummary.detailSweepCount || 0);
   const detailSweepMessageCardChecks = Number(uiSummary.detailSweepMessageCardChecks || 0);
+  const detailMessageOrderChecks = Number(uiSummary.detailMessageOrderChecks || 0);
   const maxLag = maxObservedTransitionLag(entry.uiReport);
 
   if (!scenario) {
@@ -235,6 +271,14 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
       failureCount: Number(uiSummary.failures || 0),
     });
   }
+  if (!relayProofRunID || !uiProofRunID || relayProofRunID !== uiProofRunID) {
+    failures.push({
+      code: "matrix_proof_run_mismatch",
+      message: "Relay and simulator UI reports do not share the same proof run id, so the matrix cannot trust that the artifacts came from the same run.",
+      relayProofRunID,
+      uiProofRunID,
+    });
+  }
   for (const route of requirements.routes || []) {
     if (!routeCounts[route]) {
       failures.push({
@@ -242,6 +286,34 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
         message: `Scenario ${scenario} did not exercise required route ${route}.`,
         scenario,
         route,
+      });
+    }
+  }
+  for (const [route, expectedCount] of Object.entries(requirements.minRouteCounts || {})) {
+    const actualCount = Number(routeCounts[route] || 0);
+    if (actualCount < expectedCount) {
+      failures.push({
+        code: "matrix_required_route_count_too_low",
+        message: `Scenario ${scenario} did not exercise required route ${route} enough times.`,
+        scenario,
+        route,
+        expected: expectedCount,
+        actual: actualCount,
+      });
+    }
+  }
+  if (requirements.requireFullTurnsList) {
+    const events = Array.isArray(entry.relayReport?.clientPathEvidence?.events)
+      ? entry.relayReport.clientPathEvidence.events
+      : [];
+    const hasFullTurnsList = events.some((event) => (
+      event?.route === "thread/turns/list" && event?.itemsView === "full"
+    ));
+    if (!hasFullTurnsList) {
+      failures.push({
+        code: "matrix_thread_turns_list_full_items_view_missing",
+        message: `Scenario ${scenario} did not exercise thread/turns/list with itemsView=full.`,
+        scenario,
       });
     }
   }
@@ -281,6 +353,24 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
       actual: checkpointSweepRowChecks,
     });
   }
+  if (dockVisibleOrderChecks < (requirements.minDockVisibleOrderChecks || 0)) {
+    failures.push({
+      code: "matrix_dock_visible_order_checks_missing",
+      message: `Scenario ${scenario} did not prove enough visible Dock row ordering.`,
+      scenario,
+      expected: requirements.minDockVisibleOrderChecks || 0,
+      actual: dockVisibleOrderChecks,
+    });
+  }
+  if (dockSweepOrderChecks < (requirements.minDockSweepOrderChecks || 0)) {
+    failures.push({
+      code: "matrix_dock_sweep_order_checks_missing",
+      message: `Scenario ${scenario} did not prove checkpoint Dock row ordering.`,
+      scenario,
+      expected: requirements.minDockSweepOrderChecks || 0,
+      actual: dockSweepOrderChecks,
+    });
+  }
   if (detailSweeps < (requirements.minDetailSweeps || 0)) {
     failures.push({
       code: "matrix_detail_sweep_missing",
@@ -297,6 +387,15 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
       scenario,
       expected: requirements.minDetailSweepMessageCardChecks || 0,
       actual: detailSweepMessageCardChecks,
+    });
+  }
+  if (detailMessageOrderChecks < (requirements.minDetailMessageOrderChecks || 0)) {
+    failures.push({
+      code: "matrix_detail_message_order_checks_missing",
+      message: `Scenario ${scenario} did not prove opened-thread message ordering.`,
+      scenario,
+      expected: requirements.minDetailMessageOrderChecks || 0,
+      actual: detailMessageOrderChecks,
     });
   }
   if (uiSummary.scenarioTransitionFailures || uiSummary.detailTransitionFailures) {
@@ -323,14 +422,18 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
     dir: entry.dir || null,
     relayReportPath: entry.relayReportPath || null,
     uiReportPath: entry.uiReportPath || null,
+    proofRunID: relayProofRunID,
     ok: failures.length === 0,
     routeCounts,
     uiSampleCount: Number(uiSummary.uiSampleCount || 0),
     scoredUISampleCount: Number(uiSummary.scoredUISampleCount || 0),
     checkpointSweepCount: checkpointSweeps,
     checkpointSweepRowChecks,
+    dockVisibleOrderChecks,
+    dockSweepOrderChecks,
     detailSweepCount: detailSweeps,
     detailSweepMessageCardChecks,
+    detailMessageOrderChecks,
     scenarioTransitionChecks: scenarioChecks,
     detailTransitionChecks: detailChecks,
     maxObservedUiLagMs: maxLag,
@@ -481,6 +584,8 @@ function markdownSummary(report) {
 }
 
 function writeReportFiles(report, options) {
+  finalizeProofReport(report);
+  assertProofReport(report);
   fs.mkdirSync(path.dirname(options.jsonOut), { recursive: true });
   fs.writeFileSync(options.jsonOut, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   if (options.summaryOut) {
@@ -528,5 +633,6 @@ export {
   evaluateReportEntry,
   markdownSummary,
   parseArgs,
+  readReportDir,
   validateOptions,
 };

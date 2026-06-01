@@ -386,7 +386,9 @@ async function recoverSessionUpstream(config, session, downstreamWs, generation)
         session.retryTask = null;
         return;
       }
-      session.upstream = client;
+      // A recovered upstream may have missed live detail events while the
+      // socket was down, so force the phone through reconnect + rehydrate.
+      client.close();
       session.retryTask = null;
       config.statusTracker?.recordReconnect({
         active: false,
@@ -397,6 +399,7 @@ async function recoverSessionUpstream(config, session, downstreamWs, generation)
         endpointUrl: endpoint.url,
         attempt,
       });
+      downstreamWs.close(1012, "upstream recovered; rehydrate");
       return;
     } catch (error) {
       lastError = error;

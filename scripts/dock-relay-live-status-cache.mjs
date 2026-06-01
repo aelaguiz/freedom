@@ -108,6 +108,7 @@ class LiveStatusCache {
           status: "up",
           endpoints: live.endpoints || [],
           failedEndpoints: live.failedEndpoints || 0,
+          failedThreadReads: live.failedThreadReads || 0,
           rows: humanLiveRows(live.rows || []),
           error: null,
         };
@@ -116,6 +117,7 @@ class LiveStatusCache {
           ok: true,
           endpoints: this.state.endpoints.length,
           failedEndpoints: this.state.failedEndpoints,
+          failedThreadReads: this.state.failedThreadReads,
           rows: this.state.rows.length,
         });
         return this.snapshot();

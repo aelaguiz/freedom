@@ -361,9 +361,9 @@ function detailHistoryRelayReport() {
           logicalHostID: "sim-detail-history-fixture",
           threadID: "sim-detail-history-request-thread",
           expectedMessageEventIDs: [
-            "turn-history-1-user-seed-user",
-            "turn-history-1-agent-seed-agent",
             "request-approval-history-1",
+            "turn-history-1-agent-seed-agent",
+            "turn-history-1-user-seed-user",
           ],
           expectedMessageEventCount: 3,
           requestID: "approval-history-1",
@@ -468,6 +468,47 @@ test("simulator UI proof accepts checkpoint sweeps that cover all relay rows", (
   assert.equal(evaluation.ok, true);
   assert.equal(evaluation.sweepRowCount, 2);
   assert.deepEqual(evaluation.failures, []);
+});
+
+test("simulator UI proof fails visible Dock rows rendered out of relay order", () => {
+  const relaySample = twoRowRelaySample();
+  relaySample.freshDock.renderOrderCardIDs = ["host::thread-a", "host::thread-b"];
+  const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
+  sample.dockRootValue = "loaded; rows=2; pinned=0; lens=newest; search=false; filters=0";
+  sample.dockRows = [
+    dockRow({ thread: "thread-b", status: "running", origin: "automation" }),
+    dockRow({ thread: "thread-a" }),
+  ];
+
+  const evaluation = evaluateUISample(sample, relaySample);
+
+  assert.equal(evaluation.ok, false);
+  assert.equal(evaluation.visibleOrderChecks, 1);
+  assert.equal(evaluation.failures.some((failure) => failure.code === "dock_ui_order_mismatch"), true);
+});
+
+test("simulator UI proof fails checkpoint sweeps rendered out of relay order", () => {
+  const relaySample = twoRowRelaySample();
+  relaySample.freshDock.renderOrderCardIDs = ["host::thread-a", "host::thread-b"];
+  const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
+  sample.dockRootValue = "loaded; rows=2; pinned=0; lens=newest; search=false; filters=0";
+  sample.dockRows = [dockRow({ thread: "thread-a" })];
+  sample.dockSweep = {
+    startedAt: "2026-05-31T00:00:01.500Z",
+    finishedAt: "2026-05-31T00:00:01.800Z",
+    stepCount: 2,
+    expectedRootRows: 2,
+    rows: [
+      dockRow({ thread: "thread-b", status: "running", origin: "automation" }),
+      dockRow({ thread: "thread-a" }),
+    ],
+  };
+
+  const evaluation = evaluateUISample(sample, relaySample);
+
+  assert.equal(evaluation.ok, false);
+  assert.equal(evaluation.sweepOrderChecks, 1);
+  assert.equal(evaluation.failures.some((failure) => failure.code === "dock_ui_sweep_order_mismatch"), true);
 });
 
 test("simulator UI proof fails checkpoint sweeps that miss relay rows", () => {
@@ -763,7 +804,35 @@ test("simulator UI proof scores opened-thread history through a detail sweep", (
   assert.equal(report.summary.ok, true);
   assert.equal(report.summary.detailSweepCount, 1);
   assert.equal(report.summary.detailSweepMessageCardChecks, 3);
+  assert.equal(report.summary.detailMessageOrderChecks, 1);
   assert.equal(report.summary.detailTransitionFailures, 0);
+});
+
+test("simulator UI proof fails opened-thread detail rows rendered out of newest-first order", () => {
+  const sample = detailHistoryUISample({ sampledAt: "2026-05-31T00:00:03.250Z" });
+  sample.detailSweep.messageCardIDs = [
+    "codexdock.session.message.turn-history-1-user-seed-user",
+    "codexdock.session.message.turn-history-1-agent-seed-agent",
+    "codexdock.session.message.request-approval-history-1",
+  ];
+
+  const report = buildRenderedUIReport({
+    relayReport: detailHistoryRelayReport(),
+    uiSamples: [
+      uiSample({ sampledAt: "2026-05-31T00:00:01.200Z" }),
+      uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" }),
+      sample,
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, false);
+  assert.equal(report.summary.detailMessageOrderChecks, 1);
+  assert.equal(report.failures.some((failure) => failure.code === "detail_ui_transition_not_observed"), true);
+  assert.equal(
+    report.detailTransitionCoverage.checks[0].failures.some((failure) => failure.code === "detail_ui_message_order_mismatch"),
+    true,
+  );
 });
 
 test("simulator UI proof fails server-request detail transitions that lag too long", () => {

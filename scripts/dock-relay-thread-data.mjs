@@ -475,9 +475,11 @@ async function readLoadedRows(endpoint, {
       })
     )));
     const rows = [];
+    let failedThreadReads = 0;
     for (let index = 0; index < results.length; index += 1) {
       const result = results[index];
       if (result.status === "rejected") {
+        failedThreadReads += 1;
         logger.warn("live.thread_read_failed", {
           threadId: loaded.data[index],
           endpointUrl: endpoint.url,
@@ -499,7 +501,11 @@ async function readLoadedRows(endpoint, {
         }
       }
     }
-    return rows;
+    return {
+      rows,
+      totalThreadReads: (loaded.data || []).length,
+      failedThreadReads,
+    };
   });
 }
 
@@ -577,6 +583,8 @@ async function collectLiveRows(options = {}) {
   );
   const rowsById = new Map();
   let failedEndpoints = 0;
+  let totalThreadReads = 0;
+  let failedThreadReads = 0;
   for (let index = 0; index < results.length; index += 1) {
     const result = results[index];
     if (result.status === "rejected") {
@@ -587,13 +595,17 @@ async function collectLiveRows(options = {}) {
       });
       continue;
     }
-    for (const row of result.value) {
+    totalThreadReads += Number(result.value?.totalThreadReads || 0);
+    failedThreadReads += Number(result.value?.failedThreadReads || 0);
+    for (const row of result.value?.rows || []) {
       rowsById.set(row.id, preferThread(row, rowsById.get(row.id)));
     }
   }
   return {
     endpoints,
     failedEndpoints,
+    totalThreadReads,
+    failedThreadReads,
     rows: [...rowsById.values()],
   };
 }

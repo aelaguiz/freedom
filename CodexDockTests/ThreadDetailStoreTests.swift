@@ -40,7 +40,7 @@ final class ThreadDetailStoreTests: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
@@ -147,8 +147,8 @@ final class ThreadDetailStoreTests: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
-            ThreadTurnsListParams(threadId: "thread-1", cursor: "page-2", limit: 250, sortDirection: .desc),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
+            ThreadTurnsListParams(threadId: "thread-1", cursor: "page-2", limit: 250, sortDirection: .desc, itemsView: .full),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
@@ -198,8 +198,8 @@ final class ThreadDetailStoreTests: XCTestCase {
         let turnsListParams = await session.turnsListParamsSnapshot()
         let resumeParams = await session.resumeParamsSnapshot()
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
-            ThreadTurnsListParams(threadId: "thread-1", cursor: "same-page", limit: 250, sortDirection: .desc),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
+            ThreadTurnsListParams(threadId: "thread-1", cursor: "same-page", limit: 250, sortDirection: .desc, itemsView: .full),
         ])
         XCTAssertEqual(resumeParams, [ThreadResumeParams]())
     }
@@ -1212,6 +1212,12 @@ final class ThreadDetailStoreTests: XCTestCase {
         await store.load()
         store.updateDraft("Keep")
         await store.toggleTapVoiceCapture()
+        capture.session.emit(
+            VoiceAudioChunk(sequence: 1, audio: Data([1, 2, 3]), format: .pcm16Mono24k)
+        )
+        try await waitForDetailStore {
+            realtime.session.appendedChunks.count == 1
+        }
         realtime.session.emit(
             .delta(
                 sessionID: realtime.session.id,
@@ -1260,6 +1266,12 @@ final class ThreadDetailStoreTests: XCTestCase {
         XCTAssertEqual(store.composer.voice.phase, .streaming)
         XCTAssertEqual(store.composer.voice.interactionMode, .hold)
 
+        capture.session.emit(
+            VoiceAudioChunk(sequence: 1, audio: Data([1, 2, 3]), format: .pcm16Mono24k)
+        )
+        try await waitForDetailStore {
+            realtime.session.appendedChunks.count == 1
+        }
         realtime.session.emit(
             .delta(
                 sessionID: realtime.session.id,

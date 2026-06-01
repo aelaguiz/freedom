@@ -5,6 +5,7 @@ enum ThreadCardTableResyncReason: String, Equatable, Sendable {
     case streamContract
     case epochMismatch
     case sequenceGap
+    case staleGeneration
 }
 
 enum ThreadCardTableApplyResult: Equatable, Sendable {
@@ -16,6 +17,7 @@ struct ThreadCardTable: Equatable, Sendable {
     private struct HostStreamState: Equatable, Sendable {
         var epoch: String?
         var seq: Int64
+        var stateGeneration: Int64
         var status: DockHostLoadStatus
         var freshness: DockStreamFreshnessDTO?
         var complete: Bool
@@ -27,6 +29,7 @@ struct ThreadCardTable: Equatable, Sendable {
         init(status: DockHostLoadStatus = .checking) {
             self.epoch = nil
             self.seq = 0
+            self.stateGeneration = 0
             self.status = status
             self.freshness = nil
             self.complete = false
@@ -37,7 +40,12 @@ struct ThreadCardTable: Equatable, Sendable {
         }
     }
 
+    private let expectedView: ThreadCardStreamView
     private var statesByHostID: [String: HostStreamState] = [:]
+
+    init(expectedView: ThreadCardStreamView = .dock) {
+        self.expectedView = expectedView
+    }
 
     mutating func reset(hosts: [DockHostConfiguration]) {
         statesByHostID = Dictionary(
@@ -88,8 +96,14 @@ struct ThreadCardTable: Equatable, Sendable {
         }
 
         var state = statesByHostID[host.id] ?? HostStreamState()
+        if state.epoch == nil || state.epoch == update.epoch {
+            guard acceptsGeneration(update, current: state.stateGeneration) else {
+                return .needsResync(.staleGeneration)
+            }
+        }
         state.epoch = update.epoch
         state.seq = update.seq
+        state.stateGeneration = update.stateGeneration ?? update.seq
         state.freshness = update.freshness
         state.complete = update.complete ?? false
         state.totalRows = update.totalRows
@@ -128,6 +142,9 @@ struct ThreadCardTable: Equatable, Sendable {
               state.epoch == update.epoch else {
             return .needsResync(.epochMismatch)
         }
+        guard acceptsGeneration(update, current: state.stateGeneration) else {
+            return .needsResync(.staleGeneration)
+        }
 
         switch update.kind {
         case .heartbeat:
@@ -153,6 +170,7 @@ struct ThreadCardTable: Equatable, Sendable {
             break
         }
 
+        state.stateGeneration = update.stateGeneration ?? state.stateGeneration
         state.freshness = update.freshness ?? state.freshness
         state.complete = update.complete ?? state.complete
         state.totalRows = update.totalRows ?? state.totalRows
@@ -175,7 +193,7 @@ struct ThreadCardTable: Equatable, Sendable {
     }
 
     private func acceptsStreamContract(_ update: ThreadCardStreamUpdateDTO) -> Bool {
-        guard update.view == .dock else {
+        guard update.view == expectedView else {
             return false
         }
         switch update.kind {
@@ -206,6 +224,13 @@ struct ThreadCardTable: Equatable, Sendable {
             }
             return true
         }
+    }
+
+    private func acceptsGeneration(_ update: ThreadCardStreamUpdateDTO, current: Int64) -> Bool {
+        guard let incoming = update.stateGeneration else {
+            return true
+        }
+        return incoming >= current
     }
 
     private func acceptsWindowContract(

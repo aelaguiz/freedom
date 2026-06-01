@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 import {
   RELAY_STATE_DOCK_WINDOW_SIZE,
+  RELAY_STATE_HEARTBEAT_INTERVAL_MS,
   RELAY_STATE_SNAPSHOT_SOFT_LIMIT_BYTES,
   RELAY_STATE_UPDATE_SOFT_LIMIT_BYTES,
 } from "./dock-relay-constants.mjs";
@@ -37,17 +38,22 @@ class StateSubscriptionHub {
   constructor({
     store,
     snapshotForView,
+    heartbeatForView = null,
     logger = null,
+    heartbeatIntervalMs = RELAY_STATE_HEARTBEAT_INTERVAL_MS,
     snapshotSoftLimitBytes = RELAY_STATE_SNAPSHOT_SOFT_LIMIT_BYTES,
     updateSoftLimitBytes = RELAY_STATE_UPDATE_SOFT_LIMIT_BYTES,
   }) {
     this.store = store;
     this.snapshotForView = snapshotForView;
+    this.heartbeatForView = heartbeatForView;
     this.logger = logger;
+    this.heartbeatIntervalMs = heartbeatIntervalMs;
     this.snapshotSoftLimitBytes = snapshotSoftLimitBytes;
     this.updateSoftLimitBytes = updateSoftLimitBytes;
     this.subscribers = new Set();
     this.epoch = crypto.randomUUID();
+    this.heartbeatTimer = null;
   }
 
   subscribe(view, listener) {
@@ -57,8 +63,10 @@ class StateSubscriptionHub {
       listener,
     };
     this.subscribers.add(subscriber);
+    this.ensureHeartbeatTimer();
     return () => {
       this.subscribers.delete(subscriber);
+      this.stopHeartbeatTimerIfIdle();
     };
   }
 
@@ -126,6 +134,57 @@ class StateSubscriptionHub {
         this.logger?.warn?.("state.subscriber_failed", { error });
       }
     }
+  }
+
+  ensureHeartbeatTimer() {
+    if (this.heartbeatTimer || this.heartbeatIntervalMs <= 0) {
+      return;
+    }
+    this.heartbeatTimer = setInterval(() => {
+      this.publishHeartbeats();
+    }, this.heartbeatIntervalMs);
+    this.heartbeatTimer.unref?.();
+  }
+
+  stopHeartbeatTimerIfIdle() {
+    if (this.subscribers.size > 0 || !this.heartbeatTimer) {
+      return;
+    }
+    clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
+  }
+
+  publishHeartbeats() {
+    if (this.subscribers.size === 0) {
+      this.stopHeartbeatTimerIfIdle();
+      return;
+    }
+    const views = new Set([...this.subscribers].map((subscriber) => subscriber.view));
+    for (const view of views) {
+      const heartbeat = this.heartbeat(view);
+      for (const subscriber of this.subscribers) {
+        if (subscriber.view !== view) {
+          continue;
+        }
+        try {
+          subscriber.listener(heartbeat);
+        } catch (error) {
+          this.logger?.warn?.("state.subscriber_failed", { error });
+        }
+      }
+    }
+  }
+
+  heartbeat(view) {
+    if (this.heartbeatForView) {
+      return this.heartbeatForView(view, { epoch: this.epoch });
+    }
+    return {
+      kind: "heartbeat",
+      ...sequenceFields(this.store, this),
+      baseSeq: null,
+      view,
+    };
   }
 }
 

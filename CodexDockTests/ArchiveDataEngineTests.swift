@@ -2,69 +2,76 @@ import XCTest
 @testable import CodexDock
 
 final class ArchiveDataEngineTests: XCTestCase {
-    func testEngineLoadsArchivedRowsAndBuildsSortedSectionsOffMain() async throws {
+    func testEngineBuildsArchivedSectionsFromSharedStreamTable() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
-        let loader = RecordingThreadCardFixtureLoader(results: [
-            .success(
-                ThreadCardFixtureResult(
-                    fixtures: [
-                        makeThreadCardFixtureSummary(
-                            hostID: host.id,
-                            threadID: "thread-a",
-                            branch: "main",
-                            status: .notLoaded,
-                            lastActivity: Date(timeIntervalSince1970: 2_000),
-                            prompt: "Archived row"
-                        )
-                    ]
-                )
-            )
-        ])
         let engine = ArchiveDataEngine(
             registry: registry,
-            streamClient: LoaderBackedThreadCardStreamClient(loader: loader, view: .archive),
             metadataStore: InMemoryLocalThreadMetadataStore(),
             now: { Date(timeIntervalSince1970: 2_000) }
         )
+        let card = threadCardFixture(
+            host: host,
+            threadID: "thread-a",
+            title: "Archived row",
+            status: .dormant,
+            updatedAt: 2_000
+        )
 
-        let snapshot = await engine.loadSnapshot()
-        let archivedRequests = await loader.archivedRequests()
+        await engine.loadLocalMetadata()
+        await engine.ensureHosts()
+        let result = await engine.applySnapshot(
+            dockStreamSnapshot(
+                host: host,
+                epoch: "archive-engine",
+                seq: 1,
+                cards: [card],
+                view: .archive
+            ),
+            host: host
+        )
+        await engine.migrateMetadataHostAliases()
+        let loadedSnapshot = await engine.snapshot()
+        let snapshot = try XCTUnwrap(loadedSnapshot)
 
+        XCTAssertEqual(result, .applied)
         XCTAssertEqual(snapshot.rowCount, 1)
         XCTAssertEqual(snapshot.sections.map(\.title), ["main"])
         XCTAssertEqual(snapshot.sections[0].rows.map(\.title), ["Archived row"])
         XCTAssertEqual(snapshot.hostStates.map(\.status), [.loaded(rowCount: 1)])
-        XCTAssertEqual(archivedRequests, [.archive])
     }
 
     func testEngineBuildsResolverForLogicalHostRowsLoadedFromEndpointHost() async throws {
         let host = makeHost(url: "ws://amir-m5.fairy-salmon.ts.net:4510")
         let registry = try HostRegistry(hosts: [host])
-        let loader = RecordingThreadCardFixtureLoader(results: [
-            .success(
-                ThreadCardFixtureResult(
-                    fixtures: [
-                        makeThreadCardFixtureSummary(
-                            hostID: "Amir-M5",
-                            threadID: "thread-logical",
-                            branch: "main",
-                            status: .notLoaded,
-                            lastActivity: Date(timeIntervalSince1970: 2_000),
-                            prompt: "Archived logical row"
-                        )
-                    ]
-                )
-            )
-        ])
         let engine = ArchiveDataEngine(
             registry: registry,
-            streamClient: LoaderBackedThreadCardStreamClient(loader: loader, view: .archive),
             metadataStore: InMemoryLocalThreadMetadataStore(),
             now: { Date(timeIntervalSince1970: 2_000) }
         )
+        let card = threadCardFixture(
+            host: host,
+            threadID: "thread-logical",
+            title: "Archived logical row",
+            status: .dormant,
+            updatedAt: 2_000,
+            logicalHostID: "Amir-M5"
+        )
 
-        let snapshot = await engine.loadSnapshot()
+        await engine.loadLocalMetadata()
+        await engine.ensureHosts()
+        _ = await engine.applySnapshot(
+            dockStreamSnapshot(
+                host: host,
+                epoch: "archive-logical",
+                seq: 1,
+                cards: [card],
+                view: .archive
+            ),
+            host: host
+        )
+        let loadedSnapshot = await engine.snapshot()
+        let snapshot = try XCTUnwrap(loadedSnapshot)
         let row = try XCTUnwrap(snapshot.sections.first?.rows.first)
 
         XCTAssertEqual(row.id.hostID, "Amir-M5")
@@ -80,7 +87,7 @@ final class ArchiveDataEngineTests: XCTestCase {
         )
     }
 
-    func testEngineCollectsArchiveCatchupWindowsBeforeBuildingSnapshot() async throws {
+    func testEngineAppliesArchiveCatchupWindowsBeforeBuildingSnapshot() async throws {
         let host = makeHost()
         let registry = try HostRegistry(hosts: [host])
         let firstCard = threadCardFixture(
@@ -95,8 +102,16 @@ final class ArchiveDataEngineTests: XCTestCase {
             title: "Archived second",
             updatedAt: 1_000
         )
-        let connection = ManualThreadCardStreamConnection(
-            subscribeSnapshot: dockStreamSnapshot(
+        let engine = ArchiveDataEngine(
+            registry: registry,
+            metadataStore: InMemoryLocalThreadMetadataStore(),
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+
+        await engine.loadLocalMetadata()
+        await engine.ensureHosts()
+        _ = await engine.applySnapshot(
+            dockStreamSnapshot(
                 host: host,
                 epoch: "archive-catchup",
                 seq: 1,
@@ -105,20 +120,10 @@ final class ArchiveDataEngineTests: XCTestCase {
                 complete: false,
                 totalRows: 2,
                 window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1, nextOffset: 1)
-            )
+            ),
+            host: host
         )
-        let engine = ArchiveDataEngine(
-            registry: registry,
-            streamClient: ManualThreadCardStreamClient(connection: connection),
-            metadataStore: InMemoryLocalThreadMetadataStore(),
-            now: { Date(timeIntervalSince1970: 2_000) }
-        )
-
-        let loadTask = Task {
-            await engine.loadSnapshot()
-        }
-        await Task.yield()
-        await connection.send(
+        _ = await engine.applyUpdate(
             ThreadCardStreamUpdateDTO(
                 kind: .delta,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
@@ -132,10 +137,12 @@ final class ArchiveDataEngineTests: XCTestCase {
                 seq: 2,
                 freshness: DockStreamFreshnessDTO(status: .fresh),
                 upsertCards: [secondCard]
-            )
+            ),
+            host: host
         )
 
-        let snapshot = await loadTask.value
+        let loadedSnapshot = await engine.snapshot()
+        let snapshot = try XCTUnwrap(loadedSnapshot)
 
         XCTAssertEqual(snapshot.rowCount, 2)
         XCTAssertEqual(snapshot.sections.flatMap(\.rows).map(\.title), ["Archived first", "Archived second"])

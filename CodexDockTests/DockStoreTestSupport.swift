@@ -645,7 +645,8 @@ func dockStreamSnapshot(
     freshness: DockStreamFreshnessDTO = DockStreamFreshnessDTO(status: .fresh),
     complete: Bool = true,
     totalRows: Int? = nil,
-    window: DockStreamWindowDTO? = nil
+    window: DockStreamWindowDTO? = nil,
+    stateGeneration: Int64? = nil
 ) -> ThreadCardStreamUpdateDTO {
     let logicalHostID = cards.first?.logicalHostID ?? host.id
     let hostDisplayName = cards.first?.hostDisplayName ?? host.displayName
@@ -661,7 +662,7 @@ func dockStreamSnapshot(
             rowCount: cards.count,
             nextOffset: nil
         ),
-        stateGeneration: seq,
+        stateGeneration: stateGeneration ?? seq,
         epoch: epoch,
         seq: seq,
         freshness: freshness,

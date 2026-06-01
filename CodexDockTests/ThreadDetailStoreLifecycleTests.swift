@@ -124,13 +124,82 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
         ])
+    }
+
+    @MainActor
+    func testReconnectRehydrateReplacesHistoryBeforeReplayingBufferedLiveNotification() async throws {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            turnsListResult: .success(ThreadTurnsListResponseDTO(data: [])),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            resumeDelay: .milliseconds(100),
+            turnsListResults: [
+                .success(
+                    ThreadTurnsListResponseDTO(data: [
+                        makeDetailTurn(id: "turn-initial", startedAt: 1_000, text: "Initial stale turn"),
+                    ])
+                ),
+                .success(
+                    ThreadTurnsListResponseDTO(data: [
+                        makeDetailTurn(id: "turn-rehydrated", startedAt: 2_000, text: "Canonical rehydrated turn"),
+                    ])
+                ),
+            ],
+            resumeResults: [
+                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            ]
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session),
+            now: { Date(timeIntervalSince1970: 3_000) }
+        )
+
+        await store.load()
+        await session.emitConnectionState(.reconnecting(attempt: 1, reason: "transport closed"))
+        await session.emitConnectionState(.connected)
+        try await waitForDetailStoreAsync {
+            await session.resumeParamsSnapshot().count == 2
+        }
+
+        await session.emitNotification(
+            JSONRPCNotification(
+                method: "item/agentMessage/delta",
+                params: .object([
+                    "threadId": .string("thread-1"),
+                    "turnId": .string("turn-live"),
+                    "itemId": .string("agent-live"),
+                    "delta": .string("Buffered during recovery"),
+                ])
+            )
+        )
+        try await Task.sleep(for: .milliseconds(20))
+        guard case let .loaded(reconnectingSnapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+        XCTAssertEqual(reconnectingSnapshot.liveState, .reconnecting("transport closed"))
+        XCTAssertFalse(reconnectingSnapshot.events.contains { $0.body == "Buffered during recovery" })
+
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.liveState == .live
+                && snapshot.events.contains { $0.body == "Buffered during recovery" }
+                && snapshot.events.contains { $0.body == "Canonical rehydrated turn" }
+                && !snapshot.events.contains { $0.body == "Initial stale turn" }
+        }
     }
 
     @MainActor
@@ -250,8 +319,8 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             ThreadReadParams(threadId: "thread-1", includeTurns: false),
         ])
         XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
         ])
         XCTAssertEqual(resumeParams, [
             ThreadResumeParams(threadId: "thread-1", excludeTurns: true),

@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://codex-dock.local/contract/proof/relay-sync-audit.schema.json",
+  "title": "Codex Dock Relay Sync Audit Report",
+  "type": "object",
+  "required": ["schemaVersion", "kind", "status", "mode", "relayUrl", "startedAt", "endedAt", "summary", "clientPathEvidence", "failures"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "codex-dock-relay-sync-audit-report" },
+    "status": { "$ref": "#/definitions/status" },
+    "mode": { "type": "string", "minLength": 1 },
+    "relayUrl": { "type": "string", "minLength": 1 },
+    "startedAt": { "type": "string", "minLength": 1 },
+    "endedAt": { "type": "string", "minLength": 1 },
+    "summary": {
+      "type": "object",
+      "required": ["ok", "clientPathOK"],
+      "additionalProperties": true,
+      "properties": {
+        "ok": { "type": "boolean" },
+        "clientPathOK": { "type": "boolean" }
+      }
+    },
+    "clientPathEvidence": { "$ref": "#/definitions/clientPathEvidence" },
+    "failures": { "type": "array" }
+  },
+  "definitions": {
+    "status": { "enum": ["pass", "fail", "blocked", "not_run"] },
+    "clientPathEvidence": {
+      "type": "object",
+      "required": ["routes", "routeCounts"],
+      "additionalProperties": true,
+      "properties": {
+        "routes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "routeCounts": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        }
+      }
+    }
+  }
+}

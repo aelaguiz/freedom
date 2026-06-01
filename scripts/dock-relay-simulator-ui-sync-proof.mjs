@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -7,6 +8,10 @@ import { pathToFileURL } from "node:url";
 import {
   evaluateStreamConvergenceLag,
 } from "./dock-relay-sync-audit.mjs";
+import {
+  assertProofReport,
+  finalizeProofReport,
+} from "./proof-report-contracts.mjs";
 
 const DEFAULT_MAX_UI_LAG_MS = 2000;
 
@@ -74,6 +79,11 @@ function readJSONL(filePath) {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => JSON.parse(line));
+}
+
+function proofRunIDForReportPath(filePath) {
+  const reportDir = path.resolve(path.dirname(filePath || "."));
+  return crypto.createHash("sha256").update(reportDir).digest("hex").slice(0, 16);
 }
 
 function parseSemicolonValue(value) {
@@ -257,6 +267,23 @@ function relayCardsByKey(relaySample) {
   return byKey;
 }
 
+function relayCardID(card) {
+  return card?.id || `${card?.logicalHostID || ""}::${card?.threadID || ""}`;
+}
+
+function relayRenderOrderCardIDs(relaySample) {
+  const freshDock = relaySample?.freshDock || {};
+  const renderOrder = Array.isArray(freshDock.renderOrderCardIDs)
+    ? freshDock.renderOrderCardIDs.filter(Boolean)
+    : [];
+  if (renderOrder.length) {
+    return renderOrder;
+  }
+  return (Array.isArray(freshDock.cards) ? freshDock.cards : [])
+    .map(relayCardID)
+    .filter(Boolean);
+}
+
 function relayHostIDs(relaySample) {
   const ids = new Set();
   for (const host of Array.isArray(relaySample?.freshDock?.hosts) ? relaySample.freshDock.hosts : []) {
@@ -330,6 +357,37 @@ function addFailure(failures, sample, code, message, detail = {}) {
 
 function rowFailureCode(source, suffix) {
   return source === "sweep" ? `dock_ui_sweep_${suffix}` : `dock_ui_${suffix}`;
+}
+
+function orderedSubsequence(values, reference) {
+  const referenceIndex = new Map();
+  reference.forEach((value, index) => {
+    if (!referenceIndex.has(value)) {
+      referenceIndex.set(value, index);
+    }
+  });
+
+  const filtered = values.filter((value) => referenceIndex.has(value));
+  for (let index = 1; index < filtered.length; index += 1) {
+    if (referenceIndex.get(filtered[index]) < referenceIndex.get(filtered[index - 1])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function projectedReferenceOrder(values, reference) {
+  const wanted = new Set(values);
+  return reference.filter((value) => wanted.has(value));
+}
+
+function orderedMessageCardIDs(detail) {
+  const cards = Array.isArray(detail?.messageCards) ? detail.messageCards : [];
+  const ids = cards.map((card) => card?.identifier).filter(Boolean);
+  if (ids.length) {
+    return ids;
+  }
+  return Array.isArray(detail?.messageCardIDs) ? detail.messageCardIDs.filter(Boolean) : [];
 }
 
 function automationSafeSegment(value) {
@@ -418,6 +476,14 @@ function combinedDetailForSample(sample) {
     messageCards: mergeUniqueElements(detail.messageCards || [], sweep.messageCards || []),
     requestElements: mergeUniqueElements(detail.requestElements || [], sweep.requestElements || []),
   };
+}
+
+function orderedCombinedMessageCardIDs(sample) {
+  const sweep = sample?.detailSweep || null;
+  if (sweep && Array.isArray(sweep.messageCardIDs) && sweep.messageCardIDs.length) {
+    return sweep.messageCardIDs.filter(Boolean);
+  }
+  return orderedMessageCardIDs(combinedDetailForSample(sample));
 }
 
 function detailValueObservedAtMS(sample, key) {
@@ -550,8 +616,10 @@ function evaluateDetailTransitionSample(sample, transition) {
   const header = parseSemicolonValue(detail.headerValue);
   const truth = transition.truth || {};
   const combinedDetail = combinedDetailForSample(sample);
+  let messageOrderChecks = 0;
   const actualHost = root.host || header.host || null;
   const actualThread = root.thread || header.thread || null;
+  const actualLiveState = root.live || header.live || null;
   const expectedDetailHost = truth.detailHostID || truth.logicalHostID || null;
   if (expectedDetailHost && actualHost !== expectedDetailHost) {
     addFailure(
@@ -585,6 +653,22 @@ function evaluateDetailTransitionSample(sample, transition) {
       ? detailValueObservedAtMS(sample, "root")
       : detailValueObservedAtMS(sample, "header"));
   }
+  if (truth.expectedLiveState && actualLiveState !== truth.expectedLiveState) {
+    addFailure(
+      failures,
+      sample,
+      "detail_ui_live_state_mismatch",
+      "Simulator detail UI live state does not match relay detail truth.",
+      {
+        expectedLiveState: truth.expectedLiveState,
+        actualLiveState,
+      }
+    );
+  } else if (truth.expectedLiveState) {
+    addEvidenceTime(root.live === truth.expectedLiveState
+      ? detailValueObservedAtMS(sample, "root")
+      : detailValueObservedAtMS(sample, "header"));
+  }
 
   const expectedEventCount = Number(truth.expectedMessageEventCount);
   if (Number.isFinite(expectedEventCount)) {
@@ -605,7 +689,10 @@ function evaluateDetailTransitionSample(sample, transition) {
     }
   }
 
-  for (const eventID of Array.isArray(truth.expectedMessageEventIDs) ? truth.expectedMessageEventIDs : []) {
+  const expectedMessageEventIDs = Array.isArray(truth.expectedMessageEventIDs)
+    ? truth.expectedMessageEventIDs
+    : [];
+  for (const eventID of expectedMessageEventIDs) {
     const expectedMessageCard = messageCardIdentifier(eventID);
     if (!detailHasIdentifier(combinedDetail, expectedMessageCard, combinedDetail.messageCardIDs || [])) {
       addFailure(
@@ -623,13 +710,41 @@ function evaluateDetailTransitionSample(sample, transition) {
     }
   }
 
+  if (expectedMessageEventIDs.length >= 2) {
+    const expectedMessageOrder = expectedMessageEventIDs.map(messageCardIdentifier);
+    const actualMessageOrder = orderedCombinedMessageCardIDs(sample)
+      .filter((identifier) => expectedMessageOrder.includes(identifier));
+    const hasAllExpected = expectedMessageOrder.every((identifier) => actualMessageOrder.includes(identifier));
+    if (hasAllExpected && !orderedSubsequence(actualMessageOrder, expectedMessageOrder)) {
+      messageOrderChecks = 1;
+      addFailure(
+        failures,
+        sample,
+        "detail_ui_message_order_mismatch",
+        "Simulator detail UI displayed opened-thread events in a different visual order than relay detail truth.",
+        {
+          expectedMessageOrder,
+          actualMessageOrder,
+        }
+      );
+    } else if (hasAllExpected) {
+      messageOrderChecks = 1;
+      addEvidenceTime(detailCollectionObservedAtMS(sample, "message"));
+    }
+  }
+
   if (truth.requestVisible) {
     const requestCardID = truth.requestCardID;
     const expectedRequestCard = requestCardIdentifier(requestCardID);
     const expectedMessageCard = messageCardIdentifier(requestCardID);
     const hasRequestCard = detailHasIdentifier(combinedDetail, expectedRequestCard, combinedDetail.requestCardIDs || []);
-    const hasMessageEvent = detailMessageEventCount(detail) === null || detailMessageEventCount(detail) > 0;
-    if (!hasMessageEvent && !detailHasIdentifier(combinedDetail, expectedMessageCard, combinedDetail.messageCardIDs || [])) {
+    const hasRequestMessageCard = detailHasIdentifier(combinedDetail, expectedMessageCard, combinedDetail.messageCardIDs || []);
+    const expectsExactRequestMessageCard = (Array.isArray(truth.expectedMessageEventIDs) ? truth.expectedMessageEventIDs : [])
+      .includes(requestCardID);
+    const actualEventCount = detailMessageEventCount(detail);
+    const requestEventCountProven = Number.isFinite(expectedEventCount)
+      && actualEventCount === expectedEventCount;
+    if (!hasRequestMessageCard && expectsExactRequestMessageCard) {
       addFailure(
         failures,
         sample,
@@ -640,11 +755,23 @@ function evaluateDetailTransitionSample(sample, transition) {
           expectedMessageCard,
         }
       );
+    } else if (!hasRequestMessageCard && !requestEventCountProven) {
+      addFailure(
+        failures,
+        sample,
+        "detail_ui_request_message_unproven",
+        "Simulator detail UI did not prove the server request event row by exact row id or exact event count.",
+        {
+          requestCardID,
+          expectedMessageCard,
+          expectedEventCount: Number.isFinite(expectedEventCount) ? expectedEventCount : null,
+          actualEventCount,
+        }
+      );
     } else {
-      addEvidenceTime(detailIdentifierObservedAtMS(sample, expectedMessageCard));
-      if (hasMessageEvent) {
-        addEvidenceTime(detailValueObservedAtMS(sample, "messageList"));
-      }
+      addEvidenceTime(hasRequestMessageCard
+        ? detailIdentifierObservedAtMS(sample, expectedMessageCard)
+        : detailValueObservedAtMS(sample, "messageList"));
     }
     if (!hasRequestCard) {
       addFailure(
@@ -685,6 +812,7 @@ function evaluateDetailTransitionSample(sample, transition) {
     failures,
     observedAt: isoFromMS(observedAtMs),
     observedAtMs,
+    messageOrderChecks,
   };
 }
 
@@ -770,6 +898,49 @@ function evaluateDockRows({ sample, rows, relayCards, failures, source }) {
   return seenKeys;
 }
 
+function rowRelayKey(row) {
+  const parsed = parseSemicolonValue(row?.value || "");
+  if (!parsed.host || !parsed.thread) {
+    return null;
+  }
+  return `${parsed.host}::${parsed.thread}`;
+}
+
+function evaluateDockRowOrder({ sample, rows, relaySample, failures, source }) {
+  const expectedOrder = relayRenderOrderCardIDs(relaySample);
+  const actualOrder = rows.map(rowRelayKey).filter(Boolean);
+  if (expectedOrder.length < 2 || actualOrder.length < 2) {
+    return 0;
+  }
+
+  const comparableActual = actualOrder.filter((key) => expectedOrder.includes(key));
+  if (comparableActual.length < 2) {
+    return 0;
+  }
+
+  const expectedProjectedOrder = projectedReferenceOrder(comparableActual, expectedOrder);
+  const orderMatches = source === "sweep"
+    ? comparableActual.length === expectedOrder.length
+      && expectedProjectedOrder.length === expectedOrder.length
+      && comparableActual.every((key, index) => key === expectedProjectedOrder[index])
+    : orderedSubsequence(comparableActual, expectedOrder);
+
+  if (!orderMatches) {
+    addFailure(
+      failures,
+      sample,
+      rowFailureCode(source, "order_mismatch"),
+      "Rendered Dock rows are present but not in relay render order.",
+      {
+        source,
+        expectedOrder,
+        actualOrder: comparableActual,
+      }
+    );
+  }
+  return 1;
+}
+
 function evaluateUISample(sample, relaySample) {
   const failures = [];
   const dockSweep = sample?.dockSweep && Array.isArray(sample.dockSweep.rows) ? sample.dockSweep : null;
@@ -782,6 +953,8 @@ function evaluateUISample(sample, relaySample) {
       rowCount: Array.isArray(sample.dockRows) ? sample.dockRows.length : 0,
       sweepRowCount: dockSweep ? dockSweep.rows.length : null,
       sweepStepCount: dockSweep ? dockSweep.stepCount ?? null : null,
+      visibleOrderChecks: 0,
+      sweepOrderChecks: 0,
       uiRootRows: parseRootRowCount(sample.dockRootValue || ""),
       relayRowCount: null,
       failures,
@@ -814,12 +987,27 @@ function evaluateUISample(sample, relaySample) {
   }
 
   evaluateDockRows({ sample, rows, relayCards, failures, source: "visible" });
+  const visibleOrderChecks = evaluateDockRowOrder({
+    sample,
+    rows,
+    relaySample,
+    failures,
+    source: "visible",
+  });
 
+  let sweepOrderChecks = 0;
   if (!detailOnlySample && dockSweep) {
     const sweepSeenKeys = evaluateDockRows({
       sample,
       rows: sweepRows,
       relayCards,
+      failures,
+      source: "sweep",
+    });
+    sweepOrderChecks = evaluateDockRowOrder({
+      sample,
+      rows: sweepRows,
+      relaySample,
       failures,
       source: "sweep",
     });
@@ -917,6 +1105,8 @@ function evaluateUISample(sample, relaySample) {
     sweepRowCount: dockSweep ? sweepRows.length : null,
     sweepStepCount: dockSweep ? dockSweep.stepCount ?? null : null,
     sweepExpectedRootRows: dockSweep ? dockSweep.expectedRootRows ?? null : null,
+    visibleOrderChecks,
+    sweepOrderChecks,
     uiRootRows,
     relayRowCount: Number.isFinite(relayRowCount) ? relayRowCount : null,
     failures,
@@ -1075,6 +1265,9 @@ function evaluateDetailTransitionCoverage({ uiSamples, transitions, maxUiLagMs }
         || firstPassing?.sample?.sampledAt
         || null,
       observedLagMs,
+      messageOrderChecks: evaluations.reduce((count, entry) => (
+        count + Number(entry.evaluation.messageOrderChecks || 0)
+      ), 0),
       ok: Boolean(firstPassing) && observedLagMs <= maxUiLagMs,
       failures: evaluations.flatMap((entry) => entry.evaluation.failures),
     };
@@ -1133,7 +1326,7 @@ function ignoredScenarioWarmupSampleIndexes(uiSamples, scenarioTransitionCoverag
   return ignored;
 }
 
-function buildRenderedUIReport({ relayReport, uiSamples, maxUiLagMs = DEFAULT_MAX_UI_LAG_MS }) {
+function buildRenderedUIReport({ relayReport, uiSamples, maxUiLagMs = DEFAULT_MAX_UI_LAG_MS, proofRunID = null }) {
   const failures = [];
   const transitions = scenarioTransitionTruths(relayReport);
   const detailTransitions = detailTransitionTruths(relayReport);
@@ -1215,9 +1408,11 @@ function buildRenderedUIReport({ relayReport, uiSamples, maxUiLagMs = DEFAULT_MA
   const report = {
     schemaVersion: 1,
     kind: "codex-dock-simulator-ui-sync-proof",
+    proofRunID: proofRunID || relayReport.proofRunID || null,
     startedAt: uiSamples[0]?.sampledAt || null,
     endedAt: uiSamples.at(-1)?.sampledAt || null,
     relayReport: {
+      proofRunID: relayReport.proofRunID || proofRunID || null,
       startedAt: relayReport.startedAt || null,
       endedAt: relayReport.endedAt || null,
       relayUrl: relayReport.relayUrl || null,
@@ -1241,9 +1436,14 @@ function buildRenderedUIReport({ relayReport, uiSamples, maxUiLagMs = DEFAULT_MA
       displayedRowChecks: evaluations.reduce((count, evaluation) => count + evaluation.rowCount, 0),
       checkpointSweepCount: uiSamples.filter((sample) => sample.dockSweep).length,
       checkpointSweepRowChecks: evaluations.reduce((count, evaluation) => count + (evaluation.sweepRowCount || 0), 0),
+      dockVisibleOrderChecks: evaluations.reduce((count, evaluation) => count + (evaluation.visibleOrderChecks || 0), 0),
+      dockSweepOrderChecks: evaluations.reduce((count, evaluation) => count + (evaluation.sweepOrderChecks || 0), 0),
       detailSampleCount: uiSamples.filter((sample) => sample.detail).length,
       detailSweepCount: uiSamples.filter((sample) => sample.detailSweep).length,
       detailSweepMessageCardChecks: uiSamples.reduce((count, sample) => count + detailSweepMessageCardCount(sample), 0),
+      detailMessageOrderChecks: detailTransitionCoverage.checks.reduce((count, check) => (
+        count + Number(check.messageOrderChecks || 0)
+      ), 0),
       scenarioWarmupFailureSamplesIgnored: ignoredScenarioWarmupSamples.size,
       uiLag,
       bestConsecutivePassingSamples,
@@ -1280,9 +1480,12 @@ function markdownSummary(report) {
   lines.push(`- Displayed row checks: ${report.summary.displayedRowChecks}`);
   lines.push(`- Checkpoint sweeps: ${report.summary.checkpointSweepCount}`);
   lines.push(`- Checkpoint sweep row checks: ${report.summary.checkpointSweepRowChecks}`);
+  lines.push(`- Dock visible order checks: ${report.summary.dockVisibleOrderChecks}`);
+  lines.push(`- Dock sweep order checks: ${report.summary.dockSweepOrderChecks}`);
   lines.push(`- Detail samples: ${report.summary.detailSampleCount}`);
   lines.push(`- Detail sweeps: ${report.summary.detailSweepCount}`);
   lines.push(`- Detail sweep message-card checks: ${report.summary.detailSweepMessageCardChecks}`);
+  lines.push(`- Detail message order checks: ${report.summary.detailMessageOrderChecks}`);
   lines.push(`- UI lag budget: ${report.config.maxUiLagMs} ms`);
   lines.push(`- UI lag observed: ${report.summary.uiLag?.observedLagMs ?? "not scored"} ms`);
   lines.push(`- UI lag converged: ${report.summary.uiLag?.converged === undefined ? "unknown" : String(report.summary.uiLag.converged)}`);
@@ -1307,6 +1510,8 @@ function markdownSummary(report) {
 }
 
 function writeReportFiles(report, options) {
+  finalizeProofReport(report);
+  assertProofReport(report);
   if (options.jsonOut) {
     fs.mkdirSync(path.dirname(options.jsonOut), { recursive: true });
     fs.writeFileSync(options.jsonOut, `${JSON.stringify(report, null, 2)}\n`, "utf8");
@@ -1330,6 +1535,7 @@ async function main() {
     relayReport: readJSON(options.relayReport),
     uiSamples: readJSONL(options.uiSamples),
     maxUiLagMs: options.maxUiLagMs,
+    proofRunID: proofRunIDForReportPath(options.jsonOut || options.summaryOut || options.uiSamples),
   });
   writeReportFiles(report, options);
   process.stdout.write(`${JSON.stringify({

@@ -11,14 +11,11 @@ public final class DockStore: ObservableObject {
     let screenStore: DockScreenStore
 
     private var hosts: [DockHostConfiguration]
-    private let streamClient: any ThreadCardStreamConnecting
     private let commandEngine: ClientCommandEngine
     private let metadataEngine: LocalMetadataEngine
     private let now: @Sendable () -> Date
-    private let streamReconnectDelay: Duration
     private var dataEngine: DockDataEngine?
-    private var streamConnections: [String: any ThreadCardStreamConnection] = [:]
-    private var streamTasks: [String: Task<Void, Never>] = [:]
+    private var streamLifecycle: ThreadCardStreamLifecycle?
     private var isLoading = false
     private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
     private weak var connectivityReporter: (any AppConnectivityReporting)?
@@ -26,6 +23,13 @@ public final class DockStore: ObservableObject {
 
     public var hostConfiguration: DockHostConfiguration? {
         hosts.first
+    }
+
+    public var currentDockSnapshot: DockSnapshot? {
+        guard case .loaded(let snapshot) = state else {
+            return nil
+        }
+        return snapshot
     }
 
     public func hostConfiguration(for hostID: String) -> DockHostConfiguration? {
@@ -59,18 +63,18 @@ public final class DockStore: ObservableObject {
         archiver: any ThreadArchiveCommanding = AppServerThreadCommandClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval,
+        streamHeartbeatTimeout: Duration = CodexDockConstants.Dock.streamHeartbeatTimeout,
         connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         let hostViewModels = [DockHostViewModel(host: host)]
         self.hosts = [host]
-        self.streamClient = streamClient
         self.commandEngine = ClientCommandEngine(archiver: archiver)
         self.metadataEngine = LocalMetadataEngine(store: metadataStore, now: now)
-        self.streamReconnectDelay = streamReconnectDelay
         self.connectivityEventSink = connectivityEventSink
         self.now = now
         self.screenStore = DockScreenStore(hosts: hostViewModels, now: now)
+        self.streamLifecycle = nil
         if let registry = try? HostRegistry(hosts: [host]) {
             self.dataEngine = DockDataEngine(registry: registry)
         } else {
@@ -78,6 +82,15 @@ public final class DockStore: ObservableObject {
         }
         self.state = .idle(hostViewModels)
         self.screenStore.start()
+        self.streamLifecycle = ThreadCardStreamLifecycle(
+            view: .dock,
+            streamClient: streamClient,
+            streamReconnectDelay: streamReconnectDelay,
+            streamHeartbeatTimeout: streamHeartbeatTimeout,
+            logger: DockLog.dock,
+            logName: "dock",
+            delegate: self
+        )
     }
 
     public init(
@@ -86,21 +99,30 @@ public final class DockStore: ObservableObject {
         archiver: any ThreadArchiveCommanding = AppServerThreadCommandClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval,
+        streamHeartbeatTimeout: Duration = CodexDockConstants.Dock.streamHeartbeatTimeout,
         connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         let hostViewModels = registry.hosts.map(DockHostViewModel.init)
         self.hosts = registry.hosts
-        self.streamClient = streamClient
         self.commandEngine = ClientCommandEngine(archiver: archiver)
         self.metadataEngine = LocalMetadataEngine(store: metadataStore, now: now)
-        self.streamReconnectDelay = streamReconnectDelay
         self.connectivityEventSink = connectivityEventSink
         self.now = now
         self.screenStore = DockScreenStore(hosts: hostViewModels, now: now)
         self.dataEngine = DockDataEngine(registry: registry)
+        self.streamLifecycle = nil
         self.state = .idle(hostViewModels)
         self.screenStore.start()
+        self.streamLifecycle = ThreadCardStreamLifecycle(
+            view: .dock,
+            streamClient: streamClient,
+            streamReconnectDelay: streamReconnectDelay,
+            streamHeartbeatTimeout: streamHeartbeatTimeout,
+            logger: DockLog.dock,
+            logName: "dock",
+            delegate: self
+        )
     }
 
     public init(
@@ -109,29 +131,25 @@ public final class DockStore: ObservableObject {
         archiver: any ThreadArchiveCommanding = AppServerThreadCommandClient(),
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval,
+        streamHeartbeatTimeout: Duration = CodexDockConstants.Dock.streamHeartbeatTimeout,
         connectivityEventSink: ConnectivityEventSink? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         let message = error.localizedDescription
         self.hosts = []
-        self.streamClient = streamClient
         self.commandEngine = ClientCommandEngine(archiver: archiver)
         self.metadataEngine = LocalMetadataEngine(store: metadataStore, now: now)
-        self.streamReconnectDelay = streamReconnectDelay
         self.connectivityEventSink = connectivityEventSink
         self.now = now
         self.screenStore = DockScreenStore(configurationError: message)
         self.dataEngine = nil
+        self.streamLifecycle = nil
         self.state = .configurationError(message)
         self.screenStore.start()
     }
 
-    deinit {
-        streamTasks.values.forEach { $0.cancel() }
-    }
-
     public func updateRegistry(_ registry: HostRegistry) async {
-        await closeStreams()
+        await streamLifecycle?.closeStreams()
         hosts = registry.hosts
         if let dataEngine {
             await dataEngine.updateRegistry(registry)
@@ -275,193 +293,7 @@ public final class DockStore: ObservableObject {
     }
 
     private func synchronizeStreams() async {
-        let validHostIDs = Set(hosts.map(\.id))
-        for hostID in streamConnections.keys where !validHostIDs.contains(hostID) {
-            streamTasks[hostID]?.cancel()
-            streamTasks[hostID] = nil
-            let connection = streamConnections.removeValue(forKey: hostID)
-            await connection?.close()
-        }
-
-        for host in hosts {
-            if let connection = streamConnections[host.id] {
-                await resync(host: host, connection: connection)
-            } else {
-                await openStream(host: host)
-            }
-        }
-    }
-
-    private func openStream(host: DockHostConfiguration) async {
-        guard let dataEngine else {
-            return
-        }
-
-        await dataEngine.markChecking(host: host)
-        await publishSnapshot()
-        var openedConnection: (any ThreadCardStreamConnection)?
-        do {
-            let connection = try await streamClient.connect(to: host)
-            openedConnection = connection
-            streamConnections[host.id] = connection
-            let snapshot = try await connection.subscribe()
-            try await applySubscribedSnapshot(snapshot, host: host, connection: connection)
-            startUpdateTask(host: host, connection: connection)
-            await migrateMetadataHostAliases()
-            await publishSnapshot()
-        } catch {
-            streamTasks[host.id]?.cancel()
-            streamTasks[host.id] = nil
-            streamConnections[host.id] = nil
-            await openedConnection?.close()
-            DockLog.dock.warning("dock stream open failed host_id=\(host.id, privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-            await dataEngine.markFailure(Self.mapRequestFailure(error), host: host)
-            await publishSnapshot()
-        }
-    }
-
-    private func resync(host: DockHostConfiguration, connection: any ThreadCardStreamConnection) async {
-        guard let dataEngine else {
-            return
-        }
-
-        do {
-            let snapshot = try await connection.resync()
-            try await applyResyncSnapshot(snapshot, host: host)
-            await migrateMetadataHostAliases()
-            await publishSnapshot()
-            let rowCount = await dataEngine.rowCount(for: host)
-            DockLog.dock.notice("dock stream resync finished host_id=\(host.id, privacy: .public) seq=\(snapshot.seq, privacy: .public) rows=\(rowCount, privacy: .public)")
-        } catch {
-            DockLog.dock.warning("dock stream resync failed host_id=\(host.id, privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-            await dataEngine.markFailure(Self.mapRequestFailure(error), host: host)
-            await publishSnapshot()
-        }
-    }
-
-    private func startUpdateTask(host: DockHostConfiguration, connection: any ThreadCardStreamConnection) {
-        streamTasks[host.id]?.cancel()
-        streamTasks[host.id] = Task { [weak self, host, connection] in
-            do {
-                for try await update in connection.updates() {
-                    await self?.handleStreamUpdate(update, host: host, connection: connection)
-                }
-                if !Task.isCancelled {
-                    await self?.handleStreamFailure(
-                        DockRequestFailure.offline("Relay stream closed"),
-                        host: host,
-                        connection: connection
-                    )
-                }
-            } catch is CancellationError {
-                return
-            } catch {
-                await self?.handleStreamFailure(error, host: host, connection: connection)
-            }
-        }
-    }
-
-    private func handleStreamUpdate(
-        _ update: ThreadCardStreamUpdateDTO,
-        host: DockHostConfiguration,
-        connection: any ThreadCardStreamConnection
-    ) async {
-        guard let dataEngine else {
-            return
-        }
-
-        let result = await dataEngine.applyUpdate(update, host: host)
-        if case .needsResync(let reason) = result {
-            DockLog.dock.warning("dock stream resync needed host_id=\(host.id, privacy: .public) reason=\(reason.rawValue, privacy: .public) update_kind=\(update.kind.rawValue, privacy: .public) seq=\(update.seq, privacy: .public)")
-            await resync(host: host, connection: connection)
-        } else {
-            await migrateMetadataHostAliases()
-            await publishSnapshot()
-            let rowCount = await dataEngine.rowCount(for: host)
-            DockLog.dock.info("dock stream update applied host_id=\(host.id, privacy: .public) update_kind=\(update.kind.rawValue, privacy: .public) seq=\(update.seq, privacy: .public) rows=\(rowCount, privacy: .public)")
-            if let freshness = update.freshness,
-               freshness.status != .fresh,
-               rowCount > 0 {
-                DockLog.dock.notice("dock stream rows retained host_id=\(host.id, privacy: .public) freshness=\(freshness.status.rawValue, privacy: .public) rows=\(rowCount, privacy: .public)")
-            }
-        }
-    }
-
-    private func applySubscribedSnapshot(
-        _ snapshot: ThreadCardStreamUpdateDTO,
-        host: DockHostConfiguration,
-        connection: any ThreadCardStreamConnection
-    ) async throws {
-        guard let dataEngine else {
-            return
-        }
-
-        switch await dataEngine.applySnapshot(snapshot, host: host) {
-        case .applied:
-            return
-        case .needsResync(let reason):
-            DockLog.dock.warning("dock stream subscribe snapshot rejected host_id=\(host.id, privacy: .public) reason=\(reason.rawValue, privacy: .public) seq=\(snapshot.seq, privacy: .public)")
-            let resynced = try await connection.resync()
-            try await applyResyncSnapshot(resynced, host: host)
-        }
-    }
-
-    private func applyResyncSnapshot(
-        _ snapshot: ThreadCardStreamUpdateDTO,
-        host: DockHostConfiguration
-    ) async throws {
-        guard let dataEngine else {
-            return
-        }
-
-        switch await dataEngine.applySnapshot(snapshot, host: host) {
-        case .applied:
-            return
-        case .needsResync(let reason):
-            throw DockRequestFailure.error("Dock stream resync returned incompatible data (\(reason.rawValue)).")
-        }
-    }
-
-    private func handleStreamFailure(
-        _ error: Error,
-        host: DockHostConfiguration,
-        connection: any ThreadCardStreamConnection
-    ) async {
-        DockLog.dock.warning("dock stream update failed host_id=\(host.id, privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-        streamConnections[host.id] = nil
-        streamTasks[host.id] = nil
-        await connection.close()
-        await dataEngine?.markFailure(Self.mapRequestFailure(error), host: host)
-        await publishSnapshot()
-        let rowCount = await dataEngine?.rowCount(for: host) ?? 0
-        if rowCount > 0 {
-            DockLog.dock.notice("dock stream rows retained host_id=\(host.id, privacy: .public) freshness=offline rows=\(rowCount, privacy: .public)")
-        }
-        scheduleReconnect(host: host)
-    }
-
-    private func scheduleReconnect(host: DockHostConfiguration) {
-        guard hosts.contains(where: { $0.id == host.id }) else {
-            return
-        }
-        streamTasks[host.id] = Task { [weak self, host] in
-            do {
-                try await Task.sleep(for: self?.streamReconnectDelay ?? CodexDockConstants.Dock.autoRefreshInterval)
-            } catch {
-                return
-            }
-            await self?.openStream(host: host)
-        }
-    }
-
-    private func closeStreams() async {
-        streamTasks.values.forEach { $0.cancel() }
-        streamTasks = [:]
-        let connections = streamConnections
-        streamConnections = [:]
-        for connection in connections.values {
-            await connection.close()
-        }
+        await streamLifecycle?.synchronizeStreams(hosts: hosts)
     }
 
     private func publishSnapshot() async {
@@ -604,27 +436,6 @@ public final class DockStore: ObservableObject {
         }
     }
 
-    private nonisolated static func mapRequestFailure(_ error: Error) -> DockRequestFailure {
-        if let failure = error as? DockRequestFailure {
-            return failure
-        }
-        if let clientError = error as? AppServerClientError {
-            switch clientError {
-            case .disconnected, .notConnected, .requestTimedOut, .transport:
-                return .offline(clientError.localizedDescription)
-            case .duplicateRequestID,
-                 .malformedMessage,
-                 .requestCancelled,
-                 .responseDecoding,
-                 .server,
-                 .unexpectedServerRequest,
-                 .unmatchedResponse:
-                return .error(clientError.localizedDescription)
-            }
-        }
-        return .error(error.localizedDescription)
-    }
-
     private func persistMetadataChange(
         logLabel: String,
         hostID: String?,
@@ -644,4 +455,48 @@ public final class DockStore: ObservableObject {
         }
     }
 
+}
+
+extension DockStore: DockCardStateProviding {}
+
+extension DockStore: ThreadCardStreamLifecycleDelegate {
+    func cardStreamLifecycleMarkChecking(host: DockHostConfiguration) async {
+        await dataEngine?.markChecking(host: host)
+    }
+
+    func cardStreamLifecycleMarkFailure(_ failure: DockRequestFailure, host: DockHostConfiguration) async {
+        await dataEngine?.markFailure(failure, host: host)
+    }
+
+    func cardStreamLifecycleApplySnapshot(
+        _ update: ThreadCardStreamUpdateDTO,
+        host: DockHostConfiguration
+    ) async -> ThreadCardTableApplyResult {
+        guard let dataEngine else {
+            return .needsResync(.streamContract)
+        }
+        return await dataEngine.applySnapshot(update, host: host)
+    }
+
+    func cardStreamLifecycleApplyUpdate(
+        _ update: ThreadCardStreamUpdateDTO,
+        host: DockHostConfiguration
+    ) async -> ThreadCardTableApplyResult {
+        guard let dataEngine else {
+            return .needsResync(.streamContract)
+        }
+        return await dataEngine.applyUpdate(update, host: host)
+    }
+
+    func cardStreamLifecycleRowCount(for host: DockHostConfiguration) async -> Int {
+        await dataEngine?.rowCount(for: host) ?? 0
+    }
+
+    func cardStreamLifecyclePublishSnapshot() async {
+        await publishSnapshot()
+    }
+
+    func cardStreamLifecycleMigrateMetadataHostAliases() async {
+        await migrateMetadataHostAliases()
+    }
 }

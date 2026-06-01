@@ -15,22 +15,31 @@ public enum SortDirection: String, Codable, Equatable, Sendable {
     case desc
 }
 
+public enum ThreadTurnItemsView: String, Codable, Equatable, Sendable {
+    case notLoaded
+    case summary
+    case full
+}
+
 public struct ThreadTurnsListParams: Codable, Equatable, Sendable {
     public let threadId: String
     public let cursor: String?
     public let limit: Int?
     public let sortDirection: SortDirection?
+    public let itemsView: ThreadTurnItemsView?
 
     public init(
         threadId: String,
         cursor: String? = nil,
         limit: Int? = nil,
-        sortDirection: SortDirection? = nil
+        sortDirection: SortDirection? = nil,
+        itemsView: ThreadTurnItemsView? = nil
     ) {
         self.threadId = threadId
         self.cursor = cursor
         self.limit = limit
         self.sortDirection = sortDirection
+        self.itemsView = itemsView
     }
 }
 

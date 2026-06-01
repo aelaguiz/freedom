@@ -46,6 +46,45 @@ final class DockStoreTestsProjection: XCTestCase {
         XCTAssertEqual(projection.rows.map(\.id.threadID), ["home-old", "amir-new"])
     }
 
+    func testNewestProjectionUsesStableRowIDWhenRelayOrderKeysTie() {
+        let hostA = makeProjectionHost(host: "sim-multi-host-a.local")
+        let hostB = makeProjectionHost(host: "sim-multi-host-b.local")
+        let tiedOrderKey = "9007197482258991:sim-shared-thread-id"
+        let snapshot = makeSnapshot(
+            rows: [
+                makeRow(
+                    host: hostB,
+                    threadID: "sim-shared-thread-id",
+                    title: "Simulator shared id from host B",
+                    branch: "main",
+                    status: .dormant,
+                    lastActivity: 200,
+                    orderKey: tiedOrderKey
+                ),
+                makeRow(
+                    host: hostA,
+                    threadID: "sim-shared-thread-id",
+                    title: "Simulator shared id from host A",
+                    branch: "main",
+                    status: .dormant,
+                    lastActivity: 200,
+                    orderKey: tiedOrderKey
+                )
+            ],
+            hosts: [hostA, hostB]
+        )
+
+        let projection = snapshot.project(options: .init(lens: .newest))
+
+        XCTAssertEqual(
+            projection.rows.map { "\($0.id.hostID)::\($0.id.threadID)" },
+            [
+                "sim-multi-host-a.local:4510::sim-shared-thread-id",
+                "sim-multi-host-b.local:4510::sim-shared-thread-id"
+            ]
+        )
+    }
+
     func testHostLensGroupsByHostAndPreservesNewestOrdering() {
         let amir = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
         let home = makeProjectionHost(host: "home.fairy-salmon.ts.net")

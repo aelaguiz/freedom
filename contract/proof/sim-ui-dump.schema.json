@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://codex-dock.local/contract/proof/sim-ui-dump.schema.json",
+  "title": "Codex Dock Simulator UI Dump",
+  "type": "object",
+  "required": ["schemaVersion", "kind", "status", "capturedAt", "finishedAt", "simulator", "app", "launchMode", "didRelaunch", "stateBefore", "stateAfter", "screenBefore", "screenAfter", "visibleElements"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "codex-dock-sim-ui-dump" },
+    "status": { "$ref": "#/definitions/status" },
+    "capturedAt": { "type": "string", "minLength": 1 },
+    "finishedAt": { "type": "string", "minLength": 1 },
+    "simulator": {
+      "type": "object",
+      "required": ["name", "udid"],
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "udid": { "type": "string", "minLength": 1 }
+      }
+    },
+    "app": {
+      "type": "object",
+      "required": ["bundleIdentifier"],
+      "additionalProperties": true,
+      "properties": {
+        "bundleIdentifier": { "type": "string", "minLength": 1 }
+      }
+    },
+    "launchMode": { "type": "string", "minLength": 1 },
+    "didRelaunch": { "type": "boolean" },
+    "stateBefore": { "type": "string" },
+    "stateAfter": { "type": "string" },
+    "screenBefore": { "enum": ["dock", "thread", "archive", "unknown"] },
+    "screenAfter": { "enum": ["dock", "thread", "archive", "unknown"] },
+    "visibleElements": { "type": "array" }
+  },
+  "definitions": {
+    "status": { "enum": ["pass", "fail", "blocked", "not_run"] }
+  }
+}

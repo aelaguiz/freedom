@@ -4,10 +4,10 @@
   "type": "module",
   "scripts": {
     "contract:generate": "node scripts/generate-dock-thread-card-contract.mjs",
-    "contract:check": "node scripts/check-dock-thread-card-contract.mjs",
+    "contract:check": "node scripts/check-dock-thread-card-contract.mjs && node scripts/check-proof-report-contracts.mjs",
     "dock-relay": "node -e \"console.error('Use rtk make services; scripts/dock-relay.mjs is launched by the Makefile-owned host service.'); process.exit(2)\"",
     "test": "npm run contract:check && npm run test:relay && npm run test:host-service",
-    "test:relay": "node --test scripts/dock-relay-card-contract.test.mjs scripts/dock-relay-observability.test.mjs scripts/dock-relay-realtime-transcription.test.mjs scripts/dock-relay-simulator-ui-sync-proof.test.mjs scripts/dock-relay-controlled-simulator-fixture.test.mjs scripts/dock-relay-controlled-simulator-matrix.test.mjs scripts/codex-dock-isolated-home.test.mjs",
+    "test:relay": "node --test scripts/dock-relay-card-contract.test.mjs scripts/dock-relay-observability.test.mjs scripts/dock-relay-state-subscriptions.test.mjs scripts/dock-relay-sync-audit.test.mjs scripts/dock-relay-thread-recovery.test.mjs scripts/dock-relay-realtime-transcription.test.mjs scripts/dock-relay-simulator-ui-sync-proof.test.mjs scripts/dock-relay-controlled-simulator-fixture.test.mjs scripts/dock-relay-controlled-simulator-matrix.test.mjs scripts/write-blocked-proof-report.test.mjs scripts/codex-dock-isolated-home.test.mjs",
     "test:host-service": "node --test scripts/codex-dock-host-service.test.mjs scripts/device-relay-config.test.mjs"
   },
   "dependencies": {

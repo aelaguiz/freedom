@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://codex-dock.local/contract/proof/simulator-ui-sync-proof.schema.json",
+  "title": "Codex Dock Simulator UI Sync Proof",
+  "type": "object",
+  "required": ["schemaVersion", "kind", "status", "proofRunID", "startedAt", "endedAt", "relayReport", "summary", "evaluations", "failures"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "codex-dock-simulator-ui-sync-proof" },
+    "status": { "$ref": "#/definitions/status" },
+    "proofRunID": { "type": "string", "minLength": 1 },
+    "startedAt": { "type": "string", "minLength": 1 },
+    "endedAt": { "type": "string", "minLength": 1 },
+    "relayReport": {
+      "type": "object",
+      "required": ["relayUrl", "clientPathOK"],
+      "additionalProperties": true,
+      "properties": {
+        "relayUrl": { "type": "string", "minLength": 1 },
+        "clientPathOK": { "type": ["boolean", "null"] }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["ok", "uiSampleCount", "relaySampleCount", "failures"],
+      "additionalProperties": true,
+      "properties": {
+        "ok": { "type": "boolean" },
+        "uiSampleCount": { "type": "number" },
+        "relaySampleCount": { "type": "number" },
+        "failures": { "type": "number" }
+      }
+    },
+    "evaluations": { "type": "array" },
+    "failures": { "type": "array" }
+  },
+  "definitions": {
+    "status": { "enum": ["pass", "fail", "blocked", "not_run"] }
+  }
+}

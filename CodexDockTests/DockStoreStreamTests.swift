@@ -150,6 +150,103 @@ final class DockStoreStreamTests: XCTestCase {
     }
 
     @MainActor
+    func testOlderStateGenerationRequestsResyncAndDoesNotReplaceRows() async throws {
+        let host = makeHost()
+        let connection = ManualThreadCardStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 5,
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Current row", updatedAt: 1_000)
+                ],
+                stateGeneration: 5
+            ),
+            resyncSnapshots: [
+                dockStreamSnapshot(
+                    host: host,
+                    epoch: "epoch-1",
+                    seq: 6,
+                    cards: [
+                        threadCardFixture(host: host, threadID: "thread-resynced", title: "Resynced after stale generation", updatedAt: 1_200)
+                    ],
+                    stateGeneration: 6
+                )
+            ]
+        )
+        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+
+        await store.load()
+        await connection.send(
+            ThreadCardStreamUpdateDTO(
+                kind: .delta,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                view: .dock,
+                stateGeneration: 4,
+                epoch: "epoch-1",
+                baseSeq: 5,
+                seq: 6,
+                upsertCards: [
+                    threadCardFixture(host: host, threadID: "older-generation", title: "Should not render", updatedAt: 1_300)
+                ],
+                deleteCardIDs: []
+            )
+        )
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.id.threadID) == ["thread-resynced"] }
+        ) else {
+            return XCTFail("Expected stale stateGeneration to resync, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.rows.map(\.title), ["Resynced after stale generation"])
+    }
+
+    @MainActor
+    func testNewEpochSnapshotCanReplaceHigherOldGeneration() async throws {
+        let host = makeHost()
+        let firstConnection = ManualThreadCardStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 10,
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-old", title: "Old epoch row", updatedAt: 1_000)
+                ],
+                stateGeneration: 10
+            )
+        )
+        let secondConnection = ManualThreadCardStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-2",
+                seq: 1,
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-new", title: "New epoch row", updatedAt: 1_200)
+                ],
+                stateGeneration: 1
+            )
+        )
+        let streamClient = SequencedManualThreadCardStreamClient(connections: [firstConnection, secondConnection])
+        let store = DockStore(
+            host: host,
+            streamClient: streamClient,
+            streamReconnectDelay: .milliseconds(10)
+        )
+
+        await store.load()
+        await firstConnection.finish()
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.id.threadID) == ["thread-new"] }
+        ) else {
+            return XCTFail("Expected new epoch snapshot to replace older high-generation state, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.rows.map(\.title), ["New epoch row"])
+    }
+
+    @MainActor
     func testHostResyncDoesNotClearOtherHostRows() async throws {
         let amir = makeHost()
         let home = makeHost(url: "ws://100.66.11.7:4510")
@@ -253,6 +350,38 @@ final class DockStoreStreamTests: XCTestCase {
     }
 
     @MainActor
+    func testMissingHeartbeatMarksConnectedHostStaleAndRetainsRows() async throws {
+        let host = makeHost()
+        let connection = ManualThreadCardStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Last good", updatedAt: 1_000)
+                ]
+            )
+        )
+        let store = DockStore(
+            host: host,
+            streamClient: ManualThreadCardStreamClient(connection: connection),
+            streamReconnectDelay: .seconds(1),
+            streamHeartbeatTimeout: .milliseconds(20)
+        )
+
+        await store.load()
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.hostStates.map(\.status) == [.partial(rowCount: 1, message: "Offline: Relay stream heartbeat timed out")] }
+        ) else {
+            return XCTFail("Expected missing heartbeat to retain rows and mark host stale, got \(store.state)")
+        }
+        XCTAssertTrue(snapshot.isPartial)
+        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["thread-a"])
+    }
+
+    @MainActor
     func testStreamDropsNonHumanCardsFromSnapshotsAndDeltas() async throws {
         let host = makeHost()
         let connection = ManualThreadCardStreamConnection(
@@ -304,10 +433,13 @@ final class DockStoreStreamTests: XCTestCase {
         XCTAssertEqual(updatedSnapshot.hostStates.map(\.status), [.loaded(rowCount: 2)])
     }
 
-    func testSnapshotCollectorKeepsTerminalIncompleteWindowPartialAfterDroppingNonHumanCards() async throws {
+    func testTerminalIncompleteWindowStaysPartialAfterDroppingNonHumanCards() async throws {
         let host = makeHost()
-        let connection = ManualThreadCardStreamConnection(
-            subscribeSnapshot: dockStreamSnapshot(
+        var table = ThreadCardTable()
+        table.reset(hosts: [host])
+
+        let result = table.applySnapshot(
+            dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
                 seq: 1,
@@ -318,17 +450,14 @@ final class DockStoreStreamTests: XCTestCase {
                 complete: false,
                 totalRows: 2,
                 window: DockStreamWindowDTO(offset: 0, limit: 2, rowCount: 2)
-            )
+            ),
+            host: host
         )
+        let snapshot = table.snapshot(hosts: [host], localMetadata: [:], now: Date.init)
 
-        let collection = try await ThreadCardStreamSnapshotCollector(
-            expectedView: .dock,
-            timeout: .milliseconds(100)
-        ).collect(from: connection)
-
-        XCTAssertEqual(collection.cards.map(\.threadID), ["human-final"])
-        XCTAssertFalse(collection.isComplete)
-        XCTAssertEqual(collection.hostLoadStatus, .partial(rowCount: 1, message: "Stream incomplete"))
+        XCTAssertEqual(result, .applied)
+        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["human-final"])
+        XCTAssertEqual(snapshot.hostStates.map(\.status), [.partial(rowCount: 1, message: "Showing 1 of 2")])
     }
 
     @MainActor

@@ -359,8 +359,10 @@ private struct DockCardProjectionProjector {
         // The relay owns card ordering. Swift may filter and group rows, but it
         // must not rebuild recency from timestamps or local status.
         if let lhsOrderKey = lhs.orderKey,
-           let rhsOrderKey = rhs.orderKey,
-           lhsOrderKey != rhsOrderKey {
+           let rhsOrderKey = rhs.orderKey {
+            if lhsOrderKey == rhsOrderKey {
+                return stableRowID(lhs) < stableRowID(rhs)
+            }
             return lhsOrderKey < rhsOrderKey
         }
         if lhs.orderKey != nil {
@@ -375,7 +377,7 @@ private struct DockCardProjectionProjector {
             return titleOrder == .orderedAscending
         }
 
-        return "\(lhs.id.hostID)::\(lhs.id.threadID)" < "\(rhs.id.hostID)::\(rhs.id.threadID)"
+        return stableRowID(lhs) < stableRowID(rhs)
     }
 
     private func pinnedRowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
@@ -397,7 +399,11 @@ private struct DockCardProjectionProjector {
             return lhsPinnedAt < rhsPinnedAt
         }
 
-        return "\(lhs.id.hostID)::\(lhs.id.threadID)" < "\(rhs.id.hostID)::\(rhs.id.threadID)"
+        return stableRowID(lhs) < stableRowID(rhs)
+    }
+
+    private func stableRowID(_ row: DockRowViewModel) -> String {
+        "\(row.id.hostID)::\(row.id.threadID)"
     }
 
     private func normalizedQuery(_ value: String) -> String {
