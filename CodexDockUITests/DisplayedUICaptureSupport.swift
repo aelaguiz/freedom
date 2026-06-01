@@ -241,24 +241,38 @@ extension XCUIApplication {
         }
         control.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
-        let label: String
+        let labels: [String]
         switch filter {
         case "all":
-            label = "All"
+            labels = ["All"]
         case "messages":
-            label = "Messages"
+            labels = ["Messages"]
+        case "userMessage":
+            labels = ["User"]
+        case "agentMessage":
+            labels = ["Agent"]
+        case "command":
+            labels = ["Command"]
+        case "output":
+            labels = ["Output"]
         case "request":
-            label = "Requests"
+            labels = ["Request", "Requests"]
+        case "system":
+            labels = ["System"]
+        case "unknown":
+            labels = ["Unknown"]
         default:
-            label = filter
+            labels = [filter]
         }
 
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let option = buttons[label].firstMatch
-            if option.exists {
-                option.tap()
-                return control.waitForDisplayedUIStringValue(matching: { $0 == expectedValue }, timeout: timeout)
+            for label in labels {
+                let option = buttons[label].firstMatch
+                if option.exists {
+                    option.tap()
+                    return control.waitForDisplayedUIStringValue(matching: { $0 == expectedValue }, timeout: timeout)
+                }
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         }
