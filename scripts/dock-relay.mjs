@@ -179,7 +179,12 @@ function isSessionActive(session, downstreamWs, generation) {
 
 function throwIfSessionInactive(session, downstreamWs, generation) {
   if (!isSessionActive(session, downstreamWs, generation)) {
-    throw new Error("downstream session closed");
+    throw relayError("downstream session closed", -32000, {
+      subsystem: "downstream",
+      reason: "downstream_session_closed",
+      cancelled: true,
+      retryable: false,
+    });
   }
 }
 

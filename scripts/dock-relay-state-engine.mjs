@@ -351,7 +351,7 @@ class RelayStateEngine {
         && Number(result.upsertCards?.length || 0) === Number(totalRows || 0);
       await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
         view: DOCK_VIEW,
-        baseSeq: Math.max(0, Number(result.seq) - 1),
+        baseSeq: result.baseSeq,
         seq: result.seq,
         freshness,
         upsertHosts: [host],
@@ -390,12 +390,12 @@ class RelayStateEngine {
       return result;
     } catch (error) {
       this.store.upsertHost(host);
-      this.store.markScopeStale(host.id, "active:interactiveDefault", error);
-      const seq = this.store.currentSeq();
+      const change = this.store.markScopeStale(host.id, "active:interactiveDefault", error);
+      const seq = change.seq;
       const totalRows = this.store.listDockCards({ hostID: host.id }).totalRows;
       await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
         view: DOCK_VIEW,
-        baseSeq: Math.max(0, seq - 1),
+        baseSeq: change.baseSeq,
         seq,
         freshness: this.store.freshnessForHost(host.id, { archived: false }),
         totalRows,
@@ -475,7 +475,7 @@ class RelayStateEngine {
         && this.store.cardTruthCompleteForHost(host.id, { archived: true });
       await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
         view: ARCHIVE_VIEW,
-        baseSeq: Math.max(0, Number(result.seq) - 1),
+        baseSeq: result.baseSeq,
         seq: result.seq,
         freshness,
         upsertHosts: [host],
@@ -495,12 +495,12 @@ class RelayStateEngine {
       return result;
     } catch (error) {
       this.store.upsertHost(host);
-      this.store.markScopeStale(host.id, "archived:interactiveDefault", error);
-      const seq = this.store.currentSeq();
+      const change = this.store.markScopeStale(host.id, "archived:interactiveDefault", error);
+      const seq = change.seq;
       const totalRows = this.store.listArchiveCards({ hostID: host.id }).totalRows;
       await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
         view: ARCHIVE_VIEW,
-        baseSeq: Math.max(0, seq - 1),
+        baseSeq: change.baseSeq,
         seq,
         freshness: this.store.freshnessForHost(host.id, { archived: true }),
         totalRows,
@@ -581,7 +581,7 @@ class RelayStateEngine {
     const result = archived
       ? this.store.listArchiveCards({ hostID: host.id, offset: 0, limit: 0 })
       : this.store.listDockCards({ hostID: host.id, offset: 0, limit: 0 });
-    const seq = this.store.currentSeq();
+    const seq = this.store.currentSeqForView(view);
     return {
       kind: "heartbeat",
       schemaVersion: 2,
@@ -715,8 +715,8 @@ class RelayStateEngine {
       schemaVersion: 2,
       epoch,
       baseSeq: null,
-      seq: this.store.currentSeq(),
-      stateGeneration: this.store.currentSeq(),
+      seq: this.store.currentSeqForView(view),
+      stateGeneration: this.store.currentSeqForView(view),
       view,
       complete,
       totalRows,
@@ -898,13 +898,13 @@ class RelayStateEngine {
     let nextOffset = Number(snapshot.window?.nextOffset || 0);
     const preferredLimit = Math.max(1, Number(snapshot.window?.limit || RELAY_STATE_DOCK_WINDOW_SIZE));
     while (Number.isInteger(nextOffset)) {
-      if (this.store.currentSeq() !== baseSeq) {
+      if (this.store.currentSeqForView(snapshot.view) !== baseSeq) {
         const restartSnapshot = await this.subscriptions.snapshot(snapshot.view);
         this.logger?.info?.("state.catchup_abandoned", {
           reason,
           hostId: host.id,
           baseSeq,
-          currentSeq: this.store.currentSeq(),
+          currentSeq: this.store.currentSeqForView(snapshot.view),
           restartedSeq: restartSnapshot?.seq ?? null,
         });
         sendUpdate(restartSnapshot, { scheduleCatchup: false });

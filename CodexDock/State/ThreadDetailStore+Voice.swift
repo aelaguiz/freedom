@@ -341,9 +341,6 @@ extension ThreadDetailStore {
         let voiceCaptureEngine = voiceCaptureEngine
         voiceCaptureTask = Task.detached(priority: .userInitiated) { [weak self, captureSession, transcriptionSession, voiceCaptureEngine] in
             let startedAt = Date()
-            guard let self else {
-                return
-            }
             let summary: VoiceForwardingSummary
             do {
                 summary = try await voiceCaptureEngine.forwardAudio(
@@ -351,7 +348,7 @@ extension ThreadDetailStore {
                     to: transcriptionSession
                 )
             } catch let failure as VoiceCaptureForwardingFailure {
-                await self.handleVoiceCaptureAppendFailure(
+                await self?.handleVoiceCaptureAppendFailure(
                     failure.error,
                     sessionID: transcriptionSession.id,
                     summary: failure.summary,
@@ -360,7 +357,7 @@ extension ThreadDetailStore {
                 )
                 return
             } catch {
-                await self.handleVoiceCaptureAppendFailure(
+                await self?.handleVoiceCaptureAppendFailure(
                     error,
                     sessionID: transcriptionSession.id,
                     summary: VoiceForwardingSummary(),
@@ -369,7 +366,7 @@ extension ThreadDetailStore {
                 )
                 return
             }
-            await self.handleVoiceCaptureStreamEnded(
+            await self?.handleVoiceCaptureStreamEnded(
                 sessionID: transcriptionSession.id,
                 summary: summary,
                 durationMS: DockLog.milliseconds(since: startedAt)

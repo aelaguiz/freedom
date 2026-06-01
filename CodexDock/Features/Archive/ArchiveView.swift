@@ -47,6 +47,7 @@ public struct ArchiveView: View {
     @State private var selectedHostID: String?
     @State private var dateFilter: DateFilter = .all
     @State private var selectedDetailRow: DockRowViewModel?
+    @State private var selectedDetailStore: ThreadDetailStore?
     @State private var isSelectionMode = false
     @State private var selectedRowIDs: Set<HostScopedThreadID> = []
     @State private var isBatchRestoring = false
@@ -97,6 +98,9 @@ public struct ArchiveView: View {
             }
             .navigationDestination(isPresented: detailNavigationBinding) {
                 selectedDetailDestination
+            }
+            .onChange(of: screenStore.state) { _, state in
+                syncSelectedDetail(with: state)
             }
         }
         .accessibilityElement(children: .contain)
@@ -283,7 +287,7 @@ public struct ArchiveView: View {
                 .codexAutomationID(AutomationID.Archive.selectionToggle(hostID: row.id.hostID, threadID: row.id.threadID))
             } else {
                 Button {
-                    selectedDetailRow = row
+                    openDetail(row: row)
                 } label: {
                     DockRowView(
                         row: row,
@@ -310,7 +314,7 @@ public struct ArchiveView: View {
         }
         .contextMenu {
             Button {
-                selectedDetailRow = row
+                openDetail(row: row)
             } label: {
                 Label("Open", systemImage: "arrow.up.right.square")
             }
@@ -336,6 +340,7 @@ public struct ArchiveView: View {
             set: { isPresented in
                 if !isPresented {
                     selectedDetailRow = nil
+                    selectedDetailStore = nil
                 }
             }
         )
@@ -343,16 +348,8 @@ public struct ArchiveView: View {
 
     @ViewBuilder
     private var selectedDetailDestination: some View {
-        if let selectedDetailRow,
-           let host = store.hostConfiguration(for: selectedDetailRow) {
-            SessionDetailView(
-                store: ThreadDetailStore(
-                    host: host,
-                    row: selectedDetailRow,
-                    factory: threadDetailFactory,
-                    hostIdentityResolver: currentSnapshot?.hostIdentityResolver
-                )
-            )
+        if let selectedDetailStore {
+            SessionDetailView(store: selectedDetailStore)
         } else {
             DockMessageView(
                 icon: "exclamationmark.triangle",
@@ -362,8 +359,47 @@ public struct ArchiveView: View {
         }
     }
 
+    private func openDetail(row: DockRowViewModel) {
+        selectedDetailRow = row
+        guard let host = store.hostConfiguration(for: row) else {
+            selectedDetailStore = nil
+            return
+        }
+        selectedDetailStore = makeThreadDetailStore(host: host, row: row)
+    }
+
+    private func syncSelectedDetail(with state: ArchiveStoreState) {
+        guard let selectedDetailRow,
+              let selectedDetailStore,
+              let snapshot = snapshot(from: state),
+              let updatedRow = snapshot.sections.flatMap(\.rows).first(where: { $0.id == selectedDetailRow.id }) else {
+            return
+        }
+
+        self.selectedDetailRow = updatedRow
+        // Archive uses the same detail freshness rule as Dock: card rows can
+        // invalidate an open Thread Detail, but the detail rereads history.
+        selectedDetailStore.observeDockRowUpdate(updatedRow)
+    }
+
+    private func makeThreadDetailStore(
+        host: DockHostConfiguration,
+        row: DockRowViewModel
+    ) -> ThreadDetailStore {
+        ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: threadDetailFactory,
+            hostIdentityResolver: currentSnapshot?.hostIdentityResolver
+        )
+    }
+
     private var currentSnapshot: ArchiveSnapshot? {
-        switch screenStore.state {
+        snapshot(from: screenStore.state)
+    }
+
+    private func snapshot(from state: ArchiveStoreState) -> ArchiveSnapshot? {
+        switch state {
         case .loaded(let snapshot), .empty(let snapshot), .unavailable(let snapshot, _):
             return snapshot
         case .configurationError, .idle, .loading:

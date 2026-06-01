@@ -109,13 +109,21 @@ function parseRootRowCount(rootValue) {
   return Number.isFinite(value) ? value : null;
 }
 
+function parseRootLens(rootValue) {
+  const parsed = parseSemicolonValue(rootValue);
+  return typeof parsed.lens === "string" && parsed.lens ? parsed.lens : null;
+}
+
 function dateMS(value) {
   const parsed = Date.parse(value || 0);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
 function sampleTimeMS(sample) {
-  const value = Date.parse(sample.finishedAt || sample.sampledAt || sample.startedAt || 0);
+  // `finishedAt` may include a long checkpoint sweep after visible rows were
+  // read. Dock-row comparisons use the row capture time when the UI sampler
+  // provides it.
+  const value = Date.parse(sample.dockRowsCapturedAt || sample.sampledAt || sample.finishedAt || sample.startedAt || 0);
   return Number.isFinite(value) ? value : 0;
 }
 
@@ -164,6 +172,10 @@ function relaySampleAtOrBefore(relaySamples, uiSample) {
     break;
   }
   return selected;
+}
+
+function isPartialDockSweep(dockSweep) {
+  return dockSweep?.stopReason === "maxSteps" || dockSweep?.stopReason === "timeBudget";
 }
 
 function scenarioTransitionTimeMS(transition) {
@@ -236,9 +248,36 @@ function detailTransitionTruths(relayReport) {
 function relayTruthSamples(relayReport) {
   const regularSamples = (Array.isArray(relayReport.samples) ? relayReport.samples : [])
     .filter((sample) => dateMS(sample?.finishedAt || sample?.startedAt) !== null);
+  const streamSamples = [];
+  const seenStreamSnapshots = new Set();
+  for (const sample of regularSamples) {
+    const notifications = Array.isArray(sample?.stream?.notifications)
+      ? sample.stream.notifications
+      : [];
+    for (const notification of notifications) {
+      const atMs = dateMS(notification?.receivedAt);
+      const snapshot = notification?.snapshot;
+      if (atMs === null || !snapshot) {
+        continue;
+      }
+      const key = `${notification.receivedAt || ""}:${notification.seq ?? ""}:${notification.kind || ""}`;
+      if (seenStreamSnapshots.has(key)) {
+        continue;
+      }
+      seenStreamSnapshots.add(key);
+      // Stream deltas are the relay state the app actually sees between
+      // fresh samples. Without them, UI proof can compare against stale truth.
+      streamSamples.push({
+        sampleIndex: `stream:${notification.seq ?? "unknown"}`,
+        startedAt: notification.receivedAt,
+        finishedAt: notification.receivedAt,
+        freshDock: snapshot,
+      });
+    }
+  }
   const transitionSamples = scenarioTransitionTruths(relayReport)
     .map((truth) => truth.truthSample);
-  return [...regularSamples, ...transitionSamples]
+  return [...regularSamples, ...streamSamples, ...transitionSamples]
     .sort((left, right) => relaySampleTimeMS(left) - relaySampleTimeMS(right));
 }
 
@@ -965,6 +1004,8 @@ function evaluateUISample(sample, relaySample) {
   const relayCards = relayCardsByKey(relaySample);
   const relayRowCount = Number(relaySample?.freshDock?.cardCount ?? relaySample?.freshDock?.totalRows);
   const uiRootRows = parseRootRowCount(rootValue);
+  const rootLens = parseRootLens(rootValue);
+  const usesRelayGlobalOrder = !rootLens || rootLens === "newest";
   const sweepRows = dockSweep ? dockSweep.rows : [];
   const detailOnlySample = Boolean(sample.detail) && rootValue === "not-visible";
 
@@ -987,16 +1028,19 @@ function evaluateUISample(sample, relaySample) {
   }
 
   evaluateDockRows({ sample, rows, relayCards, failures, source: "visible" });
-  const visibleOrderChecks = evaluateDockRowOrder({
-    sample,
-    rows,
-    relaySample,
-    failures,
-    source: "visible",
-  });
+  const visibleOrderChecks = usesRelayGlobalOrder
+    ? evaluateDockRowOrder({
+        sample,
+        rows,
+        relaySample,
+        failures,
+        source: "visible",
+      })
+    : 0;
 
   let sweepOrderChecks = 0;
   if (!detailOnlySample && dockSweep) {
+    const sweepIsPartial = isPartialDockSweep(dockSweep);
     const sweepSeenKeys = evaluateDockRows({
       sample,
       rows: sweepRows,
@@ -1004,14 +1048,18 @@ function evaluateUISample(sample, relaySample) {
       failures,
       source: "sweep",
     });
-    sweepOrderChecks = evaluateDockRowOrder({
-      sample,
-      rows: sweepRows,
-      relaySample,
-      failures,
-      source: "sweep",
-    });
-    if (Number.isFinite(relayRowCount) && sweepSeenKeys.size !== relayRowCount) {
+    if (!sweepIsPartial && usesRelayGlobalOrder) {
+      sweepOrderChecks = evaluateDockRowOrder({
+        sample,
+        rows: sweepRows,
+        relaySample,
+        failures,
+        source: "sweep",
+      });
+    }
+    // A capped or timed-out sweep is partial evidence. It can prove visible
+    // rows are wrong, but it cannot prove every offscreen relay row is missing.
+    if (!sweepIsPartial && Number.isFinite(relayRowCount) && sweepSeenKeys.size !== relayRowCount) {
       addFailure(
         failures,
         sample,
@@ -1024,15 +1072,17 @@ function evaluateUISample(sample, relaySample) {
         }
       );
     }
-    for (const key of relayCards.keys()) {
-      if (!sweepSeenKeys.has(key)) {
-        addFailure(
-          failures,
-          sample,
-          "dock_ui_sweep_missing_relay_row",
-          "Checkpoint sweep did not find a relay Dock row in the rendered client.",
-          { key }
-        );
+    if (!sweepIsPartial) {
+      for (const key of relayCards.keys()) {
+        if (!sweepSeenKeys.has(key)) {
+          addFailure(
+            failures,
+            sample,
+            "dock_ui_sweep_missing_relay_row",
+            "Checkpoint sweep did not find a relay Dock row in the rendered client.",
+            { key }
+          );
+        }
       }
     }
   }
@@ -1104,6 +1154,8 @@ function evaluateUISample(sample, relaySample) {
     rowCount: rows.length,
     sweepRowCount: dockSweep ? sweepRows.length : null,
     sweepStepCount: dockSweep ? dockSweep.stepCount ?? null : null,
+    sweepStopReason: dockSweep ? dockSweep.stopReason ?? null : null,
+    sweepExhaustive: dockSweep ? !isPartialDockSweep(dockSweep) : null,
     sweepExpectedRootRows: dockSweep ? dockSweep.expectedRootRows ?? null : null,
     visibleOrderChecks,
     sweepOrderChecks,

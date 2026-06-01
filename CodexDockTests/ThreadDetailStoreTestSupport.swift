@@ -190,29 +190,40 @@ actor FakeThreadDetailSession: ThreadDetailSession {
 }
 
 final class FakeRealtimeTranscriptionService: @unchecked Sendable, RealtimeTranscriptionServicing {
-    let session: FakeRealtimeTranscriptionSession
+    private(set) var sessions: [FakeRealtimeTranscriptionSession]
     private let startResult: Result<Void, TranscriptionServiceError>
     var startDelay: Duration?
     private(set) var startCount = 0
+
+    var session: FakeRealtimeTranscriptionSession {
+        sessions[0]
+    }
 
     init(
         session: FakeRealtimeTranscriptionSession = FakeRealtimeTranscriptionSession(),
         startResult: Result<Void, TranscriptionServiceError> = .success(()),
         startDelay: Duration? = nil
     ) {
-        self.session = session
+        self.sessions = [session]
         self.startResult = startResult
         self.startDelay = startDelay
     }
 
     func startSession() async throws -> any RealtimeTranscriptionSession {
+        let sessionIndex = startCount
         startCount += 1
         if let startDelay {
             try await Task.sleep(for: startDelay)
         }
         try startResult.get()
-        session.emit(.started(sessionID: session.id))
-        return session
+        // A real realtime start returns a fresh event stream. Reusing a closed
+        // fake stream makes multi-start voice tests timing-dependent.
+        if sessionIndex >= sessions.count {
+            sessions.append(FakeRealtimeTranscriptionSession(id: "fake-transcription-session-\(sessionIndex + 1)"))
+        }
+        let nextSession = sessions[sessionIndex]
+        nextSession.emit(.started(sessionID: nextSession.id))
+        return nextSession
     }
 }
 
@@ -357,7 +368,10 @@ func makeDetailRow(
     threadID: String,
     sourceHostID: String? = nil,
     status: DockRowStatusKind = .running,
-    relationship: DockRowThreadRelationship = .root
+    relationship: DockRowThreadRelationship = .root,
+    lastActivity: String = "now",
+    lastActivityDate: Date = Date(timeIntervalSince1970: 2_000),
+    orderKey: String? = nil
 ) -> DockRowViewModel {
     DockRowViewModel(
         id: HostScopedThreadID(hostID: hostID, threadID: threadID),
@@ -369,8 +383,9 @@ func makeDetailRow(
         repository: "codex-client",
         branch: "main",
         status: status,
-        lastActivity: "now",
-        lastActivityDate: Date(timeIntervalSince1970: 2_000),
+        lastActivity: lastActivity,
+        lastActivityDate: lastActivityDate,
+        orderKey: orderKey,
         summary: "Open a real thread",
         rail: .blue,
         label: nil,

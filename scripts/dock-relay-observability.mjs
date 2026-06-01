@@ -81,6 +81,9 @@ function extractTraceContextFromParams(params) {
 }
 
 function failureCategoryFor(errorData, error, routeName) {
+  if (errorData?.cancelled) {
+    return FAILURE_CATEGORY.CANCELLED;
+  }
   if (errorData?.overload) {
     return FAILURE_CATEGORY.UPSTREAM_OVERLOAD;
   }
@@ -291,7 +294,7 @@ class RelayObservability {
   beginOperation({ route, method = route, traceContext = null, parentOperationID = null } = {}) {
     const routeName = String(route || method || "unknown");
     const config = routeConfigFor(routeName);
-    this.ensureRoute(routeName);
+    const previousRoute = this.ensureRoute(routeName);
     const startedAt = nowISO(this.clock);
     const operationID = traceContext?.operationID || newID("op");
     const traceID = traceContext?.traceID || newID("tr");
@@ -307,6 +310,8 @@ class RelayObservability {
       startedAtMs: nowMs(this.clock),
       probeSafety: config.probeSafety,
       appCritical: config.appCritical,
+      previousRouteStatus: previousRoute.routeStatus,
+      previousStatusReasons: previousRoute.statusReasons,
     };
     const event = this.recordEvent({
       operationID,
@@ -377,20 +382,22 @@ class RelayObservability {
     const failureCategory = succeeded
       ? FAILURE_CATEGORY.NONE
       : failureCategoryFor(errorData, error, routeName);
+    const cancelled = failureCategory === FAILURE_CATEGORY.CANCELLED;
+    const finalOutcome = outcome || (succeeded ? "succeeded" : cancelled ? "cancelled" : "failed");
     const evidence = this.recordEvent({
       operationID: operation.operationID,
       traceID: operation.traceID,
       route: routeName,
-      type: succeeded ? "route.succeeded" : "route.failed",
+      type: succeeded ? "route.succeeded" : cancelled ? "route.cancelled" : "route.failed",
       at: finishedAt,
       durationMs,
-      outcome: outcome || (succeeded ? "succeeded" : "failed"),
+      outcome: finalOutcome,
       failureCategory: succeeded ? null : failureCategory,
       errorCode,
       phase,
     });
     const computedMeasurements = measurements || measurementSummaryForResult(routeName, result);
-    const statusReasons = succeeded ? [] : [
+    const statusReasons = succeeded || cancelled ? [] : [
       statusReasonForFailure({
         evidenceID: evidence.evidenceID,
         errorCode,
@@ -403,27 +410,31 @@ class RelayObservability {
       operationID: operation.operationID,
       at: finishedAt,
       durationMs,
-      outcome: succeeded ? "succeeded" : "failed",
+      outcome: finalOutcome,
       failureCategory: succeeded ? null : failureCategory,
       phase,
     });
     this.updateRoute(routeName, {
       configuredHostID: operation.configuredHostID,
       relayHostID: operation.relayHostID,
-      routeStatus: succeeded ? ROUTE_STATUS.HEALTHY : ROUTE_STATUS.FAILED,
-      statusReasons,
+      routeStatus: succeeded
+        ? ROUTE_STATUS.HEALTHY
+        : cancelled
+          ? operation.previousRouteStatus
+          : ROUTE_STATUS.FAILED,
+      statusReasons: cancelled ? operation.previousStatusReasons : statusReasons,
       lastAttempt,
       lastSuccess: succeeded ? lastAttempt : undefined,
-      lastFailure: succeeded ? undefined : lastAttempt,
+      lastFailure: succeeded || cancelled ? undefined : lastAttempt,
       lastMeasurement: computedMeasurements,
       incrementSuccess: succeeded,
-      incrementFailure: !succeeded,
+      incrementFailure: !succeeded && !cancelled,
     });
     const trace = this.traces.get(operation.operationID);
     if (trace) {
       trace.finishedAt = finishedAt;
       trace.durationMs = durationMs;
-      trace.outcome = succeeded ? "succeeded" : "failed";
+      trace.outcome = finalOutcome;
       trace.failureCategory = succeeded ? null : failureCategory;
       trace.errorCode = errorCode;
       trace.statusReasons = statusReasons;

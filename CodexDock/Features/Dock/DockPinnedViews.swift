@@ -37,15 +37,16 @@ struct DockSwipeActionRow<Content: View>: View {
             handleTap()
         }
         .codexAutomationID(AutomationID.Dock.row(hostID: row.id.hostID, threadID: row.id.threadID))
-        .id(row.id)
+        // Parent ForEach owns row identity. Do not add a nested .id here;
+        // live reorders can otherwise leave stale duplicate accessibility rows.
         .onChange(of: row.id) { _, _ in
-            closeAction()
+            closeAction(animated: false)
         }
         .onChange(of: row.isPinned) { _, _ in
-            closeAction()
+            closeAction(animated: false)
         }
         .onChange(of: resetToken) { _, _ in
-            closeAction()
+            closeAction(animated: false)
         }
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
@@ -95,8 +96,18 @@ struct DockSwipeActionRow<Content: View>: View {
         }
     }
 
-    private func closeAction() {
-        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+    private func closeAction(animated: Bool = true) {
+        // Render revisions are data updates. Do not open a spring transaction
+        // unless there is an actual swipe offset to close; list reorders must
+        // not leave duplicate accessibility rows during live updates.
+        guard offset != 0 else {
+            return
+        }
+        if animated {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                offset = 0
+            }
+        } else {
             offset = 0
         }
     }

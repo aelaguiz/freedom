@@ -18,12 +18,19 @@ const ARCHIVE_SUBSCRIBE_METHOD = "archive/subscribe";
 const ARCHIVE_RESYNC_METHOD = "archive/resync";
 const ARCHIVE_UPDATE_METHOD = "archive/update";
 
-function sequenceFields(store, view) {
+function currentSeqForView(store, view) {
+  return typeof store.currentSeqForView === "function"
+    ? store.currentSeqForView(view)
+    : store.currentSeq();
+}
+
+function sequenceFields(store, hub, view) {
+  const seq = currentSeqForView(store, view);
   return {
     schemaVersion: 2,
-    epoch: view.epoch,
-    seq: store.currentSeq(),
-    stateGeneration: store.currentSeq(),
+    epoch: hub.epoch,
+    seq,
+    stateGeneration: seq,
   };
 }
 
@@ -102,7 +109,7 @@ class StateSubscriptionHub {
     );
     return {
       kind: "delta",
-      ...sequenceFields(this.store, this),
+      ...sequenceFields(this.store, this, view),
       baseSeq,
       seq,
       stateGeneration: seq,
@@ -181,7 +188,7 @@ class StateSubscriptionHub {
     }
     return {
       kind: "heartbeat",
-      ...sequenceFields(this.store, this),
+      ...sequenceFields(this.store, this, view),
       baseSeq: null,
       view,
     };

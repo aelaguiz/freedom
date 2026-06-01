@@ -20,6 +20,7 @@ struct DisplayedUISample: Codable {
     var sampledAt: String
     var finishedAt: String
     var dockRootValue: String
+    var dockRowsCapturedAt: String
     var dockRows: [DisplayedUIDockRow]
     var hostSummaries: [DisplayedUIElementSnapshot]
     var dockSweep: DisplayedUIDockSweep?
@@ -62,6 +63,8 @@ struct DisplayedUIDockSweep: Codable {
     var startedAt: String
     var finishedAt: String
     var stepCount: Int
+    var maxSteps: Int
+    var stopReason: String
     var expectedRootRows: Int?
     var rows: [DisplayedUIDockRow]
 }
@@ -209,6 +212,24 @@ extension XCUIApplication {
         return nil
     }
 
+    func setDockSearchText(_ text: String, timeout: TimeInterval) -> Bool {
+        let field = displayedUIElement(id: AutomationID.Dock.searchField.rawValue)
+        guard field.waitForExistence(timeout: timeout) else {
+            return false
+        }
+
+        let clearButton = displayedUIElement(id: AutomationID.Dock.clearSearchButton.rawValue)
+        if clearButton.exists, isVisibleForTap(clearButton.frame) {
+            clearButton.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        field.typeText(text)
+        return field.waitForDisplayedUIStringValue(matching: { value in
+            value.localizedCaseInsensitiveContains(text)
+        }, timeout: timeout)
+    }
+
     func tapRequestAction(cardID: String, action: String, timeout: TimeInterval) -> Bool {
         let identifier: String
         switch action {
@@ -288,6 +309,7 @@ extension XCUIApplication {
         let dockRoot = displayedUIElement(id: AutomationID.Dock.root.rawValue)
         let rootValue = dockRoot.exists ? dockRoot.displayedUIStringValue : "not-visible"
         let dockRows = visibleDockRows()
+        let dockRowsCapturedAt = codexDockISO8601Now()
         let dockSweep = includeDockSweep ? checkpointDockSweep(rootValue: rootValue) : nil
         let detail = visibleDetail()
         let detailSweep = includeDetailSweep ? checkpointDetailSweep() : nil
@@ -300,6 +322,7 @@ extension XCUIApplication {
             sampledAt: sampledAt,
             finishedAt: codexDockISO8601Now(),
             dockRootValue: rootValue,
+            dockRowsCapturedAt: dockRowsCapturedAt,
             dockRows: dockRows,
             hostSummaries: hostSummaries,
             dockSweep: dockSweep,
@@ -366,24 +389,34 @@ extension XCUIApplication {
         var lastVisibleIdentifier: String?
         var stableTailCount = 0
         var stepCount = 0
+        let maxSteps = 30
+        let deadline = Date().addingTimeInterval(20)
+        var stopReason = "maxSteps"
 
-        for _ in 0..<30 {
+        for _ in 0..<maxSteps {
+            if Date() >= deadline {
+                stopReason = "timeBudget"
+                break
+            }
             stepCount += 1
             let visibleRows = visibleDockRows()
             for row in visibleRows where seen.insert(row.identifier).inserted {
                 rows.append(row)
             }
             if let expectedRootRows, rows.count >= expectedRootRows {
+                stopReason = "expectedRowsReached"
                 break
             }
 
             let currentLast = visibleRows.last?.identifier
             if currentLast == nil {
+                stopReason = "noVisibleRows"
                 break
             }
             if currentLast == lastVisibleIdentifier {
                 stableTailCount += 1
                 if stableTailCount >= 2 {
+                    stopReason = "stableTail"
                     break
                 }
             } else {
@@ -398,6 +431,8 @@ extension XCUIApplication {
             startedAt: startedAt,
             finishedAt: codexDockISO8601Now(),
             stepCount: stepCount,
+            maxSteps: maxSteps,
+            stopReason: stopReason,
             expectedRootRows: expectedRootRows,
             rows: rows
         )
@@ -439,6 +474,7 @@ extension XCUIApplication {
         var lastVisibleIdentifier: String?
         var stableTailCount = 0
         var stepCount = 0
+        let deadline = Date().addingTimeInterval(20)
 
         func appendUnique(_ source: [String], to target: inout [String], seen: inout Set<String>) {
             for value in source where seen.insert(value).inserted {
@@ -457,6 +493,9 @@ extension XCUIApplication {
         }
 
         for _ in 0..<30 {
+            if Date() >= deadline {
+                break
+            }
             stepCount += 1
             guard let detail = visibleDetail() else {
                 break

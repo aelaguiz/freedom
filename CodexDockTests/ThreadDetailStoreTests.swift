@@ -48,6 +48,281 @@ final class ThreadDetailStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testDockRowAdvanceRehydratesOpenThreadFromCanonicalHistory() async throws {
+        let host = makeDetailHost()
+        let initialRow = makeDetailRow(
+            hostID: host.id,
+            threadID: "thread-1",
+            lastActivityDate: Date(timeIntervalSince1970: 2_000),
+            orderKey: "2000"
+        )
+        let updatedRow = makeDetailRow(
+            hostID: host.id,
+            threadID: "thread-1",
+            lastActivityDate: Date(timeIntervalSince1970: 2_100),
+            orderKey: "2100"
+        )
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            readResults: [
+                .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+                .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            ],
+            turnsListResults: [
+                .success(ThreadTurnsListResponseDTO(data: [
+                    makeDetailTurn(id: "turn-initial", startedAt: 2_000, text: "Initial turn"),
+                ])),
+                .success(ThreadTurnsListResponseDTO(data: [
+                    makeDetailTurn(id: "turn-updated", startedAt: 2_100, text: "Updated turn"),
+                    makeDetailTurn(id: "turn-initial", startedAt: 2_000, text: "Initial turn"),
+                ])),
+            ],
+            resumeResults: [
+                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            ]
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: initialRow,
+            factory: FakeThreadDetailSessionFactory(session: session)
+        )
+
+        await store.load()
+        store.observeDockRowUpdate(updatedRow)
+
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.header.lastActivityDate == Date(timeIntervalSince1970: 2_100)
+                && snapshot.events.map(\.body) == ["Updated turn", "Initial turn"]
+                && snapshot.liveState == .live
+        }
+
+        let readParams = await session.readParamsSnapshot()
+        let turnsListParams = await session.turnsListParamsSnapshot()
+        let resumeParams = await session.resumeParamsSnapshot()
+        XCTAssertEqual(readParams, [
+            ThreadReadParams(threadId: "thread-1", includeTurns: false),
+            ThreadReadParams(threadId: "thread-1", includeTurns: false),
+        ])
+        XCTAssertEqual(turnsListParams, [
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
+            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
+        ])
+        XCTAssertEqual(resumeParams, [
+            ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
+            ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
+        ])
+    }
+
+    @MainActor
+    func testDockRowAdvanceSchedulesSettledCanonicalHistoryRefresh() async throws {
+        let host = makeDetailHost()
+        let initialRow = makeDetailRow(
+            hostID: host.id,
+            threadID: "thread-1",
+            lastActivityDate: Date(timeIntervalSince1970: 2_000),
+            orderKey: "2000"
+        )
+        let updatedRow = makeDetailRow(
+            hostID: host.id,
+            threadID: "thread-1",
+            lastActivityDate: Date(timeIntervalSince1970: 2_100),
+            orderKey: "2100"
+        )
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            readResults: [
+                .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+                .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+                .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            ],
+            turnsListResults: [
+                .success(ThreadTurnsListResponseDTO(data: [
+                    makeDetailTurn(id: "turn-initial", startedAt: 2_000, text: "Initial turn"),
+                ])),
+                .success(ThreadTurnsListResponseDTO(data: [
+                    makeDetailTurn(id: "turn-initial", startedAt: 2_000, text: "Initial turn"),
+                ])),
+                .success(ThreadTurnsListResponseDTO(data: [
+                    makeDetailTurn(id: "turn-settled", startedAt: 2_100, text: "Settled canonical read"),
+                    makeDetailTurn(id: "turn-initial", startedAt: 2_000, text: "Initial turn"),
+                ])),
+            ],
+            resumeResults: [
+                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            ]
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: initialRow,
+            factory: FakeThreadDetailSessionFactory(session: session),
+            dockRowSettleRefreshDelay: .milliseconds(20)
+        )
+
+        await store.load()
+        store.observeDockRowUpdate(updatedRow)
+
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.events.map(\.body) == ["Settled canonical read", "Initial turn"]
+                && snapshot.liveState == .live
+        }
+
+        let readParams = await session.readParamsSnapshot()
+        let turnsListParams = await session.turnsListParamsSnapshot()
+        let resumeParams = await session.resumeParamsSnapshot()
+        XCTAssertEqual(readParams.count, 3)
+        XCTAssertEqual(turnsListParams.count, 3)
+        XCTAssertEqual(resumeParams.count, 3)
+    }
+
+    @MainActor
+    func testDockRowAdvanceDoesNotDropLiveAheadEventBeforeCanonicalHistorySettles() async throws {
+        let host = makeDetailHost()
+        let initialRow = makeDetailRow(
+            hostID: host.id,
+            threadID: "thread-1",
+            lastActivityDate: Date(timeIntervalSince1970: 2_000),
+            orderKey: "2000"
+        )
+        let updatedRow = makeDetailRow(
+            hostID: host.id,
+            threadID: "thread-1",
+            lastActivityDate: Date(timeIntervalSince1970: 2_100),
+            orderKey: "2100"
+        )
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            readResults: [
+                .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+                .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+                .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            ],
+            turnsListResults: [
+                .success(ThreadTurnsListResponseDTO(data: [
+                    makeDetailTurn(id: "turn-initial", startedAt: 2_000, text: "Initial turn"),
+                ])),
+                .success(ThreadTurnsListResponseDTO(data: [
+                    makeDetailTurn(id: "turn-initial", startedAt: 2_000, text: "Initial turn"),
+                ])),
+                .success(ThreadTurnsListResponseDTO(data: [
+                    makeDetailTurn(id: "turn-live", startedAt: 2_100, text: "Canonical settled"),
+                    makeDetailTurn(id: "turn-initial", startedAt: 2_000, text: "Initial turn"),
+                ])),
+            ],
+            resumeResults: [
+                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            ]
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: initialRow,
+            factory: FakeThreadDetailSessionFactory(session: session),
+            dockRowSettleRefreshDelay: .milliseconds(100),
+            now: { Date(timeIntervalSince1970: 2_050) }
+        )
+
+        await store.load()
+        await session.emitNotification(
+            JSONRPCNotification(
+                method: "item/agentMessage/delta",
+                params: .object([
+                    "threadId": .string("thread-1"),
+                    "turnId": .string("turn-live"),
+                    "itemId": .string("turn-live-agent"),
+                    "delta": .string("Live ahead"),
+                ])
+            )
+        )
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.events.map(\.body) == ["Live ahead", "Initial turn"]
+        }
+
+        store.observeDockRowUpdate(updatedRow)
+
+        try await waitForDetailStoreAsync {
+            await session.turnsListParamsSnapshot().count == 2
+        }
+        guard case let .loaded(loadedAfterImmediate) = store.state,
+              loadedAfterImmediate.events.map(\.body) == ["Live ahead", "Initial turn"] else {
+            return XCTFail("Expected immediate canonical reread to preserve live-ahead event, got \(store.state)")
+        }
+
+        try await waitForDetailStoreAsync {
+            await session.turnsListParamsSnapshot().count == 3
+        }
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.events.map(\.body) == ["Canonical settled", "Initial turn"]
+                && snapshot.liveState == .live
+        }
+    }
+
+    @MainActor
+    func testDockRowRelativeLabelUpdateDoesNotRehydrateThreadDetail() async throws {
+        let host = makeDetailHost()
+        let initialRow = makeDetailRow(
+            hostID: host.id,
+            threadID: "thread-1",
+            lastActivity: "now",
+            lastActivityDate: Date(timeIntervalSince1970: 2_000),
+            orderKey: "2000"
+        )
+        let relativeLabelOnlyRow = makeDetailRow(
+            hostID: host.id,
+            threadID: "thread-1",
+            lastActivity: "1m ago",
+            lastActivityDate: Date(timeIntervalSince1970: 2_000),
+            orderKey: "2000"
+        )
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            turnsListResult: .success(ThreadTurnsListResponseDTO(data: [
+                makeDetailTurn(id: "turn-initial", startedAt: 2_000, text: "Initial turn"),
+            ])),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: [])))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: initialRow,
+            factory: FakeThreadDetailSessionFactory(session: session)
+        )
+
+        await store.load()
+        store.observeDockRowUpdate(relativeLabelOnlyRow)
+        try await Task.sleep(for: .milliseconds(50))
+
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.header.lastActivity, "1m ago")
+        XCTAssertEqual(snapshot.events.map(\.body), ["Initial turn"])
+        let readCount = await session.readParamsSnapshot().count
+        let turnsListCount = await session.turnsListParamsSnapshot().count
+        let resumeCount = await session.resumeParamsSnapshot().count
+        XCTAssertEqual(readCount, 1)
+        XCTAssertEqual(turnsListCount, 1)
+        XCTAssertEqual(resumeCount, 1)
+    }
+
+    @MainActor
     func testLoadBuffersLiveNotificationsUntilReadTurnsAndResumeFinish() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
@@ -1385,8 +1660,12 @@ final class ThreadDetailStoreTests: XCTestCase {
 
         XCTAssertEqual(realtime.startCount, 2)
         XCTAssertEqual(capture.startCount, 2)
+        XCTAssertEqual(realtime.sessions.count, 2)
+        XCTAssertNotEqual(realtime.sessions[0].id, realtime.sessions[1].id)
         XCTAssertEqual(store.composer.voice.phase, .streaming)
         XCTAssertEqual(store.composer.voice.interactionMode, .tap)
+
+        await store.cancelVoiceCapture()
     }
 
     @MainActor

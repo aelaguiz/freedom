@@ -3,11 +3,14 @@ import http from "node:http";
 import test from "node:test";
 
 import {
+  FAILURE_CATEGORY,
   ROUTE_CONFIGS,
   ROUTE_NAMES,
+  ROUTE_STATUS,
   autoProbeSafeRoutes,
 } from "./dock-relay-observability-contract.mjs";
 import { startServer } from "./dock-relay.mjs";
+import { createRelayObservability } from "./dock-relay-observability.mjs";
 import {
   jsonRpcRequest,
   openWebSocket,
@@ -91,3 +94,45 @@ test("removed HTTP diagnostics do not expose card truth", async () => withRelay(
   }
   assert.equal(await httpStatus(`${baseURL}/syncz`), 200);
 }));
+
+test("downstream-cancelled live resume does not become an app-critical route failure", () => {
+  const observability = createRelayObservability({
+    hostId: "home",
+    hostName: "Home",
+    persistenceDir: false,
+  });
+
+  const successOperation = observability.beginOperation({ route: ROUTE_NAMES.threadResume });
+  observability.finishOperation(successOperation, {
+    ok: true,
+    result: { thread: { id: "thread-1" } },
+  });
+
+  const cancelledOperation = observability.beginOperation({ route: ROUTE_NAMES.threadResume });
+  const error = Object.assign(new Error("downstream session closed"), {
+    code: -32000,
+    data: {
+      subsystem: "downstream",
+      reason: "downstream_session_closed",
+      cancelled: true,
+      retryable: false,
+    },
+  });
+  observability.finishOperation(cancelledOperation, {
+    ok: false,
+    error,
+    errorCode: error.code,
+    errorData: error.data,
+    phase: error.data.subsystem,
+  });
+
+  const route = observability.routeHealth().find((entry) => entry.route === ROUTE_NAMES.threadResume);
+  assert.equal(route.routeStatus, ROUTE_STATUS.HEALTHY);
+  assert.equal(route.lastAttempt.outcome, "cancelled");
+  assert.equal(route.lastAttempt.failureCategory, FAILURE_CATEGORY.CANCELLED);
+  assert.equal(route.counters.total, 1);
+  assert.equal(route.counters.succeeded, 1);
+  assert.equal(route.counters.failed, 0);
+  assert.deepEqual(route.statusReasons, []);
+  assert.deepEqual(observability.appCriticalFailures(), []);
+});

@@ -8,6 +8,12 @@
 > `/explainz`, `/debugz`, `/subscriptionsz`, `/tracesz`, `/selftestz`, and
 > `/bundlez` are not valid current card proof paths.
 
+Current UX intention:
+[CODEX_DOCK_USER_INTENTION_2026-06-01.md](CODEX_DOCK_USER_INTENTION_2026-06-01.md),
+[CODEX_DOCK_TRUSTWORTHY_LIVE_WINDOW_INTENTION_2026-06-01.md](CODEX_DOCK_TRUSTWORTHY_LIVE_WINDOW_INTENTION_2026-06-01.md)
+and
+[CODEX_DOCK_LIVE_TRUTH_INTENTION_2026-06-01.md](CODEX_DOCK_LIVE_TRUTH_INTENTION_2026-06-01.md).
+
 ## Historical Bottom Line
 
 The original drift was real. Before the single-source implementation, the

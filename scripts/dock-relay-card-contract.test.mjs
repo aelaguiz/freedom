@@ -325,6 +325,16 @@ test("dock/update replacement delta is complete when it carries every current ro
         assert.equal(initial.result.complete, true);
         assert.deepEqual(initial.result.cards.map((card) => card.threadID), ["cached"]);
 
+        const initialDockSeq = initial.result.seq;
+        const archiveOnly = config.relayStateEngine.store.applyArchiveReconciliation({
+          host: { id: "home", displayName: "Home", endpoint: null },
+          cards: [],
+          complete: true,
+        });
+        assert.ok(archiveOnly.seq > initialDockSeq);
+        assert.equal(config.relayStateEngine.store.currentSeq(), archiveOnly.seq);
+        assert.equal(config.relayStateEngine.store.currentSeqForView("dock"), initialDockSeq);
+
         sourceRows = [{
           id: "recovered",
           sessionId: "recovered-session",
@@ -344,6 +354,8 @@ test("dock/update replacement delta is complete when it carries every current ro
         await config.relayStateEngine.reconcileDock({ reason: "test-recovered" });
         const update = await updatePromise;
 
+        assert.equal(update.params.baseSeq, initialDockSeq);
+        assert.ok(update.params.seq > archiveOnly.seq);
         assert.equal(update.params.complete, true);
         assert.equal(update.params.totalRows, 1);
         assert.deepEqual(update.params.upsertCards.map((card) => card.threadID), ["recovered"]);

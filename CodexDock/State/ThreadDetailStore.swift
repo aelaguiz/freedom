@@ -104,6 +104,21 @@ public final class ThreadDetailStore: ObservableObject {
         let turns: [JSONValue]
     }
 
+    private struct DockRowActivityMarker: Equatable, Sendable {
+        let activityDate: Date
+        let orderKey: String?
+
+        init(row: DockRowViewModel) {
+            self.activityDate = row.lastActivityDate
+            self.orderKey = row.orderKey
+        }
+
+        func isNewer(than other: DockRowActivityMarker) -> Bool {
+            activityDate > other.activityDate
+                || (activityDate == other.activityDate && orderKey != other.orderKey)
+        }
+    }
+
     private static let turnPageLimit = CodexDockConstants.Dock.turnPageLimit
     @Published public private(set) var state: ThreadDetailStoreState
     @Published public private(set) var requestCards: [ServerRequestCard] = []
@@ -120,9 +135,9 @@ public final class ThreadDetailStore: ObservableObject {
     }
 
     private let host: DockHostConfiguration
-    let row: DockRowViewModel
+    public private(set) var row: DockRowViewModel
     private let hostIdentityResolver: DockHostIdentityResolver
-    private let header: ThreadDetailHeader
+    private var header: ThreadDetailHeader
     private let factory: any ThreadDetailSessionMaking
     private let dataEngine: ThreadDetailDataEngine
     private let commandEngine: ClientCommandEngine
@@ -133,6 +148,7 @@ public final class ThreadDetailStore: ObservableObject {
     private let lifecycleCoordinator: AppLifecycleCoordinator?
     private weak var connectivityReporter: (any AppConnectivityReporting)?
     private let connectivityEventSink: ConnectivityEventSink?
+    private let dockRowSettleRefreshDelay: Duration
     private let now: @Sendable () -> Date
 
     private var session: (any ThreadDetailSession)?
@@ -140,6 +156,7 @@ public final class ThreadDetailStore: ObservableObject {
     private var notificationTask: Task<Void, Never>?
     private var requestTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
+    private var dockRowSettleRefreshTask: Task<Void, Never>?
     private var lifecycleTask: Task<Void, Never>?
     var transcriptionTask: Task<Void, Never>?
     var voiceCaptureTask: Task<Void, Never>?
@@ -155,6 +172,9 @@ public final class ThreadDetailStore: ObservableObject {
     private var didLoad = false
     private var isClosing = false
     private var liveEventBuffer = ThreadDetailLiveEventBuffer()
+    private var latestDockRowActivityMarker: DockRowActivityMarker
+    private var lastCompletedDockRowRefreshMarker: DockRowActivityMarker
+    private var pendingDockRowRefreshMarker: DockRowActivityMarker?
 
     public init(
         host: DockHostConfiguration,
@@ -166,6 +186,7 @@ public final class ThreadDetailStore: ObservableObject {
         connectivityReporter: (any AppConnectivityReporting)? = nil,
         connectivityEventSink: ConnectivityEventSink? = nil,
         hostIdentityResolver: DockHostIdentityResolver? = nil,
+        dockRowSettleRefreshDelay: Duration = CodexDockConstants.Dock.threadDetailCanonicalHistorySettleDelay,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.host = host
@@ -186,8 +207,12 @@ public final class ThreadDetailStore: ObservableObject {
         self.lifecycleCoordinator = lifecycleCoordinator
         self.connectivityReporter = connectivityReporter
         self.connectivityEventSink = connectivityEventSink
+        self.dockRowSettleRefreshDelay = dockRowSettleRefreshDelay
         self.now = now
         self.state = .idle(ThreadDetailHeader(host: host, row: row))
+        let dockActivityMarker = DockRowActivityMarker(row: row)
+        self.latestDockRowActivityMarker = dockActivityMarker
+        self.lastCompletedDockRowRefreshMarker = dockActivityMarker
         self.screenStore.start()
         startLifecycleObservation()
     }
@@ -197,6 +222,7 @@ public final class ThreadDetailStore: ObservableObject {
         notificationTask?.cancel()
         requestTask?.cancel()
         recoveryTask?.cancel()
+        dockRowSettleRefreshTask?.cancel()
         lifecycleTask?.cancel()
         transcriptionTask?.cancel()
         voiceCaptureTask?.cancel()
@@ -263,6 +289,7 @@ public final class ThreadDetailStore: ObservableObject {
                 )
                 try await replaceEvents(from: liveThread, liveState: .live)
                 await replayBufferedLiveEvents()
+                startDockRowRefreshIfNeeded()
                 DockLog.threadDetail.notice("thread detail load finished live host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) events=\(self.events.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
             } catch {
                 liveEventBuffer.discard()
@@ -280,6 +307,29 @@ public final class ThreadDetailStore: ObservableObject {
         }
     }
 
+    public func observeDockRowUpdate(_ updatedRow: DockRowViewModel) {
+        guard updatedRow.id == row.id else {
+            return
+        }
+
+        row = updatedRow
+        header = ThreadDetailHeader(host: host, row: updatedRow)
+        latestDockRowActivityMarker = DockRowActivityMarker(row: updatedRow)
+
+        if case .loaded = state {
+            publishLoaded()
+        }
+
+        guard latestDockRowActivityMarker.isNewer(than: lastCompletedDockRowRefreshMarker) else {
+            return
+        }
+
+        // Dock activity can lead canonical turns by a moment. Re-read now, then
+        // do one coalesced settled re-read through the same history path.
+        scheduleDockRowSettleRefresh(for: latestDockRowActivityMarker)
+        queueDockRowRefresh(for: latestDockRowActivityMarker)
+    }
+
     public func close() {
         DockLog.threadDetail.notice("thread detail close requested host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
         isClosing = true
@@ -291,6 +341,8 @@ public final class ThreadDetailStore: ObservableObject {
         requestTask = nil
         recoveryTask?.cancel()
         recoveryTask = nil
+        dockRowSettleRefreshTask?.cancel()
+        dockRowSettleRefreshTask = nil
         liveEventBuffer.discard()
         lifecycleTask?.cancel()
         lifecycleTask = nil
@@ -662,6 +714,89 @@ public final class ThreadDetailStore: ObservableObject {
         }
 
         recoveryTask = nil
+    }
+
+    private func queueDockRowRefresh(for marker: DockRowActivityMarker, force: Bool = false) {
+        if !force, !marker.isNewer(than: lastCompletedDockRowRefreshMarker) {
+            return
+        }
+        if let pending = pendingDockRowRefreshMarker,
+           pending.isNewer(than: marker) || pending == marker {
+            return
+        }
+
+        pendingDockRowRefreshMarker = marker
+        DockLog.threadDetail.notice("thread detail dock row advanced thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
+        startDockRowRefreshIfNeeded()
+    }
+
+    private func scheduleDockRowSettleRefresh(for marker: DockRowActivityMarker) {
+        dockRowSettleRefreshTask?.cancel()
+        let delay = dockRowSettleRefreshDelay
+        dockRowSettleRefreshTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
+            self?.queueDockRowSettleRefreshIfCurrent(marker)
+        }
+    }
+
+    private func queueDockRowSettleRefreshIfCurrent(_ marker: DockRowActivityMarker) {
+        guard !isClosing, marker == latestDockRowActivityMarker else {
+            return
+        }
+        DockLog.threadDetail.notice("thread detail dock row settle refresh queued thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
+        queueDockRowRefresh(for: marker, force: true)
+    }
+
+    private func startDockRowRefreshIfNeeded() {
+        guard !isClosing,
+              recoveryTask == nil,
+              let marker = pendingDockRowRefreshMarker,
+              case .loaded = state,
+              liveState != .closed,
+              let session else {
+            return
+        }
+
+        pendingDockRowRefreshMarker = nil
+        recoveryTask = Task { [weak self] in
+            await self?.rehydrateAfterDockRowAdvance(session: session, marker: marker)
+        }
+    }
+
+    private func rehydrateAfterDockRowAdvance(
+        session: any ThreadDetailSession,
+        marker: DockRowActivityMarker
+    ) async {
+        guard !isClosing, case .loaded = state else {
+            recoveryTask = nil
+            return
+        }
+
+        liveEventBuffer.begin()
+        DockLog.threadDetail.notice("thread detail dock row refresh started thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
+
+        do {
+            let fullRead = try await readFullThread(session: session)
+            let liveThread = try await resumeCompactThread(session: session, turns: fullRead.turns)
+            try await mergeEvents(from: liveThread, liveState: .live)
+            await replayBufferedLiveEvents()
+            DockLog.threadDetail.notice("thread detail dock row refresh finished thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) events=\(self.events.count, privacy: .public)")
+        } catch {
+            liveEventBuffer.discard()
+            liveState = .stale(message(from: error))
+            publishLoaded()
+            DockLog.threadDetail.warning("thread detail dock row refresh failed thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+        }
+
+        recoveryTask = nil
+        if case .loaded = state, liveState == .live {
+            lastCompletedDockRowRefreshMarker = marker
+        }
+        startDockRowRefreshIfNeeded()
     }
 
     private func markLiveSessionReconnecting(_ message: String) {

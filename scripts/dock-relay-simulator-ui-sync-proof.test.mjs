@@ -73,6 +73,20 @@ function dockRow({ thread = "thread-a", status = "idle", origin = "human" } = {}
   };
 }
 
+function orderedUISample({ sampledAt, threads }) {
+  return {
+    sampleIndex: 0,
+    sampledAt,
+    dockRootValue: `loaded; rows=${threads.length}; pinned=0; lens=newest; search=false; filters=0`,
+    dockRows: threads.map((thread) => dockRow({
+      thread,
+      status: thread === "thread-b" ? "running" : "idle",
+      origin: thread === "thread-b" ? "automation" : "human",
+    })),
+    hostSummaries: [],
+  };
+}
+
 function uiSample({ sampledAt, status = "idle" }) {
   return {
     sampleIndex: 0,
@@ -470,6 +484,124 @@ test("simulator UI proof accepts checkpoint sweeps that cover all relay rows", (
   assert.deepEqual(evaluation.failures, []);
 });
 
+test("simulator UI proof uses stream notification snapshots as timestamped Dock truth", () => {
+  const report = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
+  report.samples[0].freshDock = {
+    cardCount: 2,
+    totalRows: 2,
+    renderOrderCardIDs: ["host::thread-a", "host::thread-b"],
+    cards: twoRowRelaySample().freshDock.cards,
+  };
+  report.samples[0].stream = {
+    notifications: [{
+      method: "dock/update",
+      receivedAt: "2026-05-31T00:00:02.000Z",
+      kind: "delta",
+      seq: 2,
+      baseSeq: 1,
+      snapshot: {
+        cardCount: 2,
+        totalRows: 2,
+        renderOrderCardIDs: ["host::thread-b", "host::thread-a"],
+        cards: [
+          {
+            id: "host::thread-b",
+            logicalHostID: "host",
+            threadID: "thread-b",
+            status: "running",
+            lane: "agent",
+            sourceKind: "automation",
+          },
+          {
+            id: "host::thread-a",
+            logicalHostID: "host",
+            threadID: "thread-a",
+            status: "idle",
+            lane: "human",
+            sourceKind: "human",
+          },
+        ],
+      },
+    }],
+  };
+
+  const proof = buildRenderedUIReport({
+    relayReport: report,
+    uiSamples: [
+      orderedUISample({
+        sampledAt: "2026-05-31T00:00:01.500Z",
+        threads: ["thread-a", "thread-b"],
+      }),
+      orderedUISample({
+        sampledAt: "2026-05-31T00:00:02.500Z",
+        threads: ["thread-b", "thread-a"],
+      }),
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(proof.summary.ok, true);
+  assert.equal(proof.evaluations[1].relaySampleIndex, "stream:2");
+  assert.deepEqual(proof.failures, []);
+});
+
+test("simulator UI proof scores Dock rows at row capture time", () => {
+  const report = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
+  report.samples[0].freshDock = {
+    cardCount: 2,
+    totalRows: 2,
+    renderOrderCardIDs: ["host::thread-a", "host::thread-b"],
+    cards: twoRowRelaySample().freshDock.cards,
+  };
+  report.samples[0].stream = {
+    notifications: [{
+      method: "dock/update",
+      receivedAt: "2026-05-31T00:00:02.000Z",
+      kind: "delta",
+      seq: 2,
+      baseSeq: 1,
+      snapshot: {
+        cardCount: 2,
+        totalRows: 2,
+        renderOrderCardIDs: ["host::thread-b", "host::thread-a"],
+        cards: [
+          {
+            id: "host::thread-b",
+            logicalHostID: "host",
+            threadID: "thread-b",
+            status: "running",
+            lane: "agent",
+            sourceKind: "automation",
+          },
+          {
+            id: "host::thread-a",
+            logicalHostID: "host",
+            threadID: "thread-a",
+            status: "idle",
+            lane: "human",
+            sourceKind: "human",
+          },
+        ],
+      },
+    }],
+  };
+  const sample = orderedUISample({
+    sampledAt: "2026-05-31T00:00:01.900Z",
+    threads: ["thread-b", "thread-a"],
+  });
+  sample.finishedAt = "2026-05-31T00:00:03.000Z";
+  sample.dockRowsCapturedAt = "2026-05-31T00:00:02.100Z";
+
+  const proof = buildRenderedUIReport({
+    relayReport: report,
+    uiSamples: [sample],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(proof.summary.ok, true);
+  assert.equal(proof.evaluations[0].relaySampleIndex, "stream:2");
+});
+
 test("simulator UI proof fails visible Dock rows rendered out of relay order", () => {
   const relaySample = twoRowRelaySample();
   relaySample.freshDock.renderOrderCardIDs = ["host::thread-a", "host::thread-b"];
@@ -485,6 +617,40 @@ test("simulator UI proof fails visible Dock rows rendered out of relay order", (
   assert.equal(evaluation.ok, false);
   assert.equal(evaluation.visibleOrderChecks, 1);
   assert.equal(evaluation.failures.some((failure) => failure.code === "dock_ui_order_mismatch"), true);
+});
+
+test("simulator UI proof skips global order checks for grouped Dock lenses", () => {
+  const relaySample = twoRowRelaySample();
+  relaySample.freshDock.renderOrderCardIDs = ["host::thread-a", "host::thread-b"];
+  const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
+  sample.dockRootValue = "loaded; rows=2; pinned=0; lens=branch; search=false; filters=0";
+  sample.dockRows = [
+    dockRow({ thread: "thread-b", status: "running", origin: "automation" }),
+    dockRow({ thread: "thread-a" }),
+  ];
+
+  const evaluation = evaluateUISample(sample, relaySample);
+
+  assert.equal(evaluation.ok, true);
+  assert.equal(evaluation.visibleOrderChecks, 0);
+  assert.equal(evaluation.failures.some((failure) => failure.code === "dock_ui_order_mismatch"), false);
+});
+
+test("simulator UI proof still detects duplicate rows for grouped Dock lenses", () => {
+  const relaySample = twoRowRelaySample();
+  relaySample.freshDock.renderOrderCardIDs = ["host::thread-a", "host::thread-b"];
+  const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
+  sample.dockRootValue = "loaded; rows=2; pinned=0; lens=host; search=false; filters=0";
+  sample.dockRows = [
+    dockRow({ thread: "thread-a" }),
+    dockRow({ thread: "thread-a" }),
+  ];
+
+  const evaluation = evaluateUISample(sample, relaySample);
+
+  assert.equal(evaluation.ok, false);
+  assert.equal(evaluation.visibleOrderChecks, 0);
+  assert.equal(evaluation.failures.some((failure) => failure.code === "dock_ui_duplicate_row"), true);
 });
 
 test("simulator UI proof fails checkpoint sweeps rendered out of relay order", () => {
@@ -530,6 +696,76 @@ test("simulator UI proof fails checkpoint sweeps that miss relay rows", () => {
   assert.equal(evaluation.failures.some((failure) => failure.code === "dock_ui_sweep_missing_relay_row"), true);
 });
 
+test("simulator UI proof treats maxSteps checkpoint sweeps as partial evidence", () => {
+  const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
+  sample.dockRootValue = "loaded; rows=2; pinned=0; lens=newest; search=false; filters=0";
+  sample.dockRows = [dockRow({ thread: "thread-a" })];
+  sample.dockSweep = {
+    startedAt: "2026-05-31T00:00:01.500Z",
+    finishedAt: "2026-05-31T00:00:01.800Z",
+    stepCount: 30,
+    maxSteps: 30,
+    stopReason: "maxSteps",
+    expectedRootRows: 2,
+    rows: [dockRow({ thread: "thread-a" })],
+  };
+
+  const evaluation = evaluateUISample(sample, twoRowRelaySample());
+
+  assert.equal(evaluation.ok, true);
+  assert.equal(evaluation.sweepExhaustive, false);
+  assert.equal(evaluation.failures.some((failure) => failure.code === "dock_ui_sweep_count_mismatch"), false);
+  assert.equal(evaluation.failures.some((failure) => failure.code === "dock_ui_sweep_missing_relay_row"), false);
+});
+
+test("simulator UI proof treats timeBudget checkpoint sweeps as partial evidence", () => {
+  const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
+  sample.dockRootValue = "loaded; rows=2; pinned=0; lens=newest; search=false; filters=0";
+  sample.dockRows = [dockRow({ thread: "thread-a" })];
+  sample.dockSweep = {
+    startedAt: "2026-05-31T00:00:01.500Z",
+    finishedAt: "2026-05-31T00:00:21.800Z",
+    stepCount: 4,
+    maxSteps: 30,
+    stopReason: "timeBudget",
+    expectedRootRows: 2,
+    rows: [dockRow({ thread: "thread-a" })],
+  };
+
+  const evaluation = evaluateUISample(sample, twoRowRelaySample());
+
+  assert.equal(evaluation.ok, true);
+  assert.equal(evaluation.sweepExhaustive, false);
+  assert.equal(evaluation.failures.some((failure) => failure.code === "dock_ui_sweep_count_mismatch"), false);
+  assert.equal(evaluation.failures.some((failure) => failure.code === "dock_ui_sweep_missing_relay_row"), false);
+});
+
+test("simulator UI proof skips capped sweep order as non-atomic evidence", () => {
+  const relaySample = twoRowRelaySample();
+  relaySample.freshDock.renderOrderCardIDs = ["host::thread-a", "host::thread-b"];
+  const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
+  sample.dockRootValue = "loaded; rows=2; pinned=0; lens=newest; search=false; filters=0";
+  sample.dockRows = [dockRow({ thread: "thread-a" })];
+  sample.dockSweep = {
+    startedAt: "2026-05-31T00:00:01.500Z",
+    finishedAt: "2026-05-31T00:03:01.500Z",
+    stepCount: 30,
+    maxSteps: 30,
+    stopReason: "maxSteps",
+    expectedRootRows: 2,
+    rows: [
+      dockRow({ thread: "thread-b", status: "running", origin: "automation" }),
+      dockRow({ thread: "thread-a" }),
+    ],
+  };
+
+  const evaluation = evaluateUISample(sample, relaySample);
+
+  assert.equal(evaluation.ok, true);
+  assert.equal(evaluation.sweepOrderChecks, 0);
+  assert.equal(evaluation.failures.some((failure) => failure.code === "dock_ui_sweep_order_mismatch"), false);
+});
+
 test("simulator UI proof does not count detail-only samples as Dock proof", () => {
   const evaluation = evaluateUISample(
     detailOnlyUISample({ sampledAt: "2026-05-31T00:00:01.500Z" }),
@@ -558,6 +794,151 @@ test("simulator UI proof only scores UI samples after relay truth exists", () =>
   assert.equal(report.summary.bestConsecutivePassingSamples, 2);
 });
 
+test("simulator UI proof scores against stream notification truth between sparse relay samples", () => {
+  const report = relayReport({ finishedAt: "2026-05-31T00:00:20.000Z" });
+  report.samples[0].finishedAt = "2026-05-31T00:00:01.000Z";
+  report.samples[0].freshDock = {
+    cardCount: 2,
+    totalRows: 2,
+    cards: [
+      {
+        id: "host::thread-a",
+        logicalHostID: "host",
+        threadID: "thread-a",
+        status: "idle",
+        lane: "human",
+        sourceKind: "human",
+        orderKey: "001",
+      },
+      {
+        id: "host::thread-b",
+        logicalHostID: "host",
+        threadID: "thread-b",
+        status: "idle",
+        lane: "human",
+        sourceKind: "human",
+        orderKey: "002",
+      },
+    ],
+  };
+  report.samples.push({
+    sampleIndex: 1,
+    startedAt: "2026-05-31T00:00:20.000Z",
+    finishedAt: "2026-05-31T00:00:20.000Z",
+    freshDock: report.samples[0].freshDock,
+    stream: {
+      notifications: [{
+        receivedAt: "2026-05-31T00:00:05.000Z",
+        kind: "delta",
+        seq: 2,
+        snapshot: {
+          cardCount: 2,
+          totalRows: 2,
+          cards: [
+            {
+              id: "host::thread-b",
+              logicalHostID: "host",
+              threadID: "thread-b",
+              status: "running",
+              lane: "human",
+              sourceKind: "human",
+              orderKey: "000",
+            },
+            {
+              id: "host::thread-a",
+              logicalHostID: "host",
+              threadID: "thread-a",
+              status: "idle",
+              lane: "human",
+              sourceKind: "human",
+              orderKey: "001",
+            },
+          ],
+        },
+      }],
+    },
+  });
+
+  const sample = uiSample({ sampledAt: "2026-05-31T00:00:06.000Z" });
+  sample.dockRootValue = "loaded; rows=2; pinned=0; lens=newest; search=false; filters=0";
+  sample.dockRows = [
+    dockRow({ thread: "thread-b", status: "running" }),
+    dockRow({ thread: "thread-a", status: "idle" }),
+  ];
+
+  const result = buildRenderedUIReport({
+    relayReport: report,
+    uiSamples: [sample],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(result.summary.ok, true);
+  assert.equal(result.evaluations[0].relaySampleIndex, "stream:2");
+});
+
+test("simulator UI proof scores visible Dock rows at sampledAt when checkpoint sweep finishes later", () => {
+  const report = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
+  report.samples[0].freshDock = {
+    cardCount: 2,
+    totalRows: 2,
+    renderOrderCardIDs: ["host::thread-a", "host::thread-b"],
+    cards: twoRowRelaySample().freshDock.cards,
+  };
+  report.samples.push({
+    sampleIndex: 1,
+    startedAt: "2026-05-31T00:00:10.000Z",
+    finishedAt: "2026-05-31T00:00:10.000Z",
+    freshDock: {
+      cardCount: 2,
+      totalRows: 2,
+      renderOrderCardIDs: ["host::thread-b", "host::thread-a"],
+      cards: [
+        {
+          id: "host::thread-b",
+          logicalHostID: "host",
+          threadID: "thread-b",
+          status: "running",
+          lane: "agent",
+          sourceKind: "automation",
+        },
+        {
+          id: "host::thread-a",
+          logicalHostID: "host",
+          threadID: "thread-a",
+          status: "idle",
+          lane: "human",
+          sourceKind: "human",
+        },
+      ],
+    },
+  });
+
+  const sample = orderedUISample({
+    sampledAt: "2026-05-31T00:00:02.000Z",
+    threads: ["thread-a", "thread-b"],
+  });
+  sample.finishedAt = "2026-05-31T00:00:12.000Z";
+  sample.dockSweep = {
+    startedAt: "2026-05-31T00:00:02.100Z",
+    finishedAt: "2026-05-31T00:00:12.000Z",
+    stepCount: 30,
+    maxSteps: 30,
+    stopReason: "maxSteps",
+    expectedRootRows: 2,
+    rows: sample.dockRows,
+  };
+
+  const result = buildRenderedUIReport({
+    relayReport: report,
+    uiSamples: [sample],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(result.summary.ok, true);
+  assert.equal(result.evaluations[0].relaySampleIndex, 0);
+  assert.deepEqual(result.failures, []);
+});
+
 test("simulator UI proof fails rendered lag after divergence", () => {
   const report = buildRenderedUIReport({
     relayReport: relayReport({ finishedAt: "2026-05-31T00:00:01.000Z", status: "idle" }),
@@ -572,6 +953,37 @@ test("simulator UI proof fails rendered lag after divergence", () => {
   assert.equal(report.summary.ok, false);
   assert.equal(report.summary.uiLag.observedLagMs, 3_400);
   assert.equal(report.failures.some((failure) => failure.code === "dock_ui_lag_exceeded"), true);
+});
+
+test("simulator UI proof does not fail a large checkpoint sweep solely because max steps capped it", () => {
+  const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
+  sample.dockRootValue = "loaded; rows=3; pinned=0; lens=newest; search=false; filters=0";
+  sample.dockRows = [dockRow({ thread: "thread-a" })];
+  sample.dockSweep = {
+    startedAt: "2026-05-31T00:00:01.500Z",
+    finishedAt: "2026-05-31T00:00:01.800Z",
+    stepCount: 30,
+    maxSteps: 30,
+    stopReason: "maxSteps",
+    expectedRootRows: 3,
+    rows: [dockRow({ thread: "thread-a" })],
+  };
+  const relaySample = twoRowRelaySample();
+  relaySample.freshDock.cardCount = 3;
+  relaySample.freshDock.totalRows = 3;
+  relaySample.freshDock.cards.push({
+    id: "host::thread-c",
+    logicalHostID: "host",
+    threadID: "thread-c",
+    status: "idle",
+    lane: "human",
+    sourceKind: "human",
+  });
+
+  const evaluation = evaluateUISample(sample, relaySample);
+
+  assert.equal(evaluation.ok, true);
+  assert.equal(evaluation.sweepExhaustive, false);
 });
 
 test("simulator UI proof scores scenario archive and unarchive transition windows", () => {

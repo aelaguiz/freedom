@@ -323,6 +323,7 @@ public struct DockView: View {
     @State private var isFilterSurfacePresented = false
     @State private var isPinnedCollapsed = false
     @State private var selectedDetailRow: DockRowViewModel?
+    @State private var selectedDetailStore: ThreadDetailStore?
     @State private var collapsedHostGroupIDs: Set<String> = []
     @State private var collapsedBranchGroupIDs: Set<String> = []
     @FocusState private var isSearchFocused: Bool
@@ -373,6 +374,9 @@ public struct DockView: View {
             }
             .navigationDestination(isPresented: detailNavigationBinding) {
                 selectedDetailDestination
+            }
+            .onChange(of: screenStore.state) { _, state in
+                syncSelectedDetail(with: state)
             }
         }
         .sheet(isPresented: $isFilterSurfacePresented) {
@@ -585,6 +589,7 @@ public struct DockView: View {
             set: { isPresented in
                 if !isPresented {
                     selectedDetailRow = nil
+                    selectedDetailStore = nil
                 }
             }
         )
@@ -592,15 +597,8 @@ public struct DockView: View {
 
     @ViewBuilder
     private var selectedDetailDestination: some View {
-        if let selectedDetailRow,
-           let host = store.hostConfiguration(for: selectedDetailRow) {
-            SessionDetailView(
-                store: makeThreadDetailStore(
-                    host: host,
-                    row: selectedDetailRow,
-                    hostIdentityResolver: currentSnapshot?.hostIdentityResolver
-                )
-            )
+        if let selectedDetailStore {
+            SessionDetailView(store: selectedDetailStore)
         } else {
             DockMessageView(
                 icon: "exclamationmark.triangle",
@@ -608,6 +606,33 @@ public struct DockView: View {
                 message: "This thread's host is no longer configured."
             )
         }
+    }
+
+    private func openDetail(row: DockRowViewModel) {
+        selectedDetailRow = row
+        guard let host = store.hostConfiguration(for: row) else {
+            selectedDetailStore = nil
+            return
+        }
+        selectedDetailStore = makeThreadDetailStore(
+            host: host,
+            row: row,
+            hostIdentityResolver: currentSnapshot?.hostIdentityResolver
+        )
+    }
+
+    private func syncSelectedDetail(with state: DockScreenState) {
+        guard let selectedDetailRow,
+              let selectedDetailStore,
+              case .loaded(let renderSnapshot) = state,
+              let updatedRow = renderSnapshot.snapshot.rows.first(where: { $0.id == selectedDetailRow.id }) else {
+            return
+        }
+
+        self.selectedDetailRow = updatedRow
+        // The Dock stream owns card freshness. Thread Detail uses it only as an
+        // invalidation signal, then rereads canonical thread history itself.
+        selectedDetailStore.observeDockRowUpdate(updatedRow)
     }
 
     private func makeThreadDetailStore(
@@ -707,7 +732,7 @@ public struct DockView: View {
                     isCollapsed: $isPinnedCollapsed,
                     onMove: { rows in Task { await store.reorderPinnedRows(rows) } },
                     onUnpin: { row in Task { await store.setPinned(false, for: row) } },
-                    onOpen: { row in selectedDetailRow = row },
+                    onOpen: { row in openDetail(row: row) },
                     rowContent: { row in dockPinnedRow(row) }
                 )
                 if shouldShowPinnedBodyDivider(projection, snapshot: snapshot) {
@@ -819,7 +844,7 @@ public struct DockView: View {
             },
             canOpen: store.hostConfiguration(for: row) != nil,
             onOpen: {
-                selectedDetailRow = row
+                openDetail(row: row)
             }
         ) {
             dockRowContent(row, showsPinIndicator: showsPinIndicator)

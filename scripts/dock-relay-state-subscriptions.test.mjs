@@ -98,6 +98,35 @@ test("StateSubscriptionHub heartbeat is per subscribed view", async () => {
   assert.equal(archiveUpdates.every((update) => update.view === "archive"), true);
 });
 
+test("StateSubscriptionHub default heartbeat uses per-view sequence", async () => {
+  const store = {
+    currentSeq() {
+      return 99;
+    },
+    currentSeqForView(view) {
+      return view === "archive" ? 11 : 7;
+    },
+  };
+  const hub = new StateSubscriptionHub({
+    store,
+    snapshotForView: () => ({}),
+    heartbeatIntervalMs: 5,
+  });
+  const dockUpdates = [];
+  const archiveUpdates = [];
+  const unsubscribeDock = hub.subscribe("dock", (update) => dockUpdates.push(update));
+  const unsubscribeArchive = hub.subscribe("archive", (update) => archiveUpdates.push(update));
+
+  await sleep(20);
+  unsubscribeDock();
+  unsubscribeArchive();
+
+  assert.ok(dockUpdates.length > 0);
+  assert.ok(archiveUpdates.length > 0);
+  assert.equal(dockUpdates.every((update) => update.seq === 7), true);
+  assert.equal(archiveUpdates.every((update) => update.seq === 11), true);
+});
+
 test("archive mutations reconcile and publish dock and archive views", async () => {
   const calls = [];
   const engine = new RelayStateEngine(

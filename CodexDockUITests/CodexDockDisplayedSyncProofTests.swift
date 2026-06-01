@@ -29,14 +29,21 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
             "Dock did not reach complete loaded state before sampling. Root value: \(root.displayedUIStringValue)"
         )
 
-        var samples: [DisplayedUISample] = []
+        try DisplayedUIArtifactWriter.resetSamples(at: config.outputPath)
+        var sampleCount = 0
+        var observedLoadedDock = false
         var sampleIndex = 0
+        func record(_ sample: DisplayedUISample) throws {
+            sampleCount += 1
+            observedLoadedDock = observedLoadedDock || sample.dockRootValue.contains("loaded")
+            try DisplayedUIArtifactWriter.appendSample(sample, to: config.outputPath)
+        }
 
         if let openThreadID = config.openThreadID {
-            samples.append(app.captureDisplayedUISample(index: sampleIndex))
+            try record(app.captureDisplayedUISample(index: sampleIndex))
             sampleIndex += 1
             RunLoop.current.run(until: Date().addingTimeInterval(TimeInterval(config.sampleMS) / 1000.0))
-            samples.append(app.captureDisplayedUISample(index: sampleIndex))
+            try record(app.captureDisplayedUISample(index: sampleIndex))
             sampleIndex += 1
 
             guard let row = app.visibleDockRow(hostID: config.openHostID, threadID: openThreadID, timeout: 15) else {
@@ -61,7 +68,7 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
             var didTapRequestAction = false
             repeat {
                 let sample = app.captureDisplayedUISample(index: sampleIndex)
-                samples.append(sample)
+                try record(sample)
                 sampleIndex += 1
                 if !didTapRequestAction,
                    let cardID = config.requestCardID,
@@ -74,21 +81,27 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
             } while Date() < deadline
 
             if config.detailCheckpointSweep == true {
-                samples.append(app.captureDisplayedUISample(index: sampleIndex, includeDetailSweep: true))
+                try record(app.captureDisplayedUISample(index: sampleIndex, includeDetailSweep: true))
                 sampleIndex += 1
             }
         } else {
             try DisplayedUIArtifactWriter.markReady(to: config.readyPath)
 
             let deadline = Date().addingTimeInterval(TimeInterval(config.durationMS) / 1000.0)
+            let dockLenses = config.resolvedDockLenses
             repeat {
-                samples.append(app.captureDisplayedUISample(index: sampleIndex))
+                let lens = dockLenses[sampleIndex % dockLenses.count]
+                XCTAssertTrue(
+                    selectDockLens(lens, app: app, root: root),
+                    "Displayed sync proof could not switch Dock lens to \(lens.rawValue)."
+                )
+                try record(app.captureDisplayedUISample(index: sampleIndex))
                 sampleIndex += 1
                 RunLoop.current.run(until: Date().addingTimeInterval(TimeInterval(config.sampleMS) / 1000.0))
             } while Date() < deadline
 
             if config.checkpointSweep == true {
-                samples.append(app.captureDisplayedUISample(index: sampleIndex, includeDockSweep: true))
+                try record(app.captureDisplayedUISample(index: sampleIndex, includeDockSweep: true))
                 sampleIndex += 1
             }
         }
@@ -99,23 +112,20 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
                 if root.waitForDisplayedUIStringValue(matching: { value in
                     value.contains("loaded") && !value.contains("Partial")
                 }, timeout: 10) {
-                    samples.append(app.captureDisplayedUISample(index: sampleIndex, includeDockSweep: true))
+                    try record(app.captureDisplayedUISample(index: sampleIndex, includeDockSweep: true))
                     sampleIndex += 1
                 }
             } else if elementExists(app.displayedUIElement(id: AutomationID.Dock.root.rawValue)) {
-                samples.append(app.captureDisplayedUISample(index: sampleIndex))
+                try record(app.captureDisplayedUISample(index: sampleIndex))
                 sampleIndex += 1
             }
         }
 
-        XCTAssertFalse(samples.isEmpty, "Displayed sync proof did not record any UI samples.")
+        XCTAssertGreaterThan(sampleCount, 0, "Displayed sync proof did not record any UI samples.")
         XCTAssertTrue(
-            samples.contains(where: { $0.dockRootValue.contains("loaded") }),
+            observedLoadedDock,
             "Displayed sync proof never observed the Dock loaded state."
         )
-
-        try DisplayedUIArtifactWriter.writeSamples(samples, to: config.outputPath)
-        add(XCTAttachment(string: samples.map(\.jsonLine).joined(separator: "\n")))
     }
 
     private func launchRelayBackedApp(hosts: String) -> XCUIApplication {
@@ -124,6 +134,23 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
         app.terminate()
         app.launch()
         return app
+    }
+
+    private func selectDockLens(
+        _ lens: DockLensID,
+        app: XCUIApplication,
+        root: XCUIElement
+    ) -> Bool {
+        if root.displayedUIStringValue.contains("lens=\(lens.rawValue)") {
+            return true
+        }
+        app.displayedUIElement(id: AutomationID.Dock.lensButton(lens.rawValue).rawValue)
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .tap()
+        return root.waitForDisplayedUIStringValue(
+            matching: { $0.contains("lens=\(lens.rawValue)") },
+            timeout: 5
+        )
     }
 }
 
@@ -141,6 +168,13 @@ private struct DisplayedUISyncConfig: Codable {
     var requestCardID: String?
     var requestAction: String?
     var detailFilter: String?
+    var dockLenses: [String]?
+
+    var resolvedDockLenses: [DockLensID] {
+        let parsed = (dockLenses ?? [DockLensID.newest.rawValue])
+            .compactMap(DockLensID.init(rawValue:))
+        return parsed.isEmpty ? [.newest] : parsed
+    }
 
     // The Makefile proof targets serialize this single simulator config path
     // with codex-dock-sim-ui-sync-config.lock. Keep this one path canonical so

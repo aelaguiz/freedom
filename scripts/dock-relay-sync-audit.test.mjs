@@ -77,6 +77,30 @@ test("sync audit flags heartbeat sequence gaps", () => {
   assert.equal(findings.some((finding) => finding.code === "dock_stream_heartbeat_sequence_gap"), true);
 });
 
+test("sync audit accepts per-view sequence jumps when baseSeq matches", () => {
+  const state = emptyDockStreamState();
+  assert.deepEqual(applyDockPayload(state, snapshot({ seq: 7 })), []);
+
+  const findings = applyDockPayload(state, {
+    kind: "delta",
+    schemaVersion: 2,
+    epoch: "epoch-1",
+    baseSeq: 7,
+    seq: 9,
+    view: "dock",
+    complete: true,
+    totalRows: 0,
+    window: emptyWindow,
+    freshness: { status: "fresh" },
+    upsertCards: [],
+    deleteCardIDs: [],
+  });
+
+  assert.deepEqual(findings, []);
+  assert.equal(state.needsResync, false);
+  assert.equal(state.seq, 9);
+});
+
 test("sync audit compares long-lived stream freshness to fresh snapshots", () => {
   const comparison = compareDockStates(
     snapshot({ freshness: { status: "stale", lastError: "old proof" } }),

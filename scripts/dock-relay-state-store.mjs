@@ -349,6 +349,14 @@ class RelayStateStore {
     return this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM changes").get().seq || 0;
   }
 
+  currentSeqForView(view) {
+    return this.db.prepare(`
+      SELECT COALESCE(MAX(seq), 0) AS seq
+      FROM changes
+      WHERE view = ?
+    `).get(view).seq || 0;
+  }
+
   hostRows() {
     return this.db.prepare(`
       SELECT host_id AS id, host_id AS logicalHostID, display_name AS displayName, endpoint
@@ -529,6 +537,7 @@ class RelayStateStore {
         }, at);
       }
 
+      const baseSeq = this.currentSeqForView(DOCK_VIEW);
       const seq = this.recordChange({
         view: DOCK_VIEW,
         hostID: host.id,
@@ -541,7 +550,7 @@ class RelayStateStore {
         at,
       });
       this.pruneChanges();
-      return { seq, upsertCards, deleteCardIDs };
+      return { baseSeq, seq, upsertCards, deleteCardIDs };
     });
   }
 
@@ -593,6 +602,7 @@ class RelayStateStore {
         error,
       }, at);
 
+      const baseSeq = this.currentSeqForView(ARCHIVE_VIEW);
       const seq = this.recordChange({
         view: ARCHIVE_VIEW,
         hostID: host.id,
@@ -605,7 +615,7 @@ class RelayStateStore {
         at,
       });
       this.pruneChanges();
-      return { seq, upsertCards, deleteCardIDs };
+      return { baseSeq, seq, upsertCards, deleteCardIDs };
     });
   }
 
@@ -841,14 +851,17 @@ class RelayStateStore {
         last_attempt_at = excluded.last_attempt_at,
         last_error = excluded.last_error
     `).run(hostID, scopeName, boolInt(archived), scopeName, at, error?.message || String(error));
-    this.recordChange({
-      view: archived ? ARCHIVE_VIEW : DOCK_VIEW,
+    const view = archived ? ARCHIVE_VIEW : DOCK_VIEW;
+    const baseSeq = this.currentSeqForView(view);
+    const seq = this.recordChange({
+      view,
       hostID,
       changeType: "scope-stale",
       payload: { scopeName },
       at,
     });
     this.pruneChanges();
+    return { baseSeq, seq };
   }
 
   recordChange({

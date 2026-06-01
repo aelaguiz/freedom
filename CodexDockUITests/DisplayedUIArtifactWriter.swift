@@ -1,15 +1,34 @@
 import Foundation
 
 enum DisplayedUIArtifactWriter {
-    static func writeSamples(_ samples: [DisplayedUISample], to path: String) throws {
+    static func resetSamples(at path: String) throws {
         let url = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true,
             attributes: nil
         )
-        let body = samples.map(\.jsonLine).joined(separator: "\n") + "\n"
-        try body.write(to: url, atomically: true, encoding: .utf8)
+        try Data().write(to: url, options: .atomic)
+    }
+
+    static func appendSample(_ sample: DisplayedUISample, to path: String) throws {
+        let url = URL(fileURLWithPath: path)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        let data = Data((sample.jsonLine + "\n").utf8)
+        if !FileManager.default.fileExists(atPath: path) {
+            try data.write(to: url, options: .atomic)
+            return
+        }
+        let handle = try FileHandle(forWritingTo: url)
+        defer {
+            try? handle.close()
+        }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: data)
     }
 
     static func markReady(to path: String?) throws {

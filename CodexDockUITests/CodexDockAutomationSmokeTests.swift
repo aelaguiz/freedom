@@ -125,6 +125,31 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         XCTAssertTrue(app.element(id: AutomationID.Composer.sendButton).waitForExistence(timeout: 5))
     }
 
+    func testArchivedThreadRowOpensSessionDetailByIdentifierWhenRowsExist() throws {
+        let app = launchRelayBackedApp()
+        XCTAssertTrue(app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20))
+
+        app.openTaskSheet(.archivedThreads)
+        XCTAssertTrue(app.element(id: AutomationID.Archive.root).waitForExistence(timeout: 20))
+
+        guard let row = app.waitForElement(
+            identifierPrefix: "codexdock.archive.row.",
+            excludedIdentifierParts: [".restore.", ".selection."],
+            timeout: 25
+        ) else {
+            XCTFail("No relay-backed archived row was available in the iPhone 17 simulator; Archive-to-detail ID proof needs at least one real archived session row from the UI test CODEX_DOCK_HOSTS relay list.")
+            return
+        }
+
+        XCTAssertTrue(
+            app.tapVisibleButton(id: row.identifier, timeout: 10),
+            "Relay-backed archived row disappeared or stopped being visibly tappable before tap. id=\(row.identifier)\n\nAccessibility tree:\n\(app.debugDescription)"
+        )
+        XCTAssertTrue(app.waitForElement(identifierPrefix: "codexdock.session.root.", timeout: 15) != nil)
+        XCTAssertTrue(app.element(id: AutomationID.Session.header).waitForExistence(timeout: 10))
+        XCTAssertTrue(app.element(id: AutomationID.Session.messageFilter).waitForStringValue(containing: "messages", timeout: 10))
+    }
+
     private func launchRelayBackedApp(hosts: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["CODEX_DOCK_HOSTS"] = hosts

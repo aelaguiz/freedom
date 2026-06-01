@@ -1239,14 +1239,20 @@ class DockStreamProbe {
         seq: message.params?.seq ?? null,
         baseSeq: message.params?.baseSeq ?? null,
       });
-      this.archiveNotifications.push({
+      const notification = {
         method: message.method,
         receivedAt,
         kind: message.params?.kind || null,
         seq: message.params?.seq ?? null,
         baseSeq: message.params?.baseSeq ?? null,
-      });
+      };
       this.applyArchivePayload(message.params, "notification", receivedAt);
+      if (message.params?.kind === "delta" || message.params?.kind === "snapshot") {
+        // Store the post-apply stream state so simulator UI proof can compare
+        // against live truth at notification time, not just sparse resyncs.
+        notification.snapshot = sanitizeDockSnapshotForReport(this.archiveSnapshot());
+      }
+      this.archiveNotifications.push(notification);
       return;
     }
     if (message?.method !== "dock/update") {
@@ -1257,14 +1263,20 @@ class DockStreamProbe {
       seq: message.params?.seq ?? null,
       baseSeq: message.params?.baseSeq ?? null,
     });
-    this.notifications.push({
+    const notification = {
       method: message.method,
       receivedAt,
       kind: message.params?.kind || null,
       seq: message.params?.seq ?? null,
       baseSeq: message.params?.baseSeq ?? null,
-    });
+    };
     this.applyPayload(message.params, "notification", receivedAt);
+    if (message.params?.kind === "delta" || message.params?.kind === "snapshot") {
+      // Store the post-apply stream state so simulator UI proof can compare
+      // against live truth at notification time, not just sparse resyncs.
+      notification.snapshot = sanitizeDockSnapshotForReport(this.snapshot());
+    }
+    this.notifications.push(notification);
   }
 
   applyPayload(payload, source, receivedAt = new Date().toISOString()) {

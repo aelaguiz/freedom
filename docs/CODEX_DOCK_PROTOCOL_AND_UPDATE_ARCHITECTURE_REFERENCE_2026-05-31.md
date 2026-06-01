@@ -7,6 +7,12 @@ the real update paths in the current repo, the app-server assumptions the relay
 depends on, and the stale-data failure modes we found while auditing. It does
 not implement fixes.
 
+Current UX intention:
+[CODEX_DOCK_USER_INTENTION_2026-06-01.md](CODEX_DOCK_USER_INTENTION_2026-06-01.md),
+[CODEX_DOCK_TRUSTWORTHY_LIVE_WINDOW_INTENTION_2026-06-01.md](CODEX_DOCK_TRUSTWORTHY_LIVE_WINDOW_INTENTION_2026-06-01.md)
+and
+[CODEX_DOCK_LIVE_TRUTH_INTENTION_2026-06-01.md](CODEX_DOCK_LIVE_TRUTH_INTENTION_2026-06-01.md).
+
 ## Bottom Line
 
 Codex Dock has two different update systems:
