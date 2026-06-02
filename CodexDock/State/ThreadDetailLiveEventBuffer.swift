@@ -2,7 +2,6 @@ import Foundation
 
 enum ThreadDetailBufferedLiveEvent {
     case notification(JSONRPCNotification)
-    case request(JSONRPCRequest)
 }
 
 struct ThreadDetailLiveEventBuffer {
@@ -27,10 +26,6 @@ struct ThreadDetailLiveEventBuffer {
 
     mutating func append(notification: JSONRPCNotification) {
         events.append(.notification(notification))
-    }
-
-    mutating func append(request: JSONRPCRequest) {
-        events.append(.request(request))
     }
 
     mutating func takeBatch() -> [ThreadDetailBufferedLiveEvent]? {

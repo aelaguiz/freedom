@@ -342,8 +342,8 @@ public extension AutomationID {
             AutomationID("codexdock.session.state.\(kind.rawValue)")
         }
 
-        public static func messageCard(eventID: String) -> AutomationID {
-            AutomationID("codexdock.session.message.\(safeSegment(eventID))")
+        public static func messageCard(projectionID: String) -> AutomationID {
+            AutomationID("codexdock.session.message.\(safeSegment(projectionID))")
         }
     }
 

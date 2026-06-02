@@ -4,8 +4,10 @@ import XCTest
 final class ClientCommandEngineTests: XCTestCase {
     func testArchiveAndUnarchiveCommandsUseArchiverActor() async throws {
         let host = makeHost()
+        let projectionID = "host:\(host.id)/thread:thread-a/row:threadCard"
         let row = DockRowViewModel(
-            id: HostScopedThreadID(hostID: host.id, threadID: "thread-a"),
+            threadIdentity: HostScopedThreadID(hostID: host.id, threadID: "thread-a"),
+            projectionID: projectionID,
             backendSessionID: "backend-thread-a",
             title: "Thread A",
             hostDisplayName: host.displayName,
@@ -15,6 +17,7 @@ final class ClientCommandEngineTests: XCTestCase {
             status: .running,
             lastActivity: "now",
             lastActivityDate: Date(timeIntervalSince1970: 1_000),
+            displayOrderKey: "9999999999000000|0001|\(projectionID)",
             summary: "summary",
             rail: .blue,
             label: nil,
@@ -49,8 +52,8 @@ final class ClientCommandEngineTests: XCTestCase {
             session: session
         )
 
-        let startParams = await session.turnStartParamsSnapshot()
-        let steerParams = await session.turnSteerParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
+        let steerParams = session.turnSteerParamsSnapshot()
         XCTAssertEqual(startedTurnID, "turn-started")
         XCTAssertEqual(steeredTurnID, "turn-started")
         XCTAssertEqual(startParams.map(\.threadId), ["thread-a"])
@@ -67,7 +70,7 @@ final class ClientCommandEngineTests: XCTestCase {
             session: session
         )
 
-        let sentResponses = await session.sentResponsesSnapshot()
+        let sentResponses = session.sentResponsesSnapshot()
         XCTAssertEqual(sentResponses, [
             SentServerResponse(id: .string("approval-1"), result: .bool(true))
         ])

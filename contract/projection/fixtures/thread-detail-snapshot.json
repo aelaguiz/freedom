@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "identityVersion": 1,
+  "projectionEngineVersion": 1,
+  "sourceHostID": "test-host",
+  "view": "thread.detail",
+  "threadID": "thread-a",
+  "epoch": "epoch-a",
+  "seq": 0,
+  "snapshotID": "snapshot-a",
+  "scope": "thread",
+  "viewParamsKey": "sha256:test",
+  "complete": true,
+  "activeTurnID": null,
+  "order": "displayOrderKeyAscending",
+  "freshness": {
+    "state": "fresh",
+    "asOf": "2026-06-01T00:00:00.000Z",
+    "sourceWatermark": "2026-06-01T00:00:00.000Z"
+  },
+  "rows": [
+    {
+      "schemaVersion": 1,
+      "identityVersion": 1,
+      "projectionEngineVersion": 1,
+      "sourceHostID": "test-host",
+      "view": "thread.detail",
+      "threadID": "thread-a",
+      "projectionID": "host:test-host/thread:thread-a/turn:turn-1/item:item-1/row:userMessage",
+      "sourceRef": "host:test-host/thread:thread-a/turn:turn-1/item:item-1",
+      "rowRole": "userMessage",
+      "displayOrderKey": "0000000000000000|000000|host:test-host/thread:thread-a/turn:turn-1/item:item-1/row:userMessage",
+      "revision": 1,
+      "freshness": {
+        "state": "fresh",
+        "asOf": "2026-06-01T00:00:00.000Z",
+        "sourceWatermark": "2026-06-01T00:00:00.000Z"
+      },
+      "payload": {
+        "itemType": "message",
+        "visibility": "body",
+        "renderKind": "message",
+        "title": "User",
+        "body": "hello",
+        "eventTime": "2026-06-01T00:00:00.000Z",
+        "activityTime": "2026-06-01T00:00:00.000Z",
+        "turnID": "turn-1",
+        "itemID": "item-1",
+        "turnOrder": 1,
+        "itemOrder": 1,
+        "rowOrder": 1,
+        "renderState": "settled",
+        "requestID": null,
+        "request": null,
+        "diagnostic": null
+      }
+    }
+  ]
+}

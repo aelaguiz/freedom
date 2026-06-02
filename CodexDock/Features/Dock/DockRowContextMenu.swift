@@ -15,8 +15,8 @@ struct DockRowContextMenu: View {
         }
         .codexAutomationID(
             AutomationID.Dock.rowAction(
-                hostID: row.id.hostID,
-                threadID: row.id.threadID,
+                hostID: row.hostID,
+                threadID: row.threadID,
                 action: row.isPinned ? .unpin : .pin
             )
         )
@@ -30,8 +30,8 @@ struct DockRowContextMenu: View {
         }
         .codexAutomationID(
             AutomationID.Dock.rowAction(
-                hostID: row.id.hostID,
-                threadID: row.id.threadID,
+                hostID: row.hostID,
+                threadID: row.threadID,
                 action: .markWatch
             )
         )
@@ -45,8 +45,8 @@ struct DockRowContextMenu: View {
         }
         .codexAutomationID(
             AutomationID.Dock.rowAction(
-                hostID: row.id.hostID,
-                threadID: row.id.threadID,
+                hostID: row.hostID,
+                threadID: row.threadID,
                 action: .clearLabel
             )
         )
@@ -62,8 +62,8 @@ struct DockRowContextMenu: View {
         }
         .codexAutomationID(
             AutomationID.Dock.rowAction(
-                hostID: row.id.hostID,
-                threadID: row.id.threadID,
+                hostID: row.hostID,
+                threadID: row.threadID,
                 action: .archive
             )
         )
@@ -79,8 +79,8 @@ struct DockRowContextMenu: View {
                 }
                 .codexAutomationID(
                     AutomationID.Dock.rowColorAction(
-                        hostID: row.id.hostID,
-                        threadID: row.id.threadID,
+                        hostID: row.hostID,
+                        threadID: row.threadID,
                         rail: rail.rawValue
                     )
                 )
@@ -95,8 +95,8 @@ struct DockRowContextMenu: View {
             }
             .codexAutomationID(
                 AutomationID.Dock.rowAction(
-                    hostID: row.id.hostID,
-                    threadID: row.id.threadID,
+                    hostID: row.hostID,
+                    threadID: row.threadID,
                     action: .clearColor
                 )
             )
@@ -105,8 +105,8 @@ struct DockRowContextMenu: View {
         }
         .codexAutomationID(
             AutomationID.Dock.rowAction(
-                hostID: row.id.hostID,
-                threadID: row.id.threadID,
+                hostID: row.hostID,
+                threadID: row.threadID,
                 action: .color
             )
         )

@@ -1,100 +1,139 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { filterCountsFromTurns, summarizeSamples } from "./codex-dock-live-filter-truth.mjs";
+import { filterCountsFromProjectionRows, summarizeSamples } from "./codex-dock-live-filter-truth.mjs";
 
-test("live filter truth ignores whitespace-only command output like Swift", () => {
-  const turn = {
-    id: "turn-1",
-    items: [
-      {
-        id: "command-1",
-        type: "commandExecution",
-        command: "true",
-        aggregatedOutput: "\n",
-      },
-    ],
+function row({
+  projectionID,
+  displayOrderKey,
+  kind,
+  visibility,
+  itemType = kind,
+  turnID = "turn-1",
+  itemID = "item-1",
+}) {
+  return {
+    projectionID,
+    sourceHostID: "host",
+    displayOrderKey,
+    renderKind: kind,
+    visibility,
+    itemType,
+    turnID,
+    itemID,
   };
+}
 
-  const counts = filterCountsFromTurns([turn], 240);
+test("live filter truth counts projection command rows without inventing whitespace-only output", () => {
+  const counts = filterCountsFromProjectionRows([
+    row({
+      projectionID: "host:host/thread:thread-a/turn:turn-1/item:command-1/row:command",
+      displayOrderKey: "001",
+      kind: "command",
+      visibility: "tooling",
+      itemType: "commandExecution",
+      itemID: "command-1",
+    }),
+  ], 240);
 
   assert.equal(counts.visibleCounts.all, 1);
   assert.equal(counts.visibleCounts.command, 1);
   assert.equal(counts.visibleCounts.output, 0);
 });
 
-test("live filter truth counts non-empty command output like Swift", () => {
-  const turn = {
-    id: "turn-1",
-    items: [
-      {
-        id: "command-1",
-        type: "commandExecution",
-        command: "echo ok",
-        aggregatedOutput: "ok\n",
-      },
-    ],
-  };
-
-  const counts = filterCountsFromTurns([turn], 240);
+test("live filter truth counts relay-emitted command output projection rows", () => {
+  const counts = filterCountsFromProjectionRows([
+    row({
+      projectionID: "host:host/thread:thread-a/turn:turn-1/item:command-1/row:command",
+      displayOrderKey: "001",
+      kind: "command",
+      visibility: "tooling",
+      itemType: "commandExecution",
+      itemID: "command-1",
+    }),
+    row({
+      projectionID: "host:host/thread:thread-a/turn:turn-1/item:command-1/row:commandOutput",
+      displayOrderKey: "002",
+      kind: "output",
+      visibility: "tooling",
+      itemType: "commandExecution",
+      itemID: "command-1",
+    }),
+  ], 240);
 
   assert.equal(counts.visibleCounts.all, 2);
   assert.equal(counts.visibleCounts.command, 1);
   assert.equal(counts.visibleCounts.output, 1);
 });
 
-test("live filter truth exposes visible event ids in Thread Detail render order", () => {
-  const turns = [
-    {
-      id: "new-turn",
-      startedAt: 100,
-      completedAt: 110,
-      items: [
-        { id: "old-agent", type: "agentMessage", text: "old" },
-        { id: "new-agent", type: "agentMessage", text: "new" },
-      ],
-    },
-    {
-      id: "older-turn",
-      startedAt: 90,
-      completedAt: 95,
-      items: [
-        { id: "older-user", type: "userMessage", content: [{ text: "older" }] },
-      ],
-    },
-  ];
+test("live filter truth exposes visible projection ids in Thread Detail render order", () => {
+  const counts = filterCountsFromProjectionRows([
+    row({
+      projectionID: "host:host/thread:thread-a/turn:new-turn/item:old-agent/row:agentMessage",
+      displayOrderKey: "002",
+      kind: "agentMessage",
+      visibility: "message",
+      itemID: "old-agent",
+      turnID: "new-turn",
+    }),
+    row({
+      projectionID: "host:host/thread:thread-a/turn:new-turn/item:new-agent/row:agentMessage",
+      displayOrderKey: "001",
+      kind: "agentMessage",
+      visibility: "message",
+      itemID: "new-agent",
+      turnID: "new-turn",
+    }),
+    row({
+      projectionID: "host:host/thread:thread-a/turn:older-turn/item:older-user/row:userMessage",
+      displayOrderKey: "003",
+      kind: "userMessage",
+      visibility: "message",
+      itemID: "older-user",
+      turnID: "older-turn",
+    }),
+  ], 240);
 
-  const counts = filterCountsFromTurns(turns, 240);
-
-  assert.deepEqual(counts.visibleEventIDs.messages.slice(0, 3), [
-    "new-turn-new-agent-agent",
-    "new-turn-old-agent-agent",
-    "older-turn-older-user-user",
+  assert.deepEqual(counts.visibleProjectionIDs.messages.slice(0, 3), [
+    "host:host/thread:thread-a/turn:new-turn/item:new-agent/row:agentMessage",
+    "host:host/thread:thread-a/turn:new-turn/item:old-agent/row:agentMessage",
+    "host:host/thread:thread-a/turn:older-turn/item:older-user/row:userMessage",
   ]);
 });
 
-test("live filter truth caps visible event ids with the same visible window as counts", () => {
-  const turn = {
-    id: "turn-1",
-    startedAt: 100,
-    completedAt: 110,
-    items: [
-      { id: "item-1", type: "agentMessage", text: "one" },
-      { id: "item-2", type: "agentMessage", text: "two" },
-      { id: "item-3", type: "agentMessage", text: "three" },
-    ],
-  };
-
-  const counts = filterCountsFromTurns([turn], 2);
+test("live filter truth caps visible projection ids with the same visible window as counts", () => {
+  const counts = filterCountsFromProjectionRows([
+    row({
+      projectionID: "host:host/thread:thread-a/turn:turn-1/item:item-1/row:agentMessage",
+      displayOrderKey: "003",
+      kind: "agentMessage",
+      visibility: "message",
+      itemID: "item-1",
+    }),
+    row({
+      projectionID: "host:host/thread:thread-a/turn:turn-1/item:item-2/row:agentMessage",
+      displayOrderKey: "002",
+      kind: "agentMessage",
+      visibility: "message",
+      itemID: "item-2",
+    }),
+    row({
+      projectionID: "host:host/thread:thread-a/turn:turn-1/item:item-3/row:agentMessage",
+      displayOrderKey: "001",
+      kind: "agentMessage",
+      visibility: "message",
+      itemID: "item-3",
+    }),
+  ], 2);
 
   assert.equal(counts.visibleCounts.messages, 2);
-  assert.deepEqual(counts.visibleEventIDs.messages, [
-    "turn-1-item-3-agent",
-    "turn-1-item-2-agent",
+  assert.deepEqual(counts.visibleProjectionIDs.messages, [
+    "host:host/thread:thread-a/turn:turn-1/item:item-3/row:agentMessage",
+    "host:host/thread:thread-a/turn:turn-1/item:item-2/row:agentMessage",
   ]);
 });
 
-test("live filter truth summary treats capped visible event id changes as movement", () => {
+test("live filter truth summary treats capped visible projection id changes as movement", () => {
   const summary = summarizeSamples([
     {
       sampledAt: "2026-06-01T13:00:00.000Z",
@@ -102,7 +141,7 @@ test("live filter truth summary treats capped visible event id changes as moveme
       dock: { targetCard: { activityAt: "2026-06-01T13:00:00.000Z" } },
       turns: {
         visibleCounts: { messages: 240 },
-        visibleEventIDs: { messages: ["event-a", "event-old"] },
+        visibleProjectionIDs: { messages: ["host:host/thread:thread-a/turn:turn-a/item:item-a/row:agentMessage", "host:host/thread:thread-a/turn:turn-old/item:item-old/row:agentMessage"] },
       },
     },
     {
@@ -111,12 +150,12 @@ test("live filter truth summary treats capped visible event id changes as moveme
       dock: { targetCard: { activityAt: "2026-06-01T13:00:00.000Z" } },
       turns: {
         visibleCounts: { messages: 240 },
-        visibleEventIDs: { messages: ["event-b", "event-a"] },
+        visibleProjectionIDs: { messages: ["host:host/thread:thread-a/turn:turn-b/item:item-b/row:agentMessage", "host:host/thread:thread-a/turn:turn-a/item:item-a/row:agentMessage"] },
       },
     },
   ]);
 
   assert.equal(summary.moving, true);
   assert.equal(summary.filters.messages.changed, true);
-  assert.deepEqual(summary.filters.messages.visibleEventIDHeadUnique, ["event-a", "event-b"]);
+  assert.deepEqual(summary.filters.messages.visibleProjectionIDHeadUnique, ["host:host/thread:thread-a/turn:turn-a/item:item-a/row:agentMessage", "host:host/thread:thread-a/turn:turn-b/item:item-b/row:agentMessage"]);
 });

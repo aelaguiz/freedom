@@ -36,7 +36,7 @@ public struct SessionDetailView: View {
             store.close()
         }
         .accessibilityElement(children: .contain)
-        .codexAutomationID(AutomationID.Session.root(threadID: store.row.id.threadID))
+        .codexAutomationID(AutomationID.Session.root(threadID: store.row.threadID))
         .accessibilityValue(sessionScreenValue)
     }
 

@@ -8,7 +8,9 @@ import { pathToFileURL } from "node:url";
 import { WebSocketServer } from "ws";
 
 import { startServer } from "./dock-relay.mjs";
+import { RELAY_STATE_STREAM_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
 import { threadMatchesSourceKinds } from "./dock-relay-source-filter.mjs";
+import { projectionIDForThreadCard } from "./dock-relay-projection-engine.mjs";
 import {
   DockStreamProbe,
   cardID,
@@ -23,7 +25,6 @@ import {
   assertProofReport,
   finalizeProofReport,
 } from "./proof-report-contracts.mjs";
-
 const SUPPORTED_SCENARIOS = new Set([
   "archive-toggle",
   "detail-reconnect",
@@ -45,6 +46,22 @@ const DEFAULT_SCENARIO_HOLD_MS = 3_500;
 const DEFAULT_WAIT_TIMEOUT_MS = 120_000;
 const DEFAULT_STREAM_COMPARE_ATTEMPTS = 5;
 const DEFAULT_STREAM_COMPARE_DELAY_MS = 1_000;
+const CLIENT_PATH_ROUTES = new Set([
+  "initialize",
+  "initialized",
+  "dock/subscribe",
+  "dock/update",
+  "dock/resync",
+  "archive/subscribe",
+  "archive/update",
+  "archive/resync",
+  "thread/archive",
+  "thread/unarchive",
+  "thread/detail/read",
+  "thread/detail/subscribe",
+  "thread/detail/resync",
+  "thread/detail/update",
+]);
 
 function usage() {
   return [
@@ -184,6 +201,130 @@ async function waitForFile(filePath, timeoutMs, label) {
   }
 }
 
+function projectionRowsFromWitness(witness) {
+  const rowsByProjectionID = new Map();
+  for (const envelope of witness?.envelopes || []) {
+    if (envelope.kind === "delete") {
+      for (const projectionID of envelope.projectionIDs || []) {
+        rowsByProjectionID.delete(projectionID);
+      }
+      continue;
+    }
+    if (envelope.kind === "snapshot" || !envelope.kind) {
+      rowsByProjectionID.clear();
+    }
+    for (const row of envelope.rows || []) {
+      if (row?.projectionID) {
+        rowsByProjectionID.set(row.projectionID, row);
+      }
+    }
+  }
+  return [...rowsByProjectionID.values()]
+    .sort((left, right) => String(left.displayOrderKey).localeCompare(String(right.displayOrderKey)));
+}
+
+function requestProjectionIDFromWitness(witness, requestID) {
+  if (requestID === null || requestID === undefined) {
+    return null;
+  }
+  const expected = String(requestID);
+  return projectionRowsFromWitness(witness).find((row) => {
+    const payload = row?.payload || {};
+    const request = payload.request || {};
+    return String(payload.requestID ?? request.requestID ?? "") === expected;
+  })?.projectionID || null;
+}
+
+function requestStatusFromWitness(witness, requestID) {
+  if (requestID === null || requestID === undefined) {
+    return null;
+  }
+  const expected = String(requestID);
+  return projectionRowsFromWitness(witness).find((row) => {
+    const payload = row?.payload || {};
+    const request = payload.request || {};
+    return String(payload.requestID ?? request.requestID ?? "") === expected;
+  })?.payload?.request?.status || null;
+}
+
+function projectionWitnessTruth(witness) {
+  return {
+    source: witness?.source || null,
+    byteEquivalentToDownstream: witness?.byteEquivalentToDownstream === true,
+    sourceHostID: witness?.sourceHostID || null,
+    view: witness?.view || null,
+    scope: witness?.scope || null,
+    threadID: witness?.threadID || null,
+    viewParamsKey: witness?.viewParamsKey || null,
+    epoch: witness?.epoch || null,
+    lastSeq: witness?.lastSeq ?? null,
+    projectionIDs: Array.isArray(witness?.projectionIDs) ? witness.projectionIDs : [],
+  };
+}
+
+async function readDetailProjectionWitness(client, {
+  sourceHostID,
+  threadID,
+}) {
+  return client.request("projection/witness/read", {
+    sourceHostID,
+    view: "thread.detail",
+    scope: "thread",
+    threadID,
+  });
+}
+
+async function waitForDetailProjectionWitness({
+  client,
+  sourceHostID,
+  threadID,
+  minProjectionCount = 0,
+  requestID = null,
+  requestStatus = null,
+  timeoutMs,
+}) {
+  const deadline = Date.now() + timeoutMs;
+  let lastWitness = null;
+  while (Date.now() < deadline) {
+    lastWitness = await readDetailProjectionWitness(client, { sourceHostID, threadID });
+    const projectionCount = Array.isArray(lastWitness?.projectionIDs) ? lastWitness.projectionIDs.length : 0;
+    const hasEnoughRows = projectionCount >= minProjectionCount;
+    const hasRequest = requestID === null || requestProjectionIDFromWitness(lastWitness, requestID);
+    const hasRequestStatus = requestStatus === null || requestStatusFromWitness(lastWitness, requestID) === requestStatus;
+    if (lastWitness?.byteEquivalentToDownstream === true && hasEnoughRows && hasRequest && hasRequestStatus) {
+      return lastWitness;
+    }
+    await sleep(100);
+  }
+  return lastWitness;
+}
+
+function detailTruthFromWitness({
+  kind,
+  logicalHostID,
+  detailHostID,
+  threadID,
+  witness,
+  requestID = null,
+  expectedStatus = null,
+  requestVisible = false,
+}) {
+  const projectionWitness = projectionWitnessTruth(witness);
+  const requestCardID = requestProjectionIDFromWitness(witness, requestID);
+  return {
+    kind,
+    sourceHostID: projectionWitness.sourceHostID || logicalHostID || null,
+    detailHostID,
+    threadID,
+    projectionWitness,
+    expectedMessageEventCount: projectionWitness.projectionIDs.length,
+    ...(requestID ? { requestID } : {}),
+    ...(requestCardID ? { requestCardID } : {}),
+    ...(expectedStatus ? { expectedStatus } : {}),
+    requestVisible: requestVisible && Boolean(requestCardID),
+  };
+}
+
 function sendFixtureResult(ws, id, result) {
   ws.send(JSON.stringify({
     jsonrpc: "2.0",
@@ -303,26 +444,17 @@ function cardThreadID(card) {
   return card?.threadID || card?.threadId || null;
 }
 
-function cardActivityMs(card) {
-  const parsed = Date.parse(card?.activityAt || 0);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 function compareDockCardRenderOrder(left, right) {
-  const leftOrder = typeof left?.orderKey === "string" ? left.orderKey : "";
-  const rightOrder = typeof right?.orderKey === "string" ? right.orderKey : "";
+  const leftOrder = typeof left?.displayOrderKey === "string" ? left.displayOrderKey : "";
+  const rightOrder = typeof right?.displayOrderKey === "string" ? right.displayOrderKey : "";
   if (leftOrder !== rightOrder) {
     return leftOrder.localeCompare(rightOrder);
-  }
-  const activityDelta = cardActivityMs(right) - cardActivityMs(left);
-  if (activityDelta !== 0) {
-    return activityDelta;
   }
   return cardID(left).localeCompare(cardID(right));
 }
 
 function dockCardsInRenderOrder(snapshot) {
-  return (Array.isArray(snapshot?.cards) ? snapshot.cards : [])
+  return (Array.isArray(snapshot?.rows) ? snapshot.rows : [])
     .slice()
     .sort(compareDockCardRenderOrder);
 }
@@ -332,7 +464,7 @@ function dockRenderOrderIDs(snapshot) {
 }
 
 function dockSnapshotCardForThread(snapshot, threadID) {
-  return (Array.isArray(snapshot?.cards) ? snapshot.cards : [])
+  return (Array.isArray(snapshot?.rows) ? snapshot.rows : [])
     .find((card) => cardThreadID(card) === threadID) || null;
 }
 
@@ -480,10 +612,12 @@ function recordClientRoute(events, route, purpose, details = {}) {
   if (!Array.isArray(events)) {
     return;
   }
+  const countedAsClientPath = CLIENT_PATH_ROUTES.has(route);
   events.push({
     route,
     purpose,
-    countedAsClientPath: true,
+    countedAsClientPath,
+    routeClass: countedAsClientPath ? "clientPath" : "relayInternalAdapter",
     at: new Date().toISOString(),
     ...normalizeForComparison(details),
   });
@@ -500,21 +634,6 @@ function requiredRouteFindings(clientPathEvidence, routes) {
         { route }
       );
     }
-  }
-  return findings;
-}
-
-function requiredTurnsListFullItemsViewFindings(routeEvents) {
-  const findings = [];
-  const usedFullItemsView = (Array.isArray(routeEvents) ? routeEvents : [])
-    .some((event) => event?.route === "thread/turns/list" && event.itemsView === "full");
-  if (!usedFullItemsView) {
-    transitionFailure(
-      findings,
-      "controlled_simulator_thread_turns_list_full_items_view_missing",
-      "controlled simulator detail scenario did not request thread/turns/list with itemsView=full",
-      { route: "thread/turns/list", expectedItemsView: "full" }
-    );
   }
   return findings;
 }
@@ -620,22 +739,14 @@ function mergeDockSnapshotsForSimulatorReport(snapshots) {
   const normalizedSnapshots = snapshots
     .filter(Boolean)
     .map((snapshot) => sanitizeDockSnapshotForReport(snapshot));
-  const cards = dockCardsInRenderOrder({
-    cards: normalizedSnapshots.flatMap((snapshot) => Array.isArray(snapshot.cards) ? snapshot.cards : []),
+  const rows = dockCardsInRenderOrder({
+    rows: normalizedSnapshots.flatMap((snapshot) => Array.isArray(snapshot.rows) ? snapshot.rows : []),
   });
-  const hostsByID = new Map();
-  for (const snapshot of normalizedSnapshots) {
-    for (const host of Array.isArray(snapshot.hosts) ? snapshot.hosts : []) {
-      if (host?.id && !hostsByID.has(host.id)) {
-        hostsByID.set(host.id, host);
-      }
-    }
-  }
-  const cardIDs = cards.map(cardID);
-  const rowCount = cards.length;
+  const projectionIDs = rows.map(cardID);
+  const rowCount = rows.length;
   return {
     kind: "snapshot",
-    schemaVersion: 2,
+    schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
     epoch: `composite-${normalizedSnapshots.map((snapshot) => snapshot.epoch || "unknown").join("-")}`,
     seq: Math.max(0, ...normalizedSnapshots.map((snapshot) => Number(snapshot.seq || 0))),
     view: "dock",
@@ -647,11 +758,10 @@ function mergeDockSnapshotsForSimulatorReport(snapshots) {
       rowCount,
       nextOffset: null,
     },
-    cardCount: rowCount,
-    cardIDs,
-    renderOrderCardIDs: dockRenderOrderIDs({ cards }),
-    cards,
-    hosts: [...hostsByID.values()],
+    rowCount,
+    projectionIDs,
+    renderOrderProjectionIDs: dockRenderOrderIDs({ rows }),
+    rows,
     freshness: compositeFreshness(normalizedSnapshots),
     lastReceivedAt: newestTimestamp(normalizedSnapshots.map((snapshot) => snapshot.lastReceivedAt)),
     needsResync: normalizedSnapshots.some((snapshot) => snapshot.needsResync === true),
@@ -890,7 +1000,7 @@ async function runArchiveToggleScenario(options) {
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         threadID,
         existingArchivedID,
       },
@@ -1066,7 +1176,7 @@ async function runArchiveToggleScenario(options) {
           clientExercised: true,
         },
         target: {
-          logicalHostID: hostID,
+          sourceHostID: hostID,
           threadID,
           existingArchivedID,
         },
@@ -1102,30 +1212,34 @@ async function runArchiveToggleScenario(options) {
 
 function multiHostIsolationFindings({ label, snapshot, host, expectedThreadIDs, forbiddenThreadIDs = [] }) {
   const findings = [];
-  const cards = Array.isArray(snapshot?.cards) ? snapshot.cards : [];
-  const cardIDs = new Set(cards.map((card) => cardID(card)));
-  for (const card of cards) {
-    if (card?.logicalHostID !== host.id) {
+  const rows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+  const projectionIDs = new Set(rows.map((card) => cardID(card)));
+  for (const card of rows) {
+    if (card?.sourceHostID !== host.id) {
       transitionFailure(
         findings,
-        "scenario_multi_host_wrong_logical_host",
-        "Dock card used the wrong logical host id for this relay host",
+        "scenario_multi_host_wrong_source_host",
+        "Dock card used the wrong relay projection source host id",
         {
           label,
           expectedHostID: host.id,
-          actualHostID: card?.logicalHostID || null,
+          actualHostID: card?.sourceHostID || null,
+          logicalHostID: card?.logicalHostID || null,
           threadID: cardThreadID(card),
         }
       );
     }
-    if (!String(cardID(card) || "").startsWith(`${host.id}::`)) {
+    const expectedProjectionID = cardThreadID(card)
+      ? projectionIDForThreadCard({ sourceHostID: host.id, threadID: cardThreadID(card) })
+      : null;
+    if (expectedProjectionID && cardID(card) !== expectedProjectionID) {
       transitionFailure(
         findings,
         "scenario_multi_host_wrong_card_id_scope",
-        "Dock card id is not scoped by the relay host id",
+        "Dock card projectionID is not scoped by the relay source host id",
         {
           label,
-          expectedPrefix: `${host.id}::`,
+          expectedProjectionID,
           cardID: cardID(card),
           threadID: cardThreadID(card),
         }
@@ -1133,7 +1247,8 @@ function multiHostIsolationFindings({ label, snapshot, host, expectedThreadIDs, 
     }
   }
   for (const threadID of expectedThreadIDs) {
-    if (!cardIDs.has(`${host.id}::${threadID}`)) {
+    const expectedProjectionID = projectionIDForThreadCard({ sourceHostID: host.id, threadID });
+    if (!projectionIDs.has(expectedProjectionID)) {
       transitionFailure(
         findings,
         "scenario_multi_host_expected_thread_missing",
@@ -1142,12 +1257,13 @@ function multiHostIsolationFindings({ label, snapshot, host, expectedThreadIDs, 
           label,
           hostID: host.id,
           threadID,
+          expectedProjectionID,
         }
       );
     }
   }
   for (const threadID of forbiddenThreadIDs) {
-    if (cards.some((card) => cardThreadID(card) === threadID)) {
+    if (rows.some((card) => cardThreadID(card) === threadID)) {
       transitionFailure(
         findings,
         "scenario_multi_host_foreign_thread_visible",
@@ -1261,8 +1377,8 @@ async function runLargeListCheckpointScenario(options) {
       streamProbe,
       timeoutMs: options.dockCollectionTimeoutMs,
       predicate: (snapshot) => (
-        Array.isArray(snapshot?.cards)
-          && snapshot.cards.length === rowCount
+        Array.isArray(snapshot?.rows)
+          && snapshot.rows.length === rowCount
           && dockSnapshotThreadIndex(snapshot, sourceRows[0].id) === 0
           && dockSnapshotHasThread(snapshot, sourceRows[rowCount - 1].id)
       ),
@@ -1296,7 +1412,7 @@ async function runLargeListCheckpointScenario(options) {
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         rowCount,
         firstThreadID: sourceRows[0].id,
         lastThreadID: sourceRows[rowCount - 1].id,
@@ -1350,7 +1466,7 @@ async function runLargeListCheckpointScenario(options) {
           note: "The fixture exposes enough Dock rows that the actual simulator checkpoint sweep must scroll and compare rows beyond the initial viewport.",
         },
         target: {
-          logicalHostID: hostID,
+          sourceHostID: hostID,
           rowCount,
           threadIDs: sourceRows.map((row) => row.id),
         },
@@ -1495,7 +1611,7 @@ async function runThreadActivityScenario(options) {
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         stableThreadID,
         movingThreadID,
         newThreadID,
@@ -1631,7 +1747,7 @@ async function runThreadActivityScenario(options) {
         id: "thread-activity",
         ok: scenarioOK,
         target: {
-          logicalHostID: hostID,
+          sourceHostID: hostID,
           stableThreadID,
           movingThreadID,
           newThreadID,
@@ -1841,7 +1957,7 @@ async function runRapidMutationsScenario(options) {
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         targetThreadID,
         stableThreadID,
         mutationCount: mutationSteps.length,
@@ -1968,7 +2084,7 @@ async function runRapidMutationsScenario(options) {
           note: "The fixture changes one visible Dock row through ordered statuses while the simulator sampler is running; the UI judge must observe every transition before the next one.",
         },
         target: {
-          logicalHostID: hostID,
+          sourceHostID: hostID,
           targetThreadID,
           stableThreadID,
         },
@@ -2121,7 +2237,7 @@ async function runSourceRefreshScenario(options) {
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         cachedThreadID,
         recoveredThreadID,
       },
@@ -2270,7 +2386,7 @@ async function runSourceRefreshScenario(options) {
         id: "source-refresh",
         ok: scenarioOK,
         target: {
-          logicalHostID: hostID,
+          sourceHostID: hostID,
           cachedThreadID,
           recoveredThreadID,
         },
@@ -2455,7 +2571,7 @@ async function runLiveLeaseExpiryScenario(options) {
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         threadID,
         sessionID,
       },
@@ -2586,7 +2702,7 @@ async function runLiveLeaseExpiryScenario(options) {
           note: "The fixture keeps the row live until the simulator UI sampler is connected, then refreshes the real live lease with the controlled max age and waits for expiry to publish through Dock routes.",
         },
         target: {
-          logicalHostID: hostID,
+          sourceHostID: hostID,
           threadID,
           sessionID,
           leaseExpiresAt: Number.isFinite(leaseExpiresAtMs) && leaseExpiresAtMs > 0
@@ -3048,7 +3164,7 @@ async function runResyncGapScenario(options) {
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         stableThreadID,
         resyncThreadID,
       },
@@ -3077,13 +3193,12 @@ async function runResyncGapScenario(options) {
     const afterSnapshot = await relayConfig.relayStateEngine.subscriptions.snapshot("dock");
     const gapDelta = relayConfig.relayStateEngine.subscriptions.cardDelta({
       view: "dock",
-      baseSeq: Number(afterSnapshot.seq || 0) + 10,
-      seq: Number(afterSnapshot.seq || 0),
+      seq: Number(afterSnapshot.seq || 0) + 10,
+      sourceHostID: afterSnapshot.sourceHostID,
       freshness: afterSnapshot.freshness,
-      upsertHosts: afterSnapshot.hosts || [],
-      upsertCards: afterSnapshot.cards || [],
-      deleteCardIDs: [],
-      totalRows: Number(afterSnapshot.totalRows || afterSnapshot.cardCount || 0),
+      rows: afterSnapshot.rows || [],
+      projectionIDs: [],
+      totalRows: Number(afterSnapshot.totalRows || afterSnapshot.rows?.length || 0),
       complete: true,
       window: afterSnapshot.window || undefined,
     });
@@ -3178,7 +3293,6 @@ async function runResyncGapScenario(options) {
       wait: resyncedWait,
       lag: resyncLag,
       injectedGap: normalizeForComparison({
-        baseSeq: gapDelta.baseSeq,
         seq: gapDelta.seq,
         publishedAt: new Date(gapPublishedAtMs).toISOString(),
       }),
@@ -3220,7 +3334,7 @@ async function runResyncGapScenario(options) {
           note: "The fixture updates relay state without publishing the normal delta, then publishes a malformed Dock delta so the actual client must reject it and recover through dock/resync before the new row can display.",
         },
         target: {
-          logicalHostID: hostID,
+          sourceHostID: hostID,
           stableThreadID,
           resyncThreadID,
         },
@@ -3396,7 +3510,7 @@ async function runSpawnEdgeScenario(options) {
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         parentThreadID,
         childThreadID,
       },
@@ -3502,7 +3616,7 @@ async function runSpawnEdgeScenario(options) {
           note: "The fixture changes app-server thread/list rows to model a new subagent spawn; proof expects the child to stay absent from the human-only Dock routes and literal simulator row accessibility values the client uses.",
         },
         target: {
-          logicalHostID: hostID,
+          sourceHostID: hostID,
           parentThreadID,
           childThreadID,
         },
@@ -3563,6 +3677,8 @@ async function runDetailReconnectScenario(options) {
   let uiReadyAtMs = null;
   let recoveryStartedAtMs = null;
   let rehydratedAtMs = null;
+  let initialProjectionWitness = null;
+  let rehydratedProjectionWitness = null;
   let resolveDetailLoaded;
   let resolveRehydrated;
   const detailLoadedPromise = new Promise((resolve) => {
@@ -3660,6 +3776,7 @@ async function runDetailReconnectScenario(options) {
     observabilityDir: false,
     relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
     relayStateAutoStart: false,
+    projectionWitnessEnabled: true,
     logger: {
       debug() {},
       info() {},
@@ -3712,7 +3829,7 @@ async function runDetailReconnectScenario(options) {
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         threadID,
       },
       uiConfig: {
@@ -3739,11 +3856,26 @@ async function runDetailReconnectScenario(options) {
 
     if (detailLoadedWait.ok) {
       const initialProofAtMs = uiReadyAtMs || detailLoadedAtMs || Date.now();
+      initialProjectionWitness = await waitForDetailProjectionWitness({
+        client: streamProbe.client,
+        sourceHostID: hostID,
+        threadID,
+        minProjectionCount: expectedInitialEventIDs.length,
+        timeoutMs: detailWaitTimeoutMs,
+      });
+      if (initialProjectionWitness?.byteEquivalentToDownstream !== true) {
+        transitionFailure(
+          findings,
+          "scenario_detail_reconnect_initial_projection_witness_missing",
+          "detail-reconnect initial state did not produce byte-equivalent relay projection witness rows",
+          { threadID, expectedProjectionCount: expectedInitialEventIDs.length }
+        );
+      }
       transitions.push({
         name: "detail-reconnect-initial",
         kind: "detail-reconnect-initial",
         iteration: 1,
-        route: "thread/resume",
+        route: "thread/detail/read",
         wait: {
           ok: true,
           observedAt: new Date(initialProofAtMs).toISOString(),
@@ -3756,14 +3888,13 @@ async function runDetailReconnectScenario(options) {
           observedAtMs: initialProofAtMs,
           maxStreamLagMs: options.maxStreamLagMs,
         }),
-        detailTruth: {
+        detailTruth: detailTruthFromWitness({
           kind: "detail-reconnect-initial",
-          logicalHostID: hostID,
+          sourceHostID: hostID,
           detailHostID: `127.0.0.1:${relayPort}`,
           threadID,
-          expectedMessageEventCount: expectedInitialEventIDs.length,
-          expectedLiveState: "Live",
-        },
+          witness: initialProjectionWitness,
+        }),
       });
 
       await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 1_500));
@@ -3788,11 +3919,29 @@ async function runDetailReconnectScenario(options) {
       );
     }
 
+    if (rehydratedWait.ok) {
+      rehydratedProjectionWitness = await waitForDetailProjectionWitness({
+        client: streamProbe.client,
+        sourceHostID: hostID,
+        threadID,
+        minProjectionCount: expectedRecoveredEventIDs.length,
+        timeoutMs: detailWaitTimeoutMs,
+      });
+      if (rehydratedProjectionWitness?.byteEquivalentToDownstream !== true) {
+        transitionFailure(
+          findings,
+          "scenario_detail_reconnect_rehydrated_projection_witness_missing",
+          "detail-reconnect rehydrated state did not produce byte-equivalent relay projection witness rows",
+          { threadID, expectedProjectionCount: expectedRecoveredEventIDs.length }
+        );
+      }
+    }
+
     transitions.push({
       name: "detail-reconnect-rehydrated",
       kind: "detail-reconnect-rehydrated",
       iteration: 1,
-      route: "thread/resume",
+      route: "thread/detail/resync",
       wait: {
         ok: rehydratedWait.ok,
         observedAt: rehydratedAtMs ? new Date(rehydratedAtMs).toISOString() : null,
@@ -3806,28 +3955,16 @@ async function runDetailReconnectScenario(options) {
         maxStreamLagMs: options.maxStreamLagMs,
       }),
       routeCountsAtTransition: { readCallCount, turnsListCallCount, resumeCallCount },
-      detailTruth: {
+      detailTruth: detailTruthFromWitness({
         kind: "detail-reconnect-rehydrated",
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         detailHostID: `127.0.0.1:${relayPort}`,
         threadID,
-        expectedMessageEventIDs: expectedRecoveredEventIDs,
-        expectedMessageEventCount: expectedRecoveredEventIDs.length,
-        expectedLiveState: "Live",
-      },
+        witness: rehydratedProjectionWitness || initialProjectionWitness,
+      }),
     });
 
     const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
-    findings.push(...requiredRouteFindings(clientPathEvidence, ["thread/read", "thread/turns/list", "thread/resume"]));
-    findings.push(...requiredTurnsListFullItemsViewFindings(routeEvents));
-    if (readCallCount < 2 || turnsListCallCount < 2 || resumeCallCount < 3) {
-      transitionFailure(
-        findings,
-        "scenario_detail_reconnect_route_counts_missing",
-        "detail-reconnect did not exercise initial detail, relay upstream recovery, and Swift rehydrate route counts",
-        { readCallCount, turnsListCallCount, resumeCallCount }
-      );
-    }
 
     const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
     const report = {
@@ -3855,7 +3992,7 @@ async function runDetailReconnectScenario(options) {
         id: "detail-reconnect",
         ok: scenarioOK,
         target: {
-          logicalHostID: hostID,
+          sourceHostID: hostID,
           threadID,
           expectedInitialEventIDs,
           expectedRecoveredEventIDs,
@@ -3897,7 +4034,6 @@ async function runDetailHistoryRequestScenario(options) {
   const hostID = "sim-detail-history-fixture";
   const threadID = "sim-detail-history-request-thread";
   const requestID = "approval-history-1";
-  const requestCardID = `request-${requestID}`;
   const threadRow = fixtureThread(threadID, "Simulator full detail fixture row", 100);
   const historicalTurns = [
     fixtureTurn("turn-history-1", 1_700_000_001, [
@@ -3911,18 +4047,6 @@ async function runDetailHistoryRequestScenario(options) {
       fixtureAgentMessageItem("agent-two", "Simulator detail second agent seed"),
     ]),
   ];
-  const expectedHistoricalEventIDs = [
-    "turn-history-2-agent-two-agent",
-    "turn-history-2-reason-seed-reasoning",
-    "turn-history-2-plan-seed-plan",
-    "turn-history-1-cmd-seed-output",
-    "turn-history-1-cmd-seed-command",
-    "turn-history-1-agent-seed-agent",
-    "turn-history-1-user-seed-user",
-  ];
-  const liveEventID = "turn-live-agent-live-item%2FagentMessage%2Fdelta";
-  const liveRawEventID = "turn-live-agent-live-item/agentMessage/delta";
-  const requestEventID = requestCardID;
   let detailWs = null;
   let detailLoadedAtMs = null;
   let liveUpdateSentAtMs = null;
@@ -4070,6 +4194,7 @@ async function runDetailHistoryRequestScenario(options) {
     hostId: hostID,
     hostName: "Simulator Detail History Fixture",
     hostEndpoint: "127.0.0.1:0",
+    projectionWitnessEnabled: true,
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
     advertiseBonjour: false,
@@ -4128,15 +4253,13 @@ async function runDetailHistoryRequestScenario(options) {
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         threadID,
         requestID,
-        requestCardID,
       },
       uiConfig: {
         openHostID: hostID,
         openThreadID: threadID,
-        requestCardID,
         requestAction: "approve",
         detailFilter: "all",
         detailCheckpointSweep: true,
@@ -4164,6 +4287,21 @@ async function runDetailHistoryRequestScenario(options) {
       );
     }
 
+    let initialProjectionWitness = null;
+    let liveProjectionWitness = null;
+    let requestProjectionWitness = null;
+    let resolutionProjectionWitness = null;
+    if (detailLoadedWait.ok) {
+      initialProjectionWitness = await waitForDetailProjectionWitness({
+        client: streamProbe.client,
+        sourceHostID: hostID,
+        threadID,
+        minProjectionCount: 1,
+        timeoutMs: detailWaitTimeoutMs,
+      });
+    }
+    const initialProjectionCount = initialProjectionWitness?.projectionIDs?.length || 0;
+
     if (detailWs) {
       await sleep(Math.min(options.scenarioHoldMs, 1_000));
       liveUpdateSentAtMs = Date.now();
@@ -4181,6 +4319,13 @@ async function runDetailHistoryRequestScenario(options) {
       resolveLiveUpdateSent({
         sentAtMs: liveUpdateSentAtMs,
         message: normalizeForComparison(liveNotification),
+      });
+      liveProjectionWitness = await waitForDetailProjectionWitness({
+        client: streamProbe.client,
+        sourceHostID: hostID,
+        threadID,
+        minProjectionCount: initialProjectionCount + 1,
+        timeoutMs: detailWaitTimeoutMs,
       });
 
       await sleep(options.scenarioHoldMs);
@@ -4204,8 +4349,15 @@ async function runDetailHistoryRequestScenario(options) {
           id: requestID,
           method: requestMessage.method,
           threadID,
-          requestCardID,
         },
+      });
+      requestProjectionWitness = await waitForDetailProjectionWitness({
+        client: streamProbe.client,
+        sourceHostID: hostID,
+        threadID,
+        minProjectionCount: (liveProjectionWitness?.projectionIDs?.length || initialProjectionCount) + 1,
+        requestID,
+        timeoutMs: detailWaitTimeoutMs,
       });
     }
 
@@ -4213,6 +4365,17 @@ async function runDetailHistoryRequestScenario(options) {
     const requestWait = await waitForAsyncEvent(requestSentPromise, detailWaitTimeoutMs);
     const responseWait = await waitForAsyncEvent(forwardedResponsePromise, detailWaitTimeoutMs);
     const resolutionWait = await waitForAsyncEvent(resolutionSentPromise, detailWaitTimeoutMs);
+    if (resolutionWait.ok) {
+      resolutionProjectionWitness = await waitForDetailProjectionWitness({
+        client: streamProbe.client,
+        sourceHostID: hostID,
+        threadID,
+        minProjectionCount: requestProjectionWitness?.projectionIDs?.length || liveProjectionWitness?.projectionIDs?.length || initialProjectionCount,
+        requestID,
+        requestStatus: "resolved",
+        timeoutMs: detailWaitTimeoutMs,
+      });
+    }
     const liveLag = scenarioLagSummary({
       transition: "detail-history-live-update",
       startedAtMs: liveUpdateSentAtMs || detailLoadedAtMs || startedAtMs,
@@ -4256,7 +4419,7 @@ async function runDetailHistoryRequestScenario(options) {
         findings,
         "scenario_detail_history_response_not_forwarded",
         "simulator app did not forward an approval response for the full-detail request card",
-        { requestID, requestCardID, timeoutMs: detailWaitTimeoutMs }
+        { requestID, timeoutMs: detailWaitTimeoutMs }
       );
     }
     if (responseWait.ok && responseWait.value?.message?.result?.decision !== "accept") {
@@ -4276,17 +4439,11 @@ async function runDetailHistoryRequestScenario(options) {
       );
     }
 
-    const baseDetailTruth = {
-      logicalHostID: hostID,
-      detailHostID: `127.0.0.1:${relayPort}`,
-      threadID,
-      expectedMessageEventIDs: expectedHistoricalEventIDs,
-    };
     transitions.push({
       name: "detail-history-live-update",
       kind: "detail-history-live-update",
       iteration: 1,
-      route: "thread/resume",
+      route: "thread/detail/update",
       wait: {
         ok: liveWait.ok,
         observedAt: liveUpdateSentAtMs ? new Date(liveUpdateSentAtMs).toISOString() : null,
@@ -4294,18 +4451,19 @@ async function runDetailHistoryRequestScenario(options) {
       },
       lag: liveLag,
       notification: liveWait.value?.message || null,
-      detailTruth: {
-        ...baseDetailTruth,
+      detailTruth: detailTruthFromWitness({
         kind: "detail-history-live-update",
-        expectedMessageEventIDs: [liveRawEventID, ...expectedHistoricalEventIDs],
-        expectedMessageEventCount: expectedHistoricalEventIDs.length + 1,
-      },
+        sourceHostID: hostID,
+        detailHostID: `127.0.0.1:${relayPort}`,
+        threadID,
+        witness: liveProjectionWitness || initialProjectionWitness,
+      }),
     });
     transitions.push({
       name: "detail-history-request-visible",
       kind: "detail-history-request-visible",
       iteration: 1,
-      route: "thread/resume",
+      route: "thread/detail/update",
       wait: {
         ok: requestWait.ok,
         observedAt: upstreamRequestSentAtMs ? new Date(upstreamRequestSentAtMs).toISOString() : null,
@@ -4313,16 +4471,16 @@ async function runDetailHistoryRequestScenario(options) {
       },
       lag: requestLag,
       request: requestWait.value?.message || null,
-      detailTruth: {
-        ...baseDetailTruth,
+      detailTruth: detailTruthFromWitness({
         kind: "detail-history-request-visible",
-        expectedMessageEventIDs: [requestEventID, liveRawEventID, ...expectedHistoricalEventIDs],
-        expectedMessageEventCount: expectedHistoricalEventIDs.length + 2,
+        sourceHostID: hostID,
+        detailHostID: `127.0.0.1:${relayPort}`,
+        threadID,
+        witness: requestProjectionWitness || liveProjectionWitness || initialProjectionWitness,
         requestID,
-        requestCardID,
         expectedStatus: "Pending",
         requestVisible: true,
-      },
+      }),
     });
     transitions.push({
       name: "detail-history-request-resolution",
@@ -4337,21 +4495,19 @@ async function runDetailHistoryRequestScenario(options) {
       lag: resolutionLag,
       forwardedResponse,
       resolution: resolutionWait.value?.message || null,
-      detailTruth: {
-        ...baseDetailTruth,
+      detailTruth: detailTruthFromWitness({
         kind: "detail-history-request-resolution",
-        expectedMessageEventIDs: [requestEventID, liveRawEventID, ...expectedHistoricalEventIDs],
-        expectedMessageEventCount: expectedHistoricalEventIDs.length + 2,
+        sourceHostID: hostID,
+        detailHostID: `127.0.0.1:${relayPort}`,
+        threadID,
+        witness: resolutionProjectionWitness || requestProjectionWitness || liveProjectionWitness || initialProjectionWitness,
         requestID,
-        requestCardID,
         expectedStatus: "Resolved",
         requestVisible: true,
-      },
+      }),
     });
 
     const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
-    findings.push(...requiredRouteFindings(clientPathEvidence, ["thread/read", "thread/turns/list", "thread/resume"]));
-    findings.push(...requiredTurnsListFullItemsViewFindings(routeEvents));
     const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
     const report = {
       schemaVersion: 1,
@@ -4378,12 +4534,9 @@ async function runDetailHistoryRequestScenario(options) {
         id: "detail-history-request",
         ok: scenarioOK,
         target: {
-          logicalHostID: hostID,
+          sourceHostID: hostID,
           threadID,
           requestID,
-          requestCardID,
-          expectedHistoricalEventIDs,
-          expectedLiveEventID: liveEventID,
         },
         transitions,
         findings,
@@ -4422,7 +4575,6 @@ async function runServerRequestScenario(options) {
   const hostID = "sim-server-request-fixture";
   const threadID = "sim-server-request-thread";
   const requestID = "approval-1";
-  const requestCardID = `request-${requestID}`;
   const threadRow = fixtureThread(threadID, "Simulator server request fixture row", 100);
   let upstreamRequestSentAtMs = null;
   let upstreamResponseReceivedAtMs = null;
@@ -4513,13 +4665,12 @@ async function runServerRequestScenario(options) {
           ws.send(JSON.stringify(requestMessage));
           resolveRequestSent({
             sentAtMs: upstreamRequestSentAtMs,
-            message: {
-              id: requestID,
-              method: requestMessage.method,
-              threadID,
-              requestCardID,
-            },
-          });
+          message: {
+            id: requestID,
+            method: requestMessage.method,
+            threadID,
+          },
+        });
         }, 10);
       } else if (!message.method && String(message.id) === requestID) {
         upstreamResponseReceivedAtMs = Date.now();
@@ -4558,6 +4709,7 @@ async function runServerRequestScenario(options) {
     hostId: hostID,
     hostName: "Simulator Server Request Fixture",
     hostEndpoint: "127.0.0.1:0",
+    projectionWitnessEnabled: true,
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
     advertiseBonjour: false,
@@ -4617,15 +4769,13 @@ async function runServerRequestScenario(options) {
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         threadID,
         requestID,
-        requestCardID,
       },
       uiConfig: {
         openHostID: hostID,
         openThreadID: threadID,
-        requestCardID,
         requestAction: "approve",
       },
       at: new Date().toISOString(),
@@ -4634,8 +4784,29 @@ async function runServerRequestScenario(options) {
 
     const detailWaitTimeoutMs = Math.min(options.dockCollectionTimeoutMs, options.waitTimeoutMs);
     const requestWait = await waitForAsyncEvent(requestSentPromise, detailWaitTimeoutMs);
+    const requestProjectionWitness = requestWait.ok
+      ? await waitForDetailProjectionWitness({
+        client: streamProbe.client,
+        sourceHostID: hostID,
+        threadID,
+        minProjectionCount: 1,
+        requestID,
+        timeoutMs: detailWaitTimeoutMs,
+      })
+      : null;
     const responseWait = await waitForAsyncEvent(forwardedResponsePromise, detailWaitTimeoutMs);
     const resolutionWait = await waitForAsyncEvent(resolutionSentPromise, detailWaitTimeoutMs);
+    const resolutionProjectionWitness = resolutionWait.ok
+      ? await waitForDetailProjectionWitness({
+        client: streamProbe.client,
+        sourceHostID: hostID,
+        threadID,
+        minProjectionCount: requestProjectionWitness?.projectionIDs?.length || 1,
+        requestID,
+        requestStatus: "resolved",
+        timeoutMs: detailWaitTimeoutMs,
+      })
+      : null;
     const requestLag = scenarioLagSummary({
       transition: "server-request-visible",
       startedAtMs: upstreamRequestSentAtMs || startedAtMs,
@@ -4664,7 +4835,7 @@ async function runServerRequestScenario(options) {
         findings,
         "scenario_server_request_response_not_forwarded",
         "simulator app did not forward an approval response for the displayed request card",
-        { requestID, requestCardID, timeoutMs: detailWaitTimeoutMs }
+        { requestID, timeoutMs: detailWaitTimeoutMs }
       );
     }
     if (responseWait.ok && responseWait.value?.message?.result?.decision !== "accept") {
@@ -4688,7 +4859,7 @@ async function runServerRequestScenario(options) {
       name: "server-request-visible",
       kind: "server-request-visible",
       iteration: 1,
-      route: "thread/resume",
+      route: "thread/detail/update",
       wait: {
         ok: requestWait.ok,
         observedAt: upstreamRequestSentAtMs ? new Date(upstreamRequestSentAtMs).toISOString() : null,
@@ -4696,17 +4867,16 @@ async function runServerRequestScenario(options) {
       },
       lag: requestLag,
       request: requestWait.value?.message || null,
-      detailTruth: {
+      detailTruth: detailTruthFromWitness({
         kind: "server-request-visible",
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         detailHostID: `127.0.0.1:${relayPort}`,
         threadID,
-        expectedMessageEventCount: 1,
+        witness: requestProjectionWitness,
         requestID,
-        requestCardID,
         expectedStatus: "Pending",
         requestVisible: true,
-      },
+      }),
     });
     transitions.push({
       name: "server-request-resolution",
@@ -4721,22 +4891,19 @@ async function runServerRequestScenario(options) {
       lag: resolutionLag,
       forwardedResponse,
       resolution: resolutionWait.value?.message || null,
-      detailTruth: {
+      detailTruth: detailTruthFromWitness({
         kind: "server-request-resolution",
-        logicalHostID: hostID,
+        sourceHostID: hostID,
         detailHostID: `127.0.0.1:${relayPort}`,
         threadID,
-        expectedMessageEventCount: 1,
+        witness: resolutionProjectionWitness || requestProjectionWitness,
         requestID,
-        requestCardID,
         expectedStatus: "Resolved",
         requestVisible: true,
-      },
+      }),
     });
 
     const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
-    findings.push(...requiredRouteFindings(clientPathEvidence, ["thread/read", "thread/turns/list", "thread/resume"]));
-    findings.push(...requiredTurnsListFullItemsViewFindings(routeEvents));
     const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
     const report = {
       schemaVersion: 1,
@@ -4763,10 +4930,9 @@ async function runServerRequestScenario(options) {
         id: "server-request",
         ok: scenarioOK,
         target: {
-          logicalHostID: hostID,
+          sourceHostID: hostID,
           threadID,
           requestID,
-          requestCardID,
         },
         transitions,
         findings,

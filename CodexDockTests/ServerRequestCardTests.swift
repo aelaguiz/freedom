@@ -3,7 +3,7 @@ import XCTest
 
 final class ServerRequestCardTests: XCTestCase {
     func testCommandApprovalCardBuildsAcceptAndDeclineResponses() {
-        let card = ServerRequestCard.make(
+        let card = makeProjectedRequestCard(
             from: JSONRPCRequest(
                 id: .string("approval-1"),
                 method: "item/commandExecution/requestApproval",
@@ -19,7 +19,8 @@ final class ServerRequestCardTests: XCTestCase {
             now: Date(timeIntervalSince1970: 1_000)
         )
 
-        XCTAssertEqual(card.id, "request-approval-1")
+        XCTAssertEqual(card.id, "host:test/thread:thread-1/request:approval-1/row:request")
+        XCTAssertEqual(card.requestID, .string("approval-1"))
         XCTAssertEqual(card.kind, .commandApproval)
         XCTAssertEqual(card.summary, "swift test")
         XCTAssertEqual(card.detail, "/repo")
@@ -29,7 +30,7 @@ final class ServerRequestCardTests: XCTestCase {
     }
 
     func testUserInputCardBuildsAnswerResponse() {
-        var card = ServerRequestCard.make(
+        var card = makeProjectedRequestCard(
             from: JSONRPCRequest(
                 id: .integer(7),
                 method: "item/tool/requestUserInput",
@@ -50,7 +51,8 @@ final class ServerRequestCardTests: XCTestCase {
         )
         card.inputDraft = "yes"
 
-        XCTAssertEqual(card.id, "request-7")
+        XCTAssertEqual(card.id, "host:test/thread:thread-1/request:7/row:request")
+        XCTAssertEqual(card.requestID, .integer(7))
         XCTAssertEqual(card.kind, .userInput)
         XCTAssertEqual(card.title, "Confirm")
         XCTAssertEqual(card.summary, "Continue?")
@@ -67,7 +69,7 @@ final class ServerRequestCardTests: XCTestCase {
     }
 
     func testPermissionCardCanGrantRequestedSubsetOrDeclineWithEmptyGrant() {
-        let card = ServerRequestCard.make(
+        let card = makeProjectedRequestCard(
             from: JSONRPCRequest(
                 id: .string("permission-1"),
                 method: "item/permissions/requestApproval",
@@ -107,7 +109,7 @@ final class ServerRequestCardTests: XCTestCase {
     }
 
     func testUnsupportedRequestStaysVisibleWithoutResponsePayload() {
-        let card = ServerRequestCard.make(
+        let card = makeProjectedRequestCard(
             from: JSONRPCRequest(
                 id: .string("desktop-1"),
                 method: "account/chatgptAuthTokens/refresh",
@@ -123,7 +125,7 @@ final class ServerRequestCardTests: XCTestCase {
     }
 
     func testMcpElicitationDeclinesWithSupportedResponseShape() {
-        let card = ServerRequestCard.make(
+        let card = makeProjectedRequestCard(
             from: JSONRPCRequest(
                 id: .string("mcp-1"),
                 method: "mcpServer/elicitation/request",
@@ -147,5 +149,51 @@ final class ServerRequestCardTests: XCTestCase {
                 "_meta": .null,
             ])
         )
+    }
+
+    private func makeProjectedRequestCard(
+        from request: JSONRPCRequest,
+        now: Date
+    ) -> ServerRequestCard {
+        let params = request.params?.objectValue ?? [:]
+        let threadID = params["threadId"]?.stringValue ?? "unknown"
+        let turnID = params["turnId"]?.stringValue
+        let itemID = params["itemId"]?.stringValue
+        let event = ThreadEvent(
+            id: "host:test/thread:\(threadID)/request:\(request.id)/row:request",
+            kind: .request,
+            visibilityCategory: .request,
+            title: "Request",
+            body: request.method,
+            date: now,
+            isLive: true,
+            turnID: turnID,
+            itemID: itemID,
+            displayOrderKey: "0000000000000000000|\(request.id)",
+            activityDate: now,
+            request: ThreadDetailEventRequestDTO(
+                requestID: request.id,
+                method: request.method,
+                params: request.params
+            )
+        )
+        guard let card = ServerRequestCard.make(from: event) else {
+            XCTFail("Expected projected request event to create a request card")
+            return ServerRequestCard(
+                id: event.id,
+                requestID: request.id,
+                method: request.method,
+                threadID: threadID,
+                turnID: turnID,
+                itemID: itemID,
+                kind: .unsupported,
+                title: "Invalid",
+                summary: "Invalid",
+                detail: "Invalid",
+                params: request.params,
+                requestedAt: now
+            )
+        }
+        return card
     }
 }

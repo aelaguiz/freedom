@@ -85,7 +85,7 @@ final class ArchiveScreenStoreTests: XCTestCase {
 
         let rows = snapshot.sections.flatMap(\.rows)
         let results = await store.restoreRows(rows)
-        let statuses = Dictionary(uniqueKeysWithValues: results.map { ($0.row.id.threadID, $0.status) })
+        let statuses = Dictionary(uniqueKeysWithValues: results.map { ($0.row.threadID, $0.status) })
 
         XCTAssertEqual(statuses["restore-ok"], .restored)
         XCTAssertEqual(statuses["restore-fails"], .failed("restore failed"))
@@ -128,11 +128,11 @@ final class ArchiveScreenStoreTests: XCTestCase {
             return XCTFail("Expected loaded archive state, got \(store.state)")
         }
         let row = try XCTUnwrap(snapshot.sections.first?.rows.first)
-        XCTAssertEqual(row.id.hostID, "Amir-M5")
-        XCTAssertEqual(row.sourceHostID, host.id)
+        XCTAssertEqual(row.hostID, "Amir-M5")
+        XCTAssertEqual(row.sourceHostID, "Amir-M5")
         XCTAssertTrue(
             snapshot.hostIdentityResolver.contains(
-                rowHostID: row.id.hostID,
+                rowHostID: row.hostID,
                 sourceConfiguredHostID: row.sourceHostID,
                 in: host.id
             )

@@ -23,14 +23,30 @@ const CLIENT_CARD_ROUTES = new Set([
   "archive/subscribe",
   "archive/update",
   "archive/resync",
-  "thread/read",
-  "thread/turns/list",
-  "thread/resume",
+  "thread/detail/read",
+  "thread/detail/subscribe",
+  "thread/detail/resync",
+  "thread/detail/update",
 ]);
 const PASSING_PROOF_KINDS_REQUIRE_ROUTES = new Set([
   "codex-dock-relay-sync-audit-report",
   "codex-dock-controlled-simulator-scenario-relay-report",
   "codex-dock-simulator-ui-sync-proof",
+]);
+const FORBIDDEN_PROOF_KEYS = new Set([
+  "baseSeq",
+  "stateGeneration",
+  "cards",
+  "cardIDs",
+  "cardCount",
+  "renderOrderCardIDs",
+  "upsertCards",
+  "deleteCardIDs",
+  "expectedMessageProjectionIDs",
+  "visibleEventIDs",
+  "messageCardIDs",
+  "requestCardIDs",
+  "orderKey",
 ]);
 
 function proofStatusForReport(report) {
@@ -79,6 +95,24 @@ function collectStrings(value, strings = []) {
   return strings;
 }
 
+function collectForbiddenKeys(value, path = "$", hits = []) {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectForbiddenKeys(item, `${path}[${index}]`, hits));
+    return hits;
+  }
+  if (!value || typeof value !== "object") {
+    return hits;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = `${path}.${key}`;
+    if (FORBIDDEN_PROOF_KEYS.has(key)) {
+      hits.push(childPath);
+    }
+    collectForbiddenKeys(child, childPath, hits);
+  }
+  return hits;
+}
+
 function routeSetFromReport(report) {
   const routes = new Set();
   for (const route of report?.clientPathEvidence?.routes || []) {
@@ -121,6 +155,10 @@ function semanticProofErrors(report) {
     if (value.includes("CODEX_DOCK_UI_DOCK_STREAM_SCENARIO")) {
       errors.push("scripted Dock stream scenario cannot satisfy live-update proof");
     }
+  }
+  const forbiddenKeyHits = collectForbiddenKeys(report);
+  if (forbiddenKeyHits.length > 0) {
+    errors.push(`proof report contains legacy identity/stream keys: ${forbiddenKeyHits.slice(0, 20).join(", ")}`);
   }
   const routes = routeSetFromReport(report);
   if (status === "pass" && PASSING_PROOF_KINDS_REQUIRE_ROUTES.has(report?.kind) && routes.size === 0) {

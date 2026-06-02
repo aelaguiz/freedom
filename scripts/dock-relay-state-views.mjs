@@ -4,6 +4,14 @@ import {
   RELAY_STATE_TEXT_FIELD_MAX_CHARS,
   RELAY_STATE_TITLE_MAX_CHARS,
 } from "./dock-relay-constants.mjs";
+import {
+  PROJECTION_ENGINE_VERSION,
+  PROJECTION_IDENTITY_VERSION,
+  PROJECTION_SCHEMA_VERSION,
+  projectionIDForThreadCard,
+  sourceRefForThreadCard,
+  threadCardDisplayOrderKey,
+} from "./dock-relay-projection-engine.mjs";
 
 const DOCK_VIEW = "dock";
 const ARCHIVE_VIEW = "archive";
@@ -195,15 +203,6 @@ function timestampToISO(value) {
   return new Date(ms).toISOString();
 }
 
-function activityOrderKey(activityAtMs, threadID) {
-  const inverted = Number.MAX_SAFE_INTEGER - Math.max(0, Number(activityAtMs || 0));
-  return `${String(Math.max(0, inverted)).padStart(16, "0")}:${threadID}`;
-}
-
-function archiveOrderKey(activityAtMs, threadID) {
-  return activityOrderKey(activityAtMs, threadID);
-}
-
 function displaySummaryForThread(thread) {
   return firstBoundedText([
     thread?.displaySummary,
@@ -336,22 +335,34 @@ function normalizeThread(thread, host, lane = "human", options = {}) {
   const activityAtMs = timestampToMs(thread?.activityAtMs ?? thread?.activityAt ?? rowTimestamp(thread));
   const sourceKind = sourceKindFromThread(thread, lane);
   const forkedFromID = forkParentIDForThread(thread);
-  const orderKey = options.orderKey || activityOrderKey(activityAtMs, threadID);
+  const sourceHostID = host.id;
+  const status = normalizedStatus(thread);
+  const projectionID = projectionIDForThreadCard({ sourceHostID, threadID });
+  const sourceRef = sourceRefForThreadCard({ sourceHostID, threadID });
+  const displayOrderKey = threadCardDisplayOrderKey({ activityAtMs, status, projectionID });
   // Canonical card facts must already be folded before this point; this
   // function formats relay-owned facts and never rebuilds order from list index.
   return {
-    id: dockCardID(host.logicalHostID || host.id, threadID),
-    logicalHostID: host.logicalHostID || host.id,
+    id: projectionID,
+    schemaVersion: PROJECTION_SCHEMA_VERSION,
+    identityVersion: PROJECTION_IDENTITY_VERSION,
+    projectionEngineVersion: PROJECTION_ENGINE_VERSION,
+    sourceHostID,
+    view: options.archiveState === "archived" ? ARCHIVE_VIEW : DOCK_VIEW,
+    projectionID,
+    sourceRef,
+    rowRole: "threadCard",
+    displayOrderKey,
+    logicalHostID: sourceHostID,
     threadID,
     backendSessionID: sessionID,
     hostDisplayName: host.displayName || host.id,
     hostEndpoint: host.endpoint || null,
-    orderKey,
     activityAt: timestampToISO(activityAtMs),
     activityAtMs,
     displaySummary: displaySummaryForThread(thread),
     title: titleForThread(thread),
-    status: normalizedStatus(thread),
+    status,
     sourceKind,
     lane,
     relationship: options.relationship || relationshipForThread(thread),
@@ -370,32 +381,44 @@ function normalizeStoredCard(row) {
   if (!row) {
     return null;
   }
-  const activityAtMs = Number(row.activity_at_ms || row.updated_at_ms || 0);
+  if (typeof row.raw_json !== "string" || !row.raw_json.trim()) {
+    return null;
+  }
+  let rawCard;
+  try {
+    rawCard = JSON.parse(row.raw_json);
+  } catch {
+    return null;
+  }
+  if (!storedCardHasProjectionEnvelope(rawCard, row)) {
+    return null;
+  }
   return {
-    id: row.dock_id || dockCardID(row.logical_host_id || row.host_id, row.thread_id),
-    logicalHostID: row.logical_host_id || row.host_id,
-    threadID: row.thread_id,
-    backendSessionID: row.backend_session_id,
-    hostDisplayName: row.host_display_name || row.host_id,
-    hostEndpoint: row.host_endpoint || null,
-    orderKey: row.order_key || activityOrderKey(activityAtMs, row.thread_id),
-    activityAt: row.activity_at || timestampToISO(activityAtMs),
-    activityAtMs,
-    displaySummary: row.display_summary || row.summary || row.title || "No summary",
-    title: row.title,
-    status: row.status,
-    sourceKind: row.source_kind || "unknown",
-    lane: row.lane,
-    relationship: row.relationship || "root",
-    forkedFromID: row.forked_from_id || null,
+    ...rawCard,
+    id: rawCard.projectionID,
     archiveState: row.archive_state || "unknown",
     freshness: row.freshness_status || "unknown",
     completeness: row.completeness || "unknown",
-    repository: row.repository,
-    workingDirectory: row.working_directory,
-    branch: row.branch,
-    summarySource: row.summary_source || null,
   };
+}
+
+function storedCardHasProjectionEnvelope(rawCard, row) {
+  return rawCard
+    && rawCard.schemaVersion === PROJECTION_SCHEMA_VERSION
+    && rawCard.identityVersion === PROJECTION_IDENTITY_VERSION
+    && rawCard.projectionEngineVersion === PROJECTION_ENGINE_VERSION
+    && rawCard.sourceHostID === row.host_id
+    && rawCard.logicalHostID === rawCard.sourceHostID
+    && rawCard.threadID === row.thread_id
+    && rawCard.id === rawCard.projectionID
+    && rawCard.rowRole === "threadCard"
+    && typeof rawCard.view === "string"
+    && typeof rawCard.projectionID === "string"
+    && rawCard.projectionID.trim()
+    && typeof rawCard.sourceRef === "string"
+    && rawCard.sourceRef.trim()
+    && typeof rawCard.displayOrderKey === "string"
+    && rawCard.displayOrderKey.trim();
 }
 
 function buildWindow({ offset = 0, limit, rowCount, totalRows }) {
@@ -421,8 +444,6 @@ function estimateJSONBytes(value) {
 export {
   ARCHIVE_VIEW,
   DOCK_VIEW,
-  activityOrderKey,
-  archiveOrderKey,
   buildWindow,
   dockCardID,
   estimateJSONBytes,

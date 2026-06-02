@@ -178,7 +178,7 @@ private struct ThreadMessageCard: View {
         .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityValue(messageAutomationValue)
-        .codexAutomationID(AutomationID.Session.messageCard(eventID: event.id))
+        .codexAutomationID(AutomationID.Session.messageCard(projectionID: event.id))
     }
 
     @ViewBuilder
@@ -294,7 +294,7 @@ private struct ThreadMessageCard: View {
 
     private var messageAutomationValue: String {
         [
-            "event=\(event.id)",
+            "projection=\(event.id)",
             "kind=\(event.kind.rawValue)",
             "visibility=\(event.visibilityCategory.rawValue)",
             "live=\(event.isLive)",

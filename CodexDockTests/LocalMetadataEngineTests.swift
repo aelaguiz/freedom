@@ -160,8 +160,10 @@ final class LocalMetadataEngineTests: XCTestCase {
         threadID: String,
         title: String
     ) -> DockRowViewModel {
-        DockRowViewModel(
-            id: HostScopedThreadID(hostID: "host-a", threadID: threadID),
+        let projectionID = "host:host-a/thread:\(threadID)/row:threadCard"
+        return DockRowViewModel(
+            threadIdentity: HostScopedThreadID(hostID: "host-a", threadID: threadID),
+            projectionID: projectionID,
             backendSessionID: "backend-\(threadID)",
             title: title,
             hostDisplayName: "Host A",
@@ -171,6 +173,7 @@ final class LocalMetadataEngineTests: XCTestCase {
             status: .running,
             lastActivity: "now",
             lastActivityDate: Date(timeIntervalSince1970: 1_000),
+            displayOrderKey: "9999999999000000|0001|\(projectionID)",
             summary: "summary",
             rail: .blue,
             label: nil,

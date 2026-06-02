@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-dock.local/contract/projection/projection-envelope.schema.json",
+  "title": "Codex Dock Projection Row Envelope",
+  "description": "Identity fields every relay projection row must carry before any view-specific payload fields. This is the shared contract for Dock, Archive, and Thread Detail rows.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "identityVersion",
+    "projectionEngineVersion",
+    "sourceHostID",
+    "view",
+    "projectionID",
+    "sourceRef",
+    "rowRole",
+    "displayOrderKey"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "identityVersion": {
+      "const": 1
+    },
+    "projectionEngineVersion": {
+      "const": 1
+    },
+    "sourceHostID": {
+      "type": "string",
+      "minLength": 1
+    },
+    "view": {
+      "type": "string",
+      "minLength": 1
+    },
+    "projectionID": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^host:[^/]+/thread:[^/]+(?:/.*)?/row:[^/]+$"
+    },
+    "sourceRef": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^host:[^/]+/thread:[^/]+(?:/.*)?$"
+    },
+    "rowRole": {
+      "$ref": "https://codex-dock.local/contract/projection/row-role.schema.json"
+    },
+    "displayOrderKey": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Relay projection display order key. Clients render by this key and never re-sort from body timestamps or local arrival order."
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Per-row projection revision. Thread Detail requires this; Dock card rows may omit it until they carry per-row revision state."
+    }
+  }
+}

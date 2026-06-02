@@ -177,28 +177,24 @@ actor LoaderBackedThreadCardStreamConnection: ThreadCardStreamConnection {
         cards: [DockThreadCardDTO],
         freshness: DockStreamFreshnessDTO
     ) -> ThreadCardStreamUpdateDTO {
-        let logicalHostID = cards.first?.logicalHostID ?? host.id
-        let hostDisplayName = cards.first?.hostDisplayName ?? host.displayName
+        let sourceHostID = cards.first?.sourceHostID ?? host.id
         return ThreadCardStreamUpdateDTO(
             kind: .snapshot,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            identityVersion: 1,
+            projectionEngineVersion: 1,
+            sourceHostID: sourceHostID,
             view: view,
+            scope: "view",
+            viewParamsKey: "\(view.rawValue):\(sourceHostID)",
             complete: true,
             totalRows: cards.count,
             window: DockStreamWindowDTO(offset: 0, limit: cards.count, rowCount: cards.count),
-            stateGeneration: seq,
             epoch: host.id,
             seq: seq,
+            order: "displayOrderKeyAscending",
             freshness: freshness,
-            hosts: [
-                DockStreamHostDTO(
-                    id: logicalHostID,
-                    logicalHostID: logicalHostID,
-                    displayName: hostDisplayName,
-                    endpoint: host.endpoint.displayEndpoint
-                )
-            ],
-            cards: cards
+            rows: cards
         )
     }
 
@@ -208,22 +204,36 @@ actor LoaderBackedThreadCardStreamConnection: ThreadCardStreamConnection {
     ) -> DockThreadCardDTO {
         let activity = summary.cardActivityDate ?? summary.lastActivity
         let activityAtMs = Int64(activity.timeIntervalSince1970 * 1_000)
-        let logicalHostID = summary.id.hostID
-        let hostDisplayName = logicalHostID == host.id ? host.displayName : logicalHostID
+        let hostDisplayName = host.displayName
         let sourceKind = streamSource(from: summary.origin)
+        let sourceHostID = summary.id.hostID
+        let projectionID = threadCardProjectionID(hostID: sourceHostID, threadID: summary.id.threadID)
+        let status = streamStatus(from: summary.status)
         return DockThreadCardDTO(
-            id: "\(logicalHostID)::\(summary.id.threadID)",
-            logicalHostID: logicalHostID,
+            schemaVersion: 1,
+            identityVersion: 1,
+            projectionEngineVersion: 1,
+            sourceHostID: sourceHostID,
+            view: view.rawValue,
+            projectionID: projectionID,
+            sourceRef: threadCardSourceRef(hostID: sourceHostID, threadID: summary.id.threadID),
+            rowRole: "threadCard",
+            displayOrderKey: threadCardDisplayOrderKey(
+                activityAtMs: activityAtMs,
+                status: status,
+                projectionID: projectionID
+            ),
+            id: projectionID,
+            logicalHostID: sourceHostID,
             threadID: summary.id.threadID,
             backendSessionID: summary.backendSessionID,
             hostDisplayName: hostDisplayName,
             hostEndpoint: host.endpoint.displayEndpoint,
-            orderKey: orderKey(activityAtMs: activityAtMs, threadID: summary.id.threadID),
             activityAt: ISO8601DateFormatter().string(from: activity),
             activityAtMs: activityAtMs,
             displaySummary: string(from: summary.displaySummary) ?? summary.displayTitle,
             title: summary.displayTitle,
-            status: streamStatus(from: summary.status),
+            status: status,
             sourceKind: sourceKind,
             lane: streamLane(from: summary.origin),
             archiveState: archiveState,
@@ -288,9 +298,6 @@ actor LoaderBackedThreadCardStreamConnection: ThreadCardStreamConnection {
         }
     }
 
-    private func orderKey(activityAtMs: Int64, threadID: String) -> String {
-        String(format: "%019lld:%@", Int64.max - activityAtMs, threadID)
-    }
 }
 
 struct FakeThreadCardFixtureLoader: ThreadCardFixtureLoading {
@@ -593,8 +600,12 @@ func makeRow(
     status: DockRowStatusKind,
     origin: SessionOrigin = .humanInteractive(subtype: .cli)
 ) -> DockRowViewModel {
-    DockRowViewModel(
-        id: HostScopedThreadID(hostID: "Amir-M5", threadID: UUID().uuidString),
+    let threadID = UUID().uuidString
+    let hostID = "Amir-M5"
+    let projectionID = threadCardProjectionID(hostID: hostID, threadID: threadID)
+    return DockRowViewModel(
+        threadIdentity: HostScopedThreadID(hostID: hostID, threadID: threadID),
+        projectionID: projectionID,
         backendSessionID: UUID().uuidString,
         title: "Row",
         hostDisplayName: "Amir-M5",
@@ -604,6 +615,11 @@ func makeRow(
         status: status,
         lastActivity: "now",
         lastActivityDate: Date(timeIntervalSince1970: 2_000),
+        displayOrderKey: threadCardDisplayOrderKey(
+            activityAtMs: 2_000_000,
+            status: status == .running ? .running : .idle,
+            projectionID: projectionID
+        ),
         summary: "Summary",
         rail: .blue,
         label: nil,
@@ -641,19 +657,22 @@ func dockStreamSnapshot(
     seq: Int64,
     cards: [DockThreadCardDTO],
     view: ThreadCardStreamView = .dock,
-    schemaVersion: Int? = CodexDockConstants.Dock.streamSchemaVersion,
+    schemaVersion: Int = CodexDockConstants.Dock.streamSchemaVersion,
     freshness: DockStreamFreshnessDTO = DockStreamFreshnessDTO(status: .fresh),
     complete: Bool = true,
     totalRows: Int? = nil,
-    window: DockStreamWindowDTO? = nil,
-    stateGeneration: Int64? = nil
+    window: DockStreamWindowDTO? = nil
 ) -> ThreadCardStreamUpdateDTO {
-    let logicalHostID = cards.first?.logicalHostID ?? host.id
-    let hostDisplayName = cards.first?.hostDisplayName ?? host.displayName
+    let sourceHostID = cards.first?.sourceHostID ?? host.id
     return ThreadCardStreamUpdateDTO(
         kind: .snapshot,
         schemaVersion: schemaVersion,
+        identityVersion: 1,
+        projectionEngineVersion: 1,
+        sourceHostID: sourceHostID,
         view: view,
+        scope: "view",
+        viewParamsKey: "\(view.rawValue):\(sourceHostID)",
         complete: complete,
         totalRows: totalRows ?? cards.count,
         window: window ?? DockStreamWindowDTO(
@@ -662,19 +681,11 @@ func dockStreamSnapshot(
             rowCount: cards.count,
             nextOffset: nil
         ),
-        stateGeneration: stateGeneration ?? seq,
         epoch: epoch,
         seq: seq,
+        order: "displayOrderKeyAscending",
         freshness: freshness,
-        hosts: [
-            DockStreamHostDTO(
-                id: logicalHostID,
-                logicalHostID: logicalHostID,
-                displayName: hostDisplayName,
-                endpoint: host.endpoint.displayEndpoint
-            )
-        ],
-        cards: cards
+        rows: cards
     )
 }
 
@@ -686,6 +697,10 @@ func threadCardFixture(
     updatedAt: Int64,
     logicalHostID: String? = nil,
     hostDisplayName: String? = nil,
+    projectionID: String? = nil,
+    sourceRef: String? = nil,
+    displayOrderKey: String? = nil,
+    view: ThreadCardStreamView = .dock,
     sourceKind: DockThreadCardSourceKind = .human,
     lane: DockThreadCardLane = .human,
     relationship: DockThreadCardRelationship? = nil,
@@ -693,16 +708,30 @@ func threadCardFixture(
 ) -> DockThreadCardDTO {
     let activityAt = Date(timeIntervalSince1970: TimeInterval(updatedAt))
     let activityAtMs = Int64(activityAt.timeIntervalSince1970 * 1_000)
-    let cardLogicalHostID = logicalHostID ?? host.id
-    let cardHostDisplayName = hostDisplayName ?? (cardLogicalHostID == host.id ? host.displayName : cardLogicalHostID)
+    let sourceHostID = logicalHostID ?? host.id
+    let cardHostDisplayName = hostDisplayName ?? host.displayName
+    let projectionID = projectionID ?? threadCardProjectionID(hostID: sourceHostID, threadID: threadID)
+    let displayOrderKey = displayOrderKey ?? threadCardDisplayOrderKey(
+        activityAtMs: activityAtMs,
+        status: status,
+        projectionID: projectionID
+    )
     return DockThreadCardDTO(
-        id: "\(cardLogicalHostID)::\(threadID)",
-        logicalHostID: cardLogicalHostID,
+        schemaVersion: 1,
+        identityVersion: 1,
+        projectionEngineVersion: 1,
+        sourceHostID: sourceHostID,
+        view: view.rawValue,
+        projectionID: projectionID,
+        sourceRef: sourceRef ?? threadCardSourceRef(hostID: sourceHostID, threadID: threadID),
+        rowRole: "threadCard",
+        displayOrderKey: displayOrderKey,
+        id: projectionID,
+        logicalHostID: sourceHostID,
         threadID: threadID,
         backendSessionID: "\(threadID)-session",
         hostDisplayName: cardHostDisplayName,
         hostEndpoint: host.endpoint.displayEndpoint,
-        orderKey: String(format: "%019lld:%@", Int64.max - activityAtMs, threadID),
         activityAt: ISO8601DateFormatter().string(from: activityAt),
         activityAtMs: activityAtMs,
         displaySummary: "Summary for \(title)",
@@ -720,4 +749,43 @@ func threadCardFixture(
         branch: "main",
         summarySource: "test"
     )
+}
+
+private func threadCardProjectionID(hostID: String, threadID: String) -> String {
+    "\(threadCardSourceRef(hostID: hostID, threadID: threadID))/row:threadCard"
+}
+
+private func threadCardSourceRef(hostID: String, threadID: String) -> String {
+    "host:\(hostID)/thread:\(threadID)"
+}
+
+private func threadCardDisplayOrderKey(
+    activityAtMs: Int64,
+    status: DockThreadCardStatus,
+    projectionID: String
+) -> String {
+    let maxSortMs: Int64 = 9_999_999_999_999_999
+    let boundedActivityAtMs = max(0, min(maxSortMs, activityAtMs))
+    return [
+        String(format: "%016lld", maxSortMs - boundedActivityAtMs),
+        String(format: "%04d", threadCardStatusPriority(status)),
+        projectionID
+    ].joined(separator: "|")
+}
+
+private func threadCardStatusPriority(_ status: DockThreadCardStatus) -> Int {
+    switch status {
+    case .needsInput, .needsApproval:
+        return 0
+    case .running:
+        return 1
+    case .idle:
+        return 2
+    case .error:
+        return 3
+    case .unknown:
+        return 4
+    case .dormant:
+        return 5
+    }
 }

@@ -323,16 +323,20 @@ final class AppServerClientTests: XCTestCase {
         let snapshot = ThreadCardStreamUpdateDTO(
             kind: .snapshot,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            identityVersion: 1,
+            projectionEngineVersion: 1,
+            sourceHostID: host.id,
             view: .dock,
+            scope: "view",
+            viewParamsKey: "dock:\(host.id)",
             complete: true,
             totalRows: 1,
             window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1),
-            stateGeneration: 1,
             epoch: "epoch-1",
             seq: 1,
+            order: "displayOrderKeyAscending",
             freshness: DockStreamFreshnessDTO(status: .fresh),
-            hosts: [DockStreamHostDTO(id: host.id, logicalHostID: host.id)],
-            cards: [
+            rows: [
                 threadCardFixture(
                     host: host,
                     threadID: "thread-1",
@@ -353,24 +357,28 @@ final class AppServerClientTests: XCTestCase {
 
         let subscribed = try await subscribeTask.value
         XCTAssertEqual(subscribed.kind, .snapshot)
-        XCTAssertEqual(subscribed.cards?.map(\.status), [.dormant])
+        XCTAssertEqual(subscribed.rows?.map(\.status), [.dormant])
 
         let updateTask = Task {
             var iterator = connection.updates().makeAsyncIterator()
             return try await iterator.next()
         }
         let delta = ThreadCardStreamUpdateDTO(
-            kind: .delta,
+            kind: .upsert,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            identityVersion: 1,
+            projectionEngineVersion: 1,
+            sourceHostID: host.id,
             view: .dock,
+            scope: "view",
+            viewParamsKey: "dock:\(host.id)",
             complete: true,
             totalRows: 1,
             window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1),
-            stateGeneration: 2,
             epoch: "epoch-1",
-            baseSeq: 1,
             seq: 2,
-            upsertCards: [
+            order: "displayOrderKeyAscending",
+            rows: [
                 threadCardFixture(
                     host: host,
                     threadID: "thread-1",
@@ -392,12 +400,12 @@ final class AppServerClientTests: XCTestCase {
         let update = try await valueWithinOneSecond {
             try await updateTask.value
         }
-        XCTAssertEqual(update?.kind, .delta)
-        XCTAssertEqual(update?.upsertCards?.map(\.status), [.needsApproval])
+        XCTAssertEqual(update?.kind, .upsert)
+        XCTAssertEqual(update?.rows?.map(\.status), [.needsApproval])
         await connection.close()
     }
 
-    func testDockThreadCardDecodesLegacyPayloadWithoutRelationshipFields() throws {
+    func testDockThreadCardRejectsLegacyPayloadWithoutProjectionEnvelope() throws {
         let payload = """
         {
           "id": "Amir-M5::thread-1",
@@ -419,10 +427,7 @@ final class AppServerClientTests: XCTestCase {
         }
         """
 
-        let card = try JSONDecoder().decode(DockThreadCardDTO.self, from: Data(payload.utf8))
-
-        XCTAssertNil(card.relationship)
-        XCTAssertNil(card.forkedFromID)
+        XCTAssertThrowsError(try JSONDecoder().decode(DockThreadCardDTO.self, from: Data(payload.utf8)))
     }
 
     func testOfflineAndMalformedResponsePathsSurfaceExplicitState() async throws {
@@ -1058,19 +1063,19 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(customTransport.maximumMessageSize, 16 * 1024 * 1024)
     }
 
-    func testThreadReadHumanOnlyRejectionSurfacesTypedServerCode() async throws {
+    func testThreadDetailReadHumanOnlyRejectionSurfacesTypedServerCode() async throws {
         let transport = ScriptedAppServerTransport()
         let client = AppServerClient(transport: transport)
         try await completeHandshake(client: client, transport: transport)
 
         let task = Task {
-            try await client.threadRead(
-                params: ThreadReadParams(threadId: "spawned-child", includeTurns: false),
+            try await client.threadDetailRead(
+                params: ThreadDetailParams(threadId: "spawned-child"),
                 timeout: .seconds(1)
             )
         }
         let request = try await transport.nextSentRequest()
-        XCTAssertEqual(request.method, AppServerMethods.threadRead)
+        XCTAssertEqual(request.method, AppServerMethods.threadDetailRead)
 
         await transport.enqueue(
             .error(
@@ -1106,103 +1111,91 @@ final class AppServerClientTests: XCTestCase {
         }
     }
 
-    func testThreadReadAndResumeSendTypedRequests() async throws {
+    func testThreadDetailMethodsSendTypedRequests() async throws {
         let transport = ScriptedAppServerTransport()
         let client = AppServerClient(transport: transport)
         try await completeHandshake(client: client, transport: transport)
 
         let readTask = Task {
-            try await client.threadRead(
-                params: ThreadReadParams(threadId: "thread-1", includeTurns: true),
+            try await client.threadDetailRead(
+                params: ThreadDetailParams(threadId: "thread-1"),
                 timeout: .seconds(1)
             )
         }
         let readRequest = try await transport.nextSentRequest()
-        XCTAssertEqual(readRequest.method, AppServerMethods.threadRead)
+        XCTAssertEqual(readRequest.method, AppServerMethods.threadDetailRead)
         guard case .object(let readParams) = try XCTUnwrap(readRequest.params) else {
             return XCTFail("Expected object params")
         }
         XCTAssertEqual(readParams["threadId"], .string("thread-1"))
-        XCTAssertEqual(readParams["includeTurns"], .bool(true))
 
         await transport.enqueue(
             .response(
                 JSONRPCResponse(
                     id: readRequest.id,
                     result: try JSONValue.encoded(
-                        ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))
+                        makeThreadDetailSnapshotDTO(threadID: "thread-1", route: AppServerMethods.threadDetailRead)
                     )
                 )
             )
         )
 
         let readResponse = try await readTask.value
-        XCTAssertEqual(readResponse.thread.id, "thread-1")
+        XCTAssertEqual(readResponse.threadID, "thread-1")
 
-        let turnsListTask = Task {
-            try await client.threadTurnsList(
-                params: ThreadTurnsListParams(
-                    threadId: "thread-1",
-                    cursor: "page-2",
-                    limit: 250,
-                    sortDirection: .desc,
-                    itemsView: .full
-                ),
+        let subscribeTask = Task {
+            try await client.threadDetailSubscribe(
+                params: ThreadDetailParams(threadId: "thread-1"),
                 timeout: .seconds(1)
             )
         }
-        let turnsListRequest = try await transport.nextSentRequest()
-        XCTAssertEqual(turnsListRequest.method, AppServerMethods.threadTurnsList)
-        guard case .object(let turnsListParams) = try XCTUnwrap(turnsListRequest.params) else {
+        let subscribeRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(subscribeRequest.method, AppServerMethods.threadDetailSubscribe)
+        guard case .object(let subscribeParams) = try XCTUnwrap(subscribeRequest.params) else {
             return XCTFail("Expected object params")
         }
-        XCTAssertEqual(turnsListParams["threadId"], .string("thread-1"))
-        XCTAssertEqual(turnsListParams["cursor"], .string("page-2"))
-        XCTAssertEqual(turnsListParams["limit"], .integer(250))
-        XCTAssertEqual(turnsListParams["sortDirection"], .string("desc"))
-        XCTAssertEqual(turnsListParams["itemsView"], .string("full"))
+        XCTAssertEqual(subscribeParams["threadId"], .string("thread-1"))
 
         await transport.enqueue(
             .response(
                 JSONRPCResponse(
-                    id: turnsListRequest.id,
+                    id: subscribeRequest.id,
                     result: try JSONValue.encoded(
-                        ThreadTurnsListResponseDTO(data: [])
+                        makeThreadDetailSnapshotDTO(threadID: "thread-1", route: AppServerMethods.threadDetailSubscribe)
                     )
                 )
             )
         )
 
-        let turnsListResponse = try await turnsListTask.value
-        XCTAssertEqual(turnsListResponse.data, [])
+        let subscribeResponse = try await subscribeTask.value
+        XCTAssertEqual(subscribeResponse.threadID, "thread-1")
 
-        let resumeTask = Task {
-            try await client.threadResume(
-                params: ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
+        let resyncTask = Task {
+            try await client.threadDetailResync(
+                params: ThreadDetailParams(threadId: "thread-1"),
                 timeout: .seconds(1)
             )
         }
-        let resumeRequest = try await transport.nextSentRequest()
-        XCTAssertEqual(resumeRequest.method, AppServerMethods.threadResume)
-        guard case .object(let resumeParams) = try XCTUnwrap(resumeRequest.params) else {
+        let resyncRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(resyncRequest.method, AppServerMethods.threadDetailResync)
+        guard case .object(let resyncParams) = try XCTUnwrap(resyncRequest.params) else {
             return XCTFail("Expected object params")
         }
-        XCTAssertEqual(resumeParams["threadId"], .string("thread-1"))
-        XCTAssertEqual(resumeParams["excludeTurns"], .bool(true))
+        XCTAssertEqual(resyncParams["threadId"], .string("thread-1"))
 
         await transport.enqueue(
             .response(
                 JSONRPCResponse(
-                    id: resumeRequest.id,
+                    id: resyncRequest.id,
                     result: try JSONValue.encoded(
-                        ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))
+                        makeThreadDetailSnapshotDTO(threadID: "thread-1", route: AppServerMethods.threadDetailResync)
                     )
                 )
             )
         )
 
-        let resumeResponse = try await resumeTask.value
-        XCTAssertEqual(resumeResponse.thread.id, "thread-1")
+        let resyncResponse = try await resyncTask.value
+        XCTAssertEqual(resyncResponse.threadID, "thread-1")
     }
 
     func testThreadDetailSessionAddsTraceMetadataToDetailRoutes() async throws {
@@ -1221,78 +1214,67 @@ final class AppServerClientTests: XCTestCase {
         try await respondToInitialize(transport: transport)
         _ = try await connectTask.value
 
-        let readTask = Task {
-            try await session.threadRead(
-                params: ThreadReadParams(threadId: "thread-1", includeTurns: true),
+        let subscribeTask = Task {
+            try await session.threadDetailSubscribe(
+                params: ThreadDetailParams(threadId: "thread-1"),
                 timeout: .seconds(1)
             )
         }
-        let readRequest = try await transport.nextSentRequest()
-        XCTAssertEqual(readRequest.method, AppServerMethods.threadRead)
+        let subscribeRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(subscribeRequest.method, AppServerMethods.threadDetailSubscribe)
         assertTraceMetadata(
-            in: readRequest.params,
-            route: AppServerMethods.threadRead,
+            in: subscribeRequest.params,
+            route: AppServerMethods.threadDetailSubscribe,
             configuredHostID: host.id
         )
         await transport.enqueue(
             .response(
                 JSONRPCResponse(
-                    id: readRequest.id,
+                    id: subscribeRequest.id,
                     result: try JSONValue.encoded(
-                        ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))
+                        ThreadDetailSnapshotDTO(
+                            sourceHostID: host.id,
+                            threadID: "thread-1",
+                            epoch: "epoch-1",
+                            seq: 1,
+                            rows: []
+                        )
                     )
                 )
             )
         )
-        _ = try await readTask.value
+        _ = try await subscribeTask.value
 
-        let turnsTask = Task {
-            try await session.threadTurnsList(
-                params: ThreadTurnsListParams(threadId: "thread-1", cursor: nil, limit: 250),
+        let resyncTask = Task {
+            try await session.threadDetailResync(
+                params: ThreadDetailParams(threadId: "thread-1"),
                 timeout: .seconds(1)
             )
         }
-        let turnsRequest = try await transport.nextSentRequest()
-        XCTAssertEqual(turnsRequest.method, AppServerMethods.threadTurnsList)
+        let resyncRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(resyncRequest.method, AppServerMethods.threadDetailResync)
         assertTraceMetadata(
-            in: turnsRequest.params,
-            route: AppServerMethods.threadTurnsList,
+            in: resyncRequest.params,
+            route: AppServerMethods.threadDetailResync,
             configuredHostID: host.id
         )
         await transport.enqueue(
             .response(
                 JSONRPCResponse(
-                    id: turnsRequest.id,
-                    result: try JSONValue.encoded(ThreadTurnsListResponseDTO(data: []))
-                )
-            )
-        )
-        _ = try await turnsTask.value
-
-        let resumeTask = Task {
-            try await session.threadResume(
-                params: ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
-                timeout: .seconds(1)
-            )
-        }
-        let resumeRequest = try await transport.nextSentRequest()
-        XCTAssertEqual(resumeRequest.method, AppServerMethods.threadResume)
-        assertTraceMetadata(
-            in: resumeRequest.params,
-            route: AppServerMethods.threadResume,
-            configuredHostID: host.id
-        )
-        await transport.enqueue(
-            .response(
-                JSONRPCResponse(
-                    id: resumeRequest.id,
+                    id: resyncRequest.id,
                     result: try JSONValue.encoded(
-                        ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))
+                        ThreadDetailSnapshotDTO(
+                            sourceHostID: host.id,
+                            threadID: "thread-1",
+                            epoch: "epoch-2",
+                            seq: 1,
+                            rows: []
+                        )
                     )
                 )
             )
         )
-        _ = try await resumeTask.value
+        _ = try await resyncTask.value
 
         await session.disconnect()
     }
@@ -2073,7 +2055,7 @@ final class AppServerClientTests: XCTestCase {
             timeout: .seconds(5),
             as: ThreadCardStreamUpdateDTO.self
         )
-        let cards = response.cards ?? []
+        let cards = response.rows ?? []
         XCTAssertLessThanOrEqual(cards.count, 5)
         for card in cards {
             XCTAssertFalse(card.threadID.isEmpty)
@@ -2082,7 +2064,7 @@ final class AppServerClientTests: XCTestCase {
         await client.disconnect()
     }
 
-    func testPhoneReachableRealHostThreadReadAndResumeWhenEndpointIsProvided() async throws {
+    func testPhoneReachableRealHostThreadDetailProjectionWhenEndpointIsProvided() async throws {
         let environment = ProcessInfo.processInfo.environment
         let url = try configuredRelayURL(from: environment, label: "phone-reachable thread detail")
         let client = AppServerClient(webSocketURL: url, bearerToken: nil)
@@ -2097,29 +2079,26 @@ final class AppServerClientTests: XCTestCase {
             as: ThreadCardStreamUpdateDTO.self
         )
         let card = try XCTUnwrap(
-            (dock.cards ?? []).first { $0.status != .dormant },
+            (dock.rows ?? []).first { $0.status != .dormant },
             "Real-host detail smoke test requires at least one loaded thread"
         )
         let threadID = card.threadID
 
-        let read = try await client.threadRead(
-            params: ThreadReadParams(threadId: threadID, includeTurns: false),
+        let read = try await client.threadDetailRead(
+            params: ThreadDetailParams(threadId: threadID),
             timeout: .seconds(10)
         )
-        let turns = try await client.threadTurnsList(
-            params: ThreadTurnsListParams(threadId: threadID, limit: 250),
-            timeout: .seconds(10)
-        )
-        let resumed = try await client.threadResume(
-            params: ThreadResumeParams(threadId: threadID, excludeTurns: true),
+        let subscribed = try await client.threadDetailSubscribe(
+            params: ThreadDetailParams(threadId: threadID),
             timeout: .seconds(10)
         )
 
-        XCTAssertEqual(read.thread.id, threadID)
-        XCTAssertEqual(resumed.thread.id, threadID)
-        XCTAssertNotNil(read.thread.turns)
-        XCTAssertNotNil(resumed.thread.turns)
-        XCTAssertLessThanOrEqual(turns.data.count, 250)
+        XCTAssertEqual(read.threadID, threadID)
+        XCTAssertEqual(subscribed.threadID, threadID)
+        XCTAssertEqual(read.view, "thread.detail")
+        XCTAssertEqual(subscribed.view, "thread.detail")
+        XCTAssertEqual(read.projectionEngineVersion, 1)
+        XCTAssertEqual(subscribed.projectionEngineVersion, 1)
         await client.disconnect()
     }
 
@@ -2146,7 +2125,7 @@ final class AppServerClientTests: XCTestCase {
                 as: ThreadCardStreamUpdateDTO.self
             )
             let card = try XCTUnwrap(
-                (dock.cards ?? []).first { $0.status == .dormant },
+                (dock.rows ?? []).first { $0.status == .dormant },
                 "Real-host archive smoke test requires one notLoaded thread"
             )
             let threadID = card.threadID
@@ -2164,7 +2143,7 @@ final class AppServerClientTests: XCTestCase {
                 as: ThreadCardStreamUpdateDTO.self
             )
             XCTAssertTrue(
-                (archived.cards ?? []).contains { $0.threadID == threadID },
+                (archived.rows ?? []).contains { $0.threadID == threadID },
                 "Archive stream should include \(threadID) after thread/archive"
             )
 
@@ -2182,7 +2161,7 @@ final class AppServerClientTests: XCTestCase {
                 as: ThreadCardStreamUpdateDTO.self
             )
             XCTAssertTrue(
-                (unarchived.cards ?? []).contains { $0.threadID == threadID },
+                (unarchived.rows ?? []).contains { $0.threadID == threadID },
                 "Dock stream should include \(threadID) after thread/unarchive"
             )
         } catch {
@@ -2619,6 +2598,33 @@ private func jsonObject(from message: JSONRPCMessage) throws -> [String: Any] {
     let data = try message.jsonData()
     let object = try JSONSerialization.jsonObject(with: data)
     return try XCTUnwrap(object as? [String: Any])
+}
+
+private func makeThreadDetailSnapshotDTO(threadID: String, route: String) -> ThreadDetailSnapshotDTO {
+    ThreadDetailSnapshotDTO(
+        sourceHostID: "test-host",
+        threadID: threadID,
+        epoch: "test-epoch",
+        seq: 1,
+        order: "newest",
+        freshness: ThreadDetailFreshnessDTO(state: "fresh"),
+        rows: [
+            ThreadDetailEventDTO(
+                sourceHostID: "test-host",
+                threadID: threadID,
+                projectionID: "host:test-host/thread:\(threadID)/system:\(route)",
+                sourceRef: "host:test-host/thread:\(threadID)/system:\(route)",
+                itemType: "system",
+                rowRole: "system",
+                visibility: .system,
+                renderKind: .system,
+                displayOrderKey: "00000000000000000000:system",
+                title: route,
+                body: route,
+                renderState: .diagnostic
+            )
+        ]
+    )
 }
 
 private func valueWithinOneSecond<T: Sendable>(

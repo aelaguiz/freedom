@@ -4,17 +4,18 @@
   "title": "Codex Dock Simulator UI Dump",
   "type": "object",
   "required": ["schemaVersion", "kind", "status", "capturedAt", "finishedAt", "simulator", "app", "launchMode", "didRelaunch", "stateBefore", "stateAfter", "screenBefore", "screenAfter", "visibleElements"],
-  "additionalProperties": true,
+  "additionalProperties": false,
   "properties": {
     "schemaVersion": { "const": 1 },
     "kind": { "const": "codex-dock-sim-ui-dump" },
     "status": { "$ref": "#/definitions/status" },
+    "reason": { "type": ["string", "null"] },
     "capturedAt": { "type": "string", "minLength": 1 },
     "finishedAt": { "type": "string", "minLength": 1 },
     "simulator": {
       "type": "object",
       "required": ["name", "udid"],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "udid": { "type": "string", "minLength": 1 }
@@ -23,7 +24,7 @@
     "app": {
       "type": "object",
       "required": ["bundleIdentifier"],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "bundleIdentifier": { "type": "string", "minLength": 1 }
       }
@@ -34,9 +35,39 @@
     "stateAfter": { "type": "string" },
     "screenBefore": { "enum": ["dock", "thread", "archive", "unknown"] },
     "screenAfter": { "enum": ["dock", "thread", "archive", "unknown"] },
-    "visibleElements": { "type": "array" }
+    "activeThreadID": { "type": ["string", "null"] },
+    "expectedScreen": { "enum": ["dock", "thread", "archive", "unknown", null] },
+    "expectedThreadID": { "type": ["string", "null"] },
+    "sampleBefore": { "$ref": "#/definitions/proofValue" },
+    "sampleAfter": { "$ref": "#/definitions/proofValue" },
+    "visibleElements": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/proofValue" }
+    },
+    "rawAccessibilityTree": { "type": ["string", "null"] }
   },
   "definitions": {
-    "status": { "enum": ["pass", "fail", "blocked", "not_run"] }
+    "status": { "enum": ["pass", "fail", "blocked", "not_run"] },
+    "proofValue": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/proofValue" }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
+            }
+          },
+          "additionalProperties": { "$ref": "#/definitions/proofValue" }
+        }
+      ]
+    }
   }
 }

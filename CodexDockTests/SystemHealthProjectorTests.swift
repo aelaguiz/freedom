@@ -66,7 +66,7 @@ final class SystemHealthProjectorTests: XCTestCase {
             routeDiagnostics: [
                 RouteDiagnosticSnapshot(
                     configuredHostID: "amir",
-                    route: AppServerMethods.threadRead,
+                    route: AppServerMethods.threadDetailUpdate,
                     routeStatus: .partial,
                     statusReasons: [
                         RouteStatusReason(code: "stale", message: "Thread detail is stale")
@@ -85,7 +85,7 @@ final class SystemHealthProjectorTests: XCTestCase {
         XCTAssertEqual(status?.label, "Degraded")
         XCTAssertTrue(status?.detail.contains("Thread detail is stale") ?? false)
         XCTAssertTrue(status?.detail.contains("Run check") ?? false)
-        XCTAssertFalse(status?.detail.contains(AppServerMethods.threadRead) ?? true)
+        XCTAssertFalse(status?.detail.contains(AppServerMethods.threadDetailUpdate) ?? true)
     }
 
     func testNoHostsMapsEveryCategoryToNotChecked() {

@@ -18,10 +18,7 @@ struct DockRenderProjector: Sendable {
             now: now
         )
         let liveRows = input.hosts.flatMap { host in
-            rowProjector.rows(
-                from: input.cardsByHostID[host.id] ?? [],
-                sourceHostID: host.id
-            )
+            rowProjector.rows(from: input.cardsByHostID[host.id] ?? [])
         }
         // Local metadata may decorate relay rows, but it must never create card
         // rows. The relay is the single source of truth for card existence and order.

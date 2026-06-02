@@ -82,7 +82,7 @@ final class DockStoreTests: XCTestCase {
         }
 
         let projection = snapshot.project(options: .init(lens: .newest))
-        XCTAssertEqual(projection.rows.map(\.id.threadID), ["old-history", "live-running"])
+        XCTAssertEqual(projection.rows.map(\.threadID), ["old-history", "live-running"])
         XCTAssertEqual(projection.rows.map(\.status), [.dormant, .running])
     }
 
@@ -160,7 +160,7 @@ final class DockStoreTests: XCTestCase {
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.rows.map(\.id.threadID) == ["recovered-row"] }
+            where: { $0.rows.map(\.threadID) == ["recovered-row"] }
         ) else {
             return XCTFail("Expected refresh to reconnect after failed subscribe resync, got \(store.state)")
         }
@@ -316,13 +316,13 @@ final class DockStoreTests: XCTestCase {
             return
         }
 
-        XCTAssertEqual(partial.rows.map(\.id.threadID), ["amir-loaded"])
+        XCTAssertEqual(partial.rows.map(\.threadID), ["amir-loaded"])
         XCTAssertEqual(partial.hostStates.map(\.status), [
             .loaded(rowCount: 1),
             .checking
         ])
         let projection = partial.project(options: .init(lens: .newest))
-        XCTAssertEqual(projection.rows.map(\.id.threadID), ["amir-loaded"])
+        XCTAssertEqual(projection.rows.map(\.threadID), ["amir-loaded"])
         XCTAssertTrue(projection.isPartial)
         XCTAssertEqual(projection.checkingHostCount, 1)
 
@@ -494,7 +494,7 @@ final class DockStoreTests: XCTestCase {
         }
 
         let projection = snapshot.project(options: .init(lens: .host))
-        XCTAssertEqual(projection.pinnedRows.map(\.id.threadID), ["thread-pin"])
+        XCTAssertEqual(projection.pinnedRows.map(\.threadID), ["thread-pin"])
         XCTAssertEqual(projection.groups.flatMap(\.rows), [])
     }
 
@@ -578,7 +578,7 @@ final class DockStoreTests: XCTestCase {
         guard case let .loaded(initialSnapshot) = store.state else {
             return XCTFail("Expected loaded state, got \(store.state)")
         }
-        let rowsByThreadID = Dictionary(uniqueKeysWithValues: initialSnapshot.rows.map { ($0.id.threadID, $0) })
+        let rowsByThreadID = Dictionary(uniqueKeysWithValues: initialSnapshot.rows.map { ($0.threadID, $0) })
         let threadB = try XCTUnwrap(rowsByThreadID["thread-b"])
         let threadA = try XCTUnwrap(rowsByThreadID["thread-a"])
 
@@ -631,7 +631,7 @@ final class DockStoreTests: XCTestCase {
         guard case let .loaded(initialSnapshot) = store.state else {
             return XCTFail("Expected loaded state, got \(store.state)")
         }
-        let rowsByThreadID = Dictionary(uniqueKeysWithValues: initialSnapshot.rows.map { ($0.id.threadID, $0) })
+        let rowsByThreadID = Dictionary(uniqueKeysWithValues: initialSnapshot.rows.map { ($0.threadID, $0) })
         let threadA = try XCTUnwrap(rowsByThreadID["thread-a"])
         let threadB = try XCTUnwrap(rowsByThreadID["thread-b"])
         let threadC = try XCTUnwrap(rowsByThreadID["thread-c"])
@@ -644,7 +644,7 @@ final class DockStoreTests: XCTestCase {
             return XCTFail("Expected pinned loaded state, got \(store.state)")
         }
         let pinnedRows = pinnedSnapshot.project(options: .init()).pinnedRows
-        let pinnedRowsByThreadID = Dictionary(uniqueKeysWithValues: pinnedRows.map { ($0.id.threadID, $0) })
+        let pinnedRowsByThreadID = Dictionary(uniqueKeysWithValues: pinnedRows.map { ($0.threadID, $0) })
         await store.reorderPinnedRows([
             try XCTUnwrap(pinnedRowsByThreadID["thread-c"]),
             try XCTUnwrap(pinnedRowsByThreadID["thread-a"])
@@ -686,7 +686,7 @@ final class DockStoreTests: XCTestCase {
         guard case let .loaded(snapshot) = store.state else {
             return XCTFail("Expected failed pin save to keep Dock loaded, got \(store.state)")
         }
-        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["thread-fail"])
+        XCTAssertEqual(snapshot.rows.map(\.threadID), ["thread-fail"])
         XCTAssertFalse(snapshot.rows[0].isPinned)
     }
 
@@ -845,7 +845,7 @@ final class DockStoreTests: XCTestCase {
         guard case let .loaded(snapshot) = store.state else {
             return XCTFail("Expected row to remain loaded, got \(store.state)")
         }
-        XCTAssertEqual(snapshot.rows[0].id.threadID, "thread-keep")
+        XCTAssertEqual(snapshot.rows[0].threadID, "thread-keep")
     }
 
     @MainActor

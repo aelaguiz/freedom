@@ -33,18 +33,13 @@ final class ThreadDetailStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.header.threadID, "thread-1")
         XCTAssertEqual(snapshot.liveState, .live)
         XCTAssertEqual(snapshot.events.map(\.body), ["Paged turn"])
-        let readParams = await session.readParamsSnapshot()
-        let turnsListParams = await session.turnsListParamsSnapshot()
-        let resumeParams = await session.resumeParamsSnapshot()
-        XCTAssertEqual(readParams, [
-            ThreadReadParams(threadId: "thread-1", includeTurns: false),
+        XCTAssertEqual(session.detailSubscribeParamsSnapshot(), [
+            ThreadDetailParams(threadId: "thread-1"),
         ])
-        XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
-        ])
-        XCTAssertEqual(resumeParams, [
-            ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
-        ])
+        XCTAssertEqual(session.detailResyncParamsSnapshot(), [])
+        XCTAssertEqual(session.readParamsSnapshot(), [])
+        XCTAssertEqual(session.turnsListParamsSnapshot(), [])
+        XCTAssertEqual(session.resumeParamsSnapshot(), [])
     }
 
     @MainActor
@@ -54,13 +49,13 @@ final class ThreadDetailStoreTests: XCTestCase {
             hostID: host.id,
             threadID: "thread-1",
             lastActivityDate: Date(timeIntervalSince1970: 2_000),
-            orderKey: "2000"
+            displayOrderKey: "2000"
         )
         let updatedRow = makeDetailRow(
             hostID: host.id,
             threadID: "thread-1",
             lastActivityDate: Date(timeIntervalSince1970: 2_100),
-            orderKey: "2100"
+            displayOrderKey: "2100"
         )
         let session = FakeThreadDetailSession(
             readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
@@ -101,21 +96,15 @@ final class ThreadDetailStoreTests: XCTestCase {
                 && snapshot.liveState == .live
         }
 
-        let readParams = await session.readParamsSnapshot()
-        let turnsListParams = await session.turnsListParamsSnapshot()
-        let resumeParams = await session.resumeParamsSnapshot()
-        XCTAssertEqual(readParams, [
-            ThreadReadParams(threadId: "thread-1", includeTurns: false),
-            ThreadReadParams(threadId: "thread-1", includeTurns: false),
+        XCTAssertEqual(session.detailSubscribeParamsSnapshot(), [
+            ThreadDetailParams(threadId: "thread-1"),
         ])
-        XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
+        XCTAssertEqual(session.detailResyncParamsSnapshot(), [
+            ThreadDetailParams(threadId: "thread-1"),
         ])
-        XCTAssertEqual(resumeParams, [
-            ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
-            ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
-        ])
+        XCTAssertEqual(session.readParamsSnapshot(), [])
+        XCTAssertEqual(session.turnsListParamsSnapshot(), [])
+        XCTAssertEqual(session.resumeParamsSnapshot(), [])
     }
 
     @MainActor
@@ -125,13 +114,13 @@ final class ThreadDetailStoreTests: XCTestCase {
             hostID: host.id,
             threadID: "thread-1",
             lastActivityDate: Date(timeIntervalSince1970: 2_000),
-            orderKey: "2000"
+            displayOrderKey: "2000"
         )
         let updatedRow = makeDetailRow(
             hostID: host.id,
             threadID: "thread-1",
             lastActivityDate: Date(timeIntervalSince1970: 2_100),
-            orderKey: "2100"
+            displayOrderKey: "2100"
         )
         let session = FakeThreadDetailSession(
             readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
@@ -177,12 +166,11 @@ final class ThreadDetailStoreTests: XCTestCase {
                 && snapshot.liveState == .live
         }
 
-        let readParams = await session.readParamsSnapshot()
-        let turnsListParams = await session.turnsListParamsSnapshot()
-        let resumeParams = await session.resumeParamsSnapshot()
-        XCTAssertEqual(readParams.count, 3)
-        XCTAssertEqual(turnsListParams.count, 3)
-        XCTAssertEqual(resumeParams.count, 3)
+        XCTAssertEqual(session.detailSubscribeParamsSnapshot().count, 1)
+        XCTAssertEqual(session.detailResyncParamsSnapshot().count, 2)
+        XCTAssertEqual(session.readParamsSnapshot(), [])
+        XCTAssertEqual(session.turnsListParamsSnapshot(), [])
+        XCTAssertEqual(session.resumeParamsSnapshot(), [])
     }
 
     @MainActor
@@ -192,13 +180,13 @@ final class ThreadDetailStoreTests: XCTestCase {
             hostID: host.id,
             threadID: "thread-1",
             lastActivityDate: Date(timeIntervalSince1970: 2_000),
-            orderKey: "2000"
+            displayOrderKey: "2000"
         )
         let updatedRow = makeDetailRow(
             hostID: host.id,
             threadID: "thread-1",
             lastActivityDate: Date(timeIntervalSince1970: 2_100),
-            orderKey: "2100"
+            displayOrderKey: "2100"
         )
         let session = FakeThreadDetailSession(
             readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
@@ -256,7 +244,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         store.observeDockRowUpdate(updatedRow)
 
         try await waitForDetailStoreAsync {
-            await session.turnsListParamsSnapshot().count == 2
+            session.detailResyncParamsSnapshot().count == 1
         }
         guard case let .loaded(loadedAfterImmediate) = store.state,
               loadedAfterImmediate.events.map(\.body) == ["Live ahead", "Initial turn"] else {
@@ -264,7 +252,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         }
 
         try await waitForDetailStoreAsync {
-            await session.turnsListParamsSnapshot().count == 3
+            session.detailResyncParamsSnapshot().count == 2
         }
         try await waitForDetailStore {
             guard case let .loaded(snapshot) = store.state else {
@@ -283,14 +271,14 @@ final class ThreadDetailStoreTests: XCTestCase {
             threadID: "thread-1",
             lastActivity: "now",
             lastActivityDate: Date(timeIntervalSince1970: 2_000),
-            orderKey: "2000"
+            displayOrderKey: "2000"
         )
         let relativeLabelOnlyRow = makeDetailRow(
             hostID: host.id,
             threadID: "thread-1",
             lastActivity: "1m ago",
             lastActivityDate: Date(timeIntervalSince1970: 2_000),
-            orderKey: "2000"
+            displayOrderKey: "2000"
         )
         let session = FakeThreadDetailSession(
             readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
@@ -314,12 +302,11 @@ final class ThreadDetailStoreTests: XCTestCase {
         }
         XCTAssertEqual(snapshot.header.lastActivity, "1m ago")
         XCTAssertEqual(snapshot.events.map(\.body), ["Initial turn"])
-        let readCount = await session.readParamsSnapshot().count
-        let turnsListCount = await session.turnsListParamsSnapshot().count
-        let resumeCount = await session.resumeParamsSnapshot().count
-        XCTAssertEqual(readCount, 1)
-        XCTAssertEqual(turnsListCount, 1)
-        XCTAssertEqual(resumeCount, 1)
+        XCTAssertEqual(session.detailSubscribeParamsSnapshot().count, 1)
+        XCTAssertEqual(session.detailResyncParamsSnapshot().count, 0)
+        XCTAssertEqual(session.readParamsSnapshot(), [])
+        XCTAssertEqual(session.turnsListParamsSnapshot(), [])
+        XCTAssertEqual(session.resumeParamsSnapshot(), [])
     }
 
     @MainActor
@@ -351,7 +338,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         let start = ContinuousClock.now
         var resumeStarted = false
         while start.duration(to: .now) < .seconds(2) {
-            if await !session.resumeParamsSnapshot().isEmpty {
+            if !session.detailSubscribeParamsSnapshot().isEmpty {
                 resumeStarted = true
                 break
             }
@@ -415,19 +402,13 @@ final class ThreadDetailStoreTests: XCTestCase {
         }
 
         XCTAssertEqual(snapshot.events.map(\.body), ["New paged turn", "Old paged turn"])
-        let readParams = await session.readParamsSnapshot()
-        let turnsListParams = await session.turnsListParamsSnapshot()
-        let resumeParams = await session.resumeParamsSnapshot()
-        XCTAssertEqual(readParams, [
-            ThreadReadParams(threadId: "thread-1", includeTurns: false),
+        XCTAssertEqual(session.detailSubscribeParamsSnapshot(), [
+            ThreadDetailParams(threadId: "thread-1"),
         ])
-        XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
-            ThreadTurnsListParams(threadId: "thread-1", cursor: "page-2", limit: 250, sortDirection: .desc, itemsView: .full),
-        ])
-        XCTAssertEqual(resumeParams, [
-            ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
-        ])
+        XCTAssertEqual(session.detailResyncParamsSnapshot(), [])
+        XCTAssertEqual(session.readParamsSnapshot(), [])
+        XCTAssertEqual(session.turnsListParamsSnapshot(), [])
+        XCTAssertEqual(session.resumeParamsSnapshot(), [])
     }
 
     @MainActor
@@ -470,13 +451,13 @@ final class ThreadDetailStoreTests: XCTestCase {
 
         XCTAssertEqual(header.threadID, "thread-1")
         XCTAssertTrue(message.contains("repeated thread turns cursor same-page"))
-        let turnsListParams = await session.turnsListParamsSnapshot()
-        let resumeParams = await session.resumeParamsSnapshot()
-        XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
-            ThreadTurnsListParams(threadId: "thread-1", cursor: "same-page", limit: 250, sortDirection: .desc, itemsView: .full),
+        XCTAssertEqual(session.detailSubscribeParamsSnapshot(), [
+            ThreadDetailParams(threadId: "thread-1"),
         ])
-        XCTAssertEqual(resumeParams, [ThreadResumeParams]())
+        XCTAssertEqual(session.detailResyncParamsSnapshot(), [])
+        XCTAssertEqual(session.readParamsSnapshot(), [])
+        XCTAssertEqual(session.turnsListParamsSnapshot(), [])
+        XCTAssertEqual(session.resumeParamsSnapshot(), [])
     }
 
     @MainActor
@@ -500,13 +481,8 @@ final class ThreadDetailStoreTests: XCTestCase {
 
         await store.load()
 
-        guard case let .loaded(snapshot) = store.state else {
-            return XCTFail("Expected loaded state, got \(store.state)")
-        }
-
-        XCTAssertEqual(snapshot.events.map(\.body), ["Stored turn"])
-        guard case let .stale(message) = snapshot.liveState else {
-            return XCTFail("Expected stale detail, got \(snapshot.liveState)")
+        guard case let .error(_, message) = store.state else {
+            return XCTFail("Expected error state, got \(store.state)")
         }
         XCTAssertTrue(message.contains("resume failed"))
     }
@@ -542,7 +518,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         }
         XCTAssertEqual(header.threadID, "spawned-child")
         XCTAssertEqual(message, "Thread unavailable.")
-        let resumeParams = await session.resumeParamsSnapshot()
+        let resumeParams = session.resumeParamsSnapshot()
         XCTAssertEqual(resumeParams, [])
     }
 
@@ -644,14 +620,12 @@ final class ThreadDetailStoreTests: XCTestCase {
 
         await store.load()
         await session.finishServerRequests()
+        try await Task.sleep(for: .milliseconds(50))
 
-        try await waitForDetailStore {
-            guard case let .loaded(snapshot) = store.state,
-                  case let .stale(message) = snapshot.liveState else {
-                return false
-            }
-            return message == "Server request stream ended."
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
         }
+        XCTAssertEqual(snapshot.liveState, .live)
     }
 
     @MainActor
@@ -938,9 +912,9 @@ final class ThreadDetailStoreTests: XCTestCase {
         }
 
         XCTAssertEqual(store.requestCards[0].kind, .commandApproval)
-        await store.respond(to: "request-approval-1", action: .accept)
+        await store.respond(to: try XCTUnwrap(store.requestCards.first?.id), action: .accept)
 
-        let sentResponses = await session.sentResponsesSnapshot()
+        let sentResponses = session.sentResponsesSnapshot()
         XCTAssertEqual(
             sentResponses,
             [
@@ -981,12 +955,111 @@ final class ThreadDetailStoreTests: XCTestCase {
 
         XCTAssertEqual(store.composer.draft, "")
         XCTAssertEqual(store.composer.lastError, nil)
-        let startParams = await session.turnStartParamsSnapshot()
-        let steerParams = await session.turnSteerParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
+        let steerParams = session.turnSteerParamsSnapshot()
         XCTAssertEqual(startParams, [
             TurnStartParams.text(threadId: "thread-1", text: "Run the smoke test"),
         ])
         XCTAssertEqual(steerParams, [])
+    }
+
+    @MainActor
+    func testSendDraftOutboundUserMessageMergesWithCanonicalProjectionResync() async throws {
+        let host = makeDetailHost()
+        let initialRow = makeDetailRow(
+            hostID: host.id,
+            threadID: "thread-1",
+            lastActivityDate: Date(timeIntervalSince1970: 3_000),
+            displayOrderKey: "3000"
+        )
+        let updatedRow = makeDetailRow(
+            hostID: host.id,
+            threadID: "thread-1",
+            lastActivityDate: Date(timeIntervalSince1970: 3_100),
+            displayOrderKey: "3100"
+        )
+        let canonicalOutboundTurn: JSONValue = .object([
+            "id": .string("turn-new"),
+            "startedAt": .integer(3_100),
+            "items": .array([
+                .object([
+                    "id": .string("item-user-1"),
+                    "type": .string("userMessage"),
+                    "content": .array([
+                        .object(["text": .string("Run the smoke test")]),
+                    ]),
+                ]),
+            ]),
+        ])
+        let session = FakeThreadDetailSession(
+            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            turnStartResult: .success(
+                TurnStartResponseDTO(
+                    turn: .object([
+                        "id": .string("turn-new"),
+                        "status": .string("inProgress"),
+                    ])
+                )
+            ),
+            readResults: [
+                .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+                .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            ],
+            turnsListResults: [
+                .success(ThreadTurnsListResponseDTO(data: [])),
+                .success(ThreadTurnsListResponseDTO(data: [canonicalOutboundTurn])),
+            ],
+            resumeResults: [
+                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            ]
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: initialRow,
+            factory: FakeThreadDetailSessionFactory(session: session),
+            dockRowSettleRefreshDelay: .milliseconds(10)
+        )
+
+        await store.load()
+        store.updateDraft("Run the smoke test")
+        await store.sendDraft()
+        if case .loaded(let snapshot) = store.state {
+            XCTAssertEqual(snapshot.events, [])
+        } else {
+            XCTFail("Expected loaded state after sendDraft")
+        }
+        await session.emitNotification(
+            JSONRPCNotification(
+                method: "item/completed",
+                params: .object([
+                    "threadId": .string("thread-1"),
+                    "turnId": .string("turn-new"),
+                    "itemId": .string("item-user-1"),
+                    "item": canonicalOutboundTurn.objectValue?["items"]?.arrayValue?.first ?? .object([:]),
+                ])
+            )
+        )
+
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.events.map(\.body) == ["Run the smoke test"]
+        }
+
+        store.observeDockRowUpdate(updatedRow)
+
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            let matchingRows = snapshot.events.filter { $0.body == "Run the smoke test" }
+            return session.detailResyncParamsSnapshot().count == 1
+                && matchingRows.count == 1
+                && snapshot.events.map(\.body) == ["Run the smoke test"]
+        }
     }
 
     @MainActor
@@ -1019,8 +1092,8 @@ final class ThreadDetailStoreTests: XCTestCase {
         store.updateDraft("Also check the relay")
         await store.sendDraft()
 
-        let startParams = await session.turnStartParamsSnapshot()
-        let steerParams = await session.turnSteerParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
+        let steerParams = session.turnSteerParamsSnapshot()
         XCTAssertEqual(startParams, [])
         XCTAssertEqual(steerParams, [
             TurnSteerParams.text(
@@ -1090,7 +1163,7 @@ final class ThreadDetailStoreTests: XCTestCase {
             store.composer.draft == "Check"
         }
         XCTAssertEqual(store.composer.voice.provisionalTranscript, "Check")
-        let startParams = await session.turnStartParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [])
     }
 
@@ -1191,11 +1264,11 @@ final class ThreadDetailStoreTests: XCTestCase {
         XCTAssertEqual(realtime.session.commitCount, 1)
         XCTAssertEqual(store.composer.draft, "Check relay status")
         XCTAssertEqual(store.composer.voice, ComposerVoiceState())
-        let beforeSendStartParams = await session.turnStartParamsSnapshot()
+        let beforeSendStartParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(beforeSendStartParams, [])
 
         await store.sendDraft()
-        let afterSendStartParams = await session.turnStartParamsSnapshot()
+        let afterSendStartParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(afterSendStartParams, [
             TurnStartParams.text(threadId: "thread-1", text: "Check relay status"),
         ])
@@ -1290,7 +1363,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         XCTAssertEqual(realtimeSession.commitCount, 1)
         XCTAssertEqual(store.composer.draft, "Prefix tap transcript")
         XCTAssertEqual(store.composer.voice, ComposerVoiceState())
-        let startParams = await session.turnStartParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [])
     }
 
@@ -1462,7 +1535,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         XCTAssertEqual(capture.session.cancelCount, 1)
         XCTAssertEqual(store.composer.draft, "Keep this")
         XCTAssertEqual(store.composer.voice, ComposerVoiceState())
-        let startParams = await session.turnStartParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [])
     }
 
@@ -1513,7 +1586,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         }
         XCTAssertEqual(realtime.session.cancelCount, 1)
         XCTAssertEqual(store.composer.draft, "Keep partial")
-        let startParams = await session.turnStartParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [])
     }
 
@@ -1570,7 +1643,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         XCTAssertEqual(realtime.session.commitCount, 0)
         XCTAssertEqual(capture.session.cancelCount, 1)
         XCTAssertEqual(capture.session.stopCount, 0)
-        let startParams = await session.turnStartParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [])
 
         await store.finishVoiceCapture()
@@ -1832,7 +1905,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         let bundleText = String(data: try JSONEncoder().encode(bundle), encoding: .utf8) ?? ""
         XCTAssertFalse(bundleText.contains(Data([9, 8, 7]).base64EncodedString()))
         XCTAssertFalse(bundleText.contains("then summarize failures"))
-        let startParams = await detailSession.turnStartParamsSnapshot()
+        let startParams = detailSession.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [])
     }
 
@@ -1879,7 +1952,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         XCTAssertEqual(store.composer.draft, "Run tests then summarize failures")
         store.updateDraft("Run tests and summarize failures")
         XCTAssertEqual(store.composer.draft, "Run tests and summarize failures")
-        let startParams = await session.turnStartParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [])
     }
 
@@ -1920,7 +1993,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         XCTAssertEqual(realtime.session.cancelCount, 1)
         XCTAssertEqual(store.composer.draft, "Run tests")
         XCTAssertEqual(store.composer.voice, ComposerVoiceState())
-        let startParams = await session.turnStartParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [])
     }
 
@@ -1969,7 +2042,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         XCTAssertEqual(store.composer.draft, "Keep this spoken partial")
         store.updateDraft("Keep this edited partial")
         XCTAssertEqual(store.composer.draft, "Keep this edited partial")
-        let startParams = await session.turnStartParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [])
     }
 
@@ -2126,7 +2199,7 @@ final class ThreadDetailStoreTests: XCTestCase {
 
         XCTAssertEqual(store.composer.draft, "Do not send yet")
         XCTAssertEqual(store.composer.lastError, "Finish dictation before sending.")
-        let startParams = await session.turnStartParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [])
     }
 
@@ -2169,7 +2242,7 @@ final class ThreadDetailStoreTests: XCTestCase {
         }
         XCTAssertEqual(store.composer.draft, "Run tests")
         XCTAssertEqual(store.composer.voice, ComposerVoiceState())
-        let startParams = await session.turnStartParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [])
     }
 
@@ -2204,9 +2277,9 @@ final class ThreadDetailStoreTests: XCTestCase {
             store.requestCards.count == 1
         }
 
-        await store.respond(to: "request-approval-1", action: .accept)
+        await store.respond(to: try XCTUnwrap(store.requestCards.first?.id), action: .accept)
 
-        let sentResponses = await session.sentResponsesSnapshot()
+        let sentResponses = session.sentResponsesSnapshot()
         XCTAssertEqual(
             sentResponses,
             [
@@ -2265,7 +2338,8 @@ final class ThreadDetailStoreTests: XCTestCase {
         let thread = makeDetailThread("thread-1", text: "Thread detail loaded")
         let session = FakeThreadDetailSession(
             readResult: .success(ThreadReadResponseDTO(thread: thread)),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: thread))
+            resumeResult: .success(ThreadResumeResponseDTO(thread: thread)),
+            detailSourceHostID: host.id
         )
         let store = ThreadDetailStore(
             host: host,

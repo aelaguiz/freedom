@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-dock.local/contract/projection/thread-detail-update.schema.json",
+  "title": "Codex Dock Projection Update: Thread Detail",
+  "description": "Canonical Thread Detail projection update emitted by thread/detail/update.",
+  "type": "object",
+  "required": [
+    "kind",
+    "schemaVersion",
+    "identityVersion",
+    "projectionEngineVersion",
+    "sourceHostID",
+    "view",
+    "threadID",
+    "epoch",
+    "seq",
+    "rows",
+    "projectionIDs"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "snapshot",
+        "upsert",
+        "delete",
+        "heartbeat",
+        "resyncRequired"
+      ]
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "identityVersion": {
+      "const": 1
+    },
+    "projectionEngineVersion": {
+      "const": 1
+    },
+    "sourceHostID": {
+      "type": "string",
+      "minLength": 1
+    },
+    "view": {
+      "const": "thread.detail"
+    },
+    "threadID": {
+      "type": "string",
+      "minLength": 1
+    },
+    "epoch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "viewParamsKey": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "order": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "freshness": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "$ref": "https://codex-dock.local/contract/projection/payloads/thread-detail-row.schema.json"
+      }
+    },
+    "projectionIDs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "activeTurnID": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "liveState": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "required": [
+          "events"
+        ]
+      },
+      {
+        "required": [
+          "upsertEvents"
+        ]
+      },
+      {
+        "required": [
+          "deleteEventIDs"
+        ]
+      }
+    ]
+  },
+  "additionalProperties": false
+}

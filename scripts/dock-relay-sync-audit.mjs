@@ -10,9 +10,16 @@ import { WebSocketServer } from "ws";
 
 import {
   DEFAULT_RELAY_WS,
+  RELAY_STATE_STREAM_SCHEMA_VERSION,
   THREAD_LIST_MAX_LIMIT,
 } from "./dock-relay-constants.mjs";
 import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
+import {
+  PROJECTION_ENGINE_VERSION,
+  PROJECTION_IDENTITY_VERSION,
+  PROJECTION_SCHEMA_VERSION,
+  projectionIDForThreadCard,
+} from "./dock-relay-projection-engine.mjs";
 import { startServer } from "./dock-relay.mjs";
 import { threadMatchesSourceKinds } from "./dock-relay-source-filter.mjs";
 import { initializeClient } from "./dock-relay-thread-data.mjs";
@@ -39,7 +46,6 @@ const DEFAULT_SCENARIO_HOLD_MS = 0;
 const DEFAULT_SCENARIO_REPETITIONS = 1;
 const DEFAULT_DETAIL_LIMIT = 5;
 const DEFAULT_DETAIL_OBSERVE_MS = 100;
-const DEFAULT_DETAIL_TURN_LIMIT = 250;
 const TEXT_FIELD_RE = /(^|_|\b)(title|summary|preview|message|text|content|transcript|prompt|firstUserMessage|displaySummary|latestSummary)($|_|\b)/i;
 const SECRET_FIELD_RE = /(token|secret|authorization|apiKey|bearer|password|credential)/i;
 const CLIENT_PATH_ROUTES = new Set([
@@ -53,9 +59,20 @@ const CLIENT_PATH_ROUTES = new Set([
   "archive/resync",
   "thread/archive",
   "thread/unarchive",
-  "thread/read",
-  "thread/turns/list",
-  "thread/resume",
+  "thread/detail/read",
+  "thread/detail/subscribe",
+  "thread/detail/resync",
+  "thread/detail/update",
+]);
+const FORBIDDEN_DOCK_STREAM_KEYS = new Set([
+  "baseSeq",
+  "stateGeneration",
+  "cards",
+  "cardIDs",
+  "cardCount",
+  "renderOrderCardIDs",
+  "upsertCards",
+  "deleteCardIDs",
 ]);
 const REQUIRED_SCENARIOS = Object.freeze([
   { id: "existing-active", label: "Existing idle active thread appears in Dock", implementedBy: "archive-toggle" },
@@ -111,9 +128,8 @@ function usage() {
     "  --max-stream-lag-ms <n>  Max allowed long-lived stream lag after divergence. Defaults to 2000.",
     "  --detail <none|sampled|all> Detail probe mode. Defaults to sampled.",
     "  --detail-limit <n>         Max detail targets for sampled mode. Defaults to 5.",
-    "  --detail-observe-ms <n>    Time to observe notifications after resume. Defaults to 100.",
-    "  --detail-turn-limit <n>    Turn page limit for detail probes. Defaults to 250.",
-    "  --no-detail-resume         Skip thread/resume in detail probes.",
+    "  --detail-observe-ms <n>    Time to observe notifications after projection subscribe. Defaults to 100.",
+    "  --no-detail-live           Skip thread/detail/subscribe and thread/detail/resync in detail probes.",
     "  --no-detail-buffer-initial-live  Fail instead of modeling the Swift initial live-event buffer.",
     "  --request-timeout-ms <n>   JSON-RPC request timeout. Defaults to 120000.",
     "  --json-out <path>          Write sanitized JSON report to a file.",
@@ -208,8 +224,7 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
     detail: "sampled",
     detailLimit: DEFAULT_DETAIL_LIMIT,
     detailObserveMs: DEFAULT_DETAIL_OBSERVE_MS,
-    detailTurnLimit: DEFAULT_DETAIL_TURN_LIMIT,
-    detailResume: true,
+    detailLive: true,
     detailBufferInitialLive: true,
     requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
     jsonOut: null,
@@ -342,13 +357,8 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
       index += 1;
     } else if (arg.startsWith("--detail-observe-ms=")) {
       options.detailObserveMs = parseNonNegativeInteger(arg.slice("--detail-observe-ms=".length), "--detail-observe-ms");
-    } else if (arg === "--detail-turn-limit") {
-      options.detailTurnLimit = parsePositiveInteger(readValue(index, arg), "--detail-turn-limit");
-      index += 1;
-    } else if (arg.startsWith("--detail-turn-limit=")) {
-      options.detailTurnLimit = parsePositiveInteger(arg.slice("--detail-turn-limit=".length), "--detail-turn-limit");
-    } else if (arg === "--no-detail-resume") {
-      options.detailResume = false;
+    } else if (arg === "--no-detail-live") {
+      options.detailLive = false;
     } else if (arg === "--no-detail-buffer-initial-live") {
       options.detailBufferInitialLive = false;
     } else if (arg === "--request-timeout-ms") {
@@ -406,7 +416,6 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
   }
 
   options.limit = Math.min(options.limit, THREAD_LIST_MAX_LIMIT);
-  options.detailTurnLimit = Math.min(options.detailTurnLimit, THREAD_LIST_MAX_LIMIT);
   options.codexHome = resolveUserPath(options.codexHome, cwd);
   options.sqliteHome = resolveUserPath(options.sqliteHome || options.codexHome, cwd);
   options.jsonOut = options.jsonOut ? resolveUserPath(options.jsonOut, cwd) : null;
@@ -497,7 +506,97 @@ function summarizeClientPathEvents(events = []) {
 }
 
 function cardID(card) {
-  return card?.id || `${card?.logicalHostID || card?.hostID || "unknown"}::${card?.threadID || card?.threadId || "unknown"}`;
+  return card?.projectionID || null;
+}
+
+function projectionCardValidationFindings(card, { receivedAt, index, view }) {
+  const findings = [];
+  const requiredStrings = [
+    "sourceHostID",
+    "view",
+    "projectionID",
+    "sourceRef",
+    "rowRole",
+    "displayOrderKey",
+    "threadID",
+  ];
+  for (const field of requiredStrings) {
+    if (typeof card?.[field] !== "string" || card[field].trim().length === 0) {
+      findings.push({
+        code: "dock_stream_projection_row_missing_field",
+        severity: "error",
+        message: `dock stream projection row is missing ${field}`,
+        field,
+        rowIndex: index,
+        receivedAt,
+      });
+    }
+  }
+  if (card?.schemaVersion !== PROJECTION_SCHEMA_VERSION
+      || card?.identityVersion !== PROJECTION_IDENTITY_VERSION
+      || card?.projectionEngineVersion !== PROJECTION_ENGINE_VERSION) {
+    findings.push({
+      code: "dock_stream_projection_row_version_mismatch",
+      severity: "error",
+      message: "dock stream projection row version fields do not match the expected projection contract",
+      rowIndex: index,
+      expected: {
+        schemaVersion: PROJECTION_SCHEMA_VERSION,
+        identityVersion: PROJECTION_IDENTITY_VERSION,
+        projectionEngineVersion: PROJECTION_ENGINE_VERSION,
+      },
+      actual: {
+        schemaVersion: card?.schemaVersion ?? null,
+        identityVersion: card?.identityVersion ?? null,
+        projectionEngineVersion: card?.projectionEngineVersion ?? null,
+      },
+      receivedAt,
+    });
+  }
+  if (view && card?.view !== view) {
+    findings.push({
+      code: "dock_stream_projection_row_view_mismatch",
+      severity: "error",
+      message: "dock stream projection row view does not match the stream view",
+      rowIndex: index,
+      expected: view,
+      actual: card?.view || null,
+      receivedAt,
+    });
+  }
+  if (card?.id !== card?.projectionID) {
+    findings.push({
+      code: "dock_stream_projection_row_id_mismatch",
+      severity: "error",
+      message: "dock stream projection row id must equal projectionID",
+      rowIndex: index,
+      id: card?.id || null,
+      projectionID: card?.projectionID || null,
+      receivedAt,
+    });
+  }
+  if (card?.logicalHostID !== undefined && card?.logicalHostID !== card?.sourceHostID) {
+    findings.push({
+      code: "dock_stream_projection_row_logical_host_mismatch",
+      severity: "error",
+      message: "dock stream projection row logicalHostID must not diverge from sourceHostID",
+      rowIndex: index,
+      logicalHostID: card?.logicalHostID || null,
+      sourceHostID: card?.sourceHostID || null,
+      receivedAt,
+    });
+  }
+  if (card?.rowRole !== "threadCard") {
+    findings.push({
+      code: "dock_stream_projection_row_role_mismatch",
+      severity: "error",
+      message: "dock stream projection row role must be threadCard",
+      rowIndex: index,
+      rowRole: card?.rowRole || null,
+      receivedAt,
+    });
+  }
+  return findings;
 }
 
 function cardThreadID(card) {
@@ -507,7 +606,7 @@ function cardThreadID(card) {
 function sanitizeCardForReport(card) {
   return normalizeForComparison({
     id: cardID(card),
-    logicalHostID: card?.logicalHostID || null,
+    sourceHostID: card?.sourceHostID || null,
     threadID: cardThreadID(card),
     status: card?.status || null,
     lane: card?.lane || null,
@@ -520,7 +619,7 @@ function sanitizeCardForReport(card) {
     updatedAt: card?.updatedAt ?? null,
     activityAt: card?.activityAt ?? null,
     activityAtMs: card?.activityAtMs ?? null,
-    orderKey: card?.orderKey ?? null,
+    displayOrderKey: card?.displayOrderKey ?? null,
   });
 }
 
@@ -528,14 +627,14 @@ function sanitizeDockSnapshotForReport(snapshot) {
   if (!snapshot) {
     return null;
   }
-  const cards = Array.isArray(snapshot.cards) ? snapshot.cards : [];
-  const orderedCards = cards.slice().sort((left, right) => {
-    const leftOrder = typeof left?.orderKey === "string" ? left.orderKey : "";
-    const rightOrder = typeof right?.orderKey === "string" ? right.orderKey : "";
+  const rows = Array.isArray(snapshot.rows) ? snapshot.rows : [];
+  const orderedRows = rows.slice().sort((left, right) => {
+    const leftOrder = typeof left?.displayOrderKey === "string" ? left.displayOrderKey : "";
+    const rightOrder = typeof right?.displayOrderKey === "string" ? right.displayOrderKey : "";
     if (leftOrder !== rightOrder) {
       return leftOrder.localeCompare(rightOrder);
     }
-    return cardID(left).localeCompare(cardID(right));
+    return String(cardID(left) || "").localeCompare(String(cardID(right) || ""));
   });
   return {
     kind: snapshot.kind || null,
@@ -546,11 +645,10 @@ function sanitizeDockSnapshotForReport(snapshot) {
     complete: snapshot.complete ?? null,
     totalRows: snapshot.totalRows ?? null,
     window: snapshot.window || null,
-    cardCount: cards.length,
-    cardIDs: cards.map(cardID).sort(),
-    renderOrderCardIDs: orderedCards.map(cardID),
-    cards: orderedCards.map(sanitizeCardForReport),
-    hosts: normalizeForComparison(snapshot.hosts || []),
+    rowCount: rows.length,
+    projectionIDs: rows.map(cardID).filter(Boolean).sort(),
+    renderOrderProjectionIDs: orderedRows.map(cardID).filter(Boolean),
+    rows: orderedRows.map(sanitizeCardForReport),
     freshness: snapshot.freshness || null,
     lastReceivedAt: snapshot.lastReceivedAt || null,
     needsResync: Boolean(snapshot.needsResync),
@@ -561,12 +659,16 @@ function sanitizeDockSnapshotForReport(snapshot) {
 function cardsByID(cards = []) {
   const map = new Map();
   for (const card of Array.isArray(cards) ? cards : []) {
-    map.set(cardID(card), card);
+    const id = cardID(card);
+    if (id) {
+      map.set(id, card);
+    }
   }
   return map;
 }
 
 function dockStateFromPayload(payload) {
+  const rows = Array.isArray(payload?.rows) ? payload.rows : [];
   return {
     kind: payload?.kind || null,
     schemaVersion: payload?.schemaVersion ?? null,
@@ -577,24 +679,24 @@ function dockStateFromPayload(payload) {
     totalRows: Number.isFinite(Number(payload?.totalRows)) ? Number(payload.totalRows) : null,
     window: payload?.window || null,
     freshness: payload?.freshness || null,
-    hosts: Array.isArray(payload?.hosts) ? payload.hosts : [],
-    cards: Array.isArray(payload?.cards) ? payload.cards : [],
-    cardIDs: (Array.isArray(payload?.cards) ? payload.cards : []).map(cardID).sort(),
+    rows,
+    projectionIDs: rows.map(cardID).filter(Boolean).sort(),
   };
 }
 
 function dockRenderOrderIDs(snapshot) {
-  return (Array.isArray(snapshot?.cards) ? snapshot.cards : [])
+  return (Array.isArray(snapshot?.rows) ? snapshot.rows : [])
     .slice()
     .sort((left, right) => {
-      const leftOrder = typeof left?.orderKey === "string" ? left.orderKey : "";
-      const rightOrder = typeof right?.orderKey === "string" ? right.orderKey : "";
+      const leftOrder = typeof left?.displayOrderKey === "string" ? left.displayOrderKey : "";
+      const rightOrder = typeof right?.displayOrderKey === "string" ? right.displayOrderKey : "";
       if (leftOrder !== rightOrder) {
         return leftOrder.localeCompare(rightOrder);
       }
-      return cardID(left).localeCompare(cardID(right));
+      return String(cardID(left) || "").localeCompare(String(cardID(right) || ""));
     })
-    .map(cardID);
+    .map(cardID)
+    .filter(Boolean);
 }
 
 function emptyDockStreamState() {
@@ -606,7 +708,6 @@ function emptyDockStreamState() {
     totalRows: null,
     window: null,
     freshness: null,
-    hosts: [],
     cardsByID: new Map(),
     needsResync: false,
     lastPayloadKind: null,
@@ -625,19 +726,42 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
     });
     return findings;
   }
-  if (payload.schemaVersion !== 2) {
+  if (payload.schemaVersion !== RELAY_STATE_STREAM_SCHEMA_VERSION) {
     findings.push({
       code: "dock_stream_schema_mismatch",
       severity: "error",
-      message: "dock stream schema version differs from expected schemaVersion 2",
-      expected: 2,
+      message: `dock stream schema version differs from expected schemaVersion ${RELAY_STATE_STREAM_SCHEMA_VERSION}`,
+      expected: RELAY_STATE_STREAM_SCHEMA_VERSION,
       actual: payload.schemaVersion ?? null,
       receivedAt,
     });
     state.needsResync = true;
   }
+  for (const key of Object.keys(payload)) {
+    if (FORBIDDEN_DOCK_STREAM_KEYS.has(key)) {
+      findings.push({
+        code: "dock_stream_forbidden_legacy_key",
+        severity: "error",
+        message: "dock stream payload contains a forbidden legacy key",
+        key,
+        receivedAt,
+      });
+      state.needsResync = true;
+    }
+  }
 
   if (payload.kind === "snapshot") {
+    const rows = Array.isArray(payload.rows) ? payload.rows : [];
+    rows.forEach((card, index) => {
+      findings.push(...projectionCardValidationFindings(card, {
+        receivedAt,
+        index,
+        view: payload.view,
+      }));
+    });
+    if (findings.some((finding) => finding.severity === "error")) {
+      state.needsResync = true;
+    }
     state.epoch = payload.epoch || null;
     state.seq = Number.isFinite(Number(payload.seq)) ? Number(payload.seq) : null;
     state.view = payload.view || null;
@@ -645,8 +769,7 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
     state.totalRows = Number.isFinite(Number(payload.totalRows)) ? Number(payload.totalRows) : null;
     state.window = payload.window || null;
     state.freshness = payload.freshness || null;
-    state.hosts = Array.isArray(payload.hosts) ? payload.hosts : [];
-    state.cardsByID = cardsByID(payload.cards || []);
+    state.cardsByID = cardsByID(rows);
     state.lastPayloadKind = "snapshot";
     state.lastReceivedAt = receivedAt;
     return findings;
@@ -693,11 +816,18 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
     return findings;
   }
 
-  if (payload.kind !== "delta") {
+  if (payload.kind === "resyncRequired") {
+    state.needsResync = true;
+    state.lastPayloadKind = "resyncRequired";
+    state.lastReceivedAt = receivedAt;
+    return findings;
+  }
+
+  if (payload.kind !== "upsert" && payload.kind !== "delete") {
     findings.push({
       code: "dock_stream_unknown_payload_kind",
       severity: "error",
-      message: "dock stream payload kind is neither snapshot, delta, nor heartbeat",
+      message: "dock stream payload kind is neither snapshot, upsert, delete, heartbeat, nor resyncRequired",
       actual: payload.kind || null,
       receivedAt,
     });
@@ -705,7 +835,6 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
     return findings;
   }
 
-  const baseSeq = Number.isFinite(Number(payload.baseSeq)) ? Number(payload.baseSeq) : null;
   const seq = Number.isFinite(Number(payload.seq)) ? Number(payload.seq) : null;
   if (state.epoch && payload.epoch && state.epoch !== payload.epoch) {
     findings.push({
@@ -718,44 +847,37 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
     });
     state.needsResync = true;
   }
-  if (baseSeq !== null && state.seq !== null && baseSeq !== state.seq) {
+  if (seq !== null && state.seq !== null && seq !== state.seq + 1) {
     findings.push({
       code: "dock_stream_sequence_gap",
       severity: "error",
-      message: "dock/update baseSeq does not match current stream seq",
-      expectedBaseSeq: state.seq,
-      actualBaseSeq: baseSeq,
-      updateSeq: seq,
-      receivedAt,
-    });
-    state.needsResync = true;
-  }
-  if (seq !== null && state.seq !== null && seq < state.seq) {
-    findings.push({
-      code: "dock_stream_sequence_regressed",
-      severity: "error",
-      message: "dock/update seq went backwards",
-      previousSeq: state.seq,
+      message: "dock/update seq is not contiguous with current stream seq",
+      expectedSeq: state.seq + 1,
       actualSeq: seq,
       receivedAt,
     });
     state.needsResync = true;
   }
 
-  for (const card of Array.isArray(payload.upsertCards) ? payload.upsertCards : []) {
-    state.cardsByID.set(cardID(card), card);
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  rows.forEach((card, index) => {
+    findings.push(...projectionCardValidationFindings(card, {
+      receivedAt,
+      index,
+      view: payload.view || state.view,
+    }));
+  });
+  if (findings.some((finding) => finding.severity === "error")) {
+    state.needsResync = true;
   }
-  for (const id of Array.isArray(payload.deleteCardIDs) ? payload.deleteCardIDs : []) {
-    state.cardsByID.delete(id);
-  }
-  if (Array.isArray(payload.upsertHosts) && payload.upsertHosts.length > 0) {
-    const hostsByID = new Map((state.hosts || []).map((host) => [host.id, host]));
-    for (const host of payload.upsertHosts) {
-      if (host?.id) {
-        hostsByID.set(host.id, host);
-      }
+  for (const card of rows) {
+    const id = cardID(card);
+    if (id) {
+      state.cardsByID.set(id, card);
     }
-    state.hosts = [...hostsByID.values()];
+  }
+  for (const id of Array.isArray(payload.projectionIDs) ? payload.projectionIDs : []) {
+    state.cardsByID.delete(id);
   }
   state.epoch = payload.epoch || state.epoch;
   state.seq = seq ?? state.seq;
@@ -764,7 +886,7 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
   state.totalRows = Number.isFinite(Number(payload.totalRows)) ? Number(payload.totalRows) : state.totalRows;
   state.window = payload.window || state.window;
   state.freshness = payload.freshness || state.freshness;
-  state.lastPayloadKind = "delta";
+  state.lastPayloadKind = payload.kind;
   state.lastReceivedAt = receivedAt;
   return findings;
 }
@@ -787,7 +909,7 @@ function snapshotFromStreamState(state) {
   const cards = [...(state.cardsByID || new Map()).values()];
   return {
     kind: state.lastPayloadKind || null,
-    schemaVersion: 2,
+    schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
     epoch: state.epoch || null,
     seq: state.seq ?? null,
     view: state.view || null,
@@ -795,9 +917,8 @@ function snapshotFromStreamState(state) {
     totalRows: state.totalRows ?? cards.length,
     window: state.window || null,
     freshness: state.freshness || null,
-    hosts: state.hosts || [],
-    cards,
-    cardIDs: cards.map(cardID).sort(),
+    rows: cards,
+    projectionIDs: cards.map(cardID).filter(Boolean).sort(),
     lastReceivedAt: state.lastReceivedAt || null,
     needsResync: Boolean(state.needsResync),
   };
@@ -813,8 +934,8 @@ function firstDifferingKeys(left, right) {
 
 function compareDockStates(streamSnapshot, freshSnapshot) {
   const findings = [];
-  const streamCardsByID = cardsByID(streamSnapshot.cards || []);
-  const freshCardsByID = cardsByID(freshSnapshot.cards || []);
+  const streamCardsByID = cardsByID(streamSnapshot.rows || []);
+  const freshCardsByID = cardsByID(freshSnapshot.rows || []);
   const streamIDs = [...streamCardsByID.keys()].sort();
   const freshIDs = [...freshCardsByID.keys()].sort();
   const streamRenderOrderIDs = dockRenderOrderIDs(streamSnapshot);
@@ -1117,14 +1238,12 @@ async function collectDockClientPathSnapshot(options, routeEvents = null) {
       recordRoute(routeEvents, "dock/update", "collect complete Dock state from streamed client-path update", {
         kind: message.params?.kind || null,
         seq: message.params?.seq ?? null,
-        baseSeq: message.params?.baseSeq ?? null,
       });
       notifications.push({
         method: message.method,
         receivedAt,
         kind: message.params?.kind || null,
         seq: message.params?.seq ?? null,
-        baseSeq: message.params?.baseSeq ?? null,
         window: message.params?.window || null,
       });
       apply(message.params, "notification", receivedAt);
@@ -1150,7 +1269,7 @@ async function collectDockClientPathSnapshot(options, routeEvents = null) {
           reason,
           at: new Date().toISOString(),
           seq: resynced?.seq ?? null,
-          cardCount: Array.isArray(resynced?.cards) ? resynced.cards.length : null,
+          rowCount: Array.isArray(resynced?.rows) ? resynced.rows.length : null,
         });
         continue;
       }
@@ -1237,17 +1356,15 @@ class DockStreamProbe {
       recordRoute(this.routeEvents, "archive/update", "receive long-lived Archive stream update", {
         kind: message.params?.kind || null,
         seq: message.params?.seq ?? null,
-        baseSeq: message.params?.baseSeq ?? null,
       });
       const notification = {
         method: message.method,
         receivedAt,
         kind: message.params?.kind || null,
         seq: message.params?.seq ?? null,
-        baseSeq: message.params?.baseSeq ?? null,
       };
       this.applyArchivePayload(message.params, "notification", receivedAt);
-      if (message.params?.kind === "delta" || message.params?.kind === "snapshot") {
+      if (message.params?.kind === "upsert" || message.params?.kind === "delete" || message.params?.kind === "snapshot") {
         // Store the post-apply stream state so simulator UI proof can compare
         // against live truth at notification time, not just sparse resyncs.
         notification.snapshot = sanitizeDockSnapshotForReport(this.archiveSnapshot());
@@ -1261,17 +1378,15 @@ class DockStreamProbe {
     recordRoute(this.routeEvents, "dock/update", "receive long-lived Dock stream update", {
       kind: message.params?.kind || null,
       seq: message.params?.seq ?? null,
-      baseSeq: message.params?.baseSeq ?? null,
     });
     const notification = {
       method: message.method,
       receivedAt,
       kind: message.params?.kind || null,
       seq: message.params?.seq ?? null,
-      baseSeq: message.params?.baseSeq ?? null,
     };
     this.applyPayload(message.params, "notification", receivedAt);
-    if (message.params?.kind === "delta" || message.params?.kind === "snapshot") {
+    if (message.params?.kind === "upsert" || message.params?.kind === "delete" || message.params?.kind === "snapshot") {
       // Store the post-apply stream state so simulator UI proof can compare
       // against live truth at notification time, not just sparse resyncs.
       notification.snapshot = sanitizeDockSnapshotForReport(this.snapshot());
@@ -1338,7 +1453,7 @@ class DockStreamProbe {
       startedAt,
       finishedAt: new Date().toISOString(),
       seq: snapshot?.seq ?? null,
-      cardCount: Array.isArray(snapshot?.cards) ? snapshot.cards.length : null,
+      rowCount: Array.isArray(snapshot?.rows) ? snapshot.rows.length : null,
     };
     this.resyncs.push(result);
     return result;
@@ -1355,7 +1470,7 @@ class DockStreamProbe {
       startedAt,
       finishedAt: new Date().toISOString(),
       seq: snapshot?.seq ?? null,
-      cardCount: Array.isArray(snapshot?.cards) ? snapshot.cards.length : null,
+      rowCount: Array.isArray(snapshot?.rows) ? snapshot.rows.length : null,
     };
     this.archiveResyncs.push(result);
     return result;
@@ -1413,7 +1528,7 @@ function selectDetailTargets(dockSnapshot, options) {
   if (options.detail === "none") {
     return [];
   }
-  const cards = Array.isArray(dockSnapshot?.cards) ? dockSnapshot.cards : [];
+  const cards = Array.isArray(dockSnapshot?.rows) ? dockSnapshot.rows : [];
   const targets = cards
     .map((card) => ({
       cardID: cardID(card),
@@ -1429,7 +1544,7 @@ function selectDetailTargets(dockSnapshot, options) {
 }
 
 function selectScenarioArchiveTarget(dockSnapshot, requestedThreadID = null) {
-  const cards = Array.isArray(dockSnapshot?.cards) ? dockSnapshot.cards : [];
+  const cards = Array.isArray(dockSnapshot?.rows) ? dockSnapshot.rows : [];
   const candidates = cards
     .map((card) => ({
       cardID: cardID(card),
@@ -1467,7 +1582,7 @@ function dockSnapshotHasThread(dockSnapshot, threadID) {
   if (!threadID) {
     return false;
   }
-  return (Array.isArray(dockSnapshot?.cards) ? dockSnapshot.cards : [])
+  return (Array.isArray(dockSnapshot?.rows) ? dockSnapshot.rows : [])
     .some((card) => cardThreadID(card) === threadID);
 }
 
@@ -1475,7 +1590,7 @@ function dockSnapshotCardForThread(dockSnapshot, threadID) {
   if (!threadID) {
     return null;
   }
-  return (Array.isArray(dockSnapshot?.cards) ? dockSnapshot.cards : [])
+  return (Array.isArray(dockSnapshot?.rows) ? dockSnapshot.rows : [])
     .find((card) => cardThreadID(card) === threadID) || null;
 }
 
@@ -1566,7 +1681,7 @@ function summarizeDetailLiveObservation({ target, notifications, requests, liveB
   const increment = (map, key) => {
     map[key] = (map[key] || 0) + 1;
   };
-  const beforeLivePhases = new Set(["read", "turns", "resume"]);
+  const beforeLivePhases = new Set(["read", "subscribe"]);
 
   for (const message of [...notifications, ...requests]) {
     increment(phaseCounts, `${message.source}:${message.phase || "unknown"}`);
@@ -1578,7 +1693,7 @@ function summarizeDetailLiveObservation({ target, notifications, requests, liveB
           findings.push({
             code: "detail_live_before_boundary",
             severity: "error",
-            message: "target-thread live detail message arrived before read, turns, and resume completed",
+            message: "target-thread live detail message arrived before projection read and subscribe completed",
             threadID: target.threadID,
             source: message.source,
             method: message.method,
@@ -1633,47 +1748,59 @@ function summarizeDetailLiveObservation({ target, notifications, requests, liveB
   };
 }
 
-async function drainThreadTurns(client, threadID, options, routeEvents = null) {
-  let cursor = null;
-  const seenCursors = new Set();
-  const turnIDs = [];
-  let pageCount = 0;
-  while (true) {
-    recordRoute(routeEvents, "thread/turns/list", "detail client-path turn page", {
-      threadID,
-      cursorPresent: Boolean(cursor),
-    });
-    const response = await client.request("thread/turns/list", {
-      threadId: threadID,
-      cursor,
-      limit: options.detailTurnLimit,
-      itemsView: options.turnItemsView,
-    });
-    pageCount += 1;
-    for (const turn of Array.isArray(response?.data) ? response.data : []) {
-      turnIDs.push(turn?.id || turn?.turnId || turn?.turnID || null);
+function duplicateProjectionIDs(rows = []) {
+  const ids = rows
+    .map((row) => row?.projectionID || null)
+    .filter(Boolean);
+  return [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
+}
+
+function projectionSnapshotSummary(snapshot, expectedThreadID) {
+  const rows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+  const duplicateIDs = duplicateProjectionIDs(rows);
+  const malformedRows = rows.flatMap((row, index) => {
+    const issues = [];
+    const requiredStrings = ["sourceHostID", "projectionID", "sourceRef", "rowRole", "displayOrderKey", "threadID"];
+    for (const field of requiredStrings) {
+      if (typeof row?.[field] !== "string" || row[field].trim().length === 0) {
+        issues.push({ index, field, code: "missing" });
+      }
     }
-    const nextCursor = response?.nextCursor || null;
-    if (!nextCursor) {
-      return {
-        complete: true,
-        pageCount,
-        turnCount: turnIDs.length,
-        duplicateTurnIDs: [...new Set(turnIDs.filter((id, index) => id && turnIDs.indexOf(id) !== index))],
-      };
+    if (row?.schemaVersion !== PROJECTION_SCHEMA_VERSION
+        || row?.identityVersion !== PROJECTION_IDENTITY_VERSION
+        || row?.projectionEngineVersion !== PROJECTION_ENGINE_VERSION) {
+      issues.push({ index, field: "version", code: "mismatch" });
     }
-    if (seenCursors.has(nextCursor)) {
-      return {
-        complete: false,
-        pageCount,
-        turnCount: turnIDs.length,
-        repeatedCursor: nextCursor,
-        duplicateTurnIDs: [...new Set(turnIDs.filter((id, index) => id && turnIDs.indexOf(id) !== index))],
-      };
+    if (row?.sourceHostID !== snapshot?.sourceHostID) {
+      issues.push({ index, field: "sourceHostID", code: "snapshot_mismatch" });
     }
-    seenCursors.add(nextCursor);
-    cursor = nextCursor;
-  }
+    if (row?.threadID !== expectedThreadID) {
+      issues.push({ index, field: "threadID", code: "thread_mismatch" });
+    }
+    return issues;
+  });
+  return {
+    ok: snapshot?.threadID === expectedThreadID
+      && snapshot?.view === "thread.detail"
+      && snapshot?.schemaVersion === PROJECTION_SCHEMA_VERSION
+      && snapshot?.identityVersion === PROJECTION_IDENTITY_VERSION
+      && snapshot?.projectionEngineVersion === PROJECTION_ENGINE_VERSION
+      && typeof snapshot?.sourceHostID === "string"
+      && snapshot.sourceHostID.trim().length > 0
+      && snapshot?.order === "displayOrderKeyAscending"
+      && duplicateIDs.length === 0
+      && malformedRows.length === 0,
+    threadID: snapshot?.threadID || null,
+    sourceHostID: snapshot?.sourceHostID || null,
+    view: snapshot?.view || null,
+    order: snapshot?.order || null,
+    seq: snapshot?.seq ?? null,
+    rowCount: rows.length,
+    duplicateProjectionIDs: duplicateIDs,
+    malformedRows,
+    complete: snapshot?.complete ?? null,
+    projectionEngineVersion: snapshot?.projectionEngineVersion ?? null,
+  };
 }
 
 async function probeThreadDetail(target, options, routeEvents = null) {
@@ -1708,88 +1835,93 @@ async function probeThreadDetail(target, options, routeEvents = null) {
   });
   try {
     phase = "read";
-    recordRoute(routeEvents, "thread/read", "detail client-path metadata read", {
+    recordRoute(routeEvents, "thread/detail/read", "detail client-path projection read", {
       threadID: target.threadID,
-      includeTurns: false,
     });
-    const readResponse = await client.request("thread/read", {
+    const readResponse = await client.request("thread/detail/read", {
       threadId: target.threadID,
-      includeTurns: false,
     });
-    const readThreadID = readResponse?.thread?.id || null;
-    if (readThreadID !== target.threadID) {
+    const read = projectionSnapshotSummary(readResponse, target.threadID);
+    if (!read.ok) {
       findings.push({
         code: "detail_wrong_thread",
         severity: "error",
-        message: "thread/read returned a different thread id from the selected Dock card",
+        message: "thread/detail/read returned a malformed projection or the wrong selected thread",
         expectedThreadID: target.threadID,
-        actualThreadID: readThreadID,
-      });
+          actualThreadID: read.threadID,
+          view: read.view,
+          duplicateProjectionIDs: read.duplicateProjectionIDs,
+          malformedRows: read.malformedRows,
+        });
     }
 
-    phase = "turns";
-    const turns = await drainThreadTurns(client, target.threadID, options, routeEvents);
-    if (!turns.complete) {
-      findings.push({
-        code: "detail_turns_incomplete",
-        severity: "error",
-        message: "thread/turns/list did not drain completely",
-        threadID: target.threadID,
-        repeatedCursor: turns.repeatedCursor || null,
-      });
-    }
-    if (turns.duplicateTurnIDs.length > 0) {
-      findings.push({
-        code: "detail_duplicate_turn",
-        severity: "error",
-        message: "thread/turns/list returned duplicate turn ids",
-        threadID: target.threadID,
-        duplicateTurnIDs: turns.duplicateTurnIDs,
-      });
-    }
-
-    let resumeThreadID = null;
-    let resumeOk = null;
+    let subscribe = null;
+    let subscribeOk = null;
+    let resync = null;
+    let resyncOk = null;
     let liveBoundaryAt = null;
-    if (options.detailResume) {
+    if (options.detailLive) {
       try {
-        phase = "resume";
-        recordRoute(routeEvents, "thread/resume", "detail client-path live resume", {
+        phase = "subscribe";
+        recordRoute(routeEvents, "thread/detail/subscribe", "detail client-path projection subscribe", {
           threadID: target.threadID,
-          excludeTurns: true,
         });
-        const resumeResponse = await client.request("thread/resume", {
+        const subscribeResponse = await client.request("thread/detail/subscribe", {
           threadId: target.threadID,
-          excludeTurns: true,
         });
-        resumeOk = true;
-        resumeThreadID = resumeResponse?.thread?.id || null;
+        subscribe = projectionSnapshotSummary(subscribeResponse, target.threadID);
+        subscribeOk = subscribe.ok;
         liveBoundaryAt = new Date().toISOString();
         phase = "live";
-        if (resumeThreadID !== target.threadID) {
+        if (!subscribe.ok) {
           findings.push({
-            code: "detail_resume_wrong_thread",
+            code: "detail_subscribe_wrong_thread",
             severity: "error",
-            message: "thread/resume returned a different thread id from the selected Dock card",
+            message: "thread/detail/subscribe returned a malformed projection or the wrong selected thread",
             expectedThreadID: target.threadID,
-            actualThreadID: resumeThreadID,
+            actualThreadID: subscribe.threadID,
+            view: subscribe.view,
+            duplicateProjectionIDs: subscribe.duplicateProjectionIDs,
+            malformedRows: subscribe.malformedRows,
           });
         }
         if (options.detailObserveMs > 0) {
           await sleep(options.detailObserveMs);
         }
+        phase = "resync";
+        recordRoute(routeEvents, "thread/detail/resync", "detail client-path projection resync", {
+          threadID: target.threadID,
+        });
+        const resyncResponse = await client.request("thread/detail/resync", {
+          threadId: target.threadID,
+        });
+        resync = projectionSnapshotSummary(resyncResponse, target.threadID);
+        resyncOk = resync.ok;
+        phase = "live";
+        if (!resync.ok) {
+          findings.push({
+            code: "detail_resync_wrong_thread",
+            severity: "error",
+            message: "thread/detail/resync returned a malformed projection or the wrong selected thread",
+            expectedThreadID: target.threadID,
+            actualThreadID: resync.threadID,
+            view: resync.view,
+            duplicateProjectionIDs: resync.duplicateProjectionIDs,
+            malformedRows: resync.malformedRows,
+          });
+        }
       } catch (error) {
-        resumeOk = false;
+        subscribeOk = false;
         findings.push({
-          code: "detail_resume_failed",
+          code: "detail_subscribe_failed",
           severity: "error",
-          message: "thread/resume failed for selected Dock card",
+          message: "thread/detail/subscribe or thread/detail/resync failed for selected Dock card",
           threadID: target.threadID,
           error: error?.message || String(error),
         });
       }
     }
-    if (!options.detailResume) {
+    if (!options.detailLive) {
       phase = "live";
     }
 
@@ -1808,15 +1940,17 @@ async function probeThreadDetail(target, options, routeEvents = null) {
       startedAt,
       endedAt: new Date().toISOString(),
       target,
-      read: {
-        ok: readThreadID === target.threadID,
-        threadID: readThreadID,
+      read,
+      subscribe: {
+        attempted: options.detailLive,
+        ok: subscribeOk,
+        ...(subscribe || {}),
+        liveBoundaryAt,
       },
-      turns,
-      resume: {
-        attempted: options.detailResume,
-        ok: resumeOk,
-        threadID: resumeThreadID,
+      resync: {
+        attempted: options.detailLive,
+        ok: resyncOk,
+        ...(resync || {}),
         liveBoundaryAt,
       },
       liveObservation,
@@ -1996,9 +2130,9 @@ async function buildSample({ options, sampleIndex, streamProbe = null }) {
       complete: freshDock?.complete ?? null,
       totalRows: freshDock?.totalRows ?? null,
       window: freshDock?.window || null,
-      cardCount: Array.isArray(freshDock?.cards) ? freshDock.cards.length : 0,
-      cardIDs: (freshDock?.cards || []).map(cardID).sort(),
-      cards: (freshDock?.cards || []).map(sanitizeCardForReport),
+      rowCount: Array.isArray(freshDock?.rows) ? freshDock.rows.length : 0,
+      projectionIDs: (freshDock?.rows || []).map(cardID).filter(Boolean).sort(),
+      rows: (freshDock?.rows || []).map(sanitizeCardForReport),
       freshness: freshDock?.freshness || null,
       collection: freshDock?.collection || null,
     },
@@ -2454,31 +2588,31 @@ function detailReconnectProbeFindings({ label, probe }) {
     findings.push({
       code: `scenario_detail_reconnect_${label}_read_failed`,
       severity: "error",
-      message: `detail ${label} probe did not load the selected thread through thread/read`,
+      message: `detail ${label} probe did not load the selected thread through thread/detail/read`,
       threadID: probe?.target?.threadID || null,
     });
   }
-  if (probe?.turns?.complete !== true) {
+  if (probe?.subscribe?.ok !== true) {
     findings.push({
-      code: `scenario_detail_reconnect_${label}_turns_incomplete`,
+      code: `scenario_detail_reconnect_${label}_subscribe_failed`,
       severity: "error",
-      message: `detail ${label} probe did not drain thread/turns/list before live resume`,
+      message: `detail ${label} probe did not subscribe through thread/detail/subscribe`,
       threadID: probe?.target?.threadID || null,
     });
   }
-  if (probe?.resume?.attempted !== true || probe?.resume?.ok !== true) {
+  if (probe?.resync?.attempted !== true || probe?.resync?.ok !== true) {
     findings.push({
-      code: `scenario_detail_reconnect_${label}_resume_failed`,
+      code: `scenario_detail_reconnect_${label}_resync_failed`,
       severity: "error",
-      message: `detail ${label} probe did not complete thread/resume after historical load`,
+      message: `detail ${label} probe did not complete thread/detail/resync after subscribe`,
       threadID: probe?.target?.threadID || null,
     });
   }
-  if (probe?.resume?.liveBoundaryAt === null || probe?.resume?.liveBoundaryAt === undefined) {
+  if (probe?.subscribe?.liveBoundaryAt === null || probe?.subscribe?.liveBoundaryAt === undefined) {
     findings.push({
       code: `scenario_detail_reconnect_${label}_missing_live_boundary`,
       severity: "error",
-      message: `detail ${label} probe did not record a live boundary after read, turns, and resume`,
+      message: `detail ${label} probe did not record a live boundary after projection subscribe`,
       threadID: probe?.target?.threadID || null,
     });
   }
@@ -2487,13 +2621,13 @@ function detailReconnectProbeFindings({ label, probe }) {
 
 function detailReconnectRouteFindings(clientPathEvidence) {
   const routeCounts = clientPathEvidence?.routeCounts || {};
-  const required = ["thread/read", "thread/turns/list", "thread/resume"];
+  const required = ["thread/detail/read", "thread/detail/subscribe", "thread/detail/resync"];
   return required
     .filter((route) => Number(routeCounts[route] || 0) < 2)
     .map((route) => ({
       code: "scenario_detail_reconnect_route_not_repeated",
       severity: "error",
-      message: "detail reconnect scenario did not exercise the required detail route once before reconnect and once after reconnect",
+      message: "detail reconnect scenario did not exercise the required projection detail route once before reconnect and once after reconnect",
       route,
       observedCount: Number(routeCounts[route] || 0),
       requiredCount: 2,
@@ -2509,7 +2643,7 @@ async function runDetailReconnectScenario(options) {
     ...options,
     detail: "sampled",
     detailLimit: 1,
-    detailResume: true,
+    detailLive: true,
   };
   const beforeDock = await collectDockClientPathSnapshot(options, routeEvents);
   const target = selectScenarioDetailTarget(beforeDock, options.scenarioThreadID);
@@ -2528,8 +2662,8 @@ async function runDetailReconnectScenario(options) {
       startedAt: new Date(startedAtMs).toISOString(),
       endedAt: new Date().toISOString(),
       actuator: {
-        type: "relay detail RPC reconnect through actual client routes",
-        routes: ["thread/read", "thread/turns/list", "thread/resume"],
+        type: "relay detail projection reconnect through actual client routes",
+        routes: ["thread/detail/read", "thread/detail/subscribe", "thread/detail/resync"],
         clientExercised: true,
       },
       target: null,
@@ -2545,7 +2679,7 @@ async function runDetailReconnectScenario(options) {
   const reconnectStartedAtMs = Date.now();
   const secondProbe = await probeThreadDetail(target, detailOptions, routeEvents);
   findings.push(...detailReconnectProbeFindings({ label: "reconnect", probe: secondProbe }));
-  const liveBoundaryAtMs = Date.parse(secondProbe?.resume?.liveBoundaryAt || "");
+  const liveBoundaryAtMs = Date.parse(secondProbe?.subscribe?.liveBoundaryAt || "");
   const reconnectObservedAtMs = Number.isFinite(liveBoundaryAtMs) ? liveBoundaryAtMs : Date.now();
   const reconnectLag = scenarioLagSummary({
     transition: "detail-reconnect",
@@ -2571,9 +2705,9 @@ async function runDetailReconnectScenario(options) {
     name: "detail-reconnect",
     kind: "detail-reconnect",
     iteration: 1,
-    routes: ["thread/read", "thread/turns/list", "thread/resume"],
+    routes: ["thread/detail/read", "thread/detail/subscribe", "thread/detail/resync"],
     wait: {
-      ok: secondProbe?.resume?.ok === true,
+      ok: secondProbe?.subscribe?.ok === true,
       observedAt: Number.isFinite(Number(reconnectObservedAtMs)) ? new Date(reconnectObservedAtMs).toISOString() : null,
       observedAtMs: Number.isFinite(Number(reconnectObservedAtMs)) ? reconnectObservedAtMs : null,
     },
@@ -2588,10 +2722,10 @@ async function runDetailReconnectScenario(options) {
     startedAt: new Date(startedAtMs).toISOString(),
     endedAt: new Date().toISOString(),
     actuator: {
-      type: "relay detail RPC reconnect through actual client routes",
-      routes: ["thread/read", "thread/turns/list", "thread/resume"],
+      type: "relay detail projection reconnect through actual client routes",
+      routes: ["thread/detail/read", "thread/detail/subscribe", "thread/detail/resync"],
       clientExercised: true,
-      note: "The scenario opens an actual Dock row, completes read, turn pagination, and live resume, closes that detail session, then repeats the same client route sequence before accepting live state.",
+      note: "The scenario opens an actual Dock row, completes projection read, live projection subscribe, and projection resync, closes that detail session, then repeats the same client route sequence before accepting live state.",
     },
     target,
     beforeDock: sanitizeDockSnapshotForReport(beforeDock),
@@ -2980,7 +3114,7 @@ async function runThreadActivityScenario(options) {
         note: "The fixture changes app-server thread/list rows to model a new session and a new turn; proof only counts delivery through real relay Dock client routes.",
       },
       target: {
-        logicalHostID: host.id,
+        sourceHostID: host.id,
         stableThreadID,
         movingThreadID,
         newThreadID,
@@ -3184,13 +3318,11 @@ async function runSpawnEdgeScenario(options) {
     let readRejection = null;
     try {
       await withRelayClient(fixtureOptions, null, async (client) => {
-        recordRoute(routeEvents, "thread/read", "spawn-edge scenario child rejection read", {
+        recordRoute(routeEvents, "thread/detail/read", "spawn-edge scenario child projection rejection read", {
           threadID: childThreadID,
-          includeTurns: false,
         });
-        return client.request("thread/read", {
+        return client.request("thread/detail/read", {
           threadId: childThreadID,
-          includeTurns: false,
         });
       }, routeEvents);
     } catch (error) {
@@ -3200,7 +3332,7 @@ async function runSpawnEdgeScenario(options) {
       findings.push({
         code: "scenario_spawn_edge_read_not_rejected",
         severity: "error",
-        message: "thread/read for spawned child did not reject with the human-only filter code",
+        message: "thread/detail/read for spawned child did not reject with the human-only filter code",
         threadID: childThreadID,
         actualCode: readRejection?.code || null,
         actualMessage: readRejection?.message || null,
@@ -3209,7 +3341,7 @@ async function runSpawnEdgeScenario(options) {
       findings.push({
         code: "scenario_spawn_edge_read_wrong_rejection_reason",
         severity: "error",
-        message: "thread/read for spawned child rejected with an unexpected human-only reason",
+        message: "thread/detail/read for spawned child rejected with an unexpected human-only reason",
         threadID: childThreadID,
         actualReason: readRejection?.data?.reason || null,
       });
@@ -3219,7 +3351,7 @@ async function runSpawnEdgeScenario(options) {
       name: "spawn-edge",
       kind: "spawn-edge",
       iteration: 1,
-      routes: ["dock/update", "dock/subscribe", "thread/read"],
+      routes: ["dock/update", "dock/subscribe", "thread/detail/read"],
       wait: spawnWait,
       lag: spawnLag,
       freshDock: sanitizeDockSnapshotForReport(freshDock),
@@ -3237,12 +3369,12 @@ async function runSpawnEdgeScenario(options) {
       endedAt: new Date().toISOString(),
       actuator: {
         type: "controlled app-server subagent spawn absence fixture through real relay Dock and detail routes",
-        routes: ["dock/subscribe", "dock/update", "thread/read"],
+        routes: ["dock/subscribe", "dock/update", "thread/detail/read"],
         clientExercised: true,
-        note: "The fixture changes app-server thread/list rows to model a new subagent spawn; proof expects the child to stay absent from human-only Dock streams and to reject through thread/read.",
+        note: "The fixture changes app-server thread/list rows to model a new subagent spawn; proof expects the child to stay absent from human-only Dock streams and to reject through thread/detail/read.",
       },
       target: {
-        logicalHostID: host.id,
+        sourceHostID: host.id,
         parentThreadID,
         childThreadID,
       },
@@ -3458,7 +3590,7 @@ async function runLiveLeaseExpiryScenario(options) {
         note: "The fixture first exposes the thread through thread/loaded/list and thread/read, then removes it from the live loaded list. Proof only counts the resulting state observed through real Dock client routes.",
       },
       target: {
-        logicalHostID: host.id,
+        sourceHostID: host.id,
         threadID,
         sessionID,
         leaseExpiresAt: Number.isFinite(leaseExpiresAtMs) && leaseExpiresAtMs > 0 ? new Date(leaseExpiresAtMs).toISOString() : null,
@@ -3547,34 +3679,38 @@ async function createMultiHostFixture({ options, tempDir, host, getRows }) {
 
 function multiHostIsolationFindings({ label, snapshot, host, expectedThreadIDs, forbiddenThreadIDs = [] }) {
   const findings = [];
-  const cards = Array.isArray(snapshot?.cards) ? snapshot.cards : [];
-  const cardIDs = new Set(cards.map((card) => cardID(card)));
-  for (const card of cards) {
-    if (card?.logicalHostID !== host.id) {
+  const rows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+  const projectionIDs = new Set(rows.map((card) => cardID(card)).filter(Boolean));
+  for (const card of rows) {
+    if (card?.sourceHostID !== host.id) {
       findings.push({
-        code: "scenario_multi_host_wrong_logical_host",
+        code: "scenario_multi_host_wrong_source_host",
         severity: "error",
-        message: "Dock card used the wrong logical host id for this relay host",
+        message: "Dock card used the wrong projection source host id for this relay host",
         label,
         expectedHostID: host.id,
-        actualHostID: card?.logicalHostID || null,
+        actualHostID: card?.sourceHostID || null,
         threadID: cardThreadID(card),
       });
     }
-    if (!String(cardID(card) || "").startsWith(`${host.id}::`)) {
+    const expectedProjectionID = cardThreadID(card)
+      ? projectionIDForThreadCard({ sourceHostID: host.id, threadID: cardThreadID(card) })
+      : null;
+    if (expectedProjectionID && card?.projectionID !== expectedProjectionID) {
       findings.push({
-        code: "scenario_multi_host_wrong_card_id_scope",
+        code: "scenario_multi_host_wrong_projection_id",
         severity: "error",
-        message: "Dock card id is not scoped by the relay host id",
+        message: "Dock card projectionID is not scoped by the relay sourceHostID and threadID",
         label,
-        expectedPrefix: `${host.id}::`,
+        expectedProjectionID,
         cardID: cardID(card),
         threadID: cardThreadID(card),
       });
     }
   }
   for (const threadID of expectedThreadIDs) {
-    if (!cardIDs.has(`${host.id}::${threadID}`)) {
+    const expectedProjectionID = projectionIDForThreadCard({ sourceHostID: host.id, threadID });
+    if (!projectionIDs.has(expectedProjectionID)) {
       findings.push({
         code: "scenario_multi_host_expected_thread_missing",
         severity: "error",
@@ -3582,11 +3718,12 @@ function multiHostIsolationFindings({ label, snapshot, host, expectedThreadIDs, 
         label,
         hostID: host.id,
         threadID,
+        expectedProjectionID,
       });
     }
   }
   for (const threadID of forbiddenThreadIDs) {
-    if (cards.some((card) => cardThreadID(card) === threadID)) {
+    if (rows.some((card) => cardThreadID(card) === threadID)) {
       findings.push({
         code: "scenario_multi_host_foreign_thread_visible",
         severity: "error",
@@ -3998,9 +4135,9 @@ async function runServerRequestScenario(options) {
     }
 
     const target = {
-      cardID: `${host.id}::${threadID}`,
+      cardID: projectionIDForThreadCard({ sourceHostID: host.id, threadID }),
       threadID,
-      logicalHostID: host.id,
+      sourceHostID: host.id,
       status: "idle",
       archived: false,
     };
@@ -4059,60 +4196,27 @@ async function runServerRequestScenario(options) {
     await initializeClient(detailClient);
     recordRoute(routeEvents, "initialized", "server-request detail client initialized notification sent", { threadID });
 
-    phase = "read";
-    recordRoute(routeEvents, "thread/read", "server-request scenario detail metadata read", {
+    phase = "subscribe";
+    const subscribeStartedAtMs = Date.now();
+    recordRoute(routeEvents, "thread/detail/subscribe", "server-request scenario detail projection subscribe", {
       threadID,
-      includeTurns: false,
     });
-    const readResponse = await detailClient.request("thread/read", {
+    const subscribeResponse = await detailClient.request("thread/detail/subscribe", {
       threadId: threadID,
-      includeTurns: false,
-    });
-    if (readResponse?.thread?.id !== threadID) {
-      findings.push({
-        code: "scenario_server_request_read_wrong_thread",
-        severity: "error",
-        message: "server-request scenario thread/read returned the wrong thread",
-        expectedThreadID: threadID,
-        actualThreadID: readResponse?.thread?.id || null,
-      });
-    }
-
-    phase = "turns";
-    const turns = await drainThreadTurns(detailClient, threadID, {
-      ...options,
-      detailTurnLimit: options.detailTurnLimit,
-    }, routeEvents);
-    if (!turns.complete) {
-      findings.push({
-        code: "scenario_server_request_turns_incomplete",
-        severity: "error",
-        message: "server-request scenario did not drain historical turns before resume",
-        threadID,
-        repeatedCursor: turns.repeatedCursor || null,
-      });
-    }
-
-    phase = "resume";
-    const resumeStartedAtMs = Date.now();
-    recordRoute(routeEvents, "thread/resume", "server-request scenario detail live resume", {
-      threadID,
-      excludeTurns: true,
-    });
-    const resumeResponse = await detailClient.request("thread/resume", {
-      threadId: threadID,
-      excludeTurns: true,
     });
     const liveBoundaryAt = new Date().toISOString();
-    const resumeAckMs = Date.now();
+    const subscribeAckMs = Date.now();
     phase = "live";
-    if (resumeResponse?.thread?.id !== threadID) {
+    const subscribe = projectionSnapshotSummary(subscribeResponse, threadID);
+    if (!subscribe.ok) {
       findings.push({
-        code: "scenario_server_request_resume_wrong_thread",
+        code: "scenario_server_request_subscribe_wrong_thread",
         severity: "error",
-        message: "server-request scenario thread/resume returned the wrong thread",
+        message: "server-request scenario thread/detail/subscribe returned a malformed projection or the wrong thread",
         expectedThreadID: threadID,
-        actualThreadID: resumeResponse?.thread?.id || null,
+        actualThreadID: subscribe.threadID,
+        view: subscribe.view,
+        duplicateProjectionIDs: subscribe.duplicateProjectionIDs,
       });
     }
 
@@ -4121,15 +4225,15 @@ async function runServerRequestScenario(options) {
     const resolutionWait = await waitForAsyncEvent(resolutionPromise, options.dockCollectionTimeoutMs);
     const requestLag = scenarioLagSummary({
       transition: "server-request-visible",
-      startedAtMs: upstreamRequestSentAtMs || resumeStartedAtMs,
-      acknowledgedAtMs: upstreamRequestSentAtMs || resumeAckMs,
+      startedAtMs: upstreamRequestSentAtMs || subscribeStartedAtMs,
+      acknowledgedAtMs: upstreamRequestSentAtMs || subscribeAckMs,
       observedAtMs: clientRequestReceivedAtMs,
       maxStreamLagMs: options.maxStreamLagMs,
     });
     const resolutionLag = scenarioLagSummary({
       transition: "server-request-resolution",
-      startedAtMs: clientResponseSentAtMs || clientRequestReceivedAtMs || resumeStartedAtMs,
-      acknowledgedAtMs: upstreamResponseReceivedAtMs || clientResponseSentAtMs || resumeAckMs,
+      startedAtMs: clientResponseSentAtMs || clientRequestReceivedAtMs || subscribeStartedAtMs,
+      acknowledgedAtMs: upstreamResponseReceivedAtMs || clientResponseSentAtMs || subscribeAckMs,
       observedAtMs: resolutionReceivedAtMs,
       maxStreamLagMs: options.maxStreamLagMs,
     });
@@ -4138,7 +4242,7 @@ async function runServerRequestScenario(options) {
       findings.push({
         code: "scenario_server_request_not_seen",
         severity: "error",
-        message: "server request did not arrive on the detail client path after thread/resume",
+        message: "server request did not arrive on the detail client path after thread/detail/subscribe",
         threadID,
         timeoutMs: options.dockCollectionTimeoutMs,
       });
@@ -4233,7 +4337,7 @@ async function runServerRequestScenario(options) {
       name: "server-request-visible",
       kind: "server-request-visible",
       iteration: 1,
-      route: "thread/resume",
+      route: "thread/detail/subscribe",
       wait: {
         ok: requestWait.ok,
         observedAt: clientRequestReceivedAtMs ? new Date(clientRequestReceivedAtMs).toISOString() : null,
@@ -4265,21 +4369,16 @@ async function runServerRequestScenario(options) {
       endedAt: new Date().toISOString(),
       actuator: {
         type: "controlled app-server detail fixture through real relay detail routes",
-        routes: ["thread/read", "thread/turns/list", "thread/resume"],
+        routes: ["thread/detail/subscribe"],
         clientExercised: true,
         note: "The fixture creates the live server request; proof only counts delivery and response through the real relay detail client path.",
       },
       target,
       transitions,
       detail: {
-        read: {
-          ok: readResponse?.thread?.id === threadID,
-          threadID: readResponse?.thread?.id || null,
-        },
-        turns,
-        resume: {
-          ok: resumeResponse?.thread?.id === threadID,
-          threadID: resumeResponse?.thread?.id || null,
+        subscribe: {
+          ok: subscribe.ok,
+          threadID: subscribe.threadID,
           liveBoundaryAt,
         },
         liveObservation,
@@ -4513,7 +4612,7 @@ async function runSourceRefreshScenario(options) {
         note: "The upstream source failure/recovery is controlled by the fixture; proof only counts what appears through real relay Dock client routes.",
       },
       target: {
-        logicalHostID: host.id,
+        sourceHostID: host.id,
         cachedThreadID,
         recoveredThreadID,
       },
@@ -4559,8 +4658,7 @@ function reportConfig(options) {
     detail: options.detail,
     detailLimit: options.detailLimit,
     detailObserveMs: options.detailObserveMs,
-    detailTurnLimit: options.detailTurnLimit,
-    detailResume: options.detailResume,
+    detailLive: options.detailLive,
     detailBufferInitialLive: options.detailBufferInitialLive,
     requestTimeoutMs: options.requestTimeoutMs,
   };

@@ -6,35 +6,43 @@ struct ThreadCardRowProjector {
     let localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata]
     let now: @Sendable () -> Date
 
-    func rows(from cards: [DockThreadCardDTO], sourceHostID: String? = nil) -> [DockRowViewModel] {
+    func rows(from cards: [DockThreadCardDTO]) -> [DockRowViewModel] {
         cards.filter(\.isAppFacingHumanThreadCard).map { card in
-            makeRow(card: card, sourceHostID: sourceHostID)
+            makeRow(card: card)
         }
     }
 
-    func makeRow(card: DockThreadCardDTO, sourceHostID: String? = nil) -> DockRowViewModel {
-        let id = HostScopedThreadID(hostID: card.logicalHostID, threadID: card.threadID)
+    func makeRow(card: DockThreadCardDTO) -> DockRowViewModel {
+        guard let resolvedSourceHostID = nonEmpty(card.sourceHostID),
+              let projectionID = nonEmpty(card.projectionID),
+              let displayOrderKey = nonEmpty(card.displayOrderKey) else {
+            preconditionFailure("ThreadCardRowProjector only accepts relay projection rows with sourceHostID, projectionID, and displayOrderKey")
+        }
+        // Dock rows are projection rows. `logicalHostID` is display payload only;
+        // action identity follows the relay-owned source host namespace.
+        let id = HostScopedThreadID(hostID: resolvedSourceHostID, threadID: card.threadID)
         let metadata = metadata(
             for: id,
             backendSessionID: card.backendSessionID,
-            sourceHostID: sourceHostID
+            sourceHostID: resolvedSourceHostID
         )
         let activityDate = activityDate(for: card)
         return DockRowViewModel(
-            id: id,
-            sourceHostID: sourceHostID,
+            threadIdentity: id,
+            sourceHostID: resolvedSourceHostID,
+            projectionID: projectionID,
             backendSessionID: card.backendSessionID,
             title: nonEmpty(card.title) ?? "Thread \(shortThreadID(card.threadID))",
             hostDisplayName: nonEmpty(card.hostDisplayName)
-                ?? hostDisplayName(for: card.logicalHostID, sourceHostID: sourceHostID),
+                ?? hostDisplayName(for: card.logicalHostID, sourceHostID: resolvedSourceHostID),
             hostEndpoint: nonEmpty(card.hostEndpoint)
-                ?? hostEndpoint(for: card.logicalHostID, sourceHostID: sourceHostID),
+                ?? hostEndpoint(for: card.logicalHostID, sourceHostID: resolvedSourceHostID),
             repository: nonEmpty(card.repository) ?? nonEmpty(card.workingDirectory) ?? "Unknown workspace",
             branch: nonEmpty(card.branch) ?? "No branch",
             status: status(for: card.status),
             lastActivity: relativeTime(since: activityDate),
             lastActivityDate: activityDate,
-            orderKey: card.orderKey,
+            displayOrderKey: displayOrderKey,
             summary: nonEmpty(card.displaySummary) ?? "No summary",
             rail: metadata?.rail ?? rail(for: card),
             label: metadata?.label,

@@ -1,7 +1,7 @@
 import XCTest
 @testable import CodexDock
 
-final class ThreadEventNormalizerTests: XCTestCase {
+final class LegacyThreadEventFixtureNormalizerTests: XCTestCase {
     func testStoredThreadTurnsNormalizeMessagesCommandsAndOutput() {
         let thread = ThreadDTO(
             id: "thread-1",
@@ -33,7 +33,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             ]
         )
 
-        let events = ThreadEventNormalizer.events(from: thread)
+        let events = LegacyThreadEventFixtureNormalizer.events(from: thread)
 
         XCTAssertEqual(events.map(\.kind), [.userMessage, .agentMessage, .command, .output])
         XCTAssertEqual(events.map(\.visibilityCategory), [.message, .message, .tooling, .tooling])
@@ -91,7 +91,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             ]
         )
 
-        let events = ThreadEventNormalizer.events(from: thread)
+        let events = LegacyThreadEventFixtureNormalizer.events(from: thread)
         let displayEvents = ThreadEventDisplayOrder.newestFirst(events)
 
         XCTAssertEqual(events.map(\.body), ["Old request", "New request", "New answer", "swift test", "passed"])
@@ -131,7 +131,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             ]
         )
 
-        let events = ThreadEventNormalizer.events(from: thread)
+        let events = LegacyThreadEventFixtureNormalizer.events(from: thread)
 
         XCTAssertEqual(events.map(\.turnID), ["turn-old", "turn-new"])
         XCTAssertEqual(events.map(\.turnSequence), [0, 1])
@@ -170,7 +170,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             ]
         )
 
-        let events = ThreadEventDisplayOrder.newestFirst(ThreadEventNormalizer.events(from: thread))
+        let events = ThreadEventDisplayOrder.newestFirst(LegacyThreadEventFixtureNormalizer.events(from: thread))
 
         XCTAssertEqual(events.map(\.body), ["Newer returned turn", "Older returned turn"])
     }
@@ -209,7 +209,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         )
 
         let events = ThreadDetailMessageFilter.default.visibleEvents(
-            from: ThreadEventNormalizer.events(from: thread)
+            from: LegacyThreadEventFixtureNormalizer.events(from: thread)
         )
 
         XCTAssertEqual(events.map(\.body), ["Still waiting", "Older answer"])
@@ -226,12 +226,12 @@ final class ThreadEventNormalizerTests: XCTestCase {
             ])
         )
 
-        let event = ThreadEventNormalizer.event(
+        let event = LegacyThreadEventFixtureNormalizer.event(
             from: notification,
             now: Date(timeIntervalSince1970: 2_000)
         )
 
-        XCTAssertEqual(ThreadEventNormalizer.threadId(from: notification), "thread-1")
+        XCTAssertEqual(LegacyThreadEventFixtureNormalizer.threadId(from: notification), "thread-1")
         XCTAssertEqual(event?.id, "turn-1-agent-1-item/agentMessage/delta")
         XCTAssertEqual(event?.kind, .agentMessage)
         XCTAssertEqual(event?.visibilityCategory, .message)
@@ -254,12 +254,12 @@ final class ThreadEventNormalizerTests: XCTestCase {
             ])
         )
 
-        let event = ThreadEventNormalizer.event(
+        let event = LegacyThreadEventFixtureNormalizer.event(
             from: request,
             now: Date(timeIntervalSince1970: 2_000)
         )
 
-        XCTAssertEqual(ThreadEventNormalizer.threadId(from: request), "thread-1")
+        XCTAssertEqual(LegacyThreadEventFixtureNormalizer.threadId(from: request), "thread-1")
         XCTAssertEqual(event.id, "request-approval-1")
         XCTAssertEqual(event.kind, .request)
         XCTAssertEqual(event.visibilityCategory, .request)
@@ -286,7 +286,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             ]
         )
 
-        let events = ThreadEventNormalizer.events(from: thread)
+        let events = LegacyThreadEventFixtureNormalizer.events(from: thread)
 
         XCTAssertEqual(events.count, 1)
         XCTAssertEqual(events[0].kind, .unknown)
@@ -356,7 +356,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             ]
         )
 
-        let events = ThreadEventNormalizer.events(from: thread)
+        let events = LegacyThreadEventFixtureNormalizer.events(from: thread)
 
         XCTAssertEqual(events.map(\.visibilityCategory), [
             .message,
@@ -447,7 +447,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
         ]
 
         let events = notifications.compactMap {
-            ThreadEventNormalizer.event(from: $0, now: now)
+            LegacyThreadEventFixtureNormalizer.event(from: $0, now: now)
         }
 
         XCTAssertEqual(events.map(\.visibilityCategory), [.message, .thinking, .tooling, .system])
@@ -495,11 +495,11 @@ final class ThreadEventNormalizerTests: XCTestCase {
             ])
         )
 
-        let reasoningEvent = ThreadEventNormalizer.event(
+        let reasoningEvent = LegacyThreadEventFixtureNormalizer.event(
             from: reasoningStarted,
             now: Date(timeIntervalSince1970: 2_000)
         )
-        let commandEvent = ThreadEventNormalizer.event(
+        let commandEvent = LegacyThreadEventFixtureNormalizer.event(
             from: commandCompleted,
             now: Date(timeIntervalSince1970: 2_001)
         )
@@ -526,6 +526,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             body: "Older visible message",
             date: Date(timeIntervalSince1970: 1_000),
             turnID: "turn-old",
+            displayOrderKey: "0000000000000000002|old-message",
             displayGroupDate: Date(timeIntervalSince1970: 1_000)
         )
         let newerMessage = ThreadEvent(
@@ -536,6 +537,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             body: "Newer visible message",
             date: Date(timeIntervalSince1970: 2_000),
             turnID: "turn-new",
+            displayOrderKey: "0000000000000000001|new-message",
             displayGroupDate: Date(timeIntervalSince1970: 2_000)
         )
         let hiddenRequestOnOldTurn = ThreadEvent(
@@ -546,6 +548,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             body: "Hidden request",
             date: Date(timeIntervalSince1970: 3_000),
             turnID: "turn-old",
+            displayOrderKey: "0000000000000000000|old-hidden-request",
             displayGroupDate: Date(timeIntervalSince1970: 3_000)
         )
 
@@ -570,6 +573,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             body: "First equal-date message",
             date: timestamp,
             turnID: "turn-a",
+            displayOrderKey: "0000000000000000000|first-message",
             displayGroupDate: timestamp
         )
         let second = ThreadEvent(
@@ -580,6 +584,7 @@ final class ThreadEventNormalizerTests: XCTestCase {
             body: "Second equal-date message",
             date: timestamp,
             turnID: "turn-b",
+            displayOrderKey: "0000000000000000001|second-message",
             displayGroupDate: timestamp
         )
 

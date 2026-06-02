@@ -29,14 +29,14 @@ actor ArchiveCleanupDataEngine {
                 displayName: host.displayName,
                 candidateCount: candidates.filter { row in
                     snapshot.hostIdentityResolver.contains(
-                        rowHostID: row.id.hostID,
+                        rowHostID: row.hostID,
                         sourceConfiguredHostID: row.sourceHostID,
                         in: host.id
                     )
                 }.count,
                 excludedCount: excluded.filter { excludedRow in
                     snapshot.hostIdentityResolver.contains(
-                        rowHostID: excludedRow.row.id.hostID,
+                        rowHostID: excludedRow.row.hostID,
                         sourceConfiguredHostID: excludedRow.row.sourceHostID,
                         in: host.id
                     )
@@ -57,14 +57,11 @@ actor ArchiveCleanupDataEngine {
     }
 
     private func rowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
-        // Cleanup previews use relay orderKey from the active Dock stream.
-        // Missing orderKey falls back only to stable identity order.
-        if let lhsOrderKey = lhs.orderKey,
-           let rhsOrderKey = rhs.orderKey,
-           lhsOrderKey != rhsOrderKey {
-            return lhsOrderKey < rhsOrderKey
+        // Cleanup previews use relay displayOrderKey, then projectionID.
+        if lhs.displayOrderKey != rhs.displayOrderKey {
+            return lhs.displayOrderKey < rhs.displayOrderKey
         }
-        return "\(lhs.id.hostID)::\(lhs.id.threadID)" < "\(rhs.id.hostID)::\(rhs.id.threadID)"
+        return lhs.id < rhs.id
     }
 
     private func exclusionReason(

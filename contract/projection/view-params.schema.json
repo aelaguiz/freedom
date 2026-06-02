@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-dock.local/contract/projection/view-params.schema.json",
+  "title": "Codex Dock Projection View Params",
+  "description": "Canonical view parameter identity. The relay owns this identity; clients compare the emitted viewParamsKey instead of reconstructing view semantics locally.",
+  "type": "object",
+  "required": [
+    "view",
+    "viewParamsKey"
+  ],
+  "properties": {
+    "view": {
+      "enum": [
+        "dock",
+        "archive",
+        "thread.detail"
+      ]
+    },
+    "viewParamsKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "order": {
+      "const": "displayOrderKeyAscending"
+    },
+    "threadID": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

@@ -374,15 +374,15 @@ function classifyRelayRequestError(method, error) {
       retryable: error.data.retryable ?? error.code !== -32602,
     };
   }
-  if (method === "thread/read"
-    || method === "thread/turns/list"
+  if (method === "thread/detail/read"
+    || method === "thread/detail/resync"
     || method === "thread/archive" || method === "thread/unarchive") {
     return {
       subsystem: "history",
       retryable: true,
     };
   }
-  if (method === "thread/resume" || method === "turn/start" || method === "turn/steer" || method === "turn/interrupt") {
+  if (method === "thread/detail/subscribe" || method === "turn/start" || method === "turn/steer" || method === "turn/interrupt") {
     return {
       subsystem: "live-upstream",
       retryable: true,

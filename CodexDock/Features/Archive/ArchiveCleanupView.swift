@@ -230,7 +230,7 @@ public struct ArchiveCleanupView: View {
                 ForEach(snapshot.candidates.prefix(6)) { row in
                     DockRowView(
                         row: row,
-                        automationID: AutomationID.ArchiveCleanup.row(hostID: row.id.hostID, threadID: row.id.threadID)
+                        automationID: AutomationID.ArchiveCleanup.row(hostID: row.hostID, threadID: row.threadID)
                     )
                 }
             }
@@ -395,13 +395,13 @@ public struct ArchiveCleanupView: View {
             return "the selected hosts"
         }
         let selectedRows = snapshot.candidates.filter { row in
-            store.selectedRowIDs.contains(row.id)
+            store.selectedRowIDs.contains(row.threadIdentity)
         }
         let selectedCountsByHost = Dictionary(
             uniqueKeysWithValues: snapshot.hostSummaries.map { summary in
                 let count = selectedRows.filter { row in
                     snapshot.hostIdentityResolver.contains(
-                        rowHostID: row.id.hostID,
+                        rowHostID: row.hostID,
                         sourceConfiguredHostID: row.sourceHostID,
                         in: summary.id
                     )
@@ -567,19 +567,19 @@ private struct ArchiveCleanupReviewList: View {
 
             Section("Candidates") {
                 ForEach(filteredCandidates) { row in
-                    Toggle(isOn: selectionBinding(row.id)) {
+                    Toggle(isOn: selectionBinding(row.threadIdentity)) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(row.title)
                                 .font(.subheadline.weight(.semibold))
                             Text("\(row.repository) - \(row.branch) - \(row.status.label)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text("\(row.hostDisplayName) - \(row.lastActivity) - \(row.id.threadID)")
+                            Text("\(row.hostDisplayName) - \(row.lastActivity) - \(row.threadID)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .codexAutomationID(AutomationID.ArchiveCleanup.selectionToggle(hostID: row.id.hostID, threadID: row.id.threadID))
+                    .codexAutomationID(AutomationID.ArchiveCleanup.selectionToggle(hostID: row.hostID, threadID: row.threadID))
                 }
             }
 
@@ -705,7 +705,7 @@ private struct ArchiveCleanupReviewList: View {
     private func matchesFilters(_ row: DockRowViewModel) -> Bool {
         if let selectedHostID,
            !snapshot.hostIdentityResolver.contains(
-               rowHostID: row.id.hostID,
+               rowHostID: row.hostID,
                sourceConfiguredHostID: row.sourceHostID,
                in: selectedHostID
            ) {
@@ -730,7 +730,7 @@ private struct ArchiveCleanupReviewList: View {
             row.repository,
             row.branch,
             row.hostDisplayName,
-            row.id.threadID
+            row.threadID
         ]
         .joined(separator: " ")
         .lowercased()

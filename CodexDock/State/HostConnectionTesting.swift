@@ -26,7 +26,7 @@ public struct CardStreamHostConnectionTester: HostConnectionTesting {
             let snapshot = try await connection?.subscribe()
             await connection?.close()
             return HostConnectionTestResult(
-                rowCount: snapshot?.totalRows ?? snapshot?.cards?.count ?? 0
+                rowCount: snapshot?.totalRows ?? snapshot?.rows?.count ?? 0
             )
         } catch {
             await connection?.close()

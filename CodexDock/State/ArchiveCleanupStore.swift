@@ -65,7 +65,7 @@ public final class ArchiveCleanupStore: ObservableObject {
             selectedRowIDs = []
         } else {
             state = .preview(preview)
-            selectedRowIDs = Set(preview.candidates.map(\.id))
+            selectedRowIDs = Set(preview.candidates.map(\.threadIdentity))
         }
         executionResults = []
         executionTotalCount = 0
@@ -88,7 +88,7 @@ public final class ArchiveCleanupStore: ObservableObject {
         guard case .preview(let preview) = state else {
             return []
         }
-        let rows = preview.candidates.filter { selectedRowIDs.contains($0.id) }
+        let rows = preview.candidates.filter { selectedRowIDs.contains($0.threadIdentity) }
         return await archiveRows(rows)
     }
 
@@ -100,12 +100,12 @@ public final class ArchiveCleanupStore: ObservableObject {
         let failedRowIDs = Set(
             executionResults.compactMap { result -> HostScopedThreadID? in
                 if case .failed = result.status {
-                    return result.row.id
+                    return result.row.threadIdentity
                 }
                 return nil
             }
         )
-        let rows = preview.candidates.filter { failedRowIDs.contains($0.id) }
+        let rows = preview.candidates.filter { failedRowIDs.contains($0.threadIdentity) }
         return await archiveRows(rows)
     }
 
@@ -137,8 +137,8 @@ public final class ArchiveCleanupStore: ObservableObject {
                 continue
             }
             do {
-                try await archiver.archiveThread(row.id.threadID, on: host)
-                selectedRowIDs.remove(row.id)
+                try await archiver.archiveThread(row.threadID, on: host)
+                selectedRowIDs.remove(row.threadIdentity)
                 results.append(ArchiveCleanupExecutionResult(row: row, status: .archived))
             } catch {
                 results.append(ArchiveCleanupExecutionResult(row: row, status: .failed(error.localizedDescription)))
@@ -152,7 +152,7 @@ public final class ArchiveCleanupStore: ObservableObject {
     private func hostConfiguration(for row: DockRowViewModel) -> DockHostConfiguration? {
         if case .preview(let preview) = state,
            let resolved = preview.hostIdentityResolver.resolve(
-               rowHostID: row.id.hostID,
+               rowHostID: row.hostID,
                sourceConfiguredHostID: row.sourceHostID
            ) {
             return resolved.host
@@ -162,7 +162,7 @@ public final class ArchiveCleanupStore: ObservableObject {
             return host
         }
         return DockHostIdentityResolver(hosts: hosts)
-            .resolve(rowHostID: row.id.hostID, sourceConfiguredHostID: row.sourceHostID)?
+            .resolve(rowHostID: row.hostID, sourceConfiguredHostID: row.sourceHostID)?
             .host
     }
 }

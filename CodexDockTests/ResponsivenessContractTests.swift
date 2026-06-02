@@ -3,14 +3,15 @@ import XCTest
 
 final class ResponsivenessContractTests: XCTestCase {
     func testThreadRenderLargeFixturePublishesOnlyInitialVisibleWindow() {
-        let events = stride(from: 999, through: 0, by: -1).map { index in
+        let events = Array(stride(from: 999, through: 0, by: -1)).enumerated().map { offset, index in
             ThreadEvent(
                 id: "event-\(index)",
                 kind: .agentMessage,
                 visibilityCategory: .message,
                 title: "Agent",
                 body: "Message \(index)",
-                date: Date(timeIntervalSince1970: TimeInterval(index))
+                date: Date(timeIntervalSince1970: TimeInterval(index)),
+                displayOrderKey: String(format: "%016d|event-%03d", offset, index)
             )
         }
         let snapshot = ThreadDetailSnapshot(
@@ -21,7 +22,6 @@ final class ResponsivenessContractTests: XCTestCase {
 
         let render = ThreadDetailRenderProjector().render(
             snapshot: snapshot,
-            requestCards: [],
             options: ThreadDetailRenderOptions(),
             revision: RenderRevision(rawValue: 7)
         )
@@ -60,8 +60,10 @@ final class ResponsivenessContractTests: XCTestCase {
 
     private func makeHeader() -> ThreadDetailHeader {
         let host = makeHost()
+        let projectionID = "host:\(host.id)/thread:thread-a/row:threadCard"
         let row = DockRowViewModel(
-            id: HostScopedThreadID(hostID: host.id, threadID: "thread-a"),
+            threadIdentity: HostScopedThreadID(hostID: host.id, threadID: "thread-a"),
+            projectionID: projectionID,
             backendSessionID: "backend-thread-a",
             title: "Thread A",
             hostDisplayName: host.displayName,
@@ -71,6 +73,7 @@ final class ResponsivenessContractTests: XCTestCase {
             status: .running,
             lastActivity: "now",
             lastActivityDate: Date(timeIntervalSince1970: 1_000),
+            displayOrderKey: "9999999999000000|0001|\(projectionID)",
             summary: "summary",
             rail: .blue,
             label: nil,

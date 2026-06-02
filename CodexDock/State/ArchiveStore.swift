@@ -188,20 +188,20 @@ public final class ArchiveStore: ObservableObject {
 
     private func restoreRow(_ row: DockRowViewModel) async -> ArchiveRestoreResult {
         guard let host = hostConfiguration(for: row) else {
-            DockLog.archive.error("archive restore skipped missing host_id=\(row.id.hostID, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
-            let message = "Host \(row.id.hostID) is no longer configured."
+            DockLog.archive.error("archive restore skipped missing host_id=\(row.hostID, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public)")
+            let message = "Host \(row.hostID) is no longer configured."
             setActionError(message)
             return ArchiveRestoreResult(row: row, status: .failed(message))
         }
 
         do {
-            DockLog.archive.notice("archive restore action started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
+            DockLog.archive.notice("archive restore action started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public)")
             try await commandEngine.unarchive(row, on: host)
             setActionError(nil)
-            DockLog.archive.notice("archive restore action finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
+            DockLog.archive.notice("archive restore action finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public)")
             return ArchiveRestoreResult(row: row, status: .restored)
         } catch {
-            DockLog.archive.error("archive restore action failed host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+            DockLog.archive.error("archive restore action failed host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             let message = error.localizedDescription
             setActionError(message)
             return ArchiveRestoreResult(row: row, status: .failed(message))
@@ -211,21 +211,21 @@ public final class ArchiveStore: ObservableObject {
     public func hostConfiguration(for row: DockRowViewModel) -> DockHostConfiguration? {
         if case .loaded(let snapshot) = state,
            let resolved = snapshot.hostIdentityResolver.resolve(
-               rowHostID: row.id.hostID,
+               rowHostID: row.hostID,
                sourceConfiguredHostID: row.sourceHostID
            ) {
             return resolved.host
         }
         if case .empty(let snapshot) = state,
            let resolved = snapshot.hostIdentityResolver.resolve(
-               rowHostID: row.id.hostID,
+               rowHostID: row.hostID,
                sourceConfiguredHostID: row.sourceHostID
            ) {
             return resolved.host
         }
         if case .unavailable(let snapshot, _) = state,
            let resolved = snapshot.hostIdentityResolver.resolve(
-               rowHostID: row.id.hostID,
+               rowHostID: row.hostID,
                sourceConfiguredHostID: row.sourceHostID
            ) {
             return resolved.host
@@ -235,7 +235,7 @@ public final class ArchiveStore: ObservableObject {
             return host
         }
         return DockHostIdentityResolver(hosts: hosts)
-            .resolve(rowHostID: row.id.hostID, sourceConfiguredHostID: row.sourceHostID)?
+            .resolve(rowHostID: row.hostID, sourceConfiguredHostID: row.sourceHostID)?
             .host
     }
 

@@ -235,7 +235,10 @@ public actor AppServerClient {
         }
     }
 
-    public func sendRequest(
+    // Keep arbitrary JSON-RPC method strings inside the transport layer.
+    // Display stores use typed projection/mutation methods so raw routes cannot
+    // become a second source of truth again.
+    func sendRequest(
         method: String,
         params: JSONValue? = nil,
         timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
@@ -251,7 +254,7 @@ public actor AppServerClient {
         )
     }
 
-    public func sendRequest<Response: Decodable>(
+    func sendRequest<Response: Decodable>(
         method: String,
         params: JSONValue? = nil,
         timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
@@ -276,45 +279,45 @@ public actor AppServerClient {
         try await send(.response(JSONRPCResponse(id: id, result: result)))
     }
 
-    public func threadRead(
-        params: ThreadReadParams,
+    public func threadDetailRead(
+        params: ThreadDetailParams,
         timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
         observabilityContext: AppServerRequestObservabilityContext? = nil
-    ) async throws -> ThreadReadResponseDTO {
+    ) async throws -> ThreadDetailSnapshotDTO {
         try await sendRequest(
-            method: AppServerMethods.threadRead,
+            method: AppServerMethods.threadDetailRead,
             params: try JSONValue.encoded(params),
             timeout: timeout,
             observabilityContext: observabilityContext,
-            as: ThreadReadResponseDTO.self
+            as: ThreadDetailSnapshotDTO.self
         )
     }
 
-    public func threadTurnsList(
-        params: ThreadTurnsListParams,
+    public func threadDetailSubscribe(
+        params: ThreadDetailParams,
         timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
         observabilityContext: AppServerRequestObservabilityContext? = nil
-    ) async throws -> ThreadTurnsListResponseDTO {
+    ) async throws -> ThreadDetailSnapshotDTO {
         try await sendRequest(
-            method: AppServerMethods.threadTurnsList,
+            method: AppServerMethods.threadDetailSubscribe,
             params: try JSONValue.encoded(params),
             timeout: timeout,
             observabilityContext: observabilityContext,
-            as: ThreadTurnsListResponseDTO.self
+            as: ThreadDetailSnapshotDTO.self
         )
     }
 
-    public func threadResume(
-        params: ThreadResumeParams,
+    public func threadDetailResync(
+        params: ThreadDetailParams,
         timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
         observabilityContext: AppServerRequestObservabilityContext? = nil
-    ) async throws -> ThreadResumeResponseDTO {
+    ) async throws -> ThreadDetailSnapshotDTO {
         try await sendRequest(
-            method: AppServerMethods.threadResume,
+            method: AppServerMethods.threadDetailResync,
             params: try JSONValue.encoded(params),
             timeout: timeout,
             observabilityContext: observabilityContext,
-            as: ThreadResumeResponseDTO.self
+            as: ThreadDetailSnapshotDTO.self
         )
     }
 
@@ -1028,25 +1031,18 @@ public final class URLSessionWebSocketAppServerTransport: AppServerTransport, @u
 }
 
 public extension AppServerClient {
-    func threadRead(
-        params: ThreadReadParams,
+    func threadDetailSubscribe(
+        params: ThreadDetailParams,
         timeout: Duration
-    ) async throws -> ThreadReadResponseDTO {
-        try await threadRead(params: params, timeout: timeout, observabilityContext: nil)
+    ) async throws -> ThreadDetailSnapshotDTO {
+        try await threadDetailSubscribe(params: params, timeout: timeout, observabilityContext: nil)
     }
 
-    func threadTurnsList(
-        params: ThreadTurnsListParams,
+    func threadDetailResync(
+        params: ThreadDetailParams,
         timeout: Duration
-    ) async throws -> ThreadTurnsListResponseDTO {
-        try await threadTurnsList(params: params, timeout: timeout, observabilityContext: nil)
-    }
-
-    func threadResume(
-        params: ThreadResumeParams,
-        timeout: Duration
-    ) async throws -> ThreadResumeResponseDTO {
-        try await threadResume(params: params, timeout: timeout, observabilityContext: nil)
+    ) async throws -> ThreadDetailSnapshotDTO {
+        try await threadDetailResync(params: params, timeout: timeout, observabilityContext: nil)
     }
 
     func turnStart(

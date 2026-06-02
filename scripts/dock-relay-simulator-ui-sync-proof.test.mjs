@@ -8,6 +8,42 @@ import {
   parseRootRowCount,
   parseSemicolonValue,
 } from "./dock-relay-simulator-ui-sync-proof.mjs";
+import {
+  projectionIDForThreadCard,
+  projectionIDForThreadItem,
+  projectionIDForThreadRequest,
+  safeSegment,
+} from "./dock-relay-projection-engine.mjs";
+
+function threadCardProjectionID(thread) {
+  return projectionIDForThreadCard({ sourceHostID: "host", threadID: thread });
+}
+
+function detailItemProjectionID({ host, thread, turn, item, row }) {
+  return projectionIDForThreadItem({
+    sourceHostID: host,
+    threadID: thread,
+    turnID: turn,
+    itemID: item,
+    rowRole: row,
+  });
+}
+
+function detailRequestProjectionID({ host, thread, request }) {
+  return projectionIDForThreadRequest({
+    sourceHostID: host,
+    threadID: thread,
+    requestID: request,
+  });
+}
+
+function encodeAutomationSegment(value) {
+  return safeSegment(value) || "_";
+}
+
+function messageIdentifierForProjection(projectionID) {
+  return `codexdock.session.message.${encodeAutomationSegment(projectionID)}`;
+}
 
 function relayReport({ finishedAt = "2026-05-31T00:00:01.000Z", status = "idle" } = {}) {
   return {
@@ -22,10 +58,11 @@ function relayReport({ finishedAt = "2026-05-31T00:00:01.000Z", status = "idle" 
       startedAt: "2026-05-31T00:00:00.500Z",
       finishedAt,
       freshDock: {
-        cardCount: 1,
+        rowCount: 1,
         totalRows: 1,
-        cards: [{
-          id: "host::thread-a",
+        rows: [{
+          id: threadCardProjectionID("thread-a"),
+          projectionID: threadCardProjectionID("thread-a"),
           logicalHostID: "host",
           threadID: "thread-a",
           status,
@@ -40,11 +77,12 @@ function relayReport({ finishedAt = "2026-05-31T00:00:01.000Z", status = "idle" 
 function twoRowRelaySample() {
   const report = relayReport();
   report.samples[0].freshDock = {
-    cardCount: 2,
+    rowCount: 2,
     totalRows: 2,
-    cards: [
+    rows: [
       {
-        id: "host::thread-a",
+        id: threadCardProjectionID("thread-a"),
+          projectionID: threadCardProjectionID("thread-a"),
         logicalHostID: "host",
         threadID: "thread-a",
         status: "idle",
@@ -52,7 +90,8 @@ function twoRowRelaySample() {
         sourceKind: "human",
       },
       {
-        id: "host::thread-b",
+        id: threadCardProjectionID("thread-b"),
+          projectionID: threadCardProjectionID("thread-b"),
         logicalHostID: "host",
         threadID: "thread-b",
         status: "running",
@@ -67,7 +106,7 @@ function twoRowRelaySample() {
 function dockRow({ thread = "thread-a", status = "idle", origin = "human" } = {}) {
   return {
     identifier: `codexdock.dock.row.host.${thread}`,
-    value: `host=host; thread=${thread}; status=${status}; origin=${origin}; label=none; Not pinned`,
+    value: `host=host; sourceHost=host; projection=${threadCardProjectionID(thread)}; thread=${thread}; status=${status}; origin=${origin}; label=none; Not pinned`,
     label: thread,
     frame: { minX: 0, minY: 10, width: 100, height: 44 },
   };
@@ -135,11 +174,12 @@ function sourceRefreshRelayReport() {
             ok: true,
           },
           freshDock: {
-            cardCount: 1,
+            rowCount: 1,
             totalRows: 1,
             freshness: { status: "stale", lastError: "controlled source refresh failure" },
-            cards: [{
-              id: "host::thread-a",
+            rows: [{
+              id: threadCardProjectionID("thread-a"),
+          projectionID: threadCardProjectionID("thread-a"),
               logicalHostID: "host",
               threadID: "thread-a",
               status: "idle",
@@ -159,11 +199,12 @@ function sourceRefreshRelayReport() {
             ok: true,
           },
           freshDock: {
-            cardCount: 1,
+            rowCount: 1,
             totalRows: 1,
             freshness: { status: "fresh" },
-            cards: [{
-              id: "host::thread-b",
+            rows: [{
+              id: threadCardProjectionID("thread-b"),
+          projectionID: threadCardProjectionID("thread-b"),
               logicalHostID: "host",
               threadID: "thread-b",
               status: "idle",
@@ -206,13 +247,17 @@ function detailOnlyUISample({ sampledAt }) {
       rootValue: "host=host; thread=thread-a",
       headerValue: "host=host; thread=thread-a",
       messageListValue: "loaded",
-      messageCardIDs: [],
-      requestCardIDs: [],
     },
   };
 }
 
 function detailRequestUISample({ sampledAt, finishedAt = null, capturedAt = sampledAt, status = "Pending" }) {
+  const requestProjectionID = detailRequestProjectionID({
+    host: "sim-server-request-fixture",
+    thread: "sim-server-request-thread",
+    request: "approval-1",
+  });
+  const requestMessageIdentifier = messageIdentifierForProjection(requestProjectionID);
   return {
     sampleIndex: 0,
     sampledAt,
@@ -230,27 +275,22 @@ function detailRequestUISample({ sampledAt, finishedAt = null, capturedAt = samp
       messageListCapturedAt: capturedAt,
       messageListValue: "loaded",
       messageCardsCapturedAt: capturedAt,
-      messageCardIDs: ["codexdock.session.message.request-approval-1"],
       requestElementsCapturedAt: capturedAt,
-      requestCardIDs: [
-        "codexdock.session.request.request-approval-1",
-        "codexdock.session.request.request-approval-1.status",
-      ],
       messageCards: [{
-        identifier: "codexdock.session.message.request-approval-1",
+        identifier: requestMessageIdentifier,
         capturedAt,
-        value: "event=request-approval-1; kind=serverRequest; request=request-approval-1; request-status=" + status,
+        value: `projection=${requestProjectionID}; kind=serverRequest; request=approval-1; request-status=${status}`,
         label: "Command approval",
       }],
       requestElements: [
         {
-          identifier: "codexdock.session.request.request-approval-1",
+          identifier: `codexdock.session.request.${encodeAutomationSegment(requestProjectionID)}`,
           capturedAt,
-          value: `card=request-approval-1; kind=commandApproval; status=${status}; needs-input=false`,
+          value: `card=${requestProjectionID}; request=approval-1; kind=commandApproval; status=${status}; needs-input=false`,
           label: "Command approval",
         },
         {
-          identifier: "codexdock.session.request.request-approval-1.status",
+          identifier: `codexdock.session.request.${encodeAutomationSegment(requestProjectionID)}.status`,
           capturedAt,
           value: status,
           label: status,
@@ -279,9 +319,9 @@ function scenarioRelayReport() {
             ok: true,
           },
           freshDock: {
-            cardCount: 0,
+            rowCount: 0,
             totalRows: 0,
-            cards: [],
+            rows: [],
           },
         },
         {
@@ -303,6 +343,11 @@ function scenarioRelayReport() {
 
 function serverRequestRelayReport() {
   const base = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
+  const requestProjectionID = detailRequestProjectionID({
+    host: "sim-server-request-fixture",
+    thread: "sim-server-request-thread",
+    request: "approval-1",
+  });
   return {
     ...base,
     mode: "scenario",
@@ -323,8 +368,19 @@ function serverRequestRelayReport() {
             kind: "server-request-visible",
             logicalHostID: "sim-server-request-fixture",
             threadID: "sim-server-request-thread",
+            projectionWitness: {
+              source: "retained-downstream-emitter-log",
+              sourceHostID: "sim-server-request-fixture",
+              view: "thread.detail",
+              scope: "thread",
+              threadID: "sim-server-request-thread",
+              viewParamsKey: "default-view",
+              epoch: "epoch-1",
+              lastSeq: 2,
+              projectionIDs: [requestProjectionID],
+            },
             requestID: "approval-1",
-            requestCardID: "request-approval-1",
+            requestCardID: requestProjectionID,
             expectedStatus: "Pending",
             requestVisible: true,
           },
@@ -343,8 +399,19 @@ function serverRequestRelayReport() {
             kind: "server-request-resolution",
             logicalHostID: "sim-server-request-fixture",
             threadID: "sim-server-request-thread",
+            projectionWitness: {
+              source: "retained-downstream-emitter-log",
+              sourceHostID: "sim-server-request-fixture",
+              view: "thread.detail",
+              scope: "thread",
+              threadID: "sim-server-request-thread",
+              viewParamsKey: "default-view",
+              epoch: "epoch-1",
+              lastSeq: 3,
+              projectionIDs: [requestProjectionID],
+            },
             requestID: "approval-1",
-            requestCardID: "request-approval-1",
+            requestCardID: requestProjectionID,
             expectedStatus: "Resolved",
             requestVisible: true,
           },
@@ -354,8 +421,31 @@ function serverRequestRelayReport() {
   };
 }
 
+function detailHistoryProjectionIDs() {
+  const host = "sim-detail-history-fixture";
+  const thread = "sim-detail-history-request-thread";
+  return {
+    request: detailRequestProjectionID({ host, thread, request: "approval-history-1" }),
+    agent: detailItemProjectionID({
+      host,
+      thread,
+      turn: "turn-history-1",
+      item: "agent-seed",
+      row: "agentMessage",
+    }),
+    user: detailItemProjectionID({
+      host,
+      thread,
+      turn: "turn-history-1",
+      item: "user-seed",
+      row: "userMessage",
+    }),
+  };
+}
+
 function detailHistoryRelayReport() {
   const base = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
+  const projectionIDs = detailHistoryProjectionIDs();
   return {
     ...base,
     mode: "scenario",
@@ -374,14 +464,24 @@ function detailHistoryRelayReport() {
         detailTruth: {
           logicalHostID: "sim-detail-history-fixture",
           threadID: "sim-detail-history-request-thread",
-          expectedMessageEventIDs: [
-            "request-approval-history-1",
-            "turn-history-1-agent-seed-agent",
-            "turn-history-1-user-seed-user",
-          ],
+          projectionWitness: {
+            source: "retained-downstream-emitter-log",
+            sourceHostID: "sim-detail-history-fixture",
+            view: "thread.detail",
+            scope: "thread",
+            threadID: "sim-detail-history-request-thread",
+            viewParamsKey: "default-view",
+            epoch: "epoch-1",
+            lastSeq: 3,
+            projectionIDs: [
+              projectionIDs.request,
+              projectionIDs.agent,
+              projectionIDs.user,
+            ],
+          },
           expectedMessageEventCount: 3,
           requestID: "approval-history-1",
-          requestCardID: "request-approval-history-1",
+          requestCardID: projectionIDs.request,
           expectedStatus: "Resolved",
           requestVisible: true,
         },
@@ -391,6 +491,13 @@ function detailHistoryRelayReport() {
 }
 
 function detailHistoryUISample({ sampledAt }) {
+  const projectionIDs = detailHistoryProjectionIDs();
+  const messageCard = (projectionID, value, label = "Thread row") => ({
+    identifier: messageIdentifierForProjection(projectionID),
+    value: `projection=${projectionID}; ${value}`,
+    label,
+  });
+  const requestIdentifier = `codexdock.session.request.${encodeAutomationSegment(projectionIDs.request)}`;
   return {
     sampleIndex: 0,
     sampledAt,
@@ -401,16 +508,12 @@ function detailHistoryUISample({ sampledAt }) {
       rootValue: "loaded; host=sim-detail-history-fixture; thread=sim-detail-history-request-thread; live=Live; events=3",
       headerValue: "host=sim-detail-history-fixture; thread=sim-detail-history-request-thread; live=Live",
       messageListValue: "events=3; filter=all",
-      messageCardIDs: ["codexdock.session.message.request-approval-history-1"],
-      requestCardIDs: ["codexdock.session.request.request-approval-history-1"],
-      messageCards: [{
-        identifier: "codexdock.session.message.request-approval-history-1",
-        value: "event=request-approval-history-1; kind=request; request=request-approval-history-1; request-status=Resolved",
-        label: "Command approval",
-      }],
+      messageCards: [
+        messageCard(projectionIDs.request, "kind=request; request=approval-history-1; request-status=Resolved", "Command approval"),
+      ],
       requestElements: [{
-        identifier: "codexdock.session.request.request-approval-history-1",
-        value: "card=request-approval-history-1; kind=commandApproval; status=Resolved; needs-input=false",
+        identifier: requestIdentifier,
+        value: `card=${projectionIDs.request}; request=approval-history-1; kind=commandApproval; status=Resolved; needs-input=false`,
         label: "Command approval",
       }],
     },
@@ -419,13 +522,11 @@ function detailHistoryUISample({ sampledAt }) {
       finishedAt: sampledAt,
       stepCount: 2,
       expectedMessageRows: 3,
-      messageCardIDs: [
-        "codexdock.session.message.request-approval-history-1",
-        "codexdock.session.message.turn-history-1-agent-seed-agent",
-        "codexdock.session.message.turn-history-1-user-seed-user",
+      messageCards: [
+        messageCard(projectionIDs.request, "kind=request; request=approval-history-1; request-status=Resolved", "Command approval"),
+        messageCard(projectionIDs.agent, "kind=agentMessage; visibility=message", "Agent message"),
+        messageCard(projectionIDs.user, "kind=userMessage; visibility=message", "User message"),
       ],
-      requestCardIDs: ["codexdock.session.request.request-approval-history-1"],
-      messageCards: [],
       requestElements: [],
     },
   };
@@ -487,25 +588,25 @@ test("simulator UI proof accepts checkpoint sweeps that cover all relay rows", (
 test("simulator UI proof uses stream notification snapshots as timestamped Dock truth", () => {
   const report = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
   report.samples[0].freshDock = {
-    cardCount: 2,
+    rowCount: 2,
     totalRows: 2,
-    renderOrderCardIDs: ["host::thread-a", "host::thread-b"],
-    cards: twoRowRelaySample().freshDock.cards,
+    renderOrderProjectionIDs: [threadCardProjectionID("thread-a"), threadCardProjectionID("thread-b")],
+    rows: twoRowRelaySample().freshDock.rows,
   };
   report.samples[0].stream = {
     notifications: [{
       method: "dock/update",
       receivedAt: "2026-05-31T00:00:02.000Z",
-      kind: "delta",
+      kind: "upsert",
       seq: 2,
-      baseSeq: 1,
       snapshot: {
-        cardCount: 2,
+        rowCount: 2,
         totalRows: 2,
-        renderOrderCardIDs: ["host::thread-b", "host::thread-a"],
-        cards: [
+        renderOrderProjectionIDs: [threadCardProjectionID("thread-b"), threadCardProjectionID("thread-a")],
+        rows: [
           {
-            id: "host::thread-b",
+            id: threadCardProjectionID("thread-b"),
+          projectionID: threadCardProjectionID("thread-b"),
             logicalHostID: "host",
             threadID: "thread-b",
             status: "running",
@@ -513,7 +614,8 @@ test("simulator UI proof uses stream notification snapshots as timestamped Dock 
             sourceKind: "automation",
           },
           {
-            id: "host::thread-a",
+            id: threadCardProjectionID("thread-a"),
+          projectionID: threadCardProjectionID("thread-a"),
             logicalHostID: "host",
             threadID: "thread-a",
             status: "idle",
@@ -548,25 +650,25 @@ test("simulator UI proof uses stream notification snapshots as timestamped Dock 
 test("simulator UI proof scores Dock rows at row capture time", () => {
   const report = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
   report.samples[0].freshDock = {
-    cardCount: 2,
+    rowCount: 2,
     totalRows: 2,
-    renderOrderCardIDs: ["host::thread-a", "host::thread-b"],
-    cards: twoRowRelaySample().freshDock.cards,
+    renderOrderProjectionIDs: [threadCardProjectionID("thread-a"), threadCardProjectionID("thread-b")],
+    rows: twoRowRelaySample().freshDock.rows,
   };
   report.samples[0].stream = {
     notifications: [{
       method: "dock/update",
       receivedAt: "2026-05-31T00:00:02.000Z",
-      kind: "delta",
+      kind: "upsert",
       seq: 2,
-      baseSeq: 1,
       snapshot: {
-        cardCount: 2,
+        rowCount: 2,
         totalRows: 2,
-        renderOrderCardIDs: ["host::thread-b", "host::thread-a"],
-        cards: [
+        renderOrderProjectionIDs: [threadCardProjectionID("thread-b"), threadCardProjectionID("thread-a")],
+        rows: [
           {
-            id: "host::thread-b",
+            id: threadCardProjectionID("thread-b"),
+          projectionID: threadCardProjectionID("thread-b"),
             logicalHostID: "host",
             threadID: "thread-b",
             status: "running",
@@ -574,7 +676,8 @@ test("simulator UI proof scores Dock rows at row capture time", () => {
             sourceKind: "automation",
           },
           {
-            id: "host::thread-a",
+            id: threadCardProjectionID("thread-a"),
+          projectionID: threadCardProjectionID("thread-a"),
             logicalHostID: "host",
             threadID: "thread-a",
             status: "idle",
@@ -604,7 +707,7 @@ test("simulator UI proof scores Dock rows at row capture time", () => {
 
 test("simulator UI proof fails visible Dock rows rendered out of relay order", () => {
   const relaySample = twoRowRelaySample();
-  relaySample.freshDock.renderOrderCardIDs = ["host::thread-a", "host::thread-b"];
+  relaySample.freshDock.renderOrderProjectionIDs = [threadCardProjectionID("thread-a"), threadCardProjectionID("thread-b")];
   const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
   sample.dockRootValue = "loaded; rows=2; pinned=0; lens=newest; search=false; filters=0";
   sample.dockRows = [
@@ -621,7 +724,7 @@ test("simulator UI proof fails visible Dock rows rendered out of relay order", (
 
 test("simulator UI proof skips global order checks for grouped Dock lenses", () => {
   const relaySample = twoRowRelaySample();
-  relaySample.freshDock.renderOrderCardIDs = ["host::thread-a", "host::thread-b"];
+  relaySample.freshDock.renderOrderProjectionIDs = [threadCardProjectionID("thread-a"), threadCardProjectionID("thread-b")];
   const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
   sample.dockRootValue = "loaded; rows=2; pinned=0; lens=branch; search=false; filters=0";
   sample.dockRows = [
@@ -638,7 +741,7 @@ test("simulator UI proof skips global order checks for grouped Dock lenses", () 
 
 test("simulator UI proof still detects duplicate rows for grouped Dock lenses", () => {
   const relaySample = twoRowRelaySample();
-  relaySample.freshDock.renderOrderCardIDs = ["host::thread-a", "host::thread-b"];
+  relaySample.freshDock.renderOrderProjectionIDs = [threadCardProjectionID("thread-a"), threadCardProjectionID("thread-b")];
   const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
   sample.dockRootValue = "loaded; rows=2; pinned=0; lens=host; search=false; filters=0";
   sample.dockRows = [
@@ -655,7 +758,7 @@ test("simulator UI proof still detects duplicate rows for grouped Dock lenses", 
 
 test("simulator UI proof fails checkpoint sweeps rendered out of relay order", () => {
   const relaySample = twoRowRelaySample();
-  relaySample.freshDock.renderOrderCardIDs = ["host::thread-a", "host::thread-b"];
+  relaySample.freshDock.renderOrderProjectionIDs = [threadCardProjectionID("thread-a"), threadCardProjectionID("thread-b")];
   const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
   sample.dockRootValue = "loaded; rows=2; pinned=0; lens=newest; search=false; filters=0";
   sample.dockRows = [dockRow({ thread: "thread-a" })];
@@ -742,7 +845,7 @@ test("simulator UI proof treats timeBudget checkpoint sweeps as partial evidence
 
 test("simulator UI proof skips capped sweep order as non-atomic evidence", () => {
   const relaySample = twoRowRelaySample();
-  relaySample.freshDock.renderOrderCardIDs = ["host::thread-a", "host::thread-b"];
+  relaySample.freshDock.renderOrderProjectionIDs = [threadCardProjectionID("thread-a"), threadCardProjectionID("thread-b")];
   const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
   sample.dockRootValue = "loaded; rows=2; pinned=0; lens=newest; search=false; filters=0";
   sample.dockRows = [dockRow({ thread: "thread-a" })];
@@ -798,26 +901,28 @@ test("simulator UI proof scores against stream notification truth between sparse
   const report = relayReport({ finishedAt: "2026-05-31T00:00:20.000Z" });
   report.samples[0].finishedAt = "2026-05-31T00:00:01.000Z";
   report.samples[0].freshDock = {
-    cardCount: 2,
+    rowCount: 2,
     totalRows: 2,
-    cards: [
+    rows: [
       {
-        id: "host::thread-a",
+        id: threadCardProjectionID("thread-a"),
+          projectionID: threadCardProjectionID("thread-a"),
         logicalHostID: "host",
         threadID: "thread-a",
         status: "idle",
         lane: "human",
         sourceKind: "human",
-        orderKey: "001",
+        displayOrderKey: "001",
       },
       {
-        id: "host::thread-b",
+        id: threadCardProjectionID("thread-b"),
+          projectionID: threadCardProjectionID("thread-b"),
         logicalHostID: "host",
         threadID: "thread-b",
         status: "idle",
         lane: "human",
         sourceKind: "human",
-        orderKey: "002",
+        displayOrderKey: "002",
       },
     ],
   };
@@ -829,29 +934,31 @@ test("simulator UI proof scores against stream notification truth between sparse
     stream: {
       notifications: [{
         receivedAt: "2026-05-31T00:00:05.000Z",
-        kind: "delta",
+        kind: "upsert",
         seq: 2,
         snapshot: {
-          cardCount: 2,
+          rowCount: 2,
           totalRows: 2,
-          cards: [
+          rows: [
             {
-              id: "host::thread-b",
+              id: threadCardProjectionID("thread-b"),
+          projectionID: threadCardProjectionID("thread-b"),
               logicalHostID: "host",
               threadID: "thread-b",
               status: "running",
               lane: "human",
               sourceKind: "human",
-              orderKey: "000",
+              displayOrderKey: "000",
             },
             {
-              id: "host::thread-a",
+              id: threadCardProjectionID("thread-a"),
+          projectionID: threadCardProjectionID("thread-a"),
               logicalHostID: "host",
               threadID: "thread-a",
               status: "idle",
               lane: "human",
               sourceKind: "human",
-              orderKey: "001",
+              displayOrderKey: "001",
             },
           ],
         },
@@ -879,22 +986,23 @@ test("simulator UI proof scores against stream notification truth between sparse
 test("simulator UI proof scores visible Dock rows at sampledAt when checkpoint sweep finishes later", () => {
   const report = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
   report.samples[0].freshDock = {
-    cardCount: 2,
+    rowCount: 2,
     totalRows: 2,
-    renderOrderCardIDs: ["host::thread-a", "host::thread-b"],
-    cards: twoRowRelaySample().freshDock.cards,
+    renderOrderProjectionIDs: [threadCardProjectionID("thread-a"), threadCardProjectionID("thread-b")],
+    rows: twoRowRelaySample().freshDock.rows,
   };
   report.samples.push({
     sampleIndex: 1,
     startedAt: "2026-05-31T00:00:10.000Z",
     finishedAt: "2026-05-31T00:00:10.000Z",
     freshDock: {
-      cardCount: 2,
+      rowCount: 2,
       totalRows: 2,
-      renderOrderCardIDs: ["host::thread-b", "host::thread-a"],
-      cards: [
+      renderOrderProjectionIDs: [threadCardProjectionID("thread-b"), threadCardProjectionID("thread-a")],
+      rows: [
         {
-          id: "host::thread-b",
+          id: threadCardProjectionID("thread-b"),
+          projectionID: threadCardProjectionID("thread-b"),
           logicalHostID: "host",
           threadID: "thread-b",
           status: "running",
@@ -902,7 +1010,8 @@ test("simulator UI proof scores visible Dock rows at sampledAt when checkpoint s
           sourceKind: "automation",
         },
         {
-          id: "host::thread-a",
+          id: threadCardProjectionID("thread-a"),
+          projectionID: threadCardProjectionID("thread-a"),
           logicalHostID: "host",
           threadID: "thread-a",
           status: "idle",
@@ -969,10 +1078,11 @@ test("simulator UI proof does not fail a large checkpoint sweep solely because m
     rows: [dockRow({ thread: "thread-a" })],
   };
   const relaySample = twoRowRelaySample();
-  relaySample.freshDock.cardCount = 3;
+  relaySample.freshDock.rowCount = 3;
   relaySample.freshDock.totalRows = 3;
-  relaySample.freshDock.cards.push({
-    id: "host::thread-c",
+  relaySample.freshDock.rows.push({
+    id: threadCardProjectionID("thread-c"),
+    projectionID: threadCardProjectionID("thread-c"),
     logicalHostID: "host",
     threadID: "thread-c",
     status: "idle",
@@ -1222,10 +1332,10 @@ test("simulator UI proof scores opened-thread history through a detail sweep", (
 
 test("simulator UI proof fails opened-thread detail rows rendered out of newest-first order", () => {
   const sample = detailHistoryUISample({ sampledAt: "2026-05-31T00:00:03.250Z" });
-  sample.detailSweep.messageCardIDs = [
-    "codexdock.session.message.turn-history-1-user-seed-user",
-    "codexdock.session.message.turn-history-1-agent-seed-agent",
-    "codexdock.session.message.request-approval-history-1",
+  sample.detailSweep.messageCards = [
+    sample.detailSweep.messageCards[2],
+    sample.detailSweep.messageCards[1],
+    sample.detailSweep.messageCards[0],
   ];
 
   const report = buildRenderedUIReport({
@@ -1243,6 +1353,31 @@ test("simulator UI proof fails opened-thread detail rows rendered out of newest-
   assert.equal(report.failures.some((failure) => failure.code === "detail_ui_transition_not_observed"), true);
   assert.equal(
     report.detailTransitionCoverage.checks[0].failures.some((failure) => failure.code === "detail_ui_message_order_mismatch"),
+    true,
+  );
+});
+
+test("simulator UI proof fails duplicate opened-thread detail message projection rows", () => {
+  const sample = detailHistoryUISample({ sampledAt: "2026-05-31T00:00:03.250Z" });
+  sample.detailSweep.messageCards = [
+    ...sample.detailSweep.messageCards,
+    sample.detailSweep.messageCards[2],
+  ];
+
+  const report = buildRenderedUIReport({
+    relayReport: detailHistoryRelayReport(),
+    uiSamples: [
+      uiSample({ sampledAt: "2026-05-31T00:00:01.200Z" }),
+      uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" }),
+      sample,
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, false);
+  assert.equal(report.failures.some((failure) => failure.code === "detail_ui_transition_not_observed"), true);
+  assert.equal(
+    report.detailTransitionCoverage.checks[0].failures.some((failure) => failure.code === "detail_ui_duplicate_message_row"),
     true,
   );
 });

@@ -41,6 +41,32 @@ canonical current-simulator UI dump command for what the app is showing right
 now. Proof must be retained JSON/Markdown over time, not screenshots,
 recordings, or one-shot fixtures.
 
+## Projection Supersession
+
+This live-update plan documents the already-built card-v2 implementation, but
+the permanent projection identity architecture supersedes it wherever identity,
+ordering, freshness, cache validity, proof truth, or phone-facing display DTOs
+are involved.
+
+Canonical target:
+
+- `docs/CODEX_DOCK_THREAD_DETAIL_OUTBOUND_DUPLICATE_ROOT_CAUSE_2026-06-01.md`
+- `docs/CODEX_DOCK_PROTOCOL_AND_UPDATE_ARCHITECTURE_REFERENCE_2026-05-31.md`
+  `Proposed Projection Identity Contract`
+
+After projection cutover, Dock, Archive, and Thread Detail all use projection
+`rows` keyed by `projectionID` with shared `snapshot` / `upsert` / `delete` /
+`heartbeat` / `resyncRequired` semantics. The card-v2 `delta`,
+`stateGeneration`, `baseSeq`, `upsertCards`, `deleteCardIDs`, and
+`logicalHostID::threadID` vocabulary in this doc is pre-cutover implementation
+history only. Raw `thread/read`, `thread/turns/list`, and `thread/resume` are
+relay-internal adapters or diagnostics, not production display routes.
+
+Post-cutover acceptance proof must fetch the relay projection view with the same
+`viewParamsKey` the simulator UI is rendering, then compare UI accessibility
+state to that relay view. It must not compare against the full unfiltered ledger
+or a client-side reconstruction.
+
 ## Plan
 
 Implementation moved depth-first through the real seams: current-simulator UI
@@ -149,8 +175,10 @@ error, or blocked instead of fresh.
   history/live sessions.
 - Heartbeat as the canonical liveness contract for Dock and Archive streams.
 - Swift rejection of stale compatible snapshots and stream corruption.
-- Thread Detail history path using `thread/read includeTurns:false`, full paged
-  `thread/turns/list`, and `thread/resume excludeTurns:true`.
+- Pre-cutover Thread Detail history path using `thread/read includeTurns:false`,
+  full paged `thread/turns/list`, and `thread/resume excludeTurns:true`.
+  Projection cutover replaces this as phone-facing display truth with
+  `thread/detail/*` projection routes.
 - Relay upstream Thread Detail recovery made visible to Swift by closing the
   downstream socket unless a later sanctioned generation-stamped resync protocol
   is explicitly planned.
@@ -169,8 +197,11 @@ error, or blocked instead of fresh.
 - A new product feature, new app navigation model, or new Dock filtering model.
 - Phone-side direct raw app-server route use as a production truth path.
 - A new parallel test framework replacing existing relay and UI proof harnesses.
-- A new `detail/resync` protocol in this implementation. It remains a future
-  option only if generation-stamped and added everywhere in one later plan.
+- A new Thread Detail resync protocol in this live-update implementation. This
+  old scope boundary is superseded for the projection identity cutover:
+  `thread/detail/resync` is now required by
+  `docs/CODEX_DOCK_THREAD_DETAIL_OUTBOUND_DUPLICATE_ROOT_CAUSE_2026-06-01.md`
+  and the canonical protocol reference.
 - Broad doc linting, stale-term greps, screenshot comparison, OCR, or visual
   golden tests as proof.
 - Preserving old side doors for compatibility after the canonical path exists.
@@ -200,8 +231,10 @@ error, or blocked instead of fresh.
 
 - Card truth has one production owner: the relay.
 - Freshness is data proof, not connection proof.
-- Stream identity is observable: `schemaVersion`, `view`, `epoch`, `seq`, and
-  `stateGeneration` must move together.
+- Stream identity is observable. Pre-cutover card-v2 uses `schemaVersion`,
+  `view`, `epoch`, `seq`, and `stateGeneration`; projection cutover uses the
+  shared projection `schemaVersion`, `identityVersion`, `sourceHostID`, `view`,
+  `epoch`, `seq`, and `viewParamsKey`.
 - Heartbeat never mutates rows and never marks failed data fresh.
 - Thread Detail live continuity is not trusted across invisible relay upstream
   recovery.
@@ -1362,11 +1395,11 @@ Every client-visible fact has exactly one production owner.
 | Fact | Canonical owner | Forbidden second owner |
 | --- | --- | --- |
 | Dock and Archive card existence | Relay `dock/*` and `archive/*` streams | Swift local metadata, diagnostics, preview fixtures, raw app-server routes |
-| Card order and recency | Relay `orderKey` / `activityAtMs` | Swift timestamp inference, pins, row text, latest rendered message |
+| Card order and recency | Pre-cutover relay `orderKey` / `activityAtMs`; projection cutover relay `displayOrderKey` | Swift timestamp inference, pins, row text, latest rendered message |
 | Card freshness and completeness | Relay freshness/completeness fields | Socket connectivity, HTTP diagnostics, host test success |
-| Human-only filtering | Relay human-started filter, with Swift defensive filter | Client-side list reconstruction from broad raw thread routes |
-| Thread Detail history | `thread/read includeTurns:false` plus fully paged `thread/turns/list` | Dock cards, raw card summaries, partial resume payloads |
-| Thread Detail liveness | Focused `thread/resume` session | Socket state alone |
+| Human-only filtering | Relay view params, with Swift defensive filter only as invalid-data guard | Client-side list reconstruction from broad raw thread routes |
+| Thread Detail history | Pre-cutover `thread/read includeTurns:false` plus fully paged `thread/turns/list`; projection cutover `thread/detail/*` rows | Dock cards, raw card summaries, partial resume payloads |
+| Thread Detail liveness | Pre-cutover focused `thread/resume`; projection cutover `thread/detail/*` epoch/seq/heartbeat/resync | Socket state alone |
 | Local labels, rails, pins | Swift local metadata | Relay/card truth fields |
 
 Local metadata may decorate visible rows. It must never create a row, change
@@ -1379,16 +1412,21 @@ A connected WebSocket is not proof that the data is current.
 
 Every stateful relay-owned stream or session must have an identity:
 
-- Dock and Archive streams: `epoch`, `seq`, and `stateGeneration`.
-- Thread Detail live session: relay downstream session generation plus the
-  active upstream `thread/resume` binding.
+- Pre-cutover Dock and Archive streams: `epoch`, `seq`, and
+  `stateGeneration`. Projection cutover streams: `epoch`, `seq`,
+  `identityVersion`, `sourceHostID`, and `viewParamsKey`.
+- Pre-cutover Thread Detail live session: relay downstream session generation
+  plus the active upstream `thread/resume` binding. Projection cutover Thread
+  Detail stream: `thread/detail/*` epoch/seq/heartbeat/resync state.
 - Realtime transcription: transcription `sessionId` plus sequence acceptance.
 
 When that identity changes, the missing state must be rebuilt in an observable
 way:
 
 - Dock and Archive must resubscribe or resync.
-- Thread Detail must rehydrate from history before trusting live deltas again.
+- Pre-cutover Thread Detail must rehydrate from history before trusting live
+  deltas again. Projection cutover replaces that phone-facing rehydrate with
+  `thread/detail/resync` or a replacement projection snapshot.
 - The UI must show stale/partial/reconnecting when freshness is not proven.
 
 No production path may silently recover a relay upstream session while leaving
@@ -1452,7 +1490,9 @@ The relay owns:
 Swift owns:
 
 - rendering;
-- grouping/filtering/searching of relay rows;
+- pre-cutover grouping/filtering/searching of relay rows; after projection
+  cutover, any filter/search that changes the visible row set is a relay
+  `viewParams` value with a matching `viewParamsKey`;
 - local decorative metadata;
 - resync/resubscribe behavior when the relay stream contract says state is
   incomplete, stale, mismatched, or behind.
@@ -1479,6 +1519,8 @@ projection.
 
 ### Rule 4. Thread Detail Uses One History Path
 
+Pre-cutover rule:
+
 Thread Detail history is:
 
 ```text
@@ -1489,6 +1531,11 @@ thread/read includeTurns:false
 
 For user-visible detail completeness, `thread/turns/list` must request
 `itemsView:"full"` on the detail path.
+
+Projection cutover supersedes this as phone-facing display truth. The relay may
+continue using raw `thread/read`, `thread/turns/list`, and `thread/resume`
+internally, but the app consumes `thread/detail/*` projection rows with
+`viewParamsKey`, `epoch`, `seq`, heartbeat, and resync semantics.
 
 Important scoping rule:
 
@@ -1532,14 +1579,15 @@ Why close the downstream socket now:
 - It prevents the exact stale-detail failure shape: relay recovered upstream,
   phone stayed connected, and missed history was never replayed.
 
-Sanctioned future alternative:
+Sanctioned projection-identity alternative:
 
-- a `detail/resync` or equivalent notification may exist later only if it is
-  `threadId`-stamped, generation-stamped, added to the relay allow-list, added
-  to Swift DTO handling, added to proof tests, and documented here in the same
-  change.
+- `thread/detail/resync` is the sanctioned resync route for the projection
+  identity architecture. It must be `threadId`-stamped, generation/epoch
+  stamped, added to the relay allow-list, added to Swift DTO handling, added to
+  proof tests, and documented in the canonical protocol reference.
 
-Until then, invisible upstream recovery is forbidden.
+Until projection resync is fully implemented, invisible upstream recovery is
+forbidden.
 
 ### Rule 6. Heartbeat Is Real Contract
 
@@ -1554,7 +1602,8 @@ Relay must emit periodic `kind:"heartbeat"` `dock/update` messages with:
 - `view`;
 - `epoch`;
 - `seq`;
-- `stateGeneration`;
+- `stateGeneration` in the pre-cutover card-v2 contract; projection cutover
+  replaces this with shared `epoch` and `seq` only;
 - `freshness`;
 - `lastSyncAt` or equivalent freshness timestamp;
 - no row changes.
@@ -1605,7 +1654,7 @@ client renders that state.
 Snapshots are full replacements, but they are not allowed to overwrite newer
 state with older state.
 
-The relay already has monotonic stream sequence material:
+The pre-cutover card-v2 relay already has monotonic stream sequence material:
 
 - `seq`;
 - `stateGeneration`;
@@ -1613,7 +1662,9 @@ The relay already has monotonic stream sequence material:
 - `schemaVersion`.
 
 Swift must reject stale compatible snapshots when their generation is older
-than the current host/view state. A compatible schema is not enough.
+than the current host/view state. A compatible schema is not enough. Projection
+cutover keeps the same fail-closed rule, but the continuity fields become the
+shared projection `epoch` and `seq`.
 
 Current gap to close during implementation: Swift currently applies compatible
 snapshots without a stale-generation guard.
@@ -1635,6 +1686,12 @@ drift-prone because the mutation ingestion path schedules generic reconciliation
 but does not make Archive convergence a first-class invariant.
 
 ## Owner Map
+
+Pre-cutover owner map: the table below names the implemented card-v2/raw-detail
+owners so migration work can be located. After projection cutover, display
+schema ownership moves to the shared projection schema package and display
+truth moves to projection `rows`, `viewParamsKey`, `projectionID`,
+`displayOrderKey`, `epoch`, and `seq`.
 
 | Surface | Canonical owner |
 | --- | --- |
@@ -1708,7 +1765,7 @@ test run masquerade as a live freshness pass.
 | Archive failure | UI surfaces action failure and does not fabricate row state | Swift store test plus relay scenario |
 | Host alias/identity change | Resolve configured/stream/logical host identity without duplicating rows | Swift host identity tests |
 | Relay host ID changes cache scope | Prune or invalidate old host rows explicitly | relay state-store test |
-| Thread Detail initial load | `thread/read`, full paged `thread/turns/list`, then `thread/resume` | ThreadDetailStore tests plus sync audit detail probe |
+| Pre-cutover Thread Detail initial load | `thread/read`, full paged `thread/turns/list`, then `thread/resume`; projection cutover replaces this phone-facing path with `thread/detail/*` projection rows | ThreadDetailStore tests plus sync audit detail probe before cutover; projection proof after cutover |
 | Thread Detail repeated cursor | Fail loudly; do not spin or silently truncate | ThreadDetailStore test |
 | Thread Detail upstream recovery | Close downstream or send sanctioned resync; Swift rehydrates | relay integration plus UI detail scenario |
 | Missing `threadId` in detail notification | Drop or classify explicitly; request-card resolution must not vanish silently | ThreadDetailStore test |
@@ -2135,11 +2192,12 @@ Rejected. Heartbeat is the canonical liveness contract for this architecture.
 A future non-heartbeat replacement requires a newer canonical architecture
 reference and equivalent proof gates.
 
-### Add `detail/resync` Immediately
+### Add Thread Detail Resync Outside A Projection Contract
 
-Rejected for now because downstream close reuses existing Swift rehydrate
-behavior. `detail/resync` is the sanctioned future evolution only if full
-evidence shows downstream close is too expensive.
+Rejected. Thread Detail resync is no longer a standalone live-update patch. The
+accepted route is `thread/detail/resync` inside the relay-owned projection
+identity contract, with `sourceHostID`, `projectionID`, `epoch`, `seq`,
+freshness, and proof gates moving together.
 
 ## Implementation Plan Outline
 
@@ -2181,9 +2239,11 @@ Relationship to other docs:
   stale commands and align with this methodology.
 - README should align with heartbeat reality after implementation.
 
-If another doc disagrees with this target architecture, this doc wins for
-live-update architecture intent until a newer explicitly canonical reference
-replaces it.
+If another doc disagrees with this target architecture for the pre-cutover
+live-update implementation, this doc wins for that pre-cutover scope. For
+projection identity cutover, the projection identity audit and canonical
+protocol reference above win; this doc's card-v2 and raw-detail sections become
+history, not implementation authority.
 
 ## Final Consensus Statement
 

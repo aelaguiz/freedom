@@ -21,7 +21,6 @@ import {
   isHumanStartedThread,
 } from "./dock-relay-human-thread-filter.mjs";
 import {
-  activityOrderKey,
   timestampToISO,
   timestampToMs,
 } from "./dock-relay-state-views.mjs";
@@ -1045,7 +1044,6 @@ async function canonicalizeThreadRows(config, rows = [], {
         ...row,
         activityAtMs,
         activityAt: timestampToISO(activityAtMs),
-        orderKey: activityOrderKey(activityAtMs, row.id),
         freshness: "fresh",
         completeness: "complete",
         activityProofStatus: "proven",
@@ -1076,7 +1074,6 @@ async function canonicalizeThreadRows(config, rows = [], {
         ...row,
         activityAtMs: fallbackActivityAtMs,
         activityAt: timestampToISO(fallbackActivityAtMs),
-        orderKey: activityOrderKey(fallbackActivityAtMs, row.id),
         freshness: "stale",
         completeness: "partial",
         activityProofStatus: "unproven",

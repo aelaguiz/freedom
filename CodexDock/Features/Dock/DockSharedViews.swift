@@ -283,9 +283,11 @@ extension DockRowRail {
 extension DockRowViewModel {
     var automationValue: String {
         [
-            "host=\(id.hostID)",
+            "host=\(hostID)",
+            "sourceHost=\(sourceHostID ?? "none")",
+            "projection=\(projectionID)",
             "hostDisplay=\(hostDisplayName)",
-            "thread=\(id.threadID)",
+            "thread=\(threadID)",
             "status=\(status.rawValue)",
             "origin=\(origin.automationKind)",
             "relationship=\(relationship.rawValue)",

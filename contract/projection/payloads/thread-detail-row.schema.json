@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-dock.local/contract/projection/payloads/thread-detail-row.schema.json",
+  "title": "Codex Dock Projection Payload: Thread Detail Row",
+  "description": "Thread Detail display row. The shared projection envelope owns identity; payload owns the visible message/request/diagnostic body.",
+  "allOf": [
+    {
+      "$ref": "https://codex-dock.local/contract/projection/projection-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "identityVersion",
+        "projectionEngineVersion",
+        "sourceHostID",
+        "view",
+        "threadID",
+        "projectionID",
+        "sourceRef",
+        "rowRole",
+        "displayOrderKey",
+        "revision",
+        "payload"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "identityVersion": {
+          "const": 1
+        },
+        "projectionEngineVersion": {
+          "const": 1
+        },
+        "sourceHostID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "view": {
+          "const": "thread.detail"
+        },
+        "threadID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "projectionID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rowRole": {
+          "$ref": "https://codex-dock.local/contract/projection/row-role.schema.json"
+        },
+        "displayOrderKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "freshness": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "state"
+          ],
+          "properties": {
+            "state": {
+              "type": "string",
+              "minLength": 1
+            },
+            "asOf": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sourceWatermark": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "visibility",
+            "renderKind",
+            "title",
+            "body",
+            "renderState"
+          ],
+          "properties": {
+            "itemType": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "visibility": {
+              "type": "string",
+              "minLength": 1
+            },
+            "renderKind": {
+              "type": "string",
+              "minLength": 1
+            },
+            "title": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string"
+            },
+            "eventTime": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "activityTime": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turnID": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "itemID": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turnOrder": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "itemOrder": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "rowOrder": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "renderState": {
+              "enum": [
+                "live",
+                "streaming",
+                "settled",
+                "stale",
+                "diagnostic"
+              ]
+            },
+            "requestID": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "required": [
+                "requestID",
+                "method"
+              ],
+              "properties": {
+                "requestID": {},
+                "method": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "params": {},
+                "status": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "diagnostic": {}
+          },
+          "additionalProperties": false
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  ]
+}

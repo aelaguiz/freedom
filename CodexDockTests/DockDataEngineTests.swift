@@ -46,18 +46,22 @@ final class DockDataEngineTests: XCTestCase {
             ]
         )
         let staleDelta = ThreadCardStreamUpdateDTO(
-            kind: .delta,
+            kind: .upsert,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
-            view: .dock,
-            complete: nil,
+            identityVersion: 1,
+                projectionEngineVersion: 1,
+                sourceHostID: host.id,
+                view: .dock,
+            scope: "view",
+                viewParamsKey: "dock:\(host.id)",
+                complete: nil,
             totalRows: nil,
             window: nil,
-            stateGeneration: 3,
             epoch: "epoch-a",
-            baseSeq: 1,
-            seq: 3,
-            upsertCards: [],
-            deleteCardIDs: []
+            seq: 4,
+            order: "displayOrderKeyAscending",
+                rows: [],
+            projectionIDs: []
         )
 
         _ = await engine.applySnapshot(snapshot, host: host)
@@ -105,7 +109,7 @@ final class DockDataEngineTests: XCTestCase {
         let snapshot = await engine.snapshot(now: { Date(timeIntervalSince1970: 2_000) })
         let rows = snapshot?.rows ?? []
 
-        XCTAssertEqual(rows.map(\.id.threadID), ["thread-a"])
+        XCTAssertEqual(rows.map(\.threadID), ["thread-a"])
         XCTAssertEqual(rows.map(\.isPinned), [true])
         XCTAssertEqual(rows.map(\.rail), [.violet])
     }

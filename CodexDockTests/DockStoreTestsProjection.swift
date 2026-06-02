@@ -10,7 +10,7 @@ final class DockStoreTestsProjection: XCTestCase {
 
         let projection = snapshot.project(options: .init(lens: .newest))
 
-        XCTAssertEqual(projection.rows.map(\.id.threadID), ["new-history", "old-running"])
+        XCTAssertEqual(projection.rows.map(\.threadID), ["new-history", "old-running"])
         XCTAssertEqual(projection.groups, [])
     }
 
@@ -26,7 +26,7 @@ final class DockStoreTestsProjection: XCTestCase {
                     branch: "main",
                     status: .running,
                     lastActivity: 100,
-                    orderKey: "000000000000:home-old"
+                    displayOrderKey: "000000000000:home-old"
                 ),
                 makeRow(
                     host: amir,
@@ -35,7 +35,7 @@ final class DockStoreTestsProjection: XCTestCase {
                     branch: "main",
                     status: .running,
                     lastActivity: 300,
-                    orderKey: "000000000001:amir-new"
+                    displayOrderKey: "000000000001:amir-new"
                 )
             ],
             hosts: [amir, home]
@@ -43,7 +43,7 @@ final class DockStoreTestsProjection: XCTestCase {
 
         let projection = snapshot.project(options: .init(lens: .newest))
 
-        XCTAssertEqual(projection.rows.map(\.id.threadID), ["home-old", "amir-new"])
+        XCTAssertEqual(projection.rows.map(\.threadID), ["home-old", "amir-new"])
     }
 
     func testNewestProjectionUsesStableRowIDWhenRelayOrderKeysTie() {
@@ -59,7 +59,7 @@ final class DockStoreTestsProjection: XCTestCase {
                     branch: "main",
                     status: .dormant,
                     lastActivity: 200,
-                    orderKey: tiedOrderKey
+                    displayOrderKey: tiedOrderKey
                 ),
                 makeRow(
                     host: hostA,
@@ -68,7 +68,7 @@ final class DockStoreTestsProjection: XCTestCase {
                     branch: "main",
                     status: .dormant,
                     lastActivity: 200,
-                    orderKey: tiedOrderKey
+                    displayOrderKey: tiedOrderKey
                 )
             ],
             hosts: [hostA, hostB]
@@ -77,7 +77,7 @@ final class DockStoreTestsProjection: XCTestCase {
         let projection = snapshot.project(options: .init(lens: .newest))
 
         XCTAssertEqual(
-            projection.rows.map { "\($0.id.hostID)::\($0.id.threadID)" },
+            projection.rows.map { "\($0.hostID)::\($0.threadID)" },
             [
                 "sim-multi-host-a.local:4510::sim-shared-thread-id",
                 "sim-multi-host-b.local:4510::sim-shared-thread-id"
@@ -100,7 +100,7 @@ final class DockStoreTestsProjection: XCTestCase {
         let projection = snapshot.project(options: .init(lens: .host))
 
         XCTAssertEqual(projection.groups.map(\.title), ["Home", "Amir-M5"])
-        XCTAssertEqual(projection.groups[1].rows.map(\.id.threadID), ["amir-new", "amir-old"])
+        XCTAssertEqual(projection.groups[1].rows.map(\.threadID), ["amir-new", "amir-old"])
         XCTAssertEqual(projection.groups[1].runningCount, 1)
     }
 
@@ -117,7 +117,7 @@ final class DockStoreTestsProjection: XCTestCase {
         let projection = snapshot.project(options: .init(lens: .host))
 
         XCTAssertEqual(projection.groups.map(\.title), ["Amir-M5"])
-        XCTAssertEqual(projection.groups[0].rows.map(\.id.threadID), ["amir-idle", "amir-running"])
+        XCTAssertEqual(projection.groups[0].rows.map(\.threadID), ["amir-idle", "amir-running"])
     }
 
     func testHostLensKeepsUnavailableHostVisibleWithoutRows() {
@@ -158,7 +158,7 @@ final class DockStoreTestsProjection: XCTestCase {
 
         XCTAssertEqual(projection.groups.map(\.title), ["main", "feature/dock"])
         XCTAssertEqual(projection.groups[0].rows.map(\.hostDisplayName), ["Home", "Amir-M5"])
-        XCTAssertEqual(projection.groups[0].rows.map(\.id.threadID), ["home-main", "amir-main"])
+        XCTAssertEqual(projection.groups[0].rows.map(\.threadID), ["home-main", "amir-main"])
     }
 
     func testProjectionSearchMatchesHostBranchRepoStatusLabelSummaryAndThreadIDCaseInsensitively() {
@@ -180,7 +180,7 @@ final class DockStoreTestsProjection: XCTestCase {
 
         for query in ["home", "feature/dock", "codex-client", "running", "watch", "Summary for Runner", "home-123"] {
             XCTAssertEqual(
-                snapshot.project(options: .init(lens: .newest, searchText: query)).rows.map(\.id.threadID),
+                snapshot.project(options: .init(lens: .newest, searchText: query)).rows.map(\.threadID),
                 ["THREAD-home-123"],
                 query
             )
@@ -208,7 +208,7 @@ final class DockStoreTestsProjection: XCTestCase {
 
         let projection = snapshot.project(options: .init(lens: .newest, filters: filtered))
 
-        XCTAssertEqual(projection.rows.map(\.id.threadID), ["human-history"])
+        XCTAssertEqual(projection.rows.map(\.threadID), ["human-history"])
         XCTAssertEqual(projection.summary.resultCount, 1)
         XCTAssertEqual(projection.summary.activeFilterCount, 4)
         XCTAssertTrue(projection.summary.text.contains("Host: Home"))
@@ -246,7 +246,7 @@ final class DockStoreTestsProjection: XCTestCase {
 
         let projection = snapshot.project(options: .init(lens: .newest))
 
-        XCTAssertEqual(projection.rows.map(\.id.threadID), ["idle", "running"])
+        XCTAssertEqual(projection.rows.map(\.threadID), ["idle", "running"])
     }
 
     func testPinnedAndBodyIdleRowsAreVisibleByDefault() {
@@ -257,8 +257,8 @@ final class DockStoreTestsProjection: XCTestCase {
 
         let projection = snapshot.project(options: .init(lens: .newest))
 
-        XCTAssertEqual(projection.pinnedRows.map(\.id.threadID), ["idle-pinned"])
-        XCTAssertEqual(projection.rows.map(\.id.threadID), ["idle-body"])
+        XCTAssertEqual(projection.pinnedRows.map(\.threadID), ["idle-pinned"])
+        XCTAssertEqual(projection.rows.map(\.threadID), ["idle-body"])
         XCTAssertEqual(projection.summary.resultCount, 2)
         XCTAssertEqual(
             projection.pinnedSummary,
@@ -274,7 +274,7 @@ final class DockStoreTestsProjection: XCTestCase {
 
         let projection = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(statusKinds: [.idle])))
 
-        XCTAssertEqual(projection.rows.map(\.id.threadID), ["idle"])
+        XCTAssertEqual(projection.rows.map(\.threadID), ["idle"])
         XCTAssertEqual(projection.summary.text.contains("Status: Idle"), true)
     }
 
@@ -289,7 +289,7 @@ final class DockStoreTestsProjection: XCTestCase {
         let projection = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(statusKinds: statusKinds)))
 
         XCTAssertEqual(projection.pinnedRows, [])
-        XCTAssertEqual(projection.rows.map(\.id.threadID), ["running"])
+        XCTAssertEqual(projection.rows.map(\.threadID), ["running"])
         XCTAssertEqual(
             projection.pinnedSummary,
             DockPinnedSummary(visibleCount: 0, totalCount: 1, hiddenByScopeCount: 1)
@@ -332,8 +332,8 @@ final class DockStoreTestsProjection: XCTestCase {
 
         let projection = snapshot.project(options: .init(lens: .newest))
 
-        XCTAssertEqual(projection.pinnedRows.map(\.id.threadID), ["pinned"])
-        XCTAssertEqual(projection.rows.map(\.id.threadID), ["normal"])
+        XCTAssertEqual(projection.pinnedRows.map(\.threadID), ["pinned"])
+        XCTAssertEqual(projection.rows.map(\.threadID), ["normal"])
         XCTAssertEqual(projection.summary.resultCount, 2)
         XCTAssertEqual(
             projection.pinnedSummary,
@@ -356,10 +356,10 @@ final class DockStoreTestsProjection: XCTestCase {
         let hostProjection = snapshot.project(options: .init(lens: .host))
         let branchProjection = snapshot.project(options: .init(lens: .branch))
 
-        XCTAssertEqual(hostProjection.pinnedRows.map(\.id.threadID), ["amir-pinned"])
-        XCTAssertEqual(hostProjection.groups.flatMap(\.rows).map(\.id.threadID), ["amir-body", "home-body"])
-        XCTAssertEqual(branchProjection.pinnedRows.map(\.id.threadID), ["amir-pinned"])
-        XCTAssertEqual(branchProjection.groups.flatMap(\.rows).map(\.id.threadID), ["amir-body", "home-body"])
+        XCTAssertEqual(hostProjection.pinnedRows.map(\.threadID), ["amir-pinned"])
+        XCTAssertEqual(hostProjection.groups.flatMap(\.rows).map(\.threadID), ["amir-body", "home-body"])
+        XCTAssertEqual(branchProjection.pinnedRows.map(\.threadID), ["amir-pinned"])
+        XCTAssertEqual(branchProjection.groups.flatMap(\.rows).map(\.threadID), ["amir-body", "home-body"])
     }
 
     func testSearchCanHidePinnedRowsAndReportsHiddenPinnedCount() {
@@ -371,7 +371,7 @@ final class DockStoreTestsProjection: XCTestCase {
         let projection = snapshot.project(options: .init(lens: .newest, searchText: "beta"))
 
         XCTAssertEqual(projection.pinnedRows, [])
-        XCTAssertEqual(projection.rows.map(\.id.threadID), ["normal"])
+        XCTAssertEqual(projection.rows.map(\.threadID), ["normal"])
         XCTAssertEqual(
             projection.pinnedSummary,
             DockPinnedSummary(visibleCount: 0, totalCount: 1, hiddenByScopeCount: 1)
@@ -393,7 +393,7 @@ final class DockStoreTestsProjection: XCTestCase {
         let projection = snapshot.project(options: .init(lens: .host, filters: filters))
 
         XCTAssertEqual(projection.pinnedRows, [])
-        XCTAssertEqual(projection.groups.flatMap(\.rows).map(\.id.threadID), ["home-body"])
+        XCTAssertEqual(projection.groups.flatMap(\.rows).map(\.threadID), ["home-body"])
         XCTAssertEqual(
             projection.pinnedSummary,
             DockPinnedSummary(visibleCount: 0, totalCount: 1, hiddenByScopeCount: 1)
@@ -411,7 +411,7 @@ final class DockStoreTestsProjection: XCTestCase {
         let projection = snapshot.project(options: .init(lens: .newest))
 
         XCTAssertEqual(
-            projection.pinnedRows.map(\.id.threadID),
+            projection.pinnedRows.map(\.threadID),
             ["order-zero", "order-two", "legacy-old", "legacy-new"]
         )
     }
@@ -443,14 +443,23 @@ final class DockStoreTestsProjection: XCTestCase {
 
     func testThreadCardTableProjectsLogicalHostRowsToConfiguredEndpointHost() {
         let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
+        let projectionID = "host:\(host.id)/thread:thread-a/row:threadCard"
         let card = DockThreadCardDTO(
-            id: "Amir-M5::thread-a",
-            logicalHostID: "Amir-M5",
+            schemaVersion: 1,
+            identityVersion: 1,
+            projectionEngineVersion: 1,
+            sourceHostID: host.id,
+            view: "dock",
+            projectionID: projectionID,
+            sourceRef: "host:\(host.id)/thread:thread-a",
+            rowRole: "threadCard",
+            displayOrderKey: "8219900799999999|0001|\(projectionID)",
+            id: projectionID,
+            logicalHostID: host.id,
             threadID: "thread-a",
             backendSessionID: "thread-a-session",
             hostDisplayName: "Amir-M5",
             hostEndpoint: host.endpoint.displayEndpoint,
-            orderKey: "000000000000:thread-a",
             activityAt: "2026-05-30T00:00:00.000Z",
             activityAtMs: 1_780_099_200_000,
             displaySummary: "Summary",
@@ -469,21 +478,19 @@ final class DockStoreTestsProjection: XCTestCase {
         let update = ThreadCardStreamUpdateDTO(
             kind: .snapshot,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            identityVersion: 1,
+            projectionEngineVersion: 1,
+            sourceHostID: host.id,
             view: .dock,
+            scope: "view",
+            viewParamsKey: "dock:\(host.id)",
             complete: true,
             totalRows: 1,
             window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1),
             epoch: "epoch",
             seq: 1,
-            hosts: [
-                DockStreamHostDTO(
-                    id: "Amir-M5",
-                    logicalHostID: "Amir-M5",
-                    displayName: "Amir-M5",
-                    endpoint: host.endpoint.displayEndpoint
-                )
-            ],
-            cards: [card]
+            order: "displayOrderKeyAscending",
+            rows: [card]
         )
         var table = ThreadCardTable()
         table.reset(hosts: [host])
@@ -496,14 +503,15 @@ final class DockStoreTestsProjection: XCTestCase {
         )
         let projection = snapshot.project(options: .init(lens: .host))
 
-        XCTAssertEqual(snapshot.rows[0].id.hostID, "Amir-M5")
+        XCTAssertEqual(snapshot.rows[0].hostID, host.id)
+        XCTAssertEqual(snapshot.rows[0].hostDisplayName, "Amir-M5")
         XCTAssertEqual(snapshot.rows[0].sourceHostID, host.id)
         XCTAssertEqual(
-            snapshot.hostIdentityResolver.resolve(rowHostID: "Amir-M5", sourceConfiguredHostID: host.id)?.host.id,
+            snapshot.hostIdentityResolver.resolve(rowHostID: host.id, sourceConfiguredHostID: host.id)?.host.id,
             host.id
         )
         XCTAssertEqual(projection.groups.map(\.title), ["Amir-M5"])
-        XCTAssertEqual(projection.groups.first?.rows.map(\.id.threadID), ["thread-a"])
+        XCTAssertEqual(projection.groups.first?.rows.map(\.threadID), ["thread-a"])
     }
 
     func testThreadCardRowProjectorMarksForkedCards() throws {
@@ -523,7 +531,7 @@ final class DockStoreTestsProjection: XCTestCase {
             forkedFromID: "parent-thread"
         )
 
-        let row = try XCTUnwrap(projector.rows(from: [card], sourceHostID: host.id).first)
+        let row = try XCTUnwrap(projector.rows(from: [card]).first)
 
         XCTAssertEqual(row.relationship, .forked)
         XCTAssertTrue(row.automationValue.contains("relationship=forked"))
@@ -550,7 +558,7 @@ final class DockStoreTestsProjection: XCTestCase {
             now: { Date(timeIntervalSince1970: 300) }
         )
 
-        XCTAssertEqual(snapshot.rows.map(\.id.threadID), [])
+        XCTAssertEqual(snapshot.rows.map(\.threadID), [])
     }
 }
 
@@ -566,16 +574,16 @@ private func makeSnapshot(
             hosts.first { $0.id == sourceHostID }
         }
         let inferredHost = sourceHost ?? hosts.first { host in
-            host.id == row.id.hostID
-                || host.displayName == row.id.hostID
-                || host.endpoint.displayEndpoint == row.id.hostID
+            host.id == row.hostID
+                || host.displayName == row.hostID
+                || host.endpoint.displayEndpoint == row.hostID
         }
         guard let host = inferredHost else {
             return nil
         }
         return DockHostIdentityObservation(
             configuredHostID: host.id,
-            logicalHostID: row.id.hostID,
+            logicalHostID: row.hostID,
             displayName: row.hostDisplayName,
             endpoint: row.hostEndpoint
         )
@@ -585,7 +593,7 @@ private func makeSnapshot(
         host: hostViewModels[0],
         hosts: hostViewModels,
         hostStates: hostStates ?? hosts.map { host in
-            DockHostStateViewModel(host: DockHostViewModel(host: host), status: .loaded(rowCount: rows.filter { $0.id.hostID == host.id }.count))
+            DockHostStateViewModel(host: DockHostViewModel(host: host), status: .loaded(rowCount: rows.filter { $0.hostID == host.id }.count))
         },
         hostIdentityResolver: resolver,
         rows: rows,
@@ -604,20 +612,24 @@ private func makeRow(
     branch: String,
     status: DockRowStatusKind,
     lastActivity: TimeInterval,
-    orderKey: String? = nil,
+    displayOrderKey: String? = nil,
     label: String? = nil,
     origin: SessionOrigin = .humanInteractive(subtype: .cli),
     isPinned: Bool = false,
     pinnedAt: TimeInterval? = nil,
     pinnedOrder: Int? = nil
 ) -> DockRowViewModel {
-    let resolvedOrderKey = orderKey ?? String(
-        format: "%019lld:%@",
-        Int64.max - Int64(lastActivity * 1_000),
-        threadID
+    let projectionID = "host:\(host.id)/thread:\(threadID)/row:threadCard"
+    let maxSortMs: Int64 = 9_999_999_999_999_999
+    let activityAtMs = Int64(lastActivity * 1_000)
+    let resolvedDisplayOrderKey = displayOrderKey ?? String(
+        format: "%016lld|000001|%@",
+        maxSortMs - max(0, min(maxSortMs, activityAtMs)),
+        projectionID
     )
     return DockRowViewModel(
-        id: HostScopedThreadID(hostID: host.id, threadID: threadID),
+        threadIdentity: HostScopedThreadID(hostID: host.id, threadID: threadID),
+        projectionID: projectionID,
         backendSessionID: "\(threadID)-session",
         title: title,
         hostDisplayName: host.displayName,
@@ -627,7 +639,7 @@ private func makeRow(
         status: status,
         lastActivity: "now",
         lastActivityDate: Date(timeIntervalSince1970: lastActivity),
-        orderKey: resolvedOrderKey,
+        displayOrderKey: resolvedDisplayOrderKey,
         summary: "Summary for \(title)",
         rail: .blue,
         label: label,

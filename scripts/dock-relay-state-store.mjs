@@ -9,10 +9,13 @@ import {
   RELAY_STATE_SCHEMA_VERSION,
 } from "./dock-relay-constants.mjs";
 import {
+  PROJECTION_ENGINE_VERSION,
+  PROJECTION_IDENTITY_VERSION,
+  PROJECTION_SCHEMA_VERSION,
+} from "./dock-relay-projection-engine.mjs";
+import {
   ARCHIVE_VIEW,
   DOCK_VIEW,
-  activityOrderKey,
-  archiveOrderKey,
   normalizeStoredCard,
 } from "./dock-relay-state-views.mjs";
 import {
@@ -50,6 +53,56 @@ function isFreshLocalArchiveMutation(row, atMs) {
 
 function sortedJSONString(value) {
   return JSON.stringify(sortJSON(value));
+}
+
+function projectionCacheContractFingerprint() {
+  return sortedJSONString({
+    projectionSchemaVersion: PROJECTION_SCHEMA_VERSION,
+    projectionIdentityVersion: PROJECTION_IDENTITY_VERSION,
+    projectionEngineVersion: PROJECTION_ENGINE_VERSION,
+  });
+}
+
+function cardProjectionKey(card) {
+  if (typeof card?.projectionID === "string" && card.projectionID.trim()) {
+    return card.projectionID;
+  }
+  return null;
+}
+
+function requireProjectionCard(card, view) {
+  const requiredStrings = [
+    "sourceHostID",
+    "view",
+    "projectionID",
+    "sourceRef",
+    "rowRole",
+    "displayOrderKey",
+    "threadID",
+    "backendSessionID",
+    "hostDisplayName",
+  ];
+  for (const field of requiredStrings) {
+    if (typeof card?.[field] !== "string" || !card[field].trim()) {
+      throw new Error(`relay projection card missing ${field}`);
+    }
+  }
+  if (card.schemaVersion !== 1 || card.identityVersion !== 1 || card.projectionEngineVersion !== 1) {
+    throw new Error("relay projection card version mismatch");
+  }
+  if (card.view !== view) {
+    throw new Error(`relay projection card view mismatch: expected ${view}, got ${card.view}`);
+  }
+  if (card.id !== card.projectionID) {
+    throw new Error("relay projection card id must equal projectionID");
+  }
+  if (card.logicalHostID !== card.sourceHostID) {
+    throw new Error("relay projection card logicalHostID must equal sourceHostID");
+  }
+  if (card.rowRole !== "threadCard") {
+    throw new Error("relay projection card rowRole must be threadCard");
+  }
+  return card;
 }
 
 function sortJSON(value) {
@@ -104,6 +157,12 @@ class RelayStateStore {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS projection_cache_contract (
+        contract_id TEXT PRIMARY KEY,
+        fingerprint TEXT NOT NULL,
         applied_at TEXT NOT NULL
       );
 
@@ -250,13 +309,75 @@ class RelayStateStore {
     // Card truth lives on stored thread rows. Remove the old decorative
     // provenance table so proof cannot drift away from the row the client sees.
     this.db.exec("DROP TABLE IF EXISTS thread_field_provenance");
+    const previousSchemaVersion = this.currentSchemaVersion();
+    for (const obsoleteScope of ["active:dock", "active:default"]) {
+      this.db.prepare("DELETE FROM sync_scopes WHERE scope = ?").run(obsoleteScope);
+    }
+    const previousProjectionCacheContractFingerprint = this.currentProjectionCacheContractFingerprint();
+    const currentProjectionCacheContractFingerprint = projectionCacheContractFingerprint();
+    const projectionContractChanged =
+      previousProjectionCacheContractFingerprint !== null
+      && previousProjectionCacheContractFingerprint !== currentProjectionCacheContractFingerprint;
+    if (previousSchemaVersion < RELAY_STATE_SCHEMA_VERSION || projectionContractChanged) {
+      this.resetDerivedProjectionCache(previousSchemaVersion, {
+        previousProjectionCacheContractFingerprint,
+        currentProjectionCacheContractFingerprint,
+      });
+    }
     this.db.prepare(`
       INSERT OR IGNORE INTO schema_migrations (version, applied_at)
       VALUES (?, ?)
     `).run(RELAY_STATE_SCHEMA_VERSION, nowISOString());
-    for (const obsoleteScope of ["active:dock", "active:default"]) {
-      this.db.prepare("DELETE FROM sync_scopes WHERE scope = ?").run(obsoleteScope);
-    }
+    this.db.prepare(`
+      INSERT INTO projection_cache_contract (contract_id, fingerprint, applied_at)
+      VALUES ('derived-projection-cache', ?, ?)
+      ON CONFLICT(contract_id) DO UPDATE SET
+        fingerprint = excluded.fingerprint,
+        applied_at = excluded.applied_at
+    `).run(currentProjectionCacheContractFingerprint, nowISOString());
+  }
+
+  currentSchemaVersion() {
+    const row = this.db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get();
+    return Number(row?.version || 0);
+  }
+
+  currentProjectionCacheContractFingerprint() {
+    const row = this.db.prepare(`
+      SELECT fingerprint
+      FROM projection_cache_contract
+      WHERE contract_id = 'derived-projection-cache'
+    `).get();
+    return typeof row?.fingerprint === "string" ? row.fingerprint : null;
+  }
+
+  resetDerivedProjectionCache(previousSchemaVersion, {
+    previousProjectionCacheContractFingerprint = null,
+    currentProjectionCacheContractFingerprint = projectionCacheContractFingerprint(),
+  } = {}) {
+    this.db.exec(`
+      DELETE FROM threads;
+      DELETE FROM sync_scopes;
+      DELETE FROM live_leases;
+      DELETE FROM subscriptions;
+      DELETE FROM changes;
+      DELETE FROM conflicts;
+      DELETE FROM turn_cache;
+    `);
+    this.db.prepare(`
+      INSERT INTO changes (view, host_id, thread_id, change_type, payload_json, created_at)
+      VALUES (?, NULL, NULL, ?, ?, ?)
+    `).run(
+      DOCK_VIEW,
+      "projection-cache-schema-reset",
+      sortedJSONString({
+        previousSchemaVersion,
+        schemaVersion: RELAY_STATE_SCHEMA_VERSION,
+        previousProjectionCacheContractFingerprint,
+        projectionCacheContractFingerprint: currentProjectionCacheContractFingerprint,
+      }),
+      nowISOString()
+    );
   }
 
   ensureThreadColumns() {
@@ -482,7 +603,9 @@ class RelayStateStore {
       const previousRows = Array.isArray(previousCards)
         ? previousCards
         : this.listDockCards({ hostID: host.id }).cards;
-      const previousByID = new Map(previousRows.map((row) => [row.id, row]));
+      const previousByID = new Map(previousRows
+        .map((row) => [cardProjectionKey(row), row])
+        .filter(([key]) => key));
       const existingRows = this.db.prepare(`
         SELECT thread_id, archive_state, freshness_status, updated_at
         FROM threads
@@ -490,23 +613,27 @@ class RelayStateStore {
       `).all(host.id);
       const existingByThreadID = new Map(existingRows.map((row) => [row.thread_id, row]));
       const nextByID = new Map();
-      const upsertCards = [];
-      const deleteCardIDs = [];
+      const rows = [];
+      const projectionIDs = [];
 
       cards.forEach((card) => {
+        requireProjectionCard(card, DOCK_VIEW);
         const existing = existingByThreadID.get(card.threadID);
         if (isFreshLocalArchiveMutation(existing, atMs)) {
           return;
         }
         const cardWithOrder = {
           ...card,
-          orderKey: card.orderKey || activityOrderKey(card.activityAtMs || Date.now(), card.threadID),
           archiveState: "active",
         };
-        nextByID.set(cardWithOrder.id, cardWithOrder);
-        const previous = previousByID.get(cardWithOrder.id);
+        const key = cardProjectionKey(cardWithOrder);
+        if (!key) {
+          return;
+        }
+        nextByID.set(key, cardWithOrder);
+        const previous = previousByID.get(key);
         if (sortedJSONString(previous) !== sortedJSONString(cardWithOrder)) {
-          upsertCards.push(cardWithOrder);
+          rows.push(cardWithOrder);
         }
         this.upsertThreadCard(host.id, cardWithOrder, {
           archiveState: "active",
@@ -517,8 +644,9 @@ class RelayStateStore {
 
       if (complete) {
         for (const previous of previousRows) {
-          if (!nextByID.has(previous.id)) {
-            deleteCardIDs.push(previous.id);
+          const key = cardProjectionKey(previous);
+          if (key && !nextByID.has(key)) {
+            projectionIDs.push(key);
             this.markThreadInactive(host.id, previous.threadID, at);
           }
         }
@@ -537,20 +665,19 @@ class RelayStateStore {
         }, at);
       }
 
-      const baseSeq = this.currentSeqForView(DOCK_VIEW);
       const seq = this.recordChange({
         view: DOCK_VIEW,
         hostID: host.id,
         changeType: "dock-reconcile",
         payload: {
-          upsertCount: upsertCards.length,
-          deleteCount: deleteCardIDs.length,
+          upsertCount: rows.length,
+          deleteCount: projectionIDs.length,
           complete,
         },
         at,
       });
       this.pruneChanges();
-      return { baseSeq, seq, upsertCards, deleteCardIDs };
+      return { seq, rows, projectionIDs };
     });
   }
 
@@ -561,21 +688,27 @@ class RelayStateStore {
       const previousRows = Array.isArray(previousCards)
         ? previousCards
         : this.listArchiveCards({ hostID: host.id }).cards;
-      const previousByID = new Map(previousRows.map((row) => [row.id, row]));
+      const previousByID = new Map(previousRows
+        .map((row) => [cardProjectionKey(row), row])
+        .filter(([key]) => key));
       const nextByID = new Map();
-      const upsertCards = [];
-      const deleteCardIDs = [];
+      const rows = [];
+      const projectionIDs = [];
 
-      cards.forEach((card, index) => {
+      cards.forEach((card) => {
+        requireProjectionCard(card, ARCHIVE_VIEW);
         const cardWithOrder = {
           ...card,
-          orderKey: card.orderKey || archiveOrderKey(card.activityAtMs || Date.now(), card.threadID),
           archiveState: "archived",
         };
-        nextByID.set(cardWithOrder.id, cardWithOrder);
-        const previous = previousByID.get(cardWithOrder.id);
+        const key = cardProjectionKey(cardWithOrder);
+        if (!key) {
+          return;
+        }
+        nextByID.set(key, cardWithOrder);
+        const previous = previousByID.get(key);
         if (sortedJSONString(previous) !== sortedJSONString(cardWithOrder)) {
-          upsertCards.push(cardWithOrder);
+          rows.push(cardWithOrder);
         }
         this.upsertThreadCard(host.id, cardWithOrder, {
           archiveState: "archived",
@@ -587,8 +720,9 @@ class RelayStateStore {
 
       if (complete) {
         for (const previous of previousRows) {
-          if (!nextByID.has(previous.id)) {
-            deleteCardIDs.push(previous.id);
+          const key = cardProjectionKey(previous);
+          if (key && !nextByID.has(key)) {
+            projectionIDs.push(key);
             this.markThreadNotArchived(host.id, previous.threadID, at);
           }
         }
@@ -602,20 +736,19 @@ class RelayStateStore {
         error,
       }, at);
 
-      const baseSeq = this.currentSeqForView(ARCHIVE_VIEW);
       const seq = this.recordChange({
         view: ARCHIVE_VIEW,
         hostID: host.id,
         changeType: "archive-reconcile",
         payload: {
-          upsertCount: upsertCards.length,
-          deleteCount: deleteCardIDs.length,
+          upsertCount: rows.length,
+          deleteCount: projectionIDs.length,
           complete,
         },
         at,
       });
       this.pruneChanges();
-      return { baseSeq, seq, upsertCards, deleteCardIDs };
+      return { seq, rows, projectionIDs };
     });
   }
 
@@ -674,12 +807,12 @@ class RelayStateStore {
     `).run(
       hostID,
       card.threadID,
-      card.id,
-      nullable(card.logicalHostID),
+      card.projectionID,
+      nullable(card.sourceHostID),
       nullable(card.backendSessionID),
       nullable(card.hostDisplayName),
       nullable(card.hostEndpoint),
-      nullable(card.orderKey),
+      nullable(card.displayOrderKey),
       nullable(card.activityAt),
       nullable(card.activityAtMs),
       nullable(card.displaySummary),
@@ -852,7 +985,7 @@ class RelayStateStore {
         last_error = excluded.last_error
     `).run(hostID, scopeName, boolInt(archived), scopeName, at, error?.message || String(error));
     const view = archived ? ARCHIVE_VIEW : DOCK_VIEW;
-    const baseSeq = this.currentSeqForView(view);
+    const previousSeq = this.currentSeqForView(view);
     const seq = this.recordChange({
       view,
       hostID,
@@ -861,7 +994,7 @@ class RelayStateStore {
       at,
     });
     this.pruneChanges();
-    return { baseSeq, seq };
+    return { previousSeq, seq };
   }
 
   recordChange({

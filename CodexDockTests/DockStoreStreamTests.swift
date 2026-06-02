@@ -3,13 +3,95 @@ import XCTest
 
 final class DockStoreStreamTests: XCTestCase {
     @MainActor
+    func testProjectionIDIsPrimaryCardIdentityForUpsertAndDelete() async throws {
+        let host = makeHost()
+        let projectionID = "host:\(host.id)/thread:thread-a/row:threadCard"
+        let connection = ManualThreadCardStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                cards: [
+                    threadCardFixture(
+                        host: host,
+                        threadID: "thread-a",
+                        title: "Initial row",
+                        updatedAt: 1_000,
+                        projectionID: projectionID
+                    )
+                ]
+            )
+        )
+        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+
+        await store.load()
+        await connection.send(
+            ThreadCardStreamUpdateDTO(
+                kind: .upsert,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                identityVersion: 1,
+                projectionEngineVersion: 1,
+                sourceHostID: host.id,
+                view: .dock,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
+                epoch: "epoch-1",
+                seq: 2,
+                order: "displayOrderKeyAscending",
+                rows: [
+                    threadCardFixture(
+                        host: host,
+                        threadID: "thread-a",
+                        title: "Projection update",
+                        updatedAt: 1_100,
+                        projectionID: projectionID
+                    )
+                ]
+            )
+        )
+
+        guard let updated = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.title) == ["Projection update"] }
+        ) else {
+            return XCTFail("Expected projection-keyed upsert to replace the existing row, got \(store.state)")
+        }
+        XCTAssertEqual(updated.rows.map(\.threadID), ["thread-a"])
+
+        await connection.send(
+            ThreadCardStreamUpdateDTO(
+                kind: .upsert,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                identityVersion: 1,
+                projectionEngineVersion: 1,
+                sourceHostID: host.id,
+                view: .dock,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
+                epoch: "epoch-1",
+                seq: 3,
+                order: "displayOrderKeyAscending",
+                projectionIDs: [projectionID]
+            )
+        )
+
+        guard let deleted = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.isEmpty }
+        ) else {
+            return XCTFail("Expected projection-keyed delete to remove the row, got \(store.state)")
+        }
+        XCTAssertTrue(deleted.rows.isEmpty)
+    }
+
+    @MainActor
     func testSequenceGapRequestsResyncAndKeepsHostRows() async throws {
         let host = makeHost()
         let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
-                seq: 1,
+                seq: 3,
                 cards: [
                     threadCardFixture(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
                 ]
@@ -30,13 +112,18 @@ final class DockStoreStreamTests: XCTestCase {
         await store.load()
         await connection.send(
             ThreadCardStreamUpdateDTO(
-                kind: .delta,
+                kind: .upsert,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                identityVersion: 1,
+                projectionEngineVersion: 1,
+                sourceHostID: host.id,
                 view: .dock,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
                 epoch: "epoch-1",
-                baseSeq: 99,
                 seq: 100,
-                upsertCards: [
+                order: "displayOrderKeyAscending",
+                rows: [
                     threadCardFixture(host: host, threadID: "bad-delta", title: "Bad delta", updatedAt: 1_200)
                 ]
             )
@@ -44,7 +131,7 @@ final class DockStoreStreamTests: XCTestCase {
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.rows.map(\.id.threadID) == ["thread-resynced"] }
+            where: { $0.rows.map(\.threadID) == ["thread-resynced"] }
         ) else {
             return XCTFail("Expected sequence gap to resync, got \(store.state)")
         }
@@ -58,7 +145,7 @@ final class DockStoreStreamTests: XCTestCase {
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
-                seq: 1,
+                seq: 2,
                 cards: [
                     threadCardFixture(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
                 ]
@@ -79,13 +166,16 @@ final class DockStoreStreamTests: XCTestCase {
         await store.load()
         await connection.send(
             ThreadCardStreamUpdateDTO(
-                kind: .delta,
+                kind: .upsert,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion + 1,
+                sourceHostID: host.id,
                 view: .dock,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
                 epoch: "epoch-1",
-                baseSeq: 1,
                 seq: 2,
-                upsertCards: [
+                order: "displayOrderKeyAscending",
+                rows: [
                     threadCardFixture(host: host, threadID: "bad-schema", title: "Bad schema delta", updatedAt: 1_200)
                 ]
             )
@@ -93,7 +183,7 @@ final class DockStoreStreamTests: XCTestCase {
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.rows.map(\.id.threadID) == ["thread-resynced"] }
+            where: { $0.rows.map(\.threadID) == ["thread-resynced"] }
         ) else {
             return XCTFail("Expected schema mismatch to resync, got \(store.state)")
         }
@@ -102,7 +192,59 @@ final class DockStoreStreamTests: XCTestCase {
     }
 
     @MainActor
-    func testMissingSchemaRequestsResync() async throws {
+    func testInvalidSchemaRequestsResync() async throws {
+        let host = makeHost()
+        let connection = ManualThreadCardStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 3,
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
+                ]
+            ),
+            resyncSnapshots: [
+                dockStreamSnapshot(
+                    host: host,
+                    epoch: "epoch-1",
+                    seq: 3,
+                    cards: [
+                        threadCardFixture(host: host, threadID: "thread-resynced", title: "Invalid schema resynced row", updatedAt: 1_100)
+                    ]
+                )
+            ]
+        )
+        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+
+        await store.load()
+        await connection.send(
+            ThreadCardStreamUpdateDTO(
+                kind: .upsert,
+                schemaVersion: 0,
+                sourceHostID: host.id,
+                view: .dock,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
+                epoch: "epoch-1",
+                seq: 2,
+                order: "displayOrderKeyAscending",
+                rows: [
+                    threadCardFixture(host: host, threadID: "invalid-schema", title: "Invalid schema delta", updatedAt: 1_200)
+                ]
+            )
+        )
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.threadID) == ["thread-resynced"] }
+        ) else {
+            return XCTFail("Expected invalid schema to resync, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.rows.map(\.title), ["Invalid schema resynced row"])
+    }
+
+    @MainActor
+    func testMalformedProjectionEnvelopeRequestsResync() async throws {
         let host = makeHost()
         let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
@@ -116,10 +258,10 @@ final class DockStoreStreamTests: XCTestCase {
             resyncSnapshots: [
                 dockStreamSnapshot(
                     host: host,
-                    epoch: "epoch-1",
-                    seq: 3,
+                    epoch: "epoch-2",
+                    seq: 1,
                     cards: [
-                        threadCardFixture(host: host, threadID: "thread-resynced", title: "Missing schema resynced row", updatedAt: 1_100)
+                        threadCardFixture(host: host, threadID: "thread-resynced", title: "Projection resynced row", updatedAt: 1_200)
                     ]
                 )
             ]
@@ -129,28 +271,101 @@ final class DockStoreStreamTests: XCTestCase {
         await store.load()
         await connection.send(
             ThreadCardStreamUpdateDTO(
-                kind: .delta,
+                kind: .upsert,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                identityVersion: 1,
+                projectionEngineVersion: 1,
+                sourceHostID: host.id,
                 view: .dock,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
                 epoch: "epoch-1",
-                baseSeq: 1,
                 seq: 2,
-                upsertCards: [
-                    threadCardFixture(host: host, threadID: "missing-schema", title: "Missing schema delta", updatedAt: 1_200)
+                order: "displayOrderKeyAscending",
+                rows: [
+                    threadCardFixture(
+                        host: host,
+                        threadID: "bad-projection",
+                        title: "Bad projection delta",
+                        updatedAt: 1_100,
+                        projectionID: ""
+                    )
                 ]
             )
         )
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.rows.map(\.id.threadID) == ["thread-resynced"] }
+            where: { $0.rows.map(\.threadID) == ["thread-resynced"] }
         ) else {
-            return XCTFail("Expected missing schema to resync, got \(store.state)")
+            return XCTFail("Expected malformed projection envelope to resync, got \(store.state)")
         }
-        XCTAssertEqual(snapshot.rows.map(\.title), ["Missing schema resynced row"])
+        XCTAssertEqual(snapshot.rows.map(\.title), ["Projection resynced row"])
     }
 
     @MainActor
-    func testOlderStateGenerationRequestsResyncAndDoesNotReplaceRows() async throws {
+    func testDuplicateProjectionSourceIdentityRequestsResync() async throws {
+        let host = makeHost()
+        let originalSourceRef = "host:\(host.id)/thread:thread-a"
+        let connection = ManualThreadCardStreamConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Initial projection row", updatedAt: 1_000)
+                ]
+            ),
+            resyncSnapshots: [
+                dockStreamSnapshot(
+                    host: host,
+                    epoch: "epoch-2",
+                    seq: 1,
+                    cards: [
+                        threadCardFixture(host: host, threadID: "thread-resynced", title: "Projection source resynced row", updatedAt: 1_200)
+                    ]
+                )
+            ]
+        )
+        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+
+        await store.load()
+        await connection.send(
+            ThreadCardStreamUpdateDTO(
+                kind: .upsert,
+                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                identityVersion: 1,
+                projectionEngineVersion: 1,
+                sourceHostID: host.id,
+                view: .dock,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
+                epoch: "epoch-1",
+                seq: 2,
+                order: "displayOrderKeyAscending",
+                rows: [
+                    threadCardFixture(
+                        host: host,
+                        threadID: "thread-b",
+                        title: "Duplicate source identity",
+                        updatedAt: 1_100,
+                        sourceRef: originalSourceRef
+                    )
+                ]
+            )
+        )
+
+        guard let snapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.threadID) == ["thread-resynced"] }
+        ) else {
+            return XCTFail("Expected duplicate projection source identity to resync, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.rows.map(\.title), ["Projection source resynced row"])
+    }
+
+    @MainActor
+    func testOutOfOrderSequenceRequestsResyncAndDoesNotReplaceRows() async throws {
         let host = makeHost()
         let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
@@ -160,7 +375,6 @@ final class DockStoreStreamTests: XCTestCase {
                 cards: [
                     threadCardFixture(host: host, threadID: "thread-a", title: "Current row", updatedAt: 1_000)
                 ],
-                stateGeneration: 5
             ),
             resyncSnapshots: [
                 dockStreamSnapshot(
@@ -170,7 +384,6 @@ final class DockStoreStreamTests: XCTestCase {
                     cards: [
                         threadCardFixture(host: host, threadID: "thread-resynced", title: "Resynced after stale generation", updatedAt: 1_200)
                     ],
-                    stateGeneration: 6
                 )
             ]
         )
@@ -179,31 +392,35 @@ final class DockStoreStreamTests: XCTestCase {
         await store.load()
         await connection.send(
             ThreadCardStreamUpdateDTO(
-                kind: .delta,
+                kind: .upsert,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                identityVersion: 1,
+                projectionEngineVersion: 1,
+                sourceHostID: host.id,
                 view: .dock,
-                stateGeneration: 4,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
                 epoch: "epoch-1",
-                baseSeq: 5,
-                seq: 6,
-                upsertCards: [
+                seq: 4,
+                order: "displayOrderKeyAscending",
+                rows: [
                     threadCardFixture(host: host, threadID: "older-generation", title: "Should not render", updatedAt: 1_300)
                 ],
-                deleteCardIDs: []
+                projectionIDs: []
             )
         )
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.rows.map(\.id.threadID) == ["thread-resynced"] }
+            where: { $0.rows.map(\.threadID) == ["thread-resynced"] }
         ) else {
-            return XCTFail("Expected stale stateGeneration to resync, got \(store.state)")
+            return XCTFail("Expected out-of-order seq to resync, got \(store.state)")
         }
         XCTAssertEqual(snapshot.rows.map(\.title), ["Resynced after stale generation"])
     }
 
     @MainActor
-    func testNewEpochSnapshotCanReplaceHigherOldGeneration() async throws {
+    func testNewEpochSnapshotCanReplacePreviousSequence() async throws {
         let host = makeHost()
         let firstConnection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
@@ -213,7 +430,6 @@ final class DockStoreStreamTests: XCTestCase {
                 cards: [
                     threadCardFixture(host: host, threadID: "thread-old", title: "Old epoch row", updatedAt: 1_000)
                 ],
-                stateGeneration: 10
             )
         )
         let secondConnection = ManualThreadCardStreamConnection(
@@ -224,7 +440,6 @@ final class DockStoreStreamTests: XCTestCase {
                 cards: [
                     threadCardFixture(host: host, threadID: "thread-new", title: "New epoch row", updatedAt: 1_200)
                 ],
-                stateGeneration: 1
             )
         )
         let streamClient = SequencedManualThreadCardStreamClient(connections: [firstConnection, secondConnection])
@@ -239,7 +454,7 @@ final class DockStoreStreamTests: XCTestCase {
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.rows.map(\.id.threadID) == ["thread-new"] }
+            where: { $0.rows.map(\.threadID) == ["thread-new"] }
         ) else {
             return XCTFail("Expected new epoch snapshot to replace older high-generation state, got \(store.state)")
         }
@@ -287,13 +502,16 @@ final class DockStoreStreamTests: XCTestCase {
         await store.load()
         await amirConnection.send(
             ThreadCardStreamUpdateDTO(
-                kind: .delta,
+                kind: .upsert,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion + 1,
+                sourceHostID: amir.id,
                 view: .dock,
+                scope: "view",
+                viewParamsKey: "dock:\(amir.id)",
                 epoch: "amir-epoch",
-                baseSeq: 1,
                 seq: 2,
-                upsertCards: [
+                order: "displayOrderKeyAscending",
+                rows: [
                     threadCardFixture(host: amir, threadID: "bad-schema", title: "Bad schema delta", updatedAt: 1_400)
                 ]
             )
@@ -301,7 +519,7 @@ final class DockStoreStreamTests: XCTestCase {
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.rows.map(\.id.threadID) == ["amir-resynced", "home-row"] }
+            where: { $0.rows.map(\.threadID) == ["amir-resynced", "home-row"] }
         ) else {
             return XCTFail("Expected one host resync to retain the other host rows, got \(store.state)")
         }
@@ -332,9 +550,15 @@ final class DockStoreStreamTests: XCTestCase {
             ThreadCardStreamUpdateDTO(
                 kind: .heartbeat,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                identityVersion: 1,
+                projectionEngineVersion: 1,
+                sourceHostID: host.id,
                 view: .dock,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
                 epoch: "epoch-1",
                 seq: 1,
+                order: "displayOrderKeyAscending",
                 freshness: DockStreamFreshnessDTO(status: .stale, lastError: "refresh failed")
             )
         )
@@ -346,7 +570,7 @@ final class DockStoreStreamTests: XCTestCase {
             return XCTFail("Expected stale heartbeat to retain rows, got \(store.state)")
         }
         XCTAssertTrue(snapshot.isPartial)
-        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["thread-a"])
+        XCTAssertEqual(snapshot.rows.map(\.threadID), ["thread-a"])
     }
 
     @MainActor
@@ -378,7 +602,7 @@ final class DockStoreStreamTests: XCTestCase {
             return XCTFail("Expected missing heartbeat to retain rows and mark host stale, got \(store.state)")
         }
         XCTAssertTrue(snapshot.isPartial)
-        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["thread-a"])
+        XCTAssertEqual(snapshot.rows.map(\.threadID), ["thread-a"])
     }
 
     @MainActor
@@ -402,7 +626,7 @@ final class DockStoreStreamTests: XCTestCase {
 
         guard let initialSnapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.rows.map(\.id.threadID) == ["human-initial"] }
+            where: { $0.rows.map(\.threadID) == ["human-initial"] }
         ) else {
             return XCTFail("Expected non-human snapshot cards to be dropped, got \(store.state)")
         }
@@ -410,23 +634,28 @@ final class DockStoreStreamTests: XCTestCase {
 
         await connection.send(
             ThreadCardStreamUpdateDTO(
-                kind: .delta,
+                kind: .upsert,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                identityVersion: 1,
+                projectionEngineVersion: 1,
+                sourceHostID: host.id,
                 view: .dock,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
                 epoch: "epoch-1",
-                baseSeq: 1,
                 seq: 2,
-                upsertCards: [
+                order: "displayOrderKeyAscending",
+                rows: [
                     threadCardFixture(host: host, threadID: "human-delta", title: "Human delta", updatedAt: 1_300),
                     threadCardFixture(host: host, threadID: "agent-delta", title: "Agent delta", updatedAt: 1_400, sourceKind: .automation, lane: .agent)
                 ],
-                deleteCardIDs: []
+                projectionIDs: []
             )
         )
 
         guard let updatedSnapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.rows.map(\.id.threadID) == ["human-delta", "human-initial"] }
+            where: { $0.rows.map(\.threadID) == ["human-delta", "human-initial"] }
         ) else {
             return XCTFail("Expected non-human delta cards to be dropped, got \(store.state)")
         }
@@ -456,7 +685,7 @@ final class DockStoreStreamTests: XCTestCase {
         let snapshot = table.snapshot(hosts: [host], localMetadata: [:], now: Date.init)
 
         XCTAssertEqual(result, .applied)
-        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["human-final"])
+        XCTAssertEqual(snapshot.rows.map(\.threadID), ["human-final"])
         XCTAssertEqual(snapshot.hostStates.map(\.status), [.partial(rowCount: 1, message: "Showing 1 of 2")])
     }
 
@@ -487,7 +716,7 @@ final class DockStoreStreamTests: XCTestCase {
             return XCTFail("Expected windowed snapshot to be partial, got \(store.state)")
         }
         XCTAssertTrue(snapshot.isPartial)
-        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["thread-a"])
+        XCTAssertEqual(snapshot.rows.map(\.threadID), ["thread-a"])
     }
 
     @MainActor
@@ -511,38 +740,46 @@ final class DockStoreStreamTests: XCTestCase {
         await store.load()
         await connection.send(
             ThreadCardStreamUpdateDTO(
-                kind: .delta,
+                kind: .upsert,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                identityVersion: 1,
+                projectionEngineVersion: 1,
+                sourceHostID: host.id,
                 view: .dock,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
                 complete: false,
                 totalRows: 3,
                 window: DockStreamWindowDTO(offset: 1, limit: 1, rowCount: 1, nextOffset: 2),
-                stateGeneration: 1,
                 epoch: "epoch-1",
-                baseSeq: 1,
-                seq: 1,
-                upsertCards: [
+                seq: 2,
+                order: "displayOrderKeyAscending",
+                rows: [
                     threadCardFixture(host: host, threadID: "thread-b", title: "Window row B", updatedAt: 900)
                 ],
-                deleteCardIDs: []
+                projectionIDs: []
             )
         )
         await connection.send(
             ThreadCardStreamUpdateDTO(
-                kind: .delta,
+                kind: .upsert,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                identityVersion: 1,
+                projectionEngineVersion: 1,
+                sourceHostID: host.id,
                 view: .dock,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
                 complete: true,
                 totalRows: 3,
                 window: DockStreamWindowDTO(offset: 2, limit: 1, rowCount: 1),
-                stateGeneration: 1,
                 epoch: "epoch-1",
-                baseSeq: 1,
-                seq: 1,
-                upsertCards: [
+                seq: 3,
+                order: "displayOrderKeyAscending",
+                rows: [
                     threadCardFixture(host: host, threadID: "thread-c", title: "Window row C", updatedAt: 800)
                 ],
-                deleteCardIDs: []
+                projectionIDs: []
             )
         )
 
@@ -553,7 +790,7 @@ final class DockStoreStreamTests: XCTestCase {
             return XCTFail("Expected streamed catch-up windows to complete the host, got \(store.state)")
         }
         XCTAssertFalse(snapshot.isPartial)
-        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["thread-a", "thread-b", "thread-c"])
+        XCTAssertEqual(snapshot.rows.map(\.threadID), ["thread-a", "thread-b", "thread-c"])
     }
 
     @MainActor
@@ -586,11 +823,17 @@ final class DockStoreStreamTests: XCTestCase {
             ThreadCardStreamUpdateDTO(
                 kind: .snapshot,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                identityVersion: 1,
+                projectionEngineVersion: 1,
+                sourceHostID: host.id,
+                view: .dock,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
                 epoch: "legacy-epoch",
                 seq: 2,
+                order: "displayOrderKeyAscending",
                 freshness: DockStreamFreshnessDTO(status: .fresh),
-                hosts: [DockStreamHostDTO(id: host.id, logicalHostID: host.id, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
-                cards: [
+                rows: [
                     threadCardFixture(host: host, threadID: "legacy-row", title: "Legacy row", updatedAt: 1_100)
                 ]
             )
@@ -598,7 +841,7 @@ final class DockStoreStreamTests: XCTestCase {
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.rows.map(\.id.threadID) == ["thread-resynced"] }
+            where: { $0.rows.map(\.threadID) == ["thread-resynced"] }
         ) else {
             return XCTFail("Expected legacy snapshot to trigger resync, got \(store.state)")
         }
@@ -630,7 +873,7 @@ final class DockStoreStreamTests: XCTestCase {
             return XCTFail("Expected closed stream to retain rows and mark host offline, got \(store.state)")
         }
         XCTAssertTrue(snapshot.isPartial)
-        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["thread-a"])
+        XCTAssertEqual(snapshot.rows.map(\.threadID), ["thread-a"])
     }
 
     @MainActor
@@ -668,7 +911,7 @@ final class DockStoreStreamTests: XCTestCase {
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.rows.map(\.id.threadID) == ["thread-b"] }
+            where: { $0.rows.map(\.threadID) == ["thread-b"] }
         ) else {
             return XCTFail("Expected closed stream to reconnect and replace rows, got \(store.state)")
         }

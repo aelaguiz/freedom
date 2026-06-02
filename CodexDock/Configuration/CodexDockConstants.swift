@@ -14,7 +14,7 @@ public enum CodexDockConstants {
     }
 
     public enum Dock {
-        public static let streamSchemaVersion = 2
+        public static let streamSchemaVersion = 1
         public static let humanSessionPageLimit = 250
         public static let agentSessionPageLimit = 250
         public static let activeSessionMaxPages = 1

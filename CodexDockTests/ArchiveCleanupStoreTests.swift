@@ -121,7 +121,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         guard case .preview(let snapshot) = store.state else {
             return XCTFail("Expected cleanup preview, got \(store.state)")
         }
-        XCTAssertEqual(Set(snapshot.candidates.map(\.id.threadID)), ["old-idle", "old-error"])
+        XCTAssertEqual(Set(snapshot.candidates.map(\.threadID)), ["old-idle", "old-error"])
         XCTAssertEqual(store.selectedRowIDs.map(\.threadID).sorted(), ["old-error", "old-idle"])
         XCTAssertEqual(snapshot.hostSummaries.map(\.candidateCount), [2])
         XCTAssertEqual(snapshot.hostSummaries.map(\.excludedCount), [7])
@@ -219,7 +219,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         guard case .preview(let snapshot) = store.state else {
             return XCTFail("Expected partial cleanup preview, got \(store.state)")
         }
-        XCTAssertEqual(snapshot.candidates.map(\.id.threadID), ["amir-old"])
+        XCTAssertEqual(snapshot.candidates.map(\.threadID), ["amir-old"])
         XCTAssertEqual(snapshot.hostStates.map(\.status), [
             .loaded(rowCount: 1),
             .offline("relay stopped")
@@ -297,7 +297,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
 
         XCTAssertEqual(Set(archivedIDs), ["archive-fails", "archive-ok"])
         XCTAssertEqual(
-            Dictionary(uniqueKeysWithValues: results.map { ($0.row.id.threadID, $0.status) }),
+            Dictionary(uniqueKeysWithValues: results.map { ($0.row.threadID, $0.status) }),
             [
                 "archive-fails": .failed("archive failed"),
                 "archive-ok": .archived
@@ -343,14 +343,14 @@ final class ArchiveCleanupStoreTests: XCTestCase {
             return XCTFail("Expected cleanup preview, got \(store.state)")
         }
         let row = try XCTUnwrap(snapshot.candidates.first)
-        XCTAssertEqual(row.id.hostID, "Amir-M5")
-        XCTAssertEqual(row.sourceHostID, host.id)
+        XCTAssertEqual(row.hostID, "Amir-M5")
+        XCTAssertEqual(row.sourceHostID, "Amir-M5")
         XCTAssertEqual(snapshot.hostSummaries.map(\.id), [host.id])
         XCTAssertEqual(snapshot.hostSummaries.map(\.candidateCount), [1])
         XCTAssertEqual(store.selectedRowIDs, Set([HostScopedThreadID(hostID: "Amir-M5", threadID: "archive-logical")]))
         XCTAssertTrue(
             snapshot.hostIdentityResolver.contains(
-                rowHostID: row.id.hostID,
+                rowHostID: row.hostID,
                 sourceConfiguredHostID: row.sourceHostID,
                 in: host.id
             )
@@ -458,13 +458,13 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         let archivedIDs = await archiver.archivedIDs()
 
         XCTAssertEqual(
-            Dictionary(uniqueKeysWithValues: firstResults.map { ($0.row.id.threadID, $0.status) }),
+            Dictionary(uniqueKeysWithValues: firstResults.map { ($0.row.threadID, $0.status) }),
             [
                 "archive-ok": .archived,
                 "retry-me": .failed("archive failed")
             ]
         )
-        XCTAssertEqual(retryResults.map(\.row.id.threadID), ["retry-me"])
+        XCTAssertEqual(retryResults.map(\.row.threadID), ["retry-me"])
         XCTAssertEqual(retryResults.map(\.status), [.archived])
         XCTAssertEqual(archivedIDs, ["archive-ok", "retry-me", "retry-me"])
         XCTAssertEqual(store.selectedRowIDs, [])
@@ -526,7 +526,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
 
         XCTAssertEqual(archivedIDs, ["archive-one"])
         XCTAssertEqual(
-            Dictionary(uniqueKeysWithValues: results.map { ($0.row.id.threadID, $0.status) }),
+            Dictionary(uniqueKeysWithValues: results.map { ($0.row.threadID, $0.status) }),
             [
                 "archive-one": .archived,
                 "archive-two": .skipped,
@@ -550,7 +550,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         _ snapshot: ArchiveCleanupPreviewSnapshot
     ) -> [String: ArchiveCleanupExclusionReason] {
         Dictionary(uniqueKeysWithValues: snapshot.excluded.map { excluded in
-            (excluded.row.id.threadID, excluded.reason)
+            (excluded.row.threadID, excluded.reason)
         })
     }
 

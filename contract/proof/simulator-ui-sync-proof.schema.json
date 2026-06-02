@@ -4,7 +4,7 @@
   "title": "Codex Dock Simulator UI Sync Proof",
   "type": "object",
   "required": ["schemaVersion", "kind", "status", "proofRunID", "startedAt", "endedAt", "relayReport", "summary", "evaluations", "failures"],
-  "additionalProperties": true,
+  "additionalProperties": false,
   "properties": {
     "schemaVersion": { "const": 1 },
     "kind": { "const": "codex-dock-simulator-ui-sync-proof" },
@@ -15,16 +15,34 @@
     "relayReport": {
       "type": "object",
       "required": ["relayUrl", "clientPathOK"],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
-        "relayUrl": { "type": "string", "minLength": 1 },
-        "clientPathOK": { "type": ["boolean", "null"] }
+        "proofRunID": { "type": ["string", "null"] },
+        "startedAt": { "type": ["string", "null"] },
+        "endedAt": { "type": ["string", "null"] },
+        "relayUrl": { "type": ["string", "null"], "minLength": 1 },
+        "clientPathOK": { "type": ["boolean", "null"] },
+        "clientPathRoutes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "clientPathEvidence": { "$ref": "#/definitions/clientPathEvidence" },
+        "routeCounts": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        }
       }
     },
+    "config": { "$ref": "#/definitions/proofValue" },
     "summary": {
       "type": "object",
       "required": ["ok", "uiSampleCount", "relaySampleCount", "failures"],
-      "additionalProperties": true,
+      "propertyNames": {
+        "not": {
+          "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
+        }
+      },
+      "additionalProperties": { "$ref": "#/definitions/proofValue" },
       "properties": {
         "ok": { "type": "boolean" },
         "uiSampleCount": { "type": "number" },
@@ -32,10 +50,57 @@
         "failures": { "type": "number" }
       }
     },
-    "evaluations": { "type": "array" },
-    "failures": { "type": "array" }
+    "evaluations": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/proofValue" }
+    },
+    "failures": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/proofValue" }
+    }
   },
   "definitions": {
-    "status": { "enum": ["pass", "fail", "blocked", "not_run"] }
+    "status": { "enum": ["pass", "fail", "blocked", "not_run"] },
+    "clientPathEvidence": {
+      "type": "object",
+      "required": ["routes", "routeCounts"],
+      "propertyNames": {
+        "not": {
+          "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
+        }
+      },
+      "additionalProperties": { "$ref": "#/definitions/proofValue" },
+      "properties": {
+        "routes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "routeCounts": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        }
+      }
+    },
+    "proofValue": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/proofValue" }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
+            }
+          },
+          "additionalProperties": { "$ref": "#/definitions/proofValue" }
+        }
+      ]
+    }
   }
 }

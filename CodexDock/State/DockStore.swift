@@ -45,7 +45,7 @@ public final class DockStore: ObservableObject {
     public func hostConfiguration(for row: DockRowViewModel) -> DockHostConfiguration? {
         if case .loaded(let snapshot) = state,
            let resolved = snapshot.hostIdentityResolver.resolve(
-               rowHostID: row.id.hostID,
+               rowHostID: row.hostID,
                sourceConfiguredHostID: row.sourceHostID
            ) {
             return resolved.host
@@ -54,7 +54,7 @@ public final class DockStore: ObservableObject {
            let host = hosts.first(where: { $0.id == sourceHostID }) {
             return host
         }
-        return hostConfiguration(for: row.id.hostID)
+        return hostConfiguration(for: row.hostID)
     }
 
     public init(
@@ -188,8 +188,8 @@ public final class DockStore: ObservableObject {
     public func setLabel(_ label: String?, for row: DockRowViewModel) async {
         await persistMetadataChange(
             logLabel: "label",
-            hostID: row.id.hostID,
-            threadID: row.id.threadID
+            hostID: row.hostID,
+            threadID: row.threadID
         ) {
             try await metadataEngine.setLabel(label, for: row.metadataKey)
         }
@@ -198,8 +198,8 @@ public final class DockStore: ObservableObject {
     public func setRail(_ rail: DockRowRail?, for row: DockRowViewModel) async {
         await persistMetadataChange(
             logLabel: "rail",
-            hostID: row.id.hostID,
-            threadID: row.id.threadID
+            hostID: row.hostID,
+            threadID: row.threadID
         ) {
             try await metadataEngine.setRail(rail, for: row.metadataKey)
         }
@@ -208,8 +208,8 @@ public final class DockStore: ObservableObject {
     public func setPinned(_ isPinned: Bool, for row: DockRowViewModel) async {
         await persistMetadataChange(
             logLabel: isPinned ? "pin" : "unpin",
-            hostID: row.id.hostID,
-            threadID: row.id.threadID
+            hostID: row.hostID,
+            threadID: row.threadID
         ) {
             try await metadataEngine.setPinned(isPinned, for: row)
         }
@@ -228,20 +228,20 @@ public final class DockStore: ObservableObject {
     @discardableResult
     public func archive(_ row: DockRowViewModel) async -> Bool {
         guard let host = hostConfiguration(for: row) else {
-            DockLog.dock.error("dock archive skipped missing host_id=\(row.id.hostID, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
-            setActionError("Host \(row.id.hostID) is no longer configured.")
+            DockLog.dock.error("dock archive skipped missing host_id=\(row.hostID, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public)")
+            setActionError("Host \(row.hostID) is no longer configured.")
             return false
         }
 
         do {
-            DockLog.dock.notice("dock archive action started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
+            DockLog.dock.notice("dock archive action started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public)")
             try await commandEngine.archive(row, on: host)
             setActionError(nil)
             await refresh()
-            DockLog.dock.notice("dock archive action finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public)")
+            DockLog.dock.notice("dock archive action finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public)")
             return true
         } catch {
-            DockLog.dock.error("dock archive action failed host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.id.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+            DockLog.dock.error("dock archive action failed host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             setActionError(error.localizedDescription)
             return false
         }

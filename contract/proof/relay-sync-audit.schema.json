@@ -4,33 +4,62 @@
   "title": "Codex Dock Relay Sync Audit Report",
   "type": "object",
   "required": ["schemaVersion", "kind", "status", "mode", "relayUrl", "startedAt", "endedAt", "summary", "clientPathEvidence", "failures"],
-  "additionalProperties": true,
+  "additionalProperties": false,
   "properties": {
     "schemaVersion": { "const": 1 },
     "kind": { "const": "codex-dock-relay-sync-audit-report" },
     "status": { "$ref": "#/definitions/status" },
     "mode": { "type": "string", "minLength": 1 },
     "relayUrl": { "type": "string", "minLength": 1 },
+    "codexHome": { "type": ["string", "null"] },
+    "sqliteHome": { "type": ["string", "null"] },
+    "config": { "$ref": "#/definitions/proofValue" },
+    "scenarios": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/proofValue" }
+    },
+    "samples": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/proofValue" }
+    },
     "startedAt": { "type": "string", "minLength": 1 },
     "endedAt": { "type": "string", "minLength": 1 },
     "summary": {
       "type": "object",
       "required": ["ok", "clientPathOK"],
-      "additionalProperties": true,
+      "propertyNames": {
+        "not": {
+          "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
+        }
+      },
+      "additionalProperties": { "$ref": "#/definitions/proofValue" },
       "properties": {
         "ok": { "type": "boolean" },
         "clientPathOK": { "type": "boolean" }
       }
     },
     "clientPathEvidence": { "$ref": "#/definitions/clientPathEvidence" },
-    "failures": { "type": "array" }
+    "oracleEvidence": { "$ref": "#/definitions/proofValue" },
+    "failures": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/proofValue" }
+    },
+    "unsupportedFacts": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/proofValue" }
+    }
   },
   "definitions": {
     "status": { "enum": ["pass", "fail", "blocked", "not_run"] },
     "clientPathEvidence": {
       "type": "object",
       "required": ["routes", "routeCounts"],
-      "additionalProperties": true,
+      "propertyNames": {
+        "not": {
+          "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
+        }
+      },
+      "additionalProperties": { "$ref": "#/definitions/proofValue" },
       "properties": {
         "routes": {
           "type": "array",
@@ -41,6 +70,27 @@
           "additionalProperties": { "type": "number" }
         }
       }
+    },
+    "proofValue": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/proofValue" }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
+            }
+          },
+          "additionalProperties": { "$ref": "#/definitions/proofValue" }
+        }
+      ]
     }
   }
 }

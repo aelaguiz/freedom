@@ -183,8 +183,10 @@ public enum DockRowThreadRelationship: String, Codable, Equatable, Sendable {
 }
 
 public struct DockRowViewModel: Equatable, Identifiable, Sendable {
-    public let id: HostScopedThreadID
+    public let id: String
+    public let threadIdentity: HostScopedThreadID
     public let sourceHostID: String?
+    public let projectionID: String
     public let backendSessionID: String
     public let title: String
     public let hostDisplayName: String
@@ -194,7 +196,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
     public let status: DockRowStatusKind
     public let lastActivity: String
     public let lastActivityDate: Date
-    public let orderKey: String?
+    public let displayOrderKey: String
     public let summary: String
     public let rail: DockRowRail
     public let label: String?
@@ -205,8 +207,9 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
     public let pinnedOrder: Int?
 
     public init(
-        id: HostScopedThreadID,
+        threadIdentity: HostScopedThreadID,
         sourceHostID: String? = nil,
+        projectionID: String,
         backendSessionID: String,
         title: String,
         hostDisplayName: String,
@@ -216,7 +219,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
         status: DockRowStatusKind,
         lastActivity: String,
         lastActivityDate: Date,
-        orderKey: String? = nil,
+        displayOrderKey: String,
         summary: String,
         rail: DockRowRail,
         label: String?,
@@ -226,8 +229,10 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
         pinnedAt: Date? = nil,
         pinnedOrder: Int? = nil
     ) {
-        self.id = id
+        self.id = projectionID
+        self.threadIdentity = threadIdentity
         self.sourceHostID = sourceHostID
+        self.projectionID = projectionID
         self.backendSessionID = backendSessionID
         self.title = title
         self.hostDisplayName = hostDisplayName
@@ -237,7 +242,7 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
         self.status = status
         self.lastActivity = lastActivity
         self.lastActivityDate = lastActivityDate
-        self.orderKey = orderKey
+        self.displayOrderKey = displayOrderKey
         self.summary = summary
         self.rail = rail
         self.label = label
@@ -250,11 +255,14 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
 
     public var metadataKey: LocalThreadMetadataKey {
         LocalThreadMetadataKey(
-            hostID: id.hostID,
+            hostID: threadIdentity.hostID,
             backendSessionID: backendSessionID,
-            threadID: id.threadID
+            threadID: threadIdentity.threadID
         )
     }
+
+    public var hostID: String { threadIdentity.hostID }
+    public var threadID: String { threadIdentity.threadID }
 }
 
 public struct DockSectionViewModel: Equatable, Identifiable, Sendable {
@@ -275,7 +283,7 @@ public struct DockProjectionGroupViewModel: Equatable, Identifiable, Sendable {
     public let subtitle: String
     public let rows: [DockRowViewModel]
     public let hostIDs: [String]
-    public let orderKey: String?
+    public let displayOrderKey: String?
     public let newestActivityDate: Date?
     public let runningCount: Int
     public let isUnavailable: Bool

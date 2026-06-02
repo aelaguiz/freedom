@@ -99,7 +99,7 @@ final class DockRenderProjectorTests: XCTestCase {
             projector.snapshot(from: input, localMetadata: [:])
         }.value
 
-        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["human-row"])
+        XCTAssertEqual(snapshot.rows.map(\.threadID), ["human-row"])
     }
 
     func testProjectorAppliesPinnedMetadataOnlyToDeliveredRows() async {
@@ -141,7 +141,7 @@ final class DockRenderProjectorTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(snapshot.rows.map(\.id.threadID), ["human-thread"])
+        XCTAssertEqual(snapshot.rows.map(\.threadID), ["human-thread"])
         XCTAssertTrue(snapshot.rows[0].isPinned)
     }
 }

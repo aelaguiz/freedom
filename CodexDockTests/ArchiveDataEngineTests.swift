@@ -15,7 +15,8 @@ final class ArchiveDataEngineTests: XCTestCase {
             threadID: "thread-a",
             title: "Archived row",
             status: .dormant,
-            updatedAt: 2_000
+            updatedAt: 2_000,
+            view: .archive
         )
 
         await engine.loadLocalMetadata()
@@ -55,7 +56,8 @@ final class ArchiveDataEngineTests: XCTestCase {
             title: "Archived logical row",
             status: .dormant,
             updatedAt: 2_000,
-            logicalHostID: "Amir-M5"
+            logicalHostID: "Amir-M5",
+            view: .archive
         )
 
         await engine.loadLocalMetadata()
@@ -74,13 +76,13 @@ final class ArchiveDataEngineTests: XCTestCase {
         let snapshot = try XCTUnwrap(loadedSnapshot)
         let row = try XCTUnwrap(snapshot.sections.first?.rows.first)
 
-        XCTAssertEqual(row.id.hostID, "Amir-M5")
-        XCTAssertEqual(row.sourceHostID, host.id)
+        XCTAssertEqual(row.hostID, "Amir-M5")
+        XCTAssertEqual(row.sourceHostID, "Amir-M5")
         XCTAssertEqual(row.hostDisplayName, "Amir-M5")
         XCTAssertEqual(row.hostEndpoint, host.endpoint.displayEndpoint)
         XCTAssertTrue(
             snapshot.hostIdentityResolver.contains(
-                rowHostID: row.id.hostID,
+                rowHostID: row.hostID,
                 sourceConfiguredHostID: row.sourceHostID,
                 in: host.id
             )
@@ -94,13 +96,15 @@ final class ArchiveDataEngineTests: XCTestCase {
             host: host,
             threadID: "thread-a",
             title: "Archived first",
-            updatedAt: 2_000
+            updatedAt: 2_000,
+            view: .archive
         )
         let secondCard = threadCardFixture(
             host: host,
             threadID: "thread-b",
             title: "Archived second",
-            updatedAt: 1_000
+            updatedAt: 1_000,
+            view: .archive
         )
         let engine = ArchiveDataEngine(
             registry: registry,
@@ -125,18 +129,22 @@ final class ArchiveDataEngineTests: XCTestCase {
         )
         _ = await engine.applyUpdate(
             ThreadCardStreamUpdateDTO(
-                kind: .delta,
+                kind: .upsert,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+                identityVersion: 1,
+                projectionEngineVersion: 1,
+                sourceHostID: host.id,
                 view: .archive,
+                scope: "view",
+                viewParamsKey: "dock:\(host.id)",
                 complete: true,
                 totalRows: 2,
                 window: DockStreamWindowDTO(offset: 1, limit: 1, rowCount: 1),
-                stateGeneration: 2,
                 epoch: "archive-catchup",
-                baseSeq: 1,
                 seq: 2,
+                order: "displayOrderKeyAscending",
                 freshness: DockStreamFreshnessDTO(status: .fresh),
-                upsertCards: [secondCard]
+                rows: [secondCard]
             ),
             host: host
         )

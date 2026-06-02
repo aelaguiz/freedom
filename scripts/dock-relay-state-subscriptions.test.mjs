@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { RELAY_STATE_STREAM_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
 import { RelayStateEngine } from "./dock-relay-state-engine.mjs";
 import { StateSubscriptionHub } from "./dock-relay-state-subscriptions.mjs";
 
@@ -13,12 +14,16 @@ function sleep(ms) {
 function heartbeatForView(store) {
   return (view, { epoch }) => ({
     kind: "heartbeat",
-    schemaVersion: 2,
+    schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
+    identityVersion: 1,
+    projectionEngineVersion: 1,
+    sourceHostID: "home",
     view,
+    scope: "view",
+    viewParamsKey: `${view}:home`,
+    order: "displayOrderKeyAscending",
     epoch,
-    baseSeq: null,
     seq: store.currentSeq(),
-    stateGeneration: store.currentSeq(),
     complete: true,
     totalRows: 0,
     window: {
@@ -56,10 +61,11 @@ test("StateSubscriptionHub emits heartbeat while subscribed and stops when idle"
   assert.ok(received.length >= 2);
   for (const update of received) {
     assert.equal(update.kind, "heartbeat");
-    assert.equal(update.schemaVersion, 2);
+    assert.equal(update.schemaVersion, RELAY_STATE_STREAM_SCHEMA_VERSION);
     assert.equal(update.view, "dock");
     assert.equal(update.seq, 7);
-    assert.equal(update.stateGeneration, 7);
+    assert.equal("stateGeneration" in update, false);
+    assert.equal("baseSeq" in update, false);
     assert.equal(update.freshness.status, "fresh");
   }
 

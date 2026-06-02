@@ -273,25 +273,25 @@ public struct ArchiveView: View {
                     toggleSelection(row)
                 } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: selectedRowIDs.contains(row.id) ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(selectedRowIDs.contains(row.id) ? .blue : .secondary)
+                        Image(systemName: selectedRowIDs.contains(row.threadIdentity) ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(selectedRowIDs.contains(row.threadIdentity) ? .blue : .secondary)
                         DockRowView(
                             row: row,
-                            automationID: AutomationID.Archive.row(hostID: row.id.hostID, threadID: row.id.threadID)
+                            automationID: AutomationID.Archive.row(hostID: row.hostID, threadID: row.threadID)
                         )
                     }
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(row.title)
-                .accessibilityValue(selectedRowIDs.contains(row.id) ? "Selected" : "Not selected")
-                .codexAutomationID(AutomationID.Archive.selectionToggle(hostID: row.id.hostID, threadID: row.id.threadID))
+                .accessibilityValue(selectedRowIDs.contains(row.threadIdentity) ? "Selected" : "Not selected")
+                .codexAutomationID(AutomationID.Archive.selectionToggle(hostID: row.hostID, threadID: row.threadID))
             } else {
                 Button {
                     openDetail(row: row)
                 } label: {
                     DockRowView(
                         row: row,
-                        automationID: AutomationID.Archive.row(hostID: row.id.hostID, threadID: row.id.threadID)
+                        automationID: AutomationID.Archive.row(hostID: row.hostID, threadID: row.threadID)
                     )
                 }
                 .buttonStyle(.plain)
@@ -309,7 +309,7 @@ public struct ArchiveView: View {
                         .font(.subheadline.weight(.semibold))
                 }
                 .buttonStyle(.bordered)
-                .codexAutomationID(AutomationID.Archive.restoreButton(hostID: row.id.hostID, threadID: row.id.threadID))
+                .codexAutomationID(AutomationID.Archive.restoreButton(hostID: row.hostID, threadID: row.threadID))
             }
         }
         .contextMenu {
@@ -328,7 +328,7 @@ public struct ArchiveView: View {
             } label: {
                 Label("Restore", systemImage: "arrow.uturn.backward")
             }
-            .codexAutomationID(AutomationID.Archive.restoreButton(hostID: row.id.hostID, threadID: row.id.threadID))
+            .codexAutomationID(AutomationID.Archive.restoreButton(hostID: row.hostID, threadID: row.threadID))
         }
     }
 
@@ -542,7 +542,7 @@ public struct ArchiveView: View {
             let rows = section.rows.filter { row in
                 if let selectedHostID,
                    !snapshot.hostIdentityResolver.contains(
-                       rowHostID: row.id.hostID,
+                       rowHostID: row.hostID,
                        sourceConfiguredHostID: row.sourceHostID,
                        in: selectedHostID
                    ) {
@@ -558,7 +558,7 @@ public struct ArchiveView: View {
                         row.branch,
                         row.summary,
                         row.hostDisplayName,
-                        row.id.threadID
+                        row.threadID
                     ].joined(separator: " ").lowercased()
                     if !haystack.contains(query) {
                         return false
@@ -574,15 +574,15 @@ public struct ArchiveView: View {
     }
 
     private func toggleSelection(_ row: DockRowViewModel) {
-        if selectedRowIDs.contains(row.id) {
-            selectedRowIDs.remove(row.id)
+        if selectedRowIDs.contains(row.threadIdentity) {
+            selectedRowIDs.remove(row.threadIdentity)
         } else {
-            selectedRowIDs.insert(row.id)
+            selectedRowIDs.insert(row.threadIdentity)
         }
     }
 
     private func restoreSelected(from visibleRows: [DockRowViewModel]) async {
-        let rows = visibleRows.filter { selectedRowIDs.contains($0.id) }
+        let rows = visibleRows.filter { selectedRowIDs.contains($0.threadIdentity) }
         await restoreBatch(rows)
     }
 
@@ -618,7 +618,7 @@ public struct ArchiveView: View {
         }
         for result in results {
             if case .restored = result.status {
-                selectedRowIDs.remove(result.row.id)
+                selectedRowIDs.remove(result.row.threadIdentity)
             }
         }
         if selectedRowIDs.isEmpty {

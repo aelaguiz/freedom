@@ -26,14 +26,14 @@ actor ClientCommandEngine {
         guard let archiver else {
             throw ClientCommandEngineError.missingArchiver
         }
-        try await archiver.archiveThread(row.id.threadID, on: host)
+        try await archiver.archiveThread(row.threadID, on: host)
     }
 
     func unarchive(_ row: DockRowViewModel, on host: DockHostConfiguration) async throws {
         guard let archiver else {
             throw ClientCommandEngineError.missingArchiver
         }
-        try await archiver.unarchiveThread(row.id.threadID, on: host)
+        try await archiver.unarchiveThread(row.threadID, on: host)
     }
 
     func sendDraft(

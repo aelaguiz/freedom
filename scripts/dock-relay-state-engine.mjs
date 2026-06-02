@@ -3,6 +3,7 @@ import {
   RELAY_STATE_RECONCILE_DEBOUNCE_MS,
   RELAY_STATE_RECONCILE_INTERVAL_MS,
   RELAY_STATE_SNAPSHOT_SOFT_LIMIT_BYTES,
+  RELAY_STATE_STREAM_SCHEMA_VERSION,
   RELAY_STATE_UPDATE_SOFT_LIMIT_BYTES,
   THREAD_LIST_MAX_LIMIT,
 } from "./dock-relay-constants.mjs";
@@ -60,14 +61,6 @@ const ACTIVE_LIVE_SCOPE = {
 function firstScopeError(scopes, fallback) {
   const scope = scopes.find((candidate) => candidate?.complete === false && candidate?.error);
   return scope?.error || fallback;
-}
-
-function appFacingHumanStartedVisibility() {
-  return {
-    mode: "app_facing_human_started_threads_only",
-    includeRejectedThreads: false,
-    rejectedThreadsRequireDiagnosticSnapshotOptIn: true,
-  };
 }
 
 function liveLeaseFromRow(row, endpoint, maxAgeMs) {
@@ -306,7 +299,6 @@ class RelayStateEngine {
       const cards = orderedRows
         .map(({ row, lane }) => canonicalByID.get(row?.id) ? normalizeThread(canonicalByID.get(row.id), host, lane, {
           archiveState: "active",
-          orderKey: canonicalByID.get(row.id).orderKey,
           freshness: canonicalByID.get(row.id).freshness,
           completeness: canonicalByID.get(row.id).completeness,
         }) : null)
@@ -348,15 +340,14 @@ class RelayStateEngine {
       // when it also deletes stale rows from the previous view.
       const deltaCarriesEveryRow = complete
         && truthComplete
-        && Number(result.upsertCards?.length || 0) === Number(totalRows || 0);
+        && Number(result.rows?.length || 0) === Number(totalRows || 0);
       await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
         view: DOCK_VIEW,
-        baseSeq: result.baseSeq,
         seq: result.seq,
+        sourceHostID: host.id,
         freshness,
-        upsertHosts: [host],
-        upsertCards: result.upsertCards,
-        deleteCardIDs: result.deleteCardIDs,
+        rows: result.rows,
+        projectionIDs: result.projectionIDs,
         totalRows,
         complete: deltaCarriesEveryRow ? true : undefined,
       }));
@@ -395,8 +386,8 @@ class RelayStateEngine {
       const totalRows = this.store.listDockCards({ hostID: host.id }).totalRows;
       await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
         view: DOCK_VIEW,
-        baseSeq: change.baseSeq,
         seq,
+        sourceHostID: host.id,
         freshness: this.store.freshnessForHost(host.id, { archived: false }),
         totalRows,
         complete: false,
@@ -407,7 +398,7 @@ class RelayStateEngine {
         error,
       });
       this.scheduleLiveLeaseExpiryReconciliation(host.id);
-      return { seq, upsertCards: [], deleteCardIDs: [], error };
+      return { seq, rows: [], projectionIDs: [], error };
     }
   }
 
@@ -453,7 +444,6 @@ class RelayStateEngine {
       const cards = canonical.rows
         .map((row) => normalizeThread(row, host, "human", {
           archiveState: "archived",
-          orderKey: row.orderKey,
           freshness: row.freshness,
           completeness: row.completeness,
         }))
@@ -475,12 +465,11 @@ class RelayStateEngine {
         && this.store.cardTruthCompleteForHost(host.id, { archived: true });
       await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
         view: ARCHIVE_VIEW,
-        baseSeq: result.baseSeq,
         seq: result.seq,
+        sourceHostID: host.id,
         freshness,
-        upsertHosts: [host],
-        upsertCards: result.upsertCards,
-        deleteCardIDs: result.deleteCardIDs,
+        rows: result.rows,
+        projectionIDs: result.projectionIDs,
         totalRows,
         complete: complete && truthComplete ? true : false,
       }));
@@ -500,8 +489,8 @@ class RelayStateEngine {
       const totalRows = this.store.listArchiveCards({ hostID: host.id }).totalRows;
       await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
         view: ARCHIVE_VIEW,
-        baseSeq: change.baseSeq,
         seq,
+        sourceHostID: host.id,
         freshness: this.store.freshnessForHost(host.id, { archived: true }),
         totalRows,
         complete: false,
@@ -511,7 +500,7 @@ class RelayStateEngine {
         hostId: host.id,
         error,
       });
-      return { seq, upsertCards: [], deleteCardIDs: [], error };
+      return { seq, rows: [], projectionIDs: [], error };
     }
   }
 
@@ -584,12 +573,16 @@ class RelayStateEngine {
     const seq = this.store.currentSeqForView(view);
     return {
       kind: "heartbeat",
-      schemaVersion: 2,
+      schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
+      identityVersion: 1,
+      projectionEngineVersion: 1,
+      sourceHostID: host.id,
       epoch,
-      baseSeq: null,
       seq,
-      stateGeneration: seq,
       view,
+      scope: "view",
+      viewParamsKey: `${view}:${host.id}`,
+      order: "displayOrderKeyAscending",
       complete: truthComplete,
       totalRows: result.totalRows,
       window: buildWindow({
@@ -712,20 +705,22 @@ class RelayStateEngine {
   }) {
     return {
       kind: "snapshot",
-      schemaVersion: 2,
+      schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
+      identityVersion: 1,
+      projectionEngineVersion: 1,
+      sourceHostID: publicHostFromConfig(this.config).id,
       epoch,
-      baseSeq: null,
       seq: this.store.currentSeqForView(view),
-      stateGeneration: this.store.currentSeqForView(view),
       view,
+      scope: "view",
+      viewParamsKey: `${view}:${publicHostFromConfig(this.config).id}`,
+      order: "displayOrderKeyAscending",
       complete,
       totalRows,
       window,
       asOf: nowISOString(),
-      visibility: appFacingHumanStartedVisibility(),
       freshness,
-      hosts: this.store.hostRows(),
-      cards,
+      rows: cards,
     };
   }
 
@@ -894,16 +889,16 @@ class RelayStateEngine {
 
   async sendCardWindowCatchup({ snapshot, sendUpdate, reason }) {
     const host = publicHostFromConfig(this.config);
-    const baseSeq = Number(snapshot.seq || 0);
+    const snapshotSeq = Number(snapshot.seq || 0);
     let nextOffset = Number(snapshot.window?.nextOffset || 0);
     const preferredLimit = Math.max(1, Number(snapshot.window?.limit || RELAY_STATE_DOCK_WINDOW_SIZE));
     while (Number.isInteger(nextOffset)) {
-      if (this.store.currentSeqForView(snapshot.view) !== baseSeq) {
+      if (this.store.currentSeqForView(snapshot.view) !== snapshotSeq) {
         const restartSnapshot = await this.subscriptions.snapshot(snapshot.view);
         this.logger?.info?.("state.catchup_abandoned", {
           reason,
           hostId: host.id,
-          baseSeq,
+          snapshotSeq,
           currentSeq: this.store.currentSeqForView(snapshot.view),
           restartedSeq: restartSnapshot?.seq ?? null,
         });
@@ -956,11 +951,11 @@ class RelayStateEngine {
     const complete = truthComplete && offset + bounded.cards.length >= bounded.totalRows;
     return this.subscriptions.cardDelta({
       view: snapshot.view,
-      baseSeq: snapshot.seq,
       seq: snapshot.seq,
+      sourceHostID: host.id,
       freshness,
-      upsertCards: bounded.cards,
-      deleteCardIDs: [],
+      rows: bounded.cards,
+      projectionIDs: [],
       totalRows: bounded.totalRows,
       complete,
       window: buildWindow({

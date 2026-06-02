@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { compare } from "./codex-dock-live-filter-compare.mjs";
 
-function relaySample(sampledAt, count, finishedAt = sampledAt, eventIDs = []) {
+function relaySample(sampledAt, count, finishedAt = sampledAt, projectionIDs = []) {
   return {
     sampledAt,
     finishedAt,
@@ -12,9 +12,9 @@ function relaySample(sampledAt, count, finishedAt = sampledAt, eventIDs = []) {
         messages: count,
         all: count,
       },
-      visibleEventIDs: {
-        messages: eventIDs,
-        all: eventIDs,
+      visibleProjectionIDs: {
+        messages: projectionIDs,
+        all: projectionIDs,
       },
     },
   };
@@ -36,8 +36,8 @@ function uiProof(samples) {
             filter: "all",
             detailRootValue: `loaded; live=Live; events=${normalized.count}`,
             messageListValue: `events=${normalized.count}; filter=all`,
-            messageCards: normalized.eventIDs.map((eventID) => messageElement(eventID)),
-            sweepMessageCards: normalized.sweepEventIDs.map((eventID) => messageElement(eventID)),
+            messageCards: normalized.projectionIDs.map((projectionID) => messageElement(projectionID)),
+            sweepMessageCards: normalized.sweepProjectionIDs.map((projectionID) => messageElement(projectionID)),
           };
         }),
       },
@@ -53,8 +53,8 @@ function normalizeUISample(sample) {
       finishedAt: sampledAt,
       messageListCapturedAt: null,
       count,
-      eventIDs: [],
-      sweepEventIDs: [],
+      projectionIDs: [],
+      sweepProjectionIDs: [],
     };
   }
   return {
@@ -62,16 +62,23 @@ function normalizeUISample(sample) {
     finishedAt: sample.finishedAt ?? sample.sampledAt,
     messageListCapturedAt: sample.messageListCapturedAt ?? null,
     count: sample.count,
-    eventIDs: sample.eventIDs ?? [],
-    sweepEventIDs: sample.sweepEventIDs ?? [],
+    projectionIDs: sample.projectionIDs ?? [],
+    sweepProjectionIDs: sample.sweepProjectionIDs ?? [],
   };
 }
 
-function messageElement(eventID) {
+function messageElement(projectionID) {
   return {
-    identifier: `codexdock.session.message.${eventID}`,
-    value: `event=${eventID}; kind=agentMessage; visibility=message; live=false`,
+    identifier: `codexdock.session.message.${encodeAutomationSegment(projectionID)}`,
+    value: `projection=${projectionID}; kind=agentMessage; visibility=message; live=false`,
   };
+}
+
+function encodeAutomationSegment(value) {
+  return encodeURIComponent(String(value || ""))
+    .replaceAll(".", "%2E")
+    .replaceAll("-", "%2D")
+    .replaceAll("_", "%5F");
 }
 
 test("live filter compare accepts bounded convergence instead of exact nearest-sample equality", () => {
@@ -184,13 +191,13 @@ test("live filter compare does not use unfinished relay reads as settled truth",
   assert.equal(report.runEvaluations[0].expectedEvents, 11);
 });
 
-test("live filter compare treats visible event id changes as UI movement when counts are capped", () => {
+test("live filter compare treats visible projection id changes as UI movement when counts are capped", () => {
   const report = compare(
     {
       summary: { moving: true },
       samples: [
-        relaySample("2026-06-01T13:00:00.000Z", 240, "2026-06-01T13:00:00.500Z", ["event-a", "event-old"]),
-        relaySample("2026-06-01T13:00:04.000Z", 240, "2026-06-01T13:00:04.500Z", ["event-b", "event-a"]),
+        relaySample("2026-06-01T13:00:00.000Z", 240, "2026-06-01T13:00:00.500Z", ["host:host/thread:thread-a/turn:turn-a/item:item-a/row:agentMessage", "host:host/thread:thread-a/turn:turn-old/item:item-old/row:agentMessage"]),
+        relaySample("2026-06-01T13:00:04.000Z", 240, "2026-06-01T13:00:04.500Z", ["host:host/thread:thread-a/turn:turn-b/item:item-b/row:agentMessage", "host:host/thread:thread-a/turn:turn-a/item:item-a/row:agentMessage"]),
       ],
     },
     uiProof([
@@ -198,14 +205,14 @@ test("live filter compare treats visible event id changes as UI movement when co
         sampledAt: "2026-06-01T13:00:03.000Z",
         messageListCapturedAt: "2026-06-01T13:00:03.000Z",
         count: 240,
-        eventIDs: ["event-a", "event-old"],
+        projectionIDs: ["host:host/thread:thread-a/turn:turn-a/item:item-a/row:agentMessage", "host:host/thread:thread-a/turn:turn-old/item:item-old/row:agentMessage"],
       },
       {
         sampledAt: "2026-06-01T13:00:10.000Z",
         messageListCapturedAt: "2026-06-01T13:00:10.000Z",
         count: 240,
-        eventIDs: ["event-b", "event-a"],
-        sweepEventIDs: ["event-b", "event-a"],
+        projectionIDs: ["host:host/thread:thread-a/turn:turn-b/item:item-b/row:agentMessage", "host:host/thread:thread-a/turn:turn-a/item:item-a/row:agentMessage"],
+        sweepProjectionIDs: ["host:host/thread:thread-a/turn:turn-b/item:item-b/row:agentMessage", "host:host/thread:thread-a/turn:turn-a/item:item-a/row:agentMessage"],
       },
     ]),
     { relayTruth: "relay.json", uiProof: "ui.json", maxLagMS: 5000, requireMoving: true },
@@ -213,7 +220,7 @@ test("live filter compare treats visible event id changes as UI movement when co
 
   assert.equal(report.status, "pass");
   assert.equal(report.summary.uiMoving, true);
-  assert.equal(report.runEvaluations[0].expectedEventIDHead, "event-b");
+  assert.equal(report.runEvaluations[0].expectedProjectionIDHead, "host:host/thread:thread-a/turn:turn-b/item:item-b/row:agentMessage");
 });
 
 test("live filter compare does not blame UI when only unsampled relay filters moved", () => {
@@ -227,8 +234,8 @@ test("live filter compare does not blame UI when only unsampled relay filters mo
         },
       },
       samples: [
-        relaySample("2026-06-01T13:00:00.000Z", 240, "2026-06-01T13:00:00.500Z", ["event-a"]),
-        relaySample("2026-06-01T13:00:04.000Z", 240, "2026-06-01T13:00:04.500Z", ["event-a"]),
+        relaySample("2026-06-01T13:00:00.000Z", 240, "2026-06-01T13:00:00.500Z", ["host:host/thread:thread-a/turn:turn-a/item:item-a/row:agentMessage"]),
+        relaySample("2026-06-01T13:00:04.000Z", 240, "2026-06-01T13:00:04.500Z", ["host:host/thread:thread-a/turn:turn-a/item:item-a/row:agentMessage"]),
       ],
     },
     uiProof([
@@ -295,12 +302,12 @@ test("live filter compare fails when sampled relay filter moves but UI stays sta
   assert.equal(report.failures.some((candidate) => candidate.code === "sampled_filter_movement_not_observed"), false);
 });
 
-test("live filter compare fails when a checkpoint sweep misses the newest settled event", () => {
+test("live filter compare fails when a checkpoint sweep misses the newest settled projection row", () => {
   const report = compare(
     {
       summary: { moving: true },
       samples: [
-        relaySample("2026-06-01T13:00:04.000Z", 240, "2026-06-01T13:00:04.500Z", ["event-b", "event-a"]),
+        relaySample("2026-06-01T13:00:04.000Z", 240, "2026-06-01T13:00:04.500Z", ["host:host/thread:thread-a/turn:turn-b/item:item-b/row:agentMessage", "host:host/thread:thread-a/turn:turn-a/item:item-a/row:agentMessage"]),
       ],
     },
     uiProof([
@@ -308,13 +315,13 @@ test("live filter compare fails when a checkpoint sweep misses the newest settle
         sampledAt: "2026-06-01T13:00:10.000Z",
         messageListCapturedAt: "2026-06-01T13:00:10.000Z",
         count: 240,
-        eventIDs: ["event-a"],
-        sweepEventIDs: ["event-a"],
+        projectionIDs: ["host:host/thread:thread-a/turn:turn-a/item:item-a/row:agentMessage"],
+        sweepProjectionIDs: ["host:host/thread:thread-a/turn:turn-a/item:item-a/row:agentMessage"],
       },
     ]),
     { relayTruth: "relay.json", uiProof: "ui.json", maxLagMS: 5000, requireMoving: false },
   );
 
   assert.equal(report.status, "fail");
-  assert.equal(report.failures.some((failure) => failure.code === "filter_newest_event_missing"), true);
+  assert.equal(report.failures.some((failure) => failure.code === "filter_newest_projection_missing"), true);
 });

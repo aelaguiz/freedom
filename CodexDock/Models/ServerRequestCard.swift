@@ -102,14 +102,18 @@ public struct ServerRequestCard: Equatable, Identifiable, Sendable {
         self.status = status
     }
 
-    public static func make(from request: JSONRPCRequest, now: Date = Date()) -> ServerRequestCard {
+    private static func make(
+        from request: JSONRPCRequest,
+        displayID: String,
+        now: Date = Date()
+    ) -> ServerRequestCard {
         let params = request.params?.objectValue ?? [:]
         let threadID = params["threadId"]?.stringValue ?? "unknown"
         let turnID = params["turnId"]?.stringValue
         let itemID = params["itemId"]?.stringValue
 
         let base = CardBase(
-            id: "request-\(request.id)",
+            id: displayID,
             requestID: request.id,
             method: request.method,
             threadID: threadID,
@@ -170,6 +174,35 @@ public struct ServerRequestCard: Equatable, Identifiable, Sendable {
                 detail: "This request type is visible but not supported on phone yet."
             )
         }
+    }
+
+    public static func make(from event: ThreadEvent) -> ServerRequestCard? {
+        guard let request = event.request else {
+            return nil
+        }
+        let base = JSONRPCRequest(
+            id: request.requestID,
+            method: request.method,
+            params: request.params
+        )
+        var card = make(from: base, displayID: event.id, now: event.activityDate ?? event.date ?? Date())
+        card = ServerRequestCard(
+            id: event.id,
+            requestID: card.requestID,
+            method: card.method,
+            threadID: event.request?.params?.objectValue?["threadId"]?.stringValue ?? card.threadID,
+            turnID: event.turnID ?? card.turnID,
+            itemID: event.itemID ?? card.itemID,
+            kind: card.kind,
+            title: card.title,
+            summary: card.summary,
+            detail: card.detail,
+            params: card.params,
+            requestedAt: card.requestedAt,
+            inputDraft: card.inputDraft,
+            status: request.status == "resolved" ? .resolved : card.status
+        )
+        return card
     }
 
     public func responsePayload(for action: ServerRequestCardAction) -> JSONValue? {

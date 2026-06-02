@@ -33,21 +33,19 @@ const SCENARIO_REQUIREMENTS = {
     minCheckpointSweeps: 1,
   },
   "detail-reconnect": {
-    routes: ["thread/read", "thread/turns/list", "thread/resume"],
-    minRouteCounts: { "thread/read": 2, "thread/turns/list": 2, "thread/resume": 3 },
+    routes: ["thread/detail/subscribe", "thread/detail/resync"],
+    minRouteCounts: { "thread/detail/subscribe": 1, "thread/detail/resync": 1 },
     minDetailTransitionChecks: 2,
     minDetailSweeps: 1,
     minDetailSweepMessageCardChecks: 2,
     minDetailMessageOrderChecks: 1,
-    requireFullTurnsList: true,
   },
   "detail-history-request": {
-    routes: ["thread/read", "thread/turns/list", "thread/resume"],
+    routes: ["thread/detail/subscribe", "thread/detail/update"],
     minDetailTransitionChecks: 3,
     minDetailSweeps: 1,
     minDetailSweepMessageCardChecks: 8,
     minDetailMessageOrderChecks: 2,
-    requireFullTurnsList: true,
   },
   "large-list-checkpoint": {
     routes: ["dock/subscribe"],
@@ -61,10 +59,9 @@ const SCENARIO_REQUIREMENTS = {
     minCheckpointSweeps: 1,
   },
   "server-request": {
-    routes: ["thread/read", "thread/turns/list", "thread/resume"],
+    routes: ["thread/detail/subscribe", "thread/detail/update"],
     minDetailTransitionChecks: 2,
     minCheckpointSweeps: 1,
-    requireFullTurnsList: true,
   },
   "source-refresh": {
     routes: ["dock/subscribe", "dock/update"],
@@ -299,21 +296,6 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
         route,
         expected: expectedCount,
         actual: actualCount,
-      });
-    }
-  }
-  if (requirements.requireFullTurnsList) {
-    const events = Array.isArray(entry.relayReport?.clientPathEvidence?.events)
-      ? entry.relayReport.clientPathEvidence.events
-      : [];
-    const hasFullTurnsList = events.some((event) => (
-      event?.route === "thread/turns/list" && event?.itemsView === "full"
-    ));
-    if (!hasFullTurnsList) {
-      failures.push({
-        code: "matrix_thread_turns_list_full_items_view_missing",
-        message: `Scenario ${scenario} did not exercise thread/turns/list with itemsView=full.`,
-        scenario,
       });
     }
   }

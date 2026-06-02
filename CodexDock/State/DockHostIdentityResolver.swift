@@ -21,19 +21,10 @@ public struct DockHostIdentityObservation: Equatable, Sendable {
         self.endpoint = Self.nonEmpty(endpoint)
     }
 
-    init(configuredHostID: String, streamHost: DockStreamHostDTO) {
-        self.init(
-            configuredHostID: configuredHostID,
-            streamHostID: streamHost.id,
-            logicalHostID: streamHost.logicalHostID,
-            displayName: streamHost.displayName,
-            endpoint: streamHost.endpoint
-        )
-    }
-
     init(configuredHostID: String, card: DockThreadCardDTO) {
         self.init(
             configuredHostID: configuredHostID,
+            streamHostID: card.sourceHostID,
             logicalHostID: card.logicalHostID,
             displayName: card.hostDisplayName,
             endpoint: card.hostEndpoint
@@ -225,14 +216,20 @@ public struct DockHostIdentityResolver: Equatable, Sendable {
         guard let expectedLogicalID = logicalIDByConfiguredHostID[configuredHostID] else {
             return false
         }
-        if sourceConfiguredHostID == configuredHostID {
-            return logicalHostID(
-                forAlias: rowHostID,
-                sourceConfiguredHostID: sourceConfiguredHostID
-            ) == expectedLogicalID
+        let rowLogicalIDs = logicalIDs(forAlias: rowHostID)
+        guard rowLogicalIDs.count == 1,
+              rowLogicalIDs.contains(expectedLogicalID) else {
+            return false
         }
-        let aliasLogicalIDs = logicalIDs(forAlias: rowHostID)
-        return aliasLogicalIDs.count == 1 && aliasLogicalIDs.contains(expectedLogicalID)
+        guard let sourceConfiguredHostID else {
+            return true
+        }
+        let sourceLogicalIDs = logicalIDs(forAlias: sourceConfiguredHostID)
+        if sourceLogicalIDs.isEmpty,
+           sourceConfiguredHostID == configuredHostID {
+            return true
+        }
+        return sourceLogicalIDs.count == 1 && sourceLogicalIDs.contains(expectedLogicalID)
     }
 
     public func displayName(

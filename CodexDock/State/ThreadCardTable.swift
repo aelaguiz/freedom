@@ -14,28 +14,34 @@ enum ThreadCardTableApplyResult: Equatable, Sendable {
 }
 
 struct ThreadCardTable: Equatable, Sendable {
+    private enum ProjectionEnvelope {
+        static let schemaVersion = 1
+        static let identityVersion = 1
+        static let engineVersion = 1
+        static let rowRole = "threadCard"
+        static let scope = "view"
+        static let order = "displayOrderKeyAscending"
+    }
+
     private struct HostStreamState: Equatable, Sendable {
         var epoch: String?
         var seq: Int64
-        var stateGeneration: Int64
+        var sourceHostID: String?
         var status: DockHostLoadStatus
         var freshness: DockStreamFreshnessDTO?
         var complete: Bool
         var totalRows: Int?
         var window: DockStreamWindowDTO?
-        var streamHosts: [DockStreamHostDTO]
         var cardsByID: [String: DockThreadCardDTO]
 
         init(status: DockHostLoadStatus = .checking) {
             self.epoch = nil
             self.seq = 0
-            self.stateGeneration = 0
             self.status = status
             self.freshness = nil
             self.complete = false
             self.totalRows = nil
             self.window = nil
-            self.streamHosts = []
             self.cardsByID = [:]
         }
     }
@@ -97,23 +103,19 @@ struct ThreadCardTable: Equatable, Sendable {
 
         var state = statesByHostID[host.id] ?? HostStreamState()
         if state.epoch == nil || state.epoch == update.epoch {
-            guard acceptsGeneration(update, current: state.stateGeneration) else {
-                return .needsResync(.staleGeneration)
-            }
         }
         state.epoch = update.epoch
         state.seq = update.seq
-        state.stateGeneration = update.stateGeneration ?? update.seq
+        state.sourceHostID = update.sourceHostID
         state.freshness = update.freshness
         state.complete = update.complete ?? false
         state.totalRows = update.totalRows
         state.window = update.window
-        state.streamHosts = update.hosts ?? []
         state.cardsByID = Dictionary(
-            uniqueKeysWithValues: (update.cards ?? [])
+            uniqueKeysWithValues: (update.rows ?? [])
                 .filter(\.isAppFacingHumanThreadCard)
                 .map { card in
-                    (card.id, card)
+                    (card.projectionStorageKey, card)
                 }
         )
         state.status = hostStatus(
@@ -134,44 +136,39 @@ struct ThreadCardTable: Equatable, Sendable {
         guard acceptsSchemaVersion(update.schemaVersion) else {
             return .needsResync(.schemaMismatch)
         }
-        guard acceptsStreamContract(update) else {
-            return .needsResync(.streamContract)
-        }
-
         guard var state = statesByHostID[host.id],
               state.epoch == update.epoch else {
             return .needsResync(.epochMismatch)
         }
-        guard acceptsGeneration(update, current: state.stateGeneration) else {
-            return .needsResync(.staleGeneration)
+        guard acceptsStreamContract(update, expectedSourceHostID: state.sourceHostID) else {
+            return .needsResync(.streamContract)
         }
-
+        guard acceptsProjectionSourceContinuity(update.rows ?? [], existingCardsByID: state.cardsByID) else {
+            return .needsResync(.streamContract)
+        }
         switch update.kind {
         case .heartbeat:
             guard state.seq == update.seq else {
                 return .needsResync(.sequenceGap)
             }
-        case .delta:
-            guard update.baseSeq == state.seq else {
+        case .upsert, .delete:
+            guard update.seq == state.seq + 1 else {
                 return .needsResync(.sequenceGap)
             }
-            for host in update.upsertHosts ?? [] {
-                state.streamHosts.removeAll { $0.id == host.id }
-                state.streamHosts.append(host)
+            for projectionID in update.projectionIDs ?? [] {
+                state.cardsByID.removeValue(forKey: projectionID)
             }
-            for card in (update.upsertCards ?? []).filter(\.isAppFacingHumanThreadCard) {
-                state.cardsByID[card.id] = card
-            }
-            for cardID in update.deleteCardIDs ?? [] {
-                state.cardsByID.removeValue(forKey: cardID)
+            for card in (update.rows ?? []).filter(\.isAppFacingHumanThreadCard) {
+                state.cardsByID[card.projectionStorageKey] = card
             }
             state.seq = update.seq
+        case .resyncRequired:
+            return .needsResync(.streamContract)
         case .snapshot:
             break
         }
 
-        state.stateGeneration = update.stateGeneration ?? state.stateGeneration
-        state.freshness = update.freshness ?? state.freshness
+        state.freshness = update.freshness
         state.complete = update.complete ?? state.complete
         state.totalRows = update.totalRows ?? state.totalRows
         state.window = update.window ?? state.window
@@ -185,14 +182,26 @@ struct ThreadCardTable: Equatable, Sendable {
         return .applied
     }
 
-    private func acceptsSchemaVersion(_ schemaVersion: Int?) -> Bool {
-        guard let schemaVersion else {
-            return false
-        }
+    private func acceptsSchemaVersion(_ schemaVersion: Int) -> Bool {
         return schemaVersion == CodexDockConstants.Dock.streamSchemaVersion
     }
 
-    private func acceptsStreamContract(_ update: ThreadCardStreamUpdateDTO) -> Bool {
+    private func acceptsStreamContract(
+        _ update: ThreadCardStreamUpdateDTO,
+        expectedSourceHostID: String? = nil
+    ) -> Bool {
+        guard let sourceHostID = nonEmpty(update.sourceHostID),
+              update.identityVersion == ProjectionEnvelope.identityVersion,
+              update.projectionEngineVersion == ProjectionEnvelope.engineVersion,
+              update.scope == ProjectionEnvelope.scope,
+              nonEmpty(update.viewParamsKey) != nil,
+              update.order == ProjectionEnvelope.order else {
+            return false
+        }
+        if let expectedSourceHostID,
+           expectedSourceHostID != sourceHostID {
+            return false
+        }
         guard update.view == expectedView else {
             return false
         }
@@ -207,9 +216,14 @@ struct ThreadCardTable: Equatable, Sendable {
                 complete: complete,
                 totalRows: totalRows,
                 window: window,
-                cardCount: update.cards?.count ?? 0
+                    cardCount: update.rows?.count ?? 0
             )
-        case .delta, .heartbeat:
+                && acceptsProjectionEnvelope(update.rows ?? [], sourceHostID: sourceHostID)
+        case .upsert, .delete, .heartbeat, .resyncRequired:
+            guard acceptsProjectionEnvelope(update.rows ?? [], sourceHostID: sourceHostID),
+                  acceptsDeleteIDs(update.projectionIDs ?? []) else {
+                return false
+            }
             if update.complete == false {
                 guard let totalRows = update.totalRows,
                       let window = update.window else {
@@ -219,18 +233,11 @@ struct ThreadCardTable: Equatable, Sendable {
                     complete: false,
                     totalRows: totalRows,
                     window: window,
-                    cardCount: update.upsertCards?.count ?? 0
+                    cardCount: update.rows?.count ?? 0
                 )
             }
             return true
         }
-    }
-
-    private func acceptsGeneration(_ update: ThreadCardStreamUpdateDTO, current: Int64) -> Bool {
-        guard let incoming = update.stateGeneration else {
-            return true
-        }
-        return incoming >= current
     }
 
     private func acceptsWindowContract(
@@ -251,6 +258,73 @@ struct ThreadCardTable: Equatable, Sendable {
             return false
         }
         return complete || window.rowCount <= totalRows
+    }
+
+    private func acceptsProjectionEnvelope(_ cards: [DockThreadCardDTO], sourceHostID expectedSourceHostID: String) -> Bool {
+        var seenProjectionIDs = Set<String>()
+        var seenSourceKeys = Set<ThreadCardProjectionSourceKey>()
+        for card in cards {
+            guard let sourceHostID = nonEmpty(card.sourceHostID) else {
+                return false
+            }
+            guard card.schemaVersion == ProjectionEnvelope.schemaVersion
+                && card.identityVersion == ProjectionEnvelope.identityVersion
+                && card.projectionEngineVersion == ProjectionEnvelope.engineVersion
+                && sourceHostID == expectedSourceHostID
+                && card.logicalHostID == sourceHostID
+                && card.view == expectedView.rawValue
+                && nonEmpty(card.projectionID) != nil
+                && card.id == card.projectionID
+                && nonEmpty(card.sourceRef) != nil
+                && card.rowRole == ProjectionEnvelope.rowRole
+                && nonEmpty(card.displayOrderKey) != nil else {
+                return false
+            }
+            guard seenProjectionIDs.insert(card.projectionID).inserted else {
+                return false
+            }
+            guard seenSourceKeys.insert(ThreadCardProjectionSourceKey(card)).inserted else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func acceptsProjectionSourceContinuity(
+        _ cards: [DockThreadCardDTO],
+        existingCardsByID: [String: DockThreadCardDTO]
+    ) -> Bool {
+        var existingProjectionIDsBySourceKey = [ThreadCardProjectionSourceKey: String]()
+        for card in existingCardsByID.values {
+            let sourceKey = ThreadCardProjectionSourceKey(card)
+            if existingProjectionIDsBySourceKey.updateValue(card.projectionStorageKey, forKey: sourceKey) != nil {
+                return false
+            }
+        }
+        for card in cards {
+            let sourceKey = ThreadCardProjectionSourceKey(card)
+            if let existing = existingCardsByID[card.projectionStorageKey],
+               ThreadCardProjectionSourceKey(existing) != sourceKey {
+                return false
+            }
+            if let existingProjectionID = existingProjectionIDsBySourceKey[sourceKey],
+               existingProjectionID != card.projectionStorageKey {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func acceptsDeleteIDs(_ ids: [String]) -> Bool {
+        ids.allSatisfy { nonEmpty($0) != nil }
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     func snapshot(
@@ -313,10 +387,10 @@ struct ThreadCardTable: Equatable, Sendable {
         }
         return Array(state.cardsByID.values)
             .sorted { lhs, rhs in
-                if lhs.orderKey != rhs.orderKey {
-                    return lhs.orderKey < rhs.orderKey
+                if lhs.displayOrderKey != rhs.displayOrderKey {
+                    return lhs.displayOrderKey < rhs.displayOrderKey
                 }
-                return lhs.id < rhs.id
+                return lhs.projectionStorageKey < rhs.projectionStorageKey
             }
     }
 
@@ -325,13 +399,15 @@ struct ThreadCardTable: Equatable, Sendable {
             guard let state = statesByHostID[host.id] else {
                 return [DockHostIdentityObservation]()
             }
-            let hostObservations = state.streamHosts.map { streamHost in
-                DockHostIdentityObservation(configuredHostID: host.id, streamHost: streamHost)
-            }
+            var observations = [DockHostIdentityObservation(
+                configuredHostID: host.id,
+                streamHostID: state.sourceHostID
+            )]
             let cardObservations = state.cardsByID.values.map { card in
                 DockHostIdentityObservation(configuredHostID: host.id, card: card)
             }
-            return hostObservations + cardObservations
+            observations.append(contentsOf: cardObservations)
+            return observations
         }
     }
 
@@ -376,4 +452,18 @@ struct ThreadCardTable: Equatable, Sendable {
         }
     }
 
+}
+
+private struct ThreadCardProjectionSourceKey: Hashable, Sendable {
+    let sourceHostID: String
+    let view: String
+    let sourceRef: String
+    let rowRole: String
+
+    init(_ card: DockThreadCardDTO) {
+        sourceHostID = card.sourceHostID
+        view = card.view
+        sourceRef = card.sourceRef
+        rowRole = card.rowRole
+    }
 }

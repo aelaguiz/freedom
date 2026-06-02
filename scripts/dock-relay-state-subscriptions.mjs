@@ -4,6 +4,7 @@ import {
   RELAY_STATE_DOCK_WINDOW_SIZE,
   RELAY_STATE_HEARTBEAT_INTERVAL_MS,
   RELAY_STATE_SNAPSHOT_SOFT_LIMIT_BYTES,
+  RELAY_STATE_STREAM_SCHEMA_VERSION,
   RELAY_STATE_UPDATE_SOFT_LIMIT_BYTES,
 } from "./dock-relay-constants.mjs";
 import {
@@ -27,17 +28,17 @@ function currentSeqForView(store, view) {
 function sequenceFields(store, hub, view) {
   const seq = currentSeqForView(store, view);
   return {
-    schemaVersion: 2,
+    schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
+    identityVersion: 1,
+    projectionEngineVersion: 1,
     epoch: hub.epoch,
     seq,
-    stateGeneration: seq,
   };
 }
 
 function cardDeltaClearlyTooLarge(delta) {
-  const changedRows = Number(delta.upsertCards?.length || 0)
-    + Number(delta.deleteCardIDs?.length || 0)
-    + Number(delta.upsertHosts?.length || 0);
+  const changedRows = Number(delta.rows?.length || 0)
+    + Number(delta.projectionIDs?.length || 0);
   return changedRows > RELAY_STATE_DOCK_WINDOW_SIZE;
 }
 
@@ -87,16 +88,17 @@ class StateSubscriptionHub {
 
   cardDelta({
     view,
-    baseSeq,
     seq,
+    sourceHostID,
     freshness,
-    upsertHosts = undefined,
-    upsertCards = [],
-    deleteCardIDs = [],
+    rows = [],
+    projectionIDs = [],
     totalRows,
     complete = undefined,
     window = undefined,
   }) {
+    const resolvedSourceHostID = sourceHostID || "unknown";
+    const kind = rows.length > 0 ? "upsert" : (projectionIDs.length > 0 ? "delete" : "heartbeat");
     const effectiveWindow = window || (
       complete !== undefined && Number.isFinite(Number(totalRows))
         ? buildWindow({
@@ -108,19 +110,20 @@ class StateSubscriptionHub {
         : undefined
     );
     return {
-      kind: "delta",
+      kind,
       ...sequenceFields(this.store, this, view),
-      baseSeq,
       seq,
-      stateGeneration: seq,
+      sourceHostID: resolvedSourceHostID,
       view,
+      scope: "view",
+      viewParamsKey: `${view}:${resolvedSourceHostID}`,
+      order: "displayOrderKeyAscending",
       complete,
       totalRows,
       window: effectiveWindow,
       freshness,
-      upsertHosts,
-      upsertCards,
-      deleteCardIDs,
+      rows,
+      projectionIDs,
     };
   }
 
@@ -189,8 +192,12 @@ class StateSubscriptionHub {
     return {
       kind: "heartbeat",
       ...sequenceFields(this.store, this, view),
-      baseSeq: null,
+      sourceHostID: "unknown",
       view,
+      scope: "view",
+      viewParamsKey: `${view}:unknown`,
+      order: "displayOrderKeyAscending",
+      freshness: { status: "unknown" },
     };
   }
 }

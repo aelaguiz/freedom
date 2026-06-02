@@ -74,16 +74,20 @@ private struct PreviewThreadCardStreamConnection: ThreadCardStreamConnection {
         return ThreadCardStreamUpdateDTO(
             kind: .snapshot,
             schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            identityVersion: 1,
+            projectionEngineVersion: 1,
+            sourceHostID: host.id,
             view: .dock,
+            scope: "view",
+            viewParamsKey: "dock:\(host.id)",
             complete: true,
             totalRows: cards.count,
             window: DockStreamWindowDTO(offset: 0, limit: cards.count, rowCount: cards.count),
-            stateGeneration: 1,
             epoch: "preview",
             seq: 1,
+            order: "displayOrderKeyAscending",
             freshness: DockStreamFreshnessDTO(status: .fresh),
-            hosts: [DockStreamHostDTO(id: host.displayName, logicalHostID: host.displayName, displayName: host.displayName, endpoint: host.endpoint.displayEndpoint)],
-            cards: cards
+            rows: cards
         )
     }
 
@@ -100,14 +104,23 @@ private struct PreviewThreadCardStreamConnection: ThreadCardStreamConnection {
         displaySummary: String
     ) -> DockThreadCardDTO {
         let activityAtMs = Int64(activityAt.timeIntervalSince1970 * 1_000)
+        let projectionID = "host:\(host.id)/thread:\(id)/row:threadCard"
         return DockThreadCardDTO(
-            id: "\(host.displayName)::\(id)",
-            logicalHostID: host.displayName,
+            schemaVersion: 1,
+            identityVersion: 1,
+            projectionEngineVersion: 1,
+            sourceHostID: host.id,
+            view: "dock",
+            projectionID: projectionID,
+            sourceRef: "host:\(host.id)/thread:\(id)",
+            rowRole: "threadCard",
+            displayOrderKey: String(format: "%019lld|0001|%@", Int64.max - activityAtMs, projectionID),
+            id: projectionID,
+            logicalHostID: host.id,
             threadID: id,
             backendSessionID: "preview-session-\(id)",
             hostDisplayName: host.displayName,
             hostEndpoint: host.endpoint.displayEndpoint,
-            orderKey: String(format: "%019lld:%@", Int64.max - activityAtMs, id),
             activityAt: ISO8601DateFormatter().string(from: activityAt),
             activityAtMs: activityAtMs,
             displaySummary: displaySummary,

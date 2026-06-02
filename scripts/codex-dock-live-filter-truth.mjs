@@ -112,19 +112,16 @@ async function initializeClient(options) {
 }
 
 function threadIDForCard(card) {
-  if (typeof card?.id === "string" && card.id.includes("::")) {
-    return card.id.split("::").at(-1);
-  }
-  return card?.threadId || card?.threadID || card?.id || null;
+  return card?.threadID || card?.threadId || null;
 }
 
 async function readDockCard(client, threadID) {
   const dock = await client.request("dock/subscribe", {});
-  const cards = Array.isArray(dock?.cards) ? dock.cards : [];
+  const cards = Array.isArray(dock?.rows) ? dock.rows : [];
   const card = cards.find((candidate) => threadIDForCard(candidate) === threadID) || null;
   return {
     totalRows: dock?.totalRows ?? null,
-    cardCount: cards.length,
+    rowCount: cards.length,
     complete: dock?.complete ?? null,
     freshness: dock?.freshness ?? null,
     seq: dock?.seq ?? null,
@@ -136,10 +133,11 @@ async function readDockCard(client, threadID) {
 function summarizeCard(card) {
   return {
     id: card.id ?? null,
+    projectionID: card.projectionID ?? null,
+    sourceHostID: card.sourceHostID ?? null,
     threadID: threadIDForCard(card),
     status: card.status ?? null,
     activityAt: card.activityAt ?? null,
-    logicalHostID: card.logicalHostID ?? null,
     hostEndpoint: card.hostEndpoint ?? null,
     sourceKind: card.sourceKind ?? null,
     completeness: card.completeness ?? null,
@@ -147,143 +145,68 @@ function summarizeCard(card) {
   };
 }
 
-async function readTurns(client, threadID) {
-  let cursor = null;
-  const seenCursors = new Set();
-  const turns = [];
-  let pageCount = 0;
-
-  while (true) {
-    const page = await client.request("thread/turns/list", {
-      threadId: threadID,
-      cursor,
-      limit: 250,
-      sortDirection: "desc",
-      itemsView: "full",
-    });
-    pageCount += 1;
-    turns.push(...(Array.isArray(page?.data) ? page.data : []));
-    const nextCursor = page?.nextCursor || null;
-    if (!nextCursor) {
-      break;
-    }
-    if (seenCursors.has(nextCursor)) {
-      throw new Error(`repeated thread/turns/list cursor ${nextCursor}`);
-    }
-    seenCursors.add(nextCursor);
-    cursor = nextCursor;
-  }
-
-  return { pageCount, turns };
+async function readDetailProjection(client, threadID) {
+  const snapshot = await client.request("thread/detail/read", {
+    threadId: threadID,
+  });
+  const rows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+  return {
+    source: "thread/detail/read",
+    threadID: snapshot?.threadID || null,
+    sourceHostID: snapshot?.sourceHostID || null,
+    view: snapshot?.view || null,
+    viewParamsKey: snapshot?.viewParamsKey || null,
+    seq: snapshot?.seq ?? null,
+    epoch: snapshot?.epoch || null,
+    projectionEngineVersion: snapshot?.projectionEngineVersion ?? null,
+    rowCount: rows.length,
+    rows,
+  };
 }
 
 function increment(map, key, by = 1) {
   map.set(key, (map.get(key) || 0) + by);
 }
 
-function renderedRowsForItem(item, turn, turnSequence, itemSequence, rowOffset) {
-  const type = item?.type || "unknown";
-  const eventDateMS = displayDateMSForItem(type, turn);
-  const turnID = turn?.id || turn?.turnId || turn?.turnID || "turn";
-  const itemID = item?.id || "item";
-  const row = (suffix, kind, visibility, eventSequence = 0) => ({
-    eventID: `${turnID}-${itemID}-${suffix}`,
-    kind,
-    visibility,
-    eventDateMS,
-    turnSequence,
-    itemSequence,
-    itemKey: `item:${itemID}`,
-    eventSequence,
-    rowOffset,
-  });
-  switch (type) {
-  case "userMessage":
-    return [row("user", "userMessage", "message")];
-  case "agentMessage":
-    return [row("agent", "agentMessage", "message")];
-  case "plan":
-    return [row("plan", "agentMessage", "thinking")];
-  case "reasoning":
-    return [row("reasoning", "agentMessage", "thinking")];
-  case "commandExecution": {
-    const rows = [row("command", "command", "tooling")];
-    if (nonEmptyString(item?.aggregatedOutput)) {
-      rows.push(row("output", "output", "tooling", 1));
-    }
-    return rows;
-  }
-  case "fileChange":
-    return [row("file-change", "request", "request")];
-  case "mcpToolCall":
-  case "dynamicToolCall":
-    return [row("tool", "command", "tooling")];
-  default:
-    return [row("unknown", "unknown", "unknown")];
-  }
-}
-
-function nonEmptyString(value) {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function displayDateMSForItem(type, turn) {
-  const startedAt = secondsToMS(turn?.startedAt);
-  const completedAt = secondsToMS(turn?.completedAt);
-  if (type === "userMessage") {
-    return startedAt ?? completedAt;
-  }
-  return completedAt ?? startedAt;
-}
-
-function secondsToMS(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? Math.trunc(number * 1000) : null;
-}
-
-function sortRowsNewestFirst(rows) {
+function sortProjectionRows(rows) {
   return [...rows].sort((left, right) => {
-    if (left.eventDateMS !== null && right.eventDateMS !== null && left.eventDateMS !== right.eventDateMS) {
-      return right.eventDateMS - left.eventDateMS;
+    const leftOrder = typeof left?.displayOrderKey === "string" ? left.displayOrderKey : "";
+    const rightOrder = typeof right?.displayOrderKey === "string" ? right.displayOrderKey : "";
+    if (leftOrder !== rightOrder) {
+      return leftOrder.localeCompare(rightOrder);
     }
-    if (left.eventDateMS !== null && right.eventDateMS === null) {
-      return -1;
-    }
-    if (left.eventDateMS === null && right.eventDateMS !== null) {
-      return 1;
-    }
-    if (left.turnSequence !== right.turnSequence) {
-      return left.turnSequence - right.turnSequence;
-    }
-    if (left.itemSequence !== right.itemSequence) {
-      return right.itemSequence - left.itemSequence;
-    }
-    if (left.itemKey !== right.itemKey) {
-      return left.itemKey < right.itemKey ? -1 : 1;
-    }
-    if (left.eventSequence !== right.eventSequence) {
-      return right.eventSequence - left.eventSequence;
-    }
-    if (left.eventID !== right.eventID) {
-      return left.eventID < right.eventID ? -1 : 1;
-    }
-    return left.rowOffset - right.rowOffset;
+    return String(left?.projectionID || "").localeCompare(String(right?.projectionID || ""));
   });
 }
 
 function rowMatchesFilter(row, filter) {
+  const visibility = row?.visibility || "unknown";
+  const kind = row?.kind || "unknown";
   if (filter === "all") {
     return true;
   }
   if (filter === "messages") {
-    return row.visibility === "request"
-      || (row.visibility === "message" && (row.kind === "userMessage" || row.kind === "agentMessage"));
+    return visibility === "request"
+      || (visibility === "message" && (kind === "userMessage" || kind === "agentMessage"));
   }
-  return row.kind === filter;
+  return kind === filter;
 }
 
-function filterCountsFromTurns(turns, visibleLimit) {
-  const rawTypeCounts = new Map();
+function projectionRowTruth(row) {
+  return {
+    projectionID: row?.projectionID || null,
+    sourceHostID: row?.sourceHostID || null,
+    displayOrderKey: row?.displayOrderKey || null,
+    kind: row?.renderKind || row?.itemType || "unknown",
+    visibility: row?.visibility || "unknown",
+    itemType: row?.itemType || "unknown",
+    turnID: row?.turnID || null,
+    itemID: row?.itemID || null,
+  };
+}
+
+function filterCountsFromProjectionRows(projectionRows, visibleLimit) {
+  const itemTypeCounts = new Map();
   const rowKindCounts = new Map();
   const visibilityCounts = new Map();
   const filterCounts = new Map([
@@ -298,25 +221,18 @@ function filterCountsFromTurns(turns, visibleLimit) {
     ["unknown", 0],
   ]);
 
-  let rawItemCount = 0;
-  const rows = [];
-  for (const [turnSequence, turn] of turns.entries()) {
-    for (const [itemSequence, item] of (Array.isArray(turn?.items) ? turn.items : []).entries()) {
-      rawItemCount += 1;
-      increment(rawTypeCounts, item?.type || "unknown");
-      for (const row of renderedRowsForItem(item, turn, turnSequence, itemSequence, rows.length)) {
-        rows.push(row);
-        increment(rowKindCounts, row.kind);
-        increment(visibilityCounts, row.visibility);
-        increment(filterCounts, "all");
-        increment(filterCounts, row.kind);
-        if (
-          row.visibility === "request"
-          || (row.visibility === "message" && (row.kind === "userMessage" || row.kind === "agentMessage"))
-        ) {
-          increment(filterCounts, "messages");
-        }
-      }
+  const rows = projectionRows.map(projectionRowTruth);
+  for (const row of rows) {
+    increment(itemTypeCounts, row.itemType);
+    increment(rowKindCounts, row.kind);
+    increment(visibilityCounts, row.visibility);
+    increment(filterCounts, "all");
+    increment(filterCounts, row.kind);
+    if (
+      row.visibility === "request"
+      || (row.visibility === "message" && (row.kind === "userMessage" || row.kind === "agentMessage"))
+    ) {
+      increment(filterCounts, "messages");
     }
   }
 
@@ -324,28 +240,31 @@ function filterCountsFromTurns(turns, visibleLimit) {
   const visibleCounts = Object.fromEntries(
     Object.entries(counts).map(([filter, count]) => [filter, Math.min(count, visibleLimit)]),
   );
-  const sortedRows = sortRowsNewestFirst(rows);
+  const sortedRows = sortProjectionRows(rows);
   const filters = [...filterCounts.keys()];
-  const visibleEventIDs = Object.fromEntries(
+  const visibleProjectionIDs = Object.fromEntries(
     filters.map((filter) => [
       filter,
       sortedRows
         .filter((row) => rowMatchesFilter(row, filter))
         .slice(0, visibleLimit)
-        .map((row) => row.eventID),
+        .map((row) => row.projectionID)
+        .filter(Boolean),
     ]),
   );
   return {
-    turnCount: turns.length,
+    source: "thread/detail/read",
+    turnCount: new Set(rows.map((row) => row.turnID).filter(Boolean)).size,
     pageLimited: false,
-    rawItemCount,
-    newestTurnID: turns[0]?.id || turns[0]?.turnId || turns[0]?.turnID || null,
-    newestTurnCompletedAt: turns[0]?.completedAt ?? null,
-    oldestTurnID: turns.at(-1)?.id || turns.at(-1)?.turnId || turns.at(-1)?.turnID || null,
+    rawItemCount: null,
+    rowCount: rows.length,
+    newestTurnID: sortedRows.find((row) => row.turnID)?.turnID || null,
+    newestTurnCompletedAt: null,
+    oldestTurnID: [...rows].reverse().find((row) => row.turnID)?.turnID || null,
     counts,
     visibleCounts,
-    visibleEventIDs,
-    rawTypeCounts: Object.fromEntries([...rawTypeCounts].sort()),
+    visibleProjectionIDs,
+    rawTypeCounts: Object.fromEntries([...itemTypeCounts].sort()),
     rowKindCounts: Object.fromEntries([...rowKindCounts].sort()),
     visibilityCounts: Object.fromEntries([...visibilityCounts].sort()),
   };
@@ -354,15 +273,26 @@ function filterCountsFromTurns(turns, visibleLimit) {
 async function sampleThread(client, options, index) {
   const sampledAt = new Date().toISOString();
   const dock = await readDockCard(client, options.threadID);
-  const { pageCount, turns } = await readTurns(client, options.threadID);
+  const detail = await readDetailProjection(client, options.threadID);
   return {
     index,
     sampledAt,
     finishedAt: new Date().toISOString(),
     dock,
+    detail: {
+      source: detail.source,
+      threadID: detail.threadID,
+      sourceHostID: detail.sourceHostID,
+      view: detail.view,
+      viewParamsKey: detail.viewParamsKey,
+      seq: detail.seq,
+      epoch: detail.epoch,
+      projectionEngineVersion: detail.projectionEngineVersion,
+      rowCount: detail.rowCount,
+    },
     turns: {
-      pageCount,
-      ...filterCountsFromTurns(turns, options.visibleLimit),
+      pageCount: 1,
+      ...filterCountsFromProjectionRows(detail.rows, options.visibleLimit),
     },
   };
 }
@@ -372,21 +302,21 @@ function summarizeSamples(samples) {
   const filterSummary = {};
   for (const filter of filters) {
     const values = samples.map((sample) => sample.turns?.visibleCounts?.[filter]).filter((value) => value !== undefined);
-    const visibleEventIDHeads = samples
-      .map((sample) => sample.turns?.visibleEventIDs?.[filter]?.[0])
+    const visibleProjectionIDHeads = samples
+      .map((sample) => sample.turns?.visibleProjectionIDs?.[filter]?.[0])
       .filter(Boolean);
-    const visibleEventIDSequences = samples
-      .map((sample) => sample.turns?.visibleEventIDs?.[filter])
+    const visibleProjectionIDSequences = samples
+      .map((sample) => sample.turns?.visibleProjectionIDs?.[filter])
       .filter((value) => Array.isArray(value) && value.length > 0)
       .map((value) => JSON.stringify(value));
     filterSummary[filter] = {
       first: values[0] ?? null,
       last: values.at(-1) ?? null,
       unique: [...new Set(values)],
-      visibleEventIDHeadFirst: visibleEventIDHeads[0] ?? null,
-      visibleEventIDHeadLast: visibleEventIDHeads.at(-1) ?? null,
-      visibleEventIDHeadUnique: [...new Set(visibleEventIDHeads)],
-      changed: new Set(values).size > 1 || new Set(visibleEventIDSequences).size > 1,
+      visibleProjectionIDHeadFirst: visibleProjectionIDHeads[0] ?? null,
+      visibleProjectionIDHeadLast: visibleProjectionIDHeads.at(-1) ?? null,
+      visibleProjectionIDHeadUnique: [...new Set(visibleProjectionIDHeads)],
+      changed: new Set(values).size > 1 || new Set(visibleProjectionIDSequences).size > 1,
     };
   }
   const activityValues = samples.map((sample) => sample.dock?.targetCard?.activityAt ?? null);
@@ -467,10 +397,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 }
 
 export {
-  filterCountsFromTurns,
+  filterCountsFromProjectionRows,
   parseArgs,
-  renderedRowsForItem,
   summarizeSamples,
-  sortRowsNewestFirst,
+  sortProjectionRows,
   run,
 };

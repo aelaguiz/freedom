@@ -216,8 +216,8 @@ final class ThreadCardStreamLifecycle {
             await delegate.cardStreamLifecyclePublishSnapshot()
             let rowCount = await delegate.cardStreamLifecycleRowCount(for: host)
             logger.info("\(self.logName, privacy: .public) stream update applied view=\(self.view.rawValue, privacy: .public) host_id=\(host.id, privacy: .public) update_kind=\(update.kind.rawValue, privacy: .public) seq=\(update.seq, privacy: .public) rows=\(rowCount, privacy: .public)")
-            if let freshness = update.freshness,
-               freshness.status != .fresh,
+            let freshness = update.freshness
+            if freshness.status != .fresh,
                rowCount > 0 {
                 logger.notice("\(self.logName, privacy: .public) stream rows retained view=\(self.view.rawValue, privacy: .public) host_id=\(host.id, privacy: .public) freshness=\(freshness.status.rawValue, privacy: .public) rows=\(rowCount, privacy: .public)")
             }

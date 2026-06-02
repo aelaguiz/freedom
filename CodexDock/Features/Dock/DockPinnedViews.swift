@@ -36,7 +36,7 @@ struct DockSwipeActionRow<Content: View>: View {
         .accessibilityAction {
             handleTap()
         }
-        .codexAutomationID(AutomationID.Dock.row(hostID: row.id.hostID, threadID: row.id.threadID))
+        .codexAutomationID(AutomationID.Dock.row(hostID: row.hostID, threadID: row.threadID))
         // Parent ForEach owns row identity. Do not add a nested .id here;
         // live reorders can otherwise leave stale duplicate accessibility rows.
         .onChange(of: row.id) { _, _ in

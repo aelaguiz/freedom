@@ -19,7 +19,7 @@ final class ThreadDetailScreenStore: ObservableObject {
     private var renderTask: Task<Void, Never>?
     private var latestRevision = RenderRevision.zero
     private var latestSnapshot: ThreadDetailSnapshot?
-    private var latestRequestCards: [ServerRequestCard] = []
+    private var latestRequestCardPresentation = ThreadDetailRequestCardPresentation()
 
     init(
         header: ThreadDetailHeader,
@@ -87,16 +87,16 @@ final class ThreadDetailScreenStore: ObservableObject {
         }
         publish(
             snapshot: latestSnapshot,
-            requestCards: latestRequestCards
+            requestCardPresentation: latestRequestCardPresentation
         )
     }
 
     func publish(
         snapshot: ThreadDetailSnapshot,
-        requestCards: [ServerRequestCard]
+        requestCardPresentation: ThreadDetailRequestCardPresentation = ThreadDetailRequestCardPresentation()
     ) {
         latestSnapshot = snapshot
-        latestRequestCards = requestCards
+        latestRequestCardPresentation = requestCardPresentation
         latestRevision = latestRevision.next()
         let revision = latestRevision
         let options = self.options
@@ -109,7 +109,7 @@ final class ThreadDetailScreenStore: ObservableObject {
             }
             let renderSnapshot = ThreadDetailRenderProjector().render(
                 snapshot: snapshot,
-                requestCards: requestCards,
+                requestCardPresentation: requestCardPresentation,
                 options: options,
                 revision: revision
             )

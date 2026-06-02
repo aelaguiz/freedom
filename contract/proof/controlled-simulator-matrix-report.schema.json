@@ -4,7 +4,7 @@
   "title": "Codex Dock Controlled Simulator Matrix Report",
   "type": "object",
   "required": ["schemaVersion", "kind", "status", "generatedAt", "config", "summary", "scenarios", "findings"],
-  "additionalProperties": true,
+  "additionalProperties": false,
   "properties": {
     "schemaVersion": { "const": 1 },
     "kind": { "const": "codex-dock-controlled-simulator-matrix-report" },
@@ -13,7 +13,7 @@
     "config": {
       "type": "object",
       "required": ["requiredScenarios", "minPasses", "maxUiLagMs"],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "requiredScenarios": {
           "type": "array",
@@ -26,21 +26,55 @@
     "summary": {
       "type": "object",
       "required": ["ok", "reportCount", "requiredScenarioCount", "passingScenarioCount", "missingScenarioCount", "failedScenarioCount", "findings"],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "ok": { "type": "boolean" },
         "reportCount": { "type": "number" },
+        "evaluatedReportCount": { "type": "number" },
         "requiredScenarioCount": { "type": "number" },
         "passingScenarioCount": { "type": "number" },
         "missingScenarioCount": { "type": "number" },
         "failedScenarioCount": { "type": "number" },
+        "unexpectedScenarioCount": { "type": "number" },
+        "maxObservedUiLagMs": { "type": ["number", "null"] },
         "findings": { "type": "number" }
       }
     },
-    "scenarios": { "type": "array" },
-    "findings": { "type": "array" }
+    "scenarios": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/proofValue" }
+    },
+    "unexpectedScenarios": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/proofValue" }
+    }
   },
   "definitions": {
-    "status": { "enum": ["pass", "fail", "blocked", "not_run"] }
+    "status": { "enum": ["pass", "fail", "blocked", "not_run"] },
+    "proofValue": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/proofValue" }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
+            }
+          },
+          "additionalProperties": { "$ref": "#/definitions/proofValue" }
+        }
+      ]
+    }
   }
 }

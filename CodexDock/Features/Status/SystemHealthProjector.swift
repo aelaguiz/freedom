@@ -91,7 +91,11 @@ public struct SystemHealthProjector: Sendable {
         case .dockFeed:
             return [AppServerMethods.dockSubscribe, AppServerMethods.dockUpdate, AppServerMethods.dockResync]
         case .threadDetail:
-            return [AppServerMethods.threadRead, AppServerMethods.threadTurnsList, AppServerMethods.threadResume]
+            return [
+                AppServerMethods.threadDetailSubscribe,
+                AppServerMethods.threadDetailUpdate,
+                AppServerMethods.threadDetailResync,
+            ]
         case .archive:
             return [
                 AppServerMethods.archiveSubscribe,

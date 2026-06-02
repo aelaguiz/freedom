@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-dock.local/contract/projection/row-role.schema.json",
+  "title": "Codex Dock Projection Row Role",
+  "description": "The canonical role names emitted by the relay projection engine. Clients filter and render by these explicit roles; they must not infer identity from message text.",
+  "enum": [
+    "threadCard",
+    "userMessage",
+    "agentMessage",
+    "plan",
+    "reasoning",
+    "command",
+    "commandOutput",
+    "fileChange",
+    "toolCall",
+    "request",
+    "system",
+    "unknown"
+  ]
+}

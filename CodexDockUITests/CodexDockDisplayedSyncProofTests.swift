@@ -71,11 +71,16 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
                 try record(sample)
                 sampleIndex += 1
                 if !didTapRequestAction,
-                   let cardID = config.requestCardID,
                    let action = config.requestAction,
-                   sample.detail?.containsRequestCard(cardID: cardID) == true,
-                   app.tapRequestAction(cardID: cardID, action: action, timeout: 0.2) {
-                    didTapRequestAction = true
+                   let detail = sample.detail {
+                    if let cardID = config.requestCardID,
+                       detail.containsRequestCard(cardID: cardID) == true,
+                       app.tapRequestAction(cardID: cardID, action: action, timeout: 0.2) {
+                        didTapRequestAction = true
+                    } else if let requestCardIdentifier = detail.requestCardIDs.first,
+                              app.tapRequestAction(requestCardIdentifier: requestCardIdentifier, action: action, timeout: 0.2) {
+                        didTapRequestAction = true
+                    }
                 }
                 RunLoop.current.run(until: Date().addingTimeInterval(TimeInterval(config.sampleMS) / 1000.0))
             } while Date() < deadline

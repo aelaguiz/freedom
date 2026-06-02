@@ -180,13 +180,13 @@ extension ThreadDetailStore {
         interactionMode: ComposerVoiceInteractionMode = .hold
     ) async {
         guard composer.canStartVoiceCapture else {
-            DockLog.voice.debug("voice capture start skipped reason=busy thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public)")
+            DockLog.voice.debug("voice capture start skipped reason=busy thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public)")
             return
         }
 
         let startedAt = Date()
         let signpostState = DockSignpost.voice.beginInterval("voice.capture")
-        DockLog.voice.notice("voice capture starting thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) mode=\(interactionMode.logDescription, privacy: .public)")
+        DockLog.voice.notice("voice capture starting thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) mode=\(interactionMode.logDescription, privacy: .public)")
         let segment = ActiveDictationSegment(
             id: UUID().uuidString,
             baseDraft: composer.draft,
@@ -207,7 +207,7 @@ extension ThreadDetailStore {
                 using: liveVoiceCaptureController
             )
             startedCaptureSession = captureSession
-            DockLog.voice.notice("voice capture stream started thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+            DockLog.voice.notice("voice capture stream started thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
             guard activeDictationSegment?.id == segment.id else {
                 DockSignpost.voice.endInterval("voice.capture", signpostState)
                 await captureSession.cancel()
@@ -215,7 +215,7 @@ extension ThreadDetailStore {
             }
             let session = try await transcriptionService.startSession()
             startedSession = session
-            DockLog.transcription.notice("transcription session started thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) session_id=\(DockLog.publicID(session.id), privacy: .public)")
+            DockLog.transcription.notice("transcription session started thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) session_id=\(DockLog.publicID(session.id), privacy: .public)")
             guard activeDictationSegment?.id == segment.id else {
                 DockSignpost.voice.endInterval("voice.capture", signpostState)
                 await captureSession.cancel()
@@ -246,7 +246,7 @@ extension ThreadDetailStore {
             activeTranscriptionSession = nil
             activeVoiceCaptureSession = nil
             composer.voice = ComposerVoiceState(phase: .idle, lastError: voiceMessage(from: error))
-            DockLog.voice.error("voice capture start failed thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+            DockLog.voice.error("voice capture start failed thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
         }
     }
 
@@ -277,10 +277,10 @@ extension ThreadDetailStore {
         }
 
         composer.voice.phase = .finalizing
-        DockLog.voice.notice("voice capture finalizing thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) session_id=\(DockLog.publicID(self.composer.voice.sessionID), privacy: .public)")
+        DockLog.voice.notice("voice capture finalizing thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) session_id=\(DockLog.publicID(self.composer.voice.sessionID), privacy: .public)")
 
         guard activeTranscriptionSession != nil else {
-            DockLog.voice.notice("voice capture finalizing deferred reason=transcription_session_not_ready thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) mode=\(interactionMode.logDescription, privacy: .public)")
+            DockLog.voice.notice("voice capture finalizing deferred reason=transcription_session_not_ready thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) mode=\(interactionMode.logDescription, privacy: .public)")
             return
         }
         await stopActiveVoiceCapture()
@@ -288,7 +288,7 @@ extension ThreadDetailStore {
     }
 
     public func cancelVoiceCapture() async {
-        DockLog.voice.notice("voice capture canceled thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) session_id=\(DockLog.publicID(self.composer.voice.sessionID), privacy: .public)")
+        DockLog.voice.notice("voice capture canceled thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) session_id=\(DockLog.publicID(self.composer.voice.sessionID), privacy: .public)")
         await cancelActiveVoiceCapture()
         await activeTranscriptionSession?.cancel()
         cancelActiveDictation()
@@ -298,21 +298,21 @@ extension ThreadDetailStore {
         let sessionID = activeTranscriptionSession?.id
         let startedAt = Date()
         let signpostState = DockSignpost.transcription.beginInterval("transcription.commit")
-        DockLog.transcription.notice("transcription commit started thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) session_id=\(DockLog.publicID(sessionID), privacy: .public)")
+        DockLog.transcription.notice("transcription commit started thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) session_id=\(DockLog.publicID(sessionID), privacy: .public)")
         do {
             try await activeTranscriptionSession?.commit()
             await transcriptionTask?.value
-            DockLog.transcription.notice("transcription commit finished thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) session_id=\(DockLog.publicID(sessionID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+            DockLog.transcription.notice("transcription commit finished thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) session_id=\(DockLog.publicID(sessionID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
         } catch {
             await cancelActiveVoiceCapture()
             failActiveDictation(message: voiceMessage(from: error))
-            DockLog.transcription.error("transcription commit failed thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) session_id=\(DockLog.publicID(sessionID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+            DockLog.transcription.error("transcription commit failed thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) session_id=\(DockLog.publicID(sessionID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
         }
         DockSignpost.transcription.endInterval("transcription.commit", signpostState)
         if let sessionID,
            activeTranscriptionSession?.id == sessionID,
            composer.voice.phase == .finalizing {
-            DockLog.transcription.warning("transcription commit ended without terminal event thread_id=\(DockLog.publicID(self.row.id.threadID), privacy: .public) session_id=\(DockLog.publicID(sessionID), privacy: .public)")
+            DockLog.transcription.warning("transcription commit ended without terminal event thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) session_id=\(DockLog.publicID(sessionID), privacy: .public)")
             await cancelActiveVoiceCapture()
             failActiveDictation(message: "Realtime transcription stopped. Try again.")
         }
@@ -385,9 +385,10 @@ extension ThreadDetailStore {
               composer.voice.phase.isBusy else {
             return
         }
+        let transcriptionSession = activeTranscriptionSession
         await cancelActiveVoiceCapture()
-        await activeTranscriptionSession?.cancel()
         failActiveDictation(message: voiceMessage(from: error))
+        await transcriptionSession?.cancel()
         DockLog.transcription.error("voice audio append failed session_id=\(DockLog.publicID(sessionID), privacy: .public) failed_sequence=\(failedSequence, privacy: .public) failed_bytes=\(failedBytes, privacy: .public) forwarded_chunks=\(summary.chunks, privacy: .public) forwarded_bytes=\(summary.bytes, privacy: .public) last_sequence=\(summary.lastSequence, privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
     }
 
@@ -408,9 +409,12 @@ extension ThreadDetailStore {
               composer.voice.phase == .streaming else {
             return
         }
-        await cancelActiveVoiceCapture()
-        await activeTranscriptionSession?.cancel()
+        let transcriptionSession = activeTranscriptionSession
+        await cancelActiveVoiceCapture(cancelForwardingTask: false)
+        // Canceling the realtime session emits normal cancellation events; keep
+        // the local capture failure visible by ending observation first.
         failActiveDictation(message: "Voice capture stopped. Try again.")
+        await transcriptionSession?.cancel()
         DockLog.voice.warning("voice capture stream ended unexpectedly session_id=\(DockLog.publicID(sessionID), privacy: .public)")
     }
 
@@ -423,11 +427,13 @@ extension ThreadDetailStore {
         voiceCaptureTask = nil
     }
 
-    func cancelActiveVoiceCapture() async {
+    func cancelActiveVoiceCapture(cancelForwardingTask: Bool = true) async {
         let captureSession = activeVoiceCaptureSession
         DockLog.voice.debug("voice capture cancel requested session_id=\(DockLog.publicID(self.composer.voice.sessionID), privacy: .public) active_capture=\((captureSession != nil), privacy: .public) phase=\(self.composer.voice.phase.logDescription, privacy: .public)")
         activeVoiceCaptureSession = nil
-        voiceCaptureTask?.cancel()
+        if cancelForwardingTask {
+            voiceCaptureTask?.cancel()
+        }
         voiceCaptureTask = nil
         await voiceCaptureEngine.cancel(captureSession)
     }

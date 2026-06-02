@@ -251,6 +251,27 @@ extension XCUIApplication {
         return true
     }
 
+    func tapRequestAction(requestCardIdentifier: String, action: String, timeout: TimeInterval) -> Bool {
+        let suffix: String
+        switch action {
+        case "approve":
+            suffix = ".approve"
+        case "decline":
+            suffix = ".decline"
+        case "send":
+            suffix = ".send"
+        default:
+            return false
+        }
+
+        let button = displayedUIElement(id: "\(requestCardIdentifier)\(suffix)")
+        guard button.waitForExistence(timeout: timeout), button.isEnabled, isVisibleForTap(button.frame) else {
+            return false
+        }
+        button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        return true
+    }
+
     func selectMessageFilter(_ filter: String, timeout: TimeInterval) -> Bool {
         let expectedValue = filter
         let control = displayedUIElement(id: AutomationID.Session.messageFilter.rawValue)

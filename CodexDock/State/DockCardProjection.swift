@@ -111,7 +111,7 @@ private struct DockCardProjectionProjector {
                 subtitle: hostState?.status.subtitle ?? "\(hostRows.count) sessions",
                 rows: hostRows,
                 hostIDs: [host.id],
-                orderKey: hostRows.first?.orderKey,
+                displayOrderKey: hostRows.first?.displayOrderKey,
                 newestActivityDate: hostRows.map(\.lastActivityDate).max(),
                 runningCount: hostRows.filter { $0.status == .running }.count,
                 isUnavailable: isUnavailable,
@@ -135,7 +135,7 @@ private struct DockCardProjectionProjector {
                 subtitle: "\(sortedRows.count) sessions · \(hostNames.joined(separator: ", "))",
                 rows: sortedRows,
                 hostIDs: Set(sortedRows.map(hostIDForGroup)).sorted(),
-                orderKey: sortedRows.first?.orderKey,
+                displayOrderKey: sortedRows.first?.displayOrderKey,
                 newestActivityDate: sortedRows.map(\.lastActivityDate).max(),
                 runningCount: sortedRows.filter { $0.status == .running }.count,
                 isUnavailable: false,
@@ -293,7 +293,7 @@ private struct DockCardProjectionProjector {
 
     private func rowBelongs(_ row: DockRowViewModel, to configuredHostID: String) -> Bool {
         snapshot.hostIdentityResolver.contains(
-            rowHostID: row.id.hostID,
+            rowHostID: row.hostID,
             sourceConfiguredHostID: row.sourceHostID,
             in: configuredHostID
         )
@@ -302,11 +302,11 @@ private struct DockCardProjectionProjector {
 
     private func hostIDForGroup(_ row: DockRowViewModel) -> String {
         snapshot.hostIdentityResolver.resolve(
-            rowHostID: row.id.hostID,
+            rowHostID: row.hostID,
             sourceConfiguredHostID: row.sourceHostID
         )?.host.id
             ?? row.sourceHostID
-            ?? row.id.hostID
+            ?? row.hostID
     }
 
     private func matchesSearch(_ row: DockRowViewModel) -> Bool {
@@ -324,27 +324,27 @@ private struct DockCardProjectionProjector {
         [
             row.title,
             row.hostDisplayName,
-            row.id.hostID,
+            row.hostID,
             row.repository,
             row.branch,
             row.summary,
             row.status.label,
             row.label,
             row.origin.automationKind,
-            row.id.threadID
+            row.threadID
         ].compactMap { $0 }
     }
 
     private func groupPrecedes(_ lhs: DockProjectionGroupViewModel, _ rhs: DockProjectionGroupViewModel) -> Bool {
-        if let lhsOrderKey = lhs.orderKey,
-           let rhsOrderKey = rhs.orderKey,
+        if let lhsOrderKey = lhs.displayOrderKey,
+           let rhsOrderKey = rhs.displayOrderKey,
            lhsOrderKey != rhsOrderKey {
             return lhsOrderKey < rhsOrderKey
         }
-        if lhs.orderKey != nil {
+        if lhs.displayOrderKey != nil {
             return true
         }
-        if rhs.orderKey != nil {
+        if rhs.displayOrderKey != nil {
             return false
         }
 
@@ -356,28 +356,12 @@ private struct DockCardProjectionProjector {
     }
 
     private func rowPrecedesByRelayOrder(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
-        // The relay owns card ordering. Swift may filter and group rows, but it
-        // must not rebuild recency from timestamps or local status.
-        if let lhsOrderKey = lhs.orderKey,
-           let rhsOrderKey = rhs.orderKey {
-            if lhsOrderKey == rhsOrderKey {
-                return stableRowID(lhs) < stableRowID(rhs)
-            }
-            return lhsOrderKey < rhsOrderKey
+        // Dock rows are relay projection rows. Swift may filter and group them,
+        // but visual order must remain relay displayOrderKey + projectionID.
+        if lhs.displayOrderKey == rhs.displayOrderKey {
+            return stableRowID(lhs) < stableRowID(rhs)
         }
-        if lhs.orderKey != nil {
-            return true
-        }
-        if rhs.orderKey != nil {
-            return false
-        }
-
-        let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
-        if titleOrder != .orderedSame {
-            return titleOrder == .orderedAscending
-        }
-
-        return stableRowID(lhs) < stableRowID(rhs)
+        return lhs.displayOrderKey < rhs.displayOrderKey
     }
 
     private func pinnedRowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
@@ -403,7 +387,7 @@ private struct DockCardProjectionProjector {
     }
 
     private func stableRowID(_ row: DockRowViewModel) -> String {
-        "\(row.id.hostID)::\(row.id.threadID)"
+        row.id
     }
 
     private func normalizedQuery(_ value: String) -> String {

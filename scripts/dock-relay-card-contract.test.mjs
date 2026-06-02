@@ -151,9 +151,9 @@ test("dock/subscribe orders cards by proven newest turn activity, not raw thread
         assert.equal(response.error, undefined);
         assert.equal(response.result.complete, true);
         assert.equal(response.result.freshness.status, "fresh");
-        assert.deepEqual(response.result.cards.map((card) => card.threadID), ["newer", "older"]);
-        assert.ok(response.result.cards.every((card) => card.completeness === "complete"));
-        assert.ok(response.result.cards.every((card) => card.freshness === "fresh"));
+        assert.deepEqual(response.result.rows.map((card) => card.threadID), ["newer", "older"]);
+        assert.ok(response.result.rows.every((card) => card.completeness === "complete"));
+        assert.ok(response.result.rows.every((card) => card.freshness === "fresh"));
       } finally {
         ws.close();
       }
@@ -174,12 +174,12 @@ test("dock/subscribe includes live-only rows absent from raw thread/list", async
         assert.equal(response.error, undefined);
         assert.equal(response.result.complete, true);
         assert.equal(response.result.freshness.status, "fresh");
-        assert.deepEqual(response.result.cards.map((card) => card.threadID), [
+        assert.deepEqual(response.result.rows.map((card) => card.threadID), [
           "live-only",
           "newer",
           "older",
         ]);
-        const liveOnly = response.result.cards.find((card) => card.threadID === "live-only");
+        const liveOnly = response.result.rows.find((card) => card.threadID === "live-only");
         assert.equal(liveOnly?.completeness, "complete");
         assert.equal(liveOnly?.freshness, "fresh");
       } finally {
@@ -205,8 +205,8 @@ test("stale thread/read cannot downgrade list activity when turn proof fails", a
         const response = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
         assert.equal(response.error, undefined);
         assert.equal(response.result.complete, false);
-        assert.deepEqual(response.result.cards.map((card) => card.threadID), ["newer", "older"]);
-        const newer = response.result.cards.find((card) => card.threadID === "newer");
+        assert.deepEqual(response.result.rows.map((card) => card.threadID), ["newer", "older"]);
+        const newer = response.result.rows.find((card) => card.threadID === "newer");
         // Relay card truth is always canonical milliseconds, even when the
         // upstream fixture uses second-shaped app-server timestamps.
         assert.equal(newer?.activityAtMs, 4_000_000_000);
@@ -235,7 +235,7 @@ test("dock/subscribe marks stream stale when a live source refresh fails", async
           assert.equal(response.result.complete, false);
           assert.equal(response.result.freshness.status, "stale");
           assert.match(response.result.freshness.lastError || "", /live loaded session refresh failed/u);
-          assert.deepEqual(response.result.cards.map((card) => card.threadID), ["newer", "older"]);
+          assert.deepEqual(response.result.rows.map((card) => card.threadID), ["newer", "older"]);
         } finally {
           ws.close();
         }
@@ -258,7 +258,7 @@ test("dock/subscribe marks cards partial and stream stale when newest-turn proof
         assert.equal(response.error, undefined);
         assert.equal(response.result.complete, false);
         assert.equal(response.result.freshness.status, "stale");
-        const newer = response.result.cards.find((card) => card.threadID === "newer");
+        const newer = response.result.rows.find((card) => card.threadID === "newer");
         assert.equal(newer?.freshness, "stale");
         assert.equal(newer?.completeness, "partial");
         assert.equal(typeof newer?.activityAtMs, "number");
@@ -271,7 +271,7 @@ test("dock/subscribe marks cards partial and stream stale when newest-turn proof
   }
 });
 
-test("dock/update replacement delta is complete when it carries every current row", async () => {
+test("dock/update replacement upsert is complete when it carries every current row", async () => {
   let sourceRows = [{
     id: "cached",
     sessionId: "cached-session",
@@ -323,7 +323,7 @@ test("dock/update replacement delta is complete when it carries every current ro
         const initial = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
         assert.equal(initial.error, undefined);
         assert.equal(initial.result.complete, true);
-        assert.deepEqual(initial.result.cards.map((card) => card.threadID), ["cached"]);
+        assert.deepEqual(initial.result.rows.map((card) => card.threadID), ["cached"]);
 
         const initialDockSeq = initial.result.seq;
         const archiveOnly = config.relayStateEngine.store.applyArchiveReconciliation({
@@ -348,18 +348,18 @@ test("dock/update replacement delta is complete when it carries every current ro
         }];
         const updatePromise = waitForRelayMessage(ws, (message) => (
           message.method === "dock/update"
-          && message.params?.kind === "delta"
-          && (message.params?.upsertCards || []).some((card) => card.threadID === "recovered")
+          && message.params?.kind === "upsert"
+          && (message.params?.rows || []).some((card) => card.threadID === "recovered")
         ));
         await config.relayStateEngine.reconcileDock({ reason: "test-recovered" });
         const update = await updatePromise;
 
-        assert.equal(update.params.baseSeq, initialDockSeq);
-        assert.ok(update.params.seq > archiveOnly.seq);
+        assert.equal("baseSeq" in update.params, false);
+        assert.ok(update.params.seq > initialDockSeq);
         assert.equal(update.params.complete, true);
         assert.equal(update.params.totalRows, 1);
-        assert.deepEqual(update.params.upsertCards.map((card) => card.threadID), ["recovered"]);
-        assert.deepEqual(update.params.deleteCardIDs, ["home::cached"]);
+        assert.deepEqual(update.params.rows.map((card) => card.threadID), ["recovered"]);
+        assert.deepEqual(update.params.projectionIDs, ["host:home/thread:cached/row:threadCard"]);
       } finally {
         ws.close();
       }

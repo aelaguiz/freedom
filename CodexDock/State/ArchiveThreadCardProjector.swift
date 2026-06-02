@@ -14,7 +14,7 @@ struct ArchiveThreadCardProjector {
             now: now
         )
         let rows = cardBatches.flatMap { batch in
-            rowProjector.rows(from: batch.cards, sourceHostID: batch.hostID)
+            rowProjector.rows(from: batch.cards)
         }
         let groupedRows = Dictionary(grouping: rows, by: sectionID(for:))
 
@@ -30,7 +30,7 @@ struct ArchiveThreadCardProjector {
     }
 
     private func sectionID(for row: DockRowViewModel) -> String {
-        hosts.count > 1 ? "\(row.id.hostID)::\(row.branch)" : row.branch
+        hosts.count > 1 ? "\(row.hostID)::\(row.branch)" : row.branch
     }
 
     private func sectionTitle(for row: DockRowViewModel) -> String {
@@ -41,8 +41,8 @@ struct ArchiveThreadCardProjector {
     }
 
     private func sectionPrecedes(_ lhs: DockSectionViewModel, _ rhs: DockSectionViewModel) -> Bool {
-        // Archive ordering follows relay orderKey only. If a row somehow lacks
-        // orderKey, keep ordering stable rather than rebuilding recency locally.
+        // Archive ordering follows relay displayOrderKey only. Do not rebuild
+        // recency locally from timestamps.
         if let lhsOrderKey = sectionOrderKey(lhs),
            let rhsOrderKey = sectionOrderKey(rhs),
            lhsOrderKey != rhsOrderKey {
@@ -53,18 +53,16 @@ struct ArchiveThreadCardProjector {
     }
 
     private func sectionOrderKey(_ section: DockSectionViewModel) -> String? {
-        section.rows.compactMap(\.orderKey).min()
+        section.rows.map(\.displayOrderKey).min()
     }
 
     private func rowPrecedes(_ lhs: DockRowViewModel, _ rhs: DockRowViewModel) -> Bool {
-        // The relay owns card recency. Archive may group and render rows, but
-        // must not fall back to timestamp sorting if orderKey is absent.
-        if let lhsOrderKey = lhs.orderKey,
-           let rhsOrderKey = rhs.orderKey,
-           lhsOrderKey != rhsOrderKey {
-            return lhsOrderKey < rhsOrderKey
+        // The relay owns card recency. Archive may group rows, but row order is
+        // still relay displayOrderKey, then projectionID.
+        if lhs.displayOrderKey != rhs.displayOrderKey {
+            return lhs.displayOrderKey < rhs.displayOrderKey
         }
 
-        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        return lhs.id < rhs.id
     }
 }

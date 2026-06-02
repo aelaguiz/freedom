@@ -832,8 +832,8 @@ public struct DockView: View {
         DockSwipeActionRow(
             row: row,
             actionID: AutomationID.Dock.rowAction(
-                hostID: row.id.hostID,
-                threadID: row.id.threadID,
+                hostID: row.hostID,
+                threadID: row.threadID,
                 action: row.isPinned ? .unpin : .pin
             ),
             resetToken: resetToken,
@@ -860,7 +860,7 @@ public struct DockView: View {
         dockRowContent(
             row,
             showsPinIndicator: true,
-            automationID: AutomationID.Dock.row(hostID: row.id.hostID, threadID: row.id.threadID),
+            automationID: AutomationID.Dock.row(hostID: row.hostID, threadID: row.threadID),
             showsContextMenu: false
         )
         .accessibilityAction(named: Text("Unpin thread")) {

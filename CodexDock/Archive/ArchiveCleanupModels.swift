@@ -92,7 +92,7 @@ public struct ArchiveCleanupHostSummary: Equatable, Identifiable, Sendable {
 }
 
 public struct ArchiveCleanupExcludedRow: Equatable, Identifiable, Sendable {
-    public var id: HostScopedThreadID { row.id }
+    public var id: HostScopedThreadID { row.threadIdentity }
     public let row: DockRowViewModel
     public let reason: ArchiveCleanupExclusionReason
 }

@@ -105,33 +105,39 @@ function parseSemicolonValue(value) {
   return result;
 }
 
-function eventIDsFromElements(...elementGroups) {
+function projectionIDsFromElements(...elementGroups) {
   const ids = [];
   const seen = new Set();
   for (const element of elementGroups.flat()) {
-    const eventID = eventIDFromElement(element);
-    if (!eventID || seen.has(eventID)) {
+    const projectionID = projectionIDFromElement(element);
+    if (!projectionID || seen.has(projectionID)) {
       continue;
     }
-    seen.add(eventID);
-    ids.push(eventID);
+    seen.add(projectionID);
+    ids.push(projectionID);
   }
   return ids;
 }
 
-function eventIDFromElement(element) {
+function projectionIDFromElement(element) {
   if (!element) {
     return null;
   }
   const parsed = parseSemicolonValue(element.value || "");
-  if (parsed.event) {
-    return parsed.event;
+  if (isCanonicalProjectionID(parsed.projection)) {
+    return parsed.projection;
   }
   const prefix = "codexdock.session.message.";
   if (typeof element.identifier === "string" && element.identifier.startsWith(prefix)) {
-    return decodeAutomationSegment(element.identifier.slice(prefix.length));
+    const decoded = decodeAutomationSegment(element.identifier.slice(prefix.length));
+    return isCanonicalProjectionID(decoded) ? decoded : null;
   }
   return null;
+}
+
+function isCanonicalProjectionID(value) {
+  return typeof value === "string"
+    && /^host:[^/]+\/thread:[^/]+\/.+\/row:[^/]+$/u.test(value);
 }
 
 function decodeAutomationSegment(value) {
@@ -147,7 +153,7 @@ function flattenUISamples(uiProof) {
   for (const run of Array.isArray(uiProof?.runs) ? uiProof.runs : []) {
     for (const sample of Array.isArray(run.samples) ? run.samples : []) {
       const parsed = parseMessageListValue(sample.messageListValue);
-      const uiVisibleEventIDs = eventIDsFromElements(
+      const uiVisibleProjectionIDs = projectionIDsFromElements(
         sample.messageCards || [],
         sample.sweepMessageCards || [],
       );
@@ -162,8 +168,8 @@ function flattenUISamples(uiProof) {
         messageListValue: sample.messageListValue,
         uiEvents: parsed.events,
         messageListFilter: parsed.filter,
-        uiVisibleEventIDs,
-        uiVisibleEventIDHead: uiVisibleEventIDs[0] ?? null,
+        uiVisibleProjectionIDs,
+        uiVisibleProjectionIDHead: uiVisibleProjectionIDs[0] ?? null,
       });
     }
   }
@@ -188,8 +194,8 @@ function uiSampleTimeMS(sample) {
 }
 
 function relaySampleTimeMS(sample) {
-  // Relay truth here comes from thread/read + thread/turns/list. The sample is
-  // known only after those reads finish, so finishedAt is the canonical clock.
+  // Relay truth here comes from thread/detail/read projection rows. The sample
+  // is known only after that read finishes, so finishedAt is the canonical clock.
   return timestamp(sample?.finishedAt) ?? timestamp(sample?.sampledAt);
 }
 
@@ -243,7 +249,7 @@ function compare(relayTruth, uiProof, options) {
     }
 
     const expectedEvents = nearest.relaySample?.turns?.visibleCounts?.[uiSample.filter] ?? null;
-    const expectedEventIDHead = nearest.relaySample?.turns?.visibleEventIDs?.[uiSample.filter]?.[0] ?? null;
+    const expectedProjectionIDHead = nearest.relaySample?.turns?.visibleProjectionIDs?.[uiSample.filter]?.[0] ?? null;
     const ok = uiSample.screenKind === "thread"
       && uiSample.messageListFilter === uiSample.filter
       && Number.isInteger(uiSample.uiEvents);
@@ -256,10 +262,10 @@ function compare(relayTruth, uiProof, options) {
         sampledAt: uiSample.sampledAt,
         messageListCapturedAt: uiSample.messageListCapturedAt ?? null,
         uiEvents: uiSample.uiEvents,
-        uiVisibleEventIDHead: uiSample.uiVisibleEventIDHead,
+        uiVisibleProjectionIDHead: uiSample.uiVisibleProjectionIDHead,
         messageListFilter: uiSample.messageListFilter,
         expectedEvents,
-        expectedEventIDHead,
+        expectedProjectionIDHead,
         relaySampledAt: nearest.relaySample.sampledAt,
         lagMS: nearest.lagMS,
         screenKind: uiSample.screenKind,
@@ -272,12 +278,12 @@ function compare(relayTruth, uiProof, options) {
         sampledAt: nearest.relaySample.sampledAt,
         dockActivityAt: nearest.relaySample.dock?.targetCard?.activityAt ?? null,
         visibleCounts: nearest.relaySample.turns?.visibleCounts ?? {},
-        visibleEventIDHeads: Object.fromEntries(Object.entries(nearest.relaySample.turns?.visibleEventIDs ?? {})
+        visibleProjectionIDHeads: Object.fromEntries(Object.entries(nearest.relaySample.turns?.visibleProjectionIDs ?? {})
           .map(([filter, ids]) => [filter, Array.isArray(ids) ? ids[0] ?? null : null])),
       },
       lagMS: nearest.lagMS,
       expectedEvents,
-      expectedEventIDHead,
+      expectedProjectionIDHead,
       ok,
     });
   }
@@ -294,7 +300,7 @@ function compare(relayTruth, uiProof, options) {
   const relayMovingInSampledFilters = relayMovingFilters.length > 0;
   const uiMoving = Object.values(groupUISamplesByFilter(uiSamples)).some((samples) => (
     uniqueCounts(samples, "uiEvents").length > 1
-      || uniqueSequences(samples, "uiVisibleEventIDs").length > 1
+      || uniqueSequences(samples, "uiVisibleProjectionIDs").length > 1
   ));
   if (options.requireMoving && !relayMovingInSampledFilters) {
     failures.push({
@@ -307,7 +313,7 @@ function compare(relayTruth, uiProof, options) {
   } else if (options.requireMoving && !uiMoving) {
     failures.push({
       code: "moving_updates_not_proven",
-      message: "Moving proof requires UI count or visible event-id changes in a sampled Thread Detail filter that moved in relay truth.",
+      message: "Moving proof requires UI count or visible projection-id changes in a sampled Thread Detail filter that moved in relay truth.",
       relayMoving,
       relayMovingInSampledFilters,
       uiMoving,
@@ -361,7 +367,7 @@ function relayFilterMoved(relayTruth, relaySamples, filter) {
     return true;
   }
   const sequences = relaySamples
-    .map((sample) => sample?.turns?.visibleEventIDs?.[filter])
+    .map((sample) => sample?.turns?.visibleProjectionIDs?.[filter])
     .filter((value) => Array.isArray(value) && value.length > 0)
     .map((value) => JSON.stringify(value));
   return new Set(sequences).size > 1;
@@ -379,7 +385,7 @@ function evaluateRuns(relaySamples, uiProof, options) {
           events: parsed.events,
           messageListFilter: parsed.filter,
           filter: sample.filter || run.filter || parsed.filter,
-          uiVisibleEventIDs: eventIDsFromElements(
+          uiVisibleProjectionIDs: projectionIDsFromElements(
             sample.messageCards || [],
             sample.sweepMessageCards || [],
           ),
@@ -434,9 +440,9 @@ function evaluateRuns(relaySamples, uiProof, options) {
     const relayCutoff = Number.isFinite(lastUITime) ? lastUITime - options.maxLagMS : null;
     const relaySample = latestRelaySampleAtOrBefore(relaySamples, relayCutoff);
     const expectedEvents = relaySample?.turns?.visibleCounts?.[filter] ?? null;
-    const expectedEventIDs = relaySample?.turns?.visibleEventIDs?.[filter] ?? [];
+    const expectedProjectionIDs = relaySample?.turns?.visibleProjectionIDs?.[filter] ?? [];
     const lastUIEvents = lastUISample?.events ?? null;
-    const lastUIEventIDs = Array.isArray(lastUISample?.uiVisibleEventIDs) ? lastUISample.uiVisibleEventIDs : [];
+    const lastUIProjectionIDs = Array.isArray(lastUISample?.uiVisibleProjectionIDs) ? lastUISample.uiVisibleProjectionIDs : [];
 
     if (!relaySample) {
       failures.push({
@@ -471,12 +477,12 @@ function evaluateRuns(relaySamples, uiProof, options) {
         maxLagMS: options.maxLagMS,
       });
     }
-    failures.push(...eventIDFailures({
+    failures.push(...projectionIDFailures({
       runIndex,
       filter,
       lastUISample,
-      lastUIEventIDs,
-      expectedEventIDs,
+      lastUIProjectionIDs,
+      expectedProjectionIDs,
       relaySample,
       maxLagMS: options.maxLagMS,
     }));
@@ -484,9 +490,9 @@ function evaluateRuns(relaySamples, uiProof, options) {
     evaluations.push(runEvaluation(runIndex, run, samples, filter, relaySample, failures, {
       lastUISample,
       lastUIEvents,
-      lastUIEventIDs,
+      lastUIProjectionIDs,
       expectedEvents,
-      expectedEventIDHead: expectedEventIDs[0] ?? null,
+      expectedProjectionIDHead: expectedProjectionIDs[0] ?? null,
       relayCutoff: Number.isFinite(relayCutoff) ? new Date(relayCutoff).toISOString() : null,
     }));
   }
@@ -510,49 +516,49 @@ function latestRelaySampleAtOrBefore(relaySamples, cutoffMS) {
   return selected;
 }
 
-function eventIDFailures({
+function projectionIDFailures({
   runIndex,
   filter,
   lastUISample,
-  lastUIEventIDs,
-  expectedEventIDs,
+  lastUIProjectionIDs,
+  expectedProjectionIDs,
   relaySample,
   maxLagMS,
 }) {
-  if (!Array.isArray(expectedEventIDs) || !expectedEventIDs.length || !lastUIEventIDs.length) {
+  if (!Array.isArray(expectedProjectionIDs) || !expectedProjectionIDs.length || !lastUIProjectionIDs.length) {
     return [];
   }
   const failures = [];
-  const expectedSet = new Set(expectedEventIDs);
-  const comparableActual = lastUIEventIDs.filter((eventID) => expectedSet.has(eventID));
-  if (comparableActual.length > 1 && !orderedSubsequence(comparableActual, expectedEventIDs)) {
+  const expectedSet = new Set(expectedProjectionIDs);
+  const comparableActual = lastUIProjectionIDs.filter((projectionID) => expectedSet.has(projectionID));
+  if (comparableActual.length > 1 && !orderedSubsequence(comparableActual, expectedProjectionIDs)) {
     failures.push({
-      code: "filter_event_order_mismatch",
-      message: "UI event ids are present but not in settled relay order.",
+      code: "filter_projection_order_mismatch",
+      message: "UI projection ids are present but not in settled relay order.",
       runIndex,
       filter,
       lastUISampledAt: lastUISample?.sampledAt ?? null,
       lastUIMessageListCapturedAt: lastUISample?.messageListCapturedAt ?? null,
-      actualEventIDs: comparableActual,
-      expectedEventIDs,
+      actualProjectionIDs: comparableActual,
+      expectedProjectionIDs,
       relaySampledAt: relaySample?.sampledAt ?? null,
       relayFinishedAt: relaySample?.finishedAt ?? null,
       maxLagMS,
     });
   }
 
-  const newestExpectedID = expectedEventIDs[0] ?? null;
+  const newestExpectedID = expectedProjectionIDs[0] ?? null;
   const hasSweep = Array.isArray(lastUISample?.sweepMessageCards) && lastUISample.sweepMessageCards.length > 0;
-  if (hasSweep && newestExpectedID && !lastUIEventIDs.includes(newestExpectedID)) {
+  if (hasSweep && newestExpectedID && !lastUIProjectionIDs.includes(newestExpectedID)) {
     failures.push({
-      code: "filter_newest_event_missing",
-      message: "UI checkpoint sweep did not include the newest settled relay event for this filter.",
+      code: "filter_newest_projection_missing",
+      message: "UI checkpoint sweep did not include the newest settled relay projection row for this filter.",
       runIndex,
       filter,
       lastUISampledAt: lastUISample?.sampledAt ?? null,
       lastUIMessageListCapturedAt: lastUISample?.messageListCapturedAt ?? null,
       newestExpectedID,
-      actualEventIDHead: lastUIEventIDs[0] ?? null,
+      actualProjectionIDHead: lastUIProjectionIDs[0] ?? null,
       relaySampledAt: relaySample?.sampledAt ?? null,
       relayFinishedAt: relaySample?.finishedAt ?? null,
       maxLagMS,
@@ -589,8 +595,8 @@ function runEvaluation(
   const counts = samples
     .map((sample) => sample.events)
     .filter((count) => Number.isInteger(count));
-  const eventIDHeads = samples
-    .map((sample) => sample.uiVisibleEventIDs?.[0] ?? null)
+  const projectionIDHeads = samples
+    .map((sample) => sample.uiVisibleProjectionIDs?.[0] ?? null)
     .filter(Boolean);
   return {
     runIndex,
@@ -600,14 +606,14 @@ function runEvaluation(
     firstUIEvents: counts[0] ?? null,
     lastUIEvents: extra.lastUIEvents ?? counts.at(-1) ?? null,
     uniqueUIEvents: [...new Set(counts)],
-    firstUIEventIDHead: eventIDHeads[0] ?? null,
-    lastUIEventIDHead: extra.lastUIEventIDs?.[0] ?? eventIDHeads.at(-1) ?? null,
-    uniqueUIEventIDHeads: [...new Set(eventIDHeads)],
+    firstUIProjectionIDHead: projectionIDHeads[0] ?? null,
+    lastUIProjectionIDHead: extra.lastUIProjectionIDs?.[0] ?? projectionIDHeads.at(-1) ?? null,
+    uniqueUIProjectionIDHeads: [...new Set(projectionIDHeads)],
     relaySampledAt: relaySample?.sampledAt ?? null,
     relayFinishedAt: relaySample?.finishedAt ?? null,
     relayCutoff: extra.relayCutoff ?? null,
     expectedEvents: extra.expectedEvents ?? null,
-    expectedEventIDHead: extra.expectedEventIDHead ?? null,
+    expectedProjectionIDHead: extra.expectedProjectionIDHead ?? null,
     ok: failures.length === 0,
     failures,
   };
@@ -622,10 +628,10 @@ function summarizeRunEvaluations(evaluations) {
     lastUIEvents: evaluation.lastUIEvents,
     expectedEvents: evaluation.expectedEvents,
     uniqueUIEvents: evaluation.uniqueUIEvents,
-    firstUIEventIDHead: evaluation.firstUIEventIDHead,
-    lastUIEventIDHead: evaluation.lastUIEventIDHead,
-    expectedEventIDHead: evaluation.expectedEventIDHead,
-    uniqueUIEventIDHeads: evaluation.uniqueUIEventIDHeads,
+    firstUIProjectionIDHead: evaluation.firstUIProjectionIDHead,
+    lastUIProjectionIDHead: evaluation.lastUIProjectionIDHead,
+    expectedProjectionIDHead: evaluation.expectedProjectionIDHead,
+    uniqueUIProjectionIDHeads: evaluation.uniqueUIProjectionIDHeads,
   }));
 }
 
@@ -643,14 +649,14 @@ function summarizeUIFilters(samples) {
   const summary = {};
   for (const [filter, filterSamples] of Object.entries(groupUISamplesByFilter(samples))) {
     const counts = uniqueCounts(filterSamples, "uiEvents");
-    const eventIDSequences = uniqueSequences(filterSamples, "uiVisibleEventIDs");
+    const projectionIDSequences = uniqueSequences(filterSamples, "uiVisibleProjectionIDs");
     summary[filter] = {
       sampleCount: filterSamples.length,
       first: counts[0] ?? null,
       last: counts.at(-1) ?? null,
       unique: counts,
-      eventIDSequenceCount: eventIDSequences.length,
-      changed: counts.length > 1 || eventIDSequences.length > 1,
+      projectionIDSequenceCount: projectionIDSequences.length,
+      changed: counts.length > 1 || projectionIDSequences.length > 1,
     };
   }
   return summary;

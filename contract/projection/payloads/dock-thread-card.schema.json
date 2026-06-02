@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-dock.local/contract/projection/payloads/dock-thread-card.schema.json",
+  "title": "Codex Dock Projection Payload: Thread Card",
+  "description": "Dock and Archive row payload. The shared projection envelope owns identity; these fields are only the thread-card view payload.",
+  "allOf": [
+    {
+      "$ref": "https://codex-dock.local/contract/projection/projection-envelope.schema.json"
+    },
+    {
+      "type": "object",
+      "required": [
+        "displayOrderKey",
+        "rowRole",
+        "sourceRef",
+        "projectionID",
+        "view",
+        "sourceHostID",
+        "projectionEngineVersion",
+        "identityVersion",
+        "schemaVersion",
+        "id",
+        "logicalHostID",
+        "threadID",
+        "backendSessionID",
+        "hostDisplayName",
+        "activityAt",
+        "activityAtMs",
+        "displaySummary",
+        "title",
+        "status",
+        "sourceKind",
+        "lane",
+        "archiveState",
+        "freshness",
+        "completeness"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "logicalHostID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "threadID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "backendSessionID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hostDisplayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hostEndpoint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "activityAt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Relay-owned canonical card activity timestamp."
+        },
+        "activityAtMs": {
+          "type": "integer",
+          "description": "Relay-owned canonical card activity time in milliseconds. It must fold thread metadata, newest turns, and live activity when available."
+        },
+        "displaySummary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "running",
+            "needsInput",
+            "needsApproval",
+            "idle",
+            "error",
+            "dormant",
+            "unknown"
+          ]
+        },
+        "sourceKind": {
+          "enum": [
+            "human",
+            "automation",
+            "unknown"
+          ]
+        },
+        "lane": {
+          "enum": [
+            "human",
+            "agent",
+            "unknown"
+          ]
+        },
+        "relationship": {
+          "enum": [
+            "root",
+            "forked",
+            "spawned",
+            "unknown"
+          ]
+        },
+        "forkedFromID": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "archiveState": {
+          "enum": [
+            "active",
+            "archived",
+            "unknown"
+          ]
+        },
+        "freshness": {
+          "enum": [
+            "unknown",
+            "fresh",
+            "stale",
+            "offline",
+            "error"
+          ],
+          "description": "Relay-owned card freshness. A card with unproven canonical activity must not be emitted as fresh."
+        },
+        "completeness": {
+          "enum": [
+            "complete",
+            "partial",
+            "unknown"
+          ],
+          "description": "Relay-owned proof state for card truth. complete means canonical activity was proven or bounded by the relay projection."
+        },
+        "repository": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workingDirectory": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summarySource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "identityVersion": {
+          "const": 1
+        },
+        "projectionEngineVersion": {
+          "const": 1
+        },
+        "sourceHostID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "view": {
+          "enum": [
+            "dock",
+            "archive"
+          ]
+        },
+        "projectionID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rowRole": {
+          "const": "threadCard"
+        },
+        "displayOrderKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Relay projection display order key. Clients must render by this key and must not infer visible order from timestamps."
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  ]
+}

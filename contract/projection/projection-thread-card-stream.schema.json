@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-dock.local/contract/projection/projection-thread-card-stream.schema.json",
+  "title": "Codex Dock Projection Stream: Thread Cards",
+  "description": "The canonical Dock and Archive projection stream. This replaces the old Dock-only contract path so all visible thread-card identity flows through the shared projection contract package.",
+  "type": "object",
+  "required": [
+    "kind",
+    "schemaVersion",
+    "identityVersion",
+    "projectionEngineVersion",
+    "sourceHostID",
+    "view",
+    "scope",
+    "viewParamsKey",
+    "order",
+    "epoch",
+    "seq",
+    "freshness"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "snapshot",
+        "upsert",
+        "delete",
+        "resyncRequired",
+        "heartbeat"
+      ]
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "identityVersion": {
+      "const": 1
+    },
+    "projectionEngineVersion": {
+      "const": 1
+    },
+    "sourceHostID": {
+      "type": "string",
+      "minLength": 1
+    },
+    "view": {
+      "enum": [
+        "dock",
+        "archive"
+      ]
+    },
+    "complete": {
+      "type": "boolean",
+      "description": "True only when the emitted ordering window is fully proven by the relay card projection. If any emitted card has unproven canonical activity, the stream must be incomplete."
+    },
+    "totalRows": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "window": {
+      "$ref": "#/$defs/window"
+    },
+    "epoch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "asOf": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "string"
+    },
+    "viewParamsKey": {
+      "type": "string"
+    },
+    "order": {
+      "const": "displayOrderKeyAscending"
+    },
+    "freshness": {
+      "$ref": "#/$defs/streamFreshness",
+      "description": "Relay-owned freshness for the stream. Transport reachability alone must not mark card data fresh."
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "$ref": "https://codex-dock.local/contract/projection/payloads/dock-thread-card.schema.json"
+      }
+    },
+    "projectionIDs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "required": [
+          "sessions"
+        ]
+      },
+      {
+        "required": [
+          "upsertSessions"
+        ]
+      },
+      {
+        "required": [
+          "deleteSessionIDs"
+        ]
+      },
+      {
+        "required": [
+          "cards"
+        ]
+      },
+      {
+        "required": [
+          "upsertCards"
+        ]
+      },
+      {
+        "required": [
+          "deleteCardIDs"
+        ]
+      },
+      {
+        "required": [
+          "messageSummary"
+        ]
+      },
+      {
+        "required": [
+          "messageUpdatedAt"
+        ]
+      }
+    ]
+  },
+  "$defs": {
+    "window": {
+      "type": "object",
+      "required": [
+        "offset",
+        "limit",
+        "rowCount"
+      ],
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rowCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "nextOffset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "streamFreshness": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "unknown",
+            "fresh",
+            "stale",
+            "offline",
+            "error"
+          ]
+        },
+        "lastAttemptAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastSyncAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastError": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

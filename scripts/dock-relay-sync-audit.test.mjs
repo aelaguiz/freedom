@@ -8,6 +8,8 @@ import {
   parseArgs,
   sanitizeDockSnapshotForReport,
 } from "./dock-relay-sync-audit.mjs";
+import { RELAY_STATE_STREAM_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
+import { projectionIDForThreadCard } from "./dock-relay-projection-engine.mjs";
 
 const emptyWindow = {
   offset: 0,
@@ -20,7 +22,7 @@ const emptyWindow = {
 function snapshot(overrides = {}) {
   return {
     kind: "snapshot",
-    schemaVersion: 2,
+    schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
     epoch: "epoch-1",
     seq: 7,
     view: "dock",
@@ -29,7 +31,7 @@ function snapshot(overrides = {}) {
     window: emptyWindow,
     freshness: { status: "fresh" },
     hosts: [],
-    cards: [],
+    rows: [],
     ...overrides,
   };
 }
@@ -40,7 +42,7 @@ test("sync audit applies heartbeat as stream state instead of requiring resync",
 
   const findings = applyDockPayload(state, {
     kind: "heartbeat",
-    schemaVersion: 2,
+    schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
     epoch: "epoch-1",
     seq: 7,
     view: "dock",
@@ -63,7 +65,7 @@ test("sync audit flags heartbeat sequence gaps", () => {
 
   const findings = applyDockPayload(state, {
     kind: "heartbeat",
-    schemaVersion: 2,
+    schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
     epoch: "epoch-1",
     seq: 8,
     view: "dock",
@@ -77,13 +79,36 @@ test("sync audit flags heartbeat sequence gaps", () => {
   assert.equal(findings.some((finding) => finding.code === "dock_stream_heartbeat_sequence_gap"), true);
 });
 
-test("sync audit accepts per-view sequence jumps when baseSeq matches", () => {
+test("sync audit applies canonical upsert updates with contiguous sequence numbers", () => {
+  const state = emptyDockStreamState();
+  assert.deepEqual(applyDockPayload(state, snapshot({ seq: 7 })), []);
+
+  const findings = applyDockPayload(state, {
+    kind: "upsert",
+    schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
+    epoch: "epoch-1",
+    seq: 8,
+    view: "dock",
+    complete: true,
+    totalRows: 0,
+    window: emptyWindow,
+    freshness: { status: "fresh" },
+    rows: [],
+    projectionIDs: [],
+  });
+
+  assert.deepEqual(findings, []);
+  assert.equal(state.needsResync, false);
+  assert.equal(state.seq, 8);
+});
+
+test("sync audit rejects old delta grammar even when baseSeq is present", () => {
   const state = emptyDockStreamState();
   assert.deepEqual(applyDockPayload(state, snapshot({ seq: 7 })), []);
 
   const findings = applyDockPayload(state, {
     kind: "delta",
-    schemaVersion: 2,
+    schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
     epoch: "epoch-1",
     baseSeq: 7,
     seq: 9,
@@ -96,9 +121,8 @@ test("sync audit accepts per-view sequence jumps when baseSeq matches", () => {
     deleteCardIDs: [],
   });
 
-  assert.deepEqual(findings, []);
-  assert.equal(state.needsResync, false);
-  assert.equal(state.seq, 9);
+  assert.equal(state.needsResync, true);
+  assert.equal(findings.some((finding) => finding.code === "dock_stream_unknown_payload_kind"), true);
 });
 
 test("sync audit compares long-lived stream freshness to fresh snapshots", () => {
@@ -120,7 +144,9 @@ test("sync audit ignores freshness timestamp churn when status and error match",
   assert.equal(comparison.ok, true);
 });
 
-test("sync audit report sanitizer preserves relay ordering fields", () => {
+test("sync audit report sanitizer preserves relay projection display order", () => {
+  const projectionID = projectionIDForThreadCard({ sourceHostID: "host", threadID: "thread-a" });
+  const displayOrderKey = "9005418977250991|0000000000|9999999999|9999999999|host%3Ahost%2Fthread%3Athread-a%2Frow%3AthreadCard";
   const reportSnapshot = sanitizeDockSnapshotForReport(snapshot({
     totalRows: 1,
     window: {
@@ -129,8 +155,10 @@ test("sync audit report sanitizer preserves relay ordering fields", () => {
       rowCount: 1,
       nextOffset: null,
     },
-    cards: [{
-      id: "host::thread-a",
+    rows: [{
+      id: projectionID,
+      projectionID,
+      sourceHostID: "host",
       logicalHostID: "host",
       threadID: "thread-a",
       status: "idle",
@@ -138,13 +166,13 @@ test("sync audit report sanitizer preserves relay ordering fields", () => {
       sourceKind: "human",
       activityAt: "2026-06-01T00:00:00.000Z",
       activityAtMs: 1_780_272_000_000,
-      orderKey: "9005418977250991:thread-a",
+      displayOrderKey,
     }],
   }));
 
-  assert.equal(reportSnapshot.cards[0].orderKey, "9005418977250991:thread-a");
-  assert.equal(reportSnapshot.cards[0].activityAtMs, 1_780_272_000_000);
-  assert.deepEqual(reportSnapshot.renderOrderCardIDs, ["host::thread-a"]);
+  assert.equal(reportSnapshot.rows[0].displayOrderKey, displayOrderKey);
+  assert.equal(reportSnapshot.rows[0].activityAtMs, 1_780_272_000_000);
+  assert.deepEqual(reportSnapshot.renderOrderProjectionIDs, [projectionID]);
 });
 
 test("sync audit rejects raw app-server relay URLs", () => {

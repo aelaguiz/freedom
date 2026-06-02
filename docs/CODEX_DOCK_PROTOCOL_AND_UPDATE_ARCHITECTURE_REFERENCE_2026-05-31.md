@@ -86,10 +86,14 @@ reference.
 2. Dock Home card truth comes from relay `dock/*` methods, not raw
    `thread/list`.
 3. Archive card truth comes from relay `archive/*` methods.
-4. Thread Detail history must come from `thread/read includeTurns:false` plus
-   paged `thread/turns/list`; `thread/resume excludeTurns:true` is only the live
-   session and compact metadata path.
-5. The relay, not Swift, owns card recency. Swift renders relay `orderKey` and
+4. Current legacy Thread Detail history comes from
+   `thread/read includeTurns:false` plus paged `thread/turns/list`, with
+   `thread/resume excludeTurns:true` as the live session and compact metadata
+   path. After the proposed projection cutover, the relay may still use those
+   raw routes internally, but phone display truth must come from
+   `thread/detail/*`.
+5. The relay, not Swift, owns card recency. Pre-cutover Swift renders relay
+   `orderKey`; projection cutover Swift renders relay `displayOrderKey`. Swift
    must not rebuild card recency from local timestamps.
 6. `thread/list` order is not a client-visible ordering contract. The relay must
    prove card activity with `thread/turns/list` before exposing fresh card
@@ -97,9 +101,11 @@ reference.
 7. Route health is not freshness. A route can answer and still return stale or
    partial data.
 8. Local client metadata can decorate rows and pin rows, but it must not create
-   production thread rows.
-9. Human-started filtering is intended to be relay-owned, with Swift enforcing a
-   defensive second filter.
+   production thread rows or override projection `displayOrderKey` after
+   cutover.
+9. Human-started filtering is relay-owned. After projection cutover, filters
+   that change visible membership are `viewParams` with a `viewParamsKey`;
+   Swift's defensive second filter is an invalid-data guard only.
 10. Any reconnect that changes stream/session identity must force the missing
     state to be rebuilt, not merely reconnect a socket.
 11. A normal phone host config must identify relay hosts only. Saved app configs
@@ -112,19 +118,1282 @@ Swift method constants live in `CodexDock/AppServer/AppServerMethods.swift`.
 The relay dispatcher that decides what the phone can call lives in
 `scripts/dock-relay.mjs`.
 
+## Proposed Projection Identity Contract
+
+Status: proposed permanent projection contract, not implemented yet. The
+rationale and root-cause audit live in
+`docs/CODEX_DOCK_THREAD_DETAIL_OUTBOUND_DUPLICATE_ROOT_CAUSE_2026-06-01.md`.
+
+Projection supersession rule: after projection cutover, the sections below that
+describe card-v2 `delta`, `stateGeneration`, `logicalHostID::threadID`,
+`upsertCards`, `deleteCardIDs`, or raw Thread Detail display routes are
+pre-cutover implementation history only. They are not co-equal display
+contracts and cannot be used as production identity, ordering, or freshness
+truth.
+
+The permanent display source for Dock, Archive, and Thread Detail should be
+relay-owned projection rows, not raw Codex JSON parsed independently by Swift
+and proof scripts. Thread Detail is the first urgent cutover, but it must use
+the same projection identity grammar as Dock and Archive.
+
+### Shared Projection Identity Envelope
+
+Every user-visible production row/card is a relay projection row. The shared
+envelope is:
+
+```json
+{
+  "schemaVersion": 1,
+  "identityVersion": 1,
+  "sourceHostID": "amir-m5",
+  "view": "thread.detail",
+  "threadID": "019e...",
+  "projectionID": "host:amir-m5/thread:019e.../turn:t1/item:i1/row:userMessage",
+  "sourceRef": "host:amir-m5/thread:019e.../turn:t1/item:i1",
+  "rowRole": "userMessage",
+  "revision": 7,
+  "displayOrderKey": "9998239345599999|0000000000|9999999999|9999999999|...",
+  "freshness": {
+    "state": "fresh",
+    "sourceWatermark": "codex-source-..."
+  },
+  "payload": {}
+}
+```
+
+Required shared fields:
+
+| Field | Meaning |
+| --- | --- |
+| `schemaVersion` | Projection DTO shape version. |
+| `identityVersion` | Projection identity algorithm version. |
+| `sourceHostID` | Stable Codex source identity; never derived from phone saved host config. |
+| `view` | `dock`, `archive`, `archive.cleanup`, `host.registry`, or `thread.detail`. |
+| `threadID` | Raw Codex thread ID when the row belongs to one thread. |
+| `projectionID` | Stable visible row/card identity, generated only by the relay projection normalizer. |
+| `sourceRef` | Stable raw Codex fact identity used to derive `projectionID`. |
+| `rowRole` | Semantic visible role, such as `threadCard`, `userMessage`, `request`, or `system`. |
+| `revision` | Content revision for the same `projectionID`; it is not identity. |
+| `displayOrderKey` | Opaque relay-owned ascending sort key. |
+| `freshness` | Data freshness for this projection row or view. |
+| `payload` | Typed row payload for the specific view. |
+
+Projection IDs include `sourceHostID`:
+
+```text
+host:<sourceHostID>/row:host
+host:<sourceHostID>/thread:<threadID>/row:threadCard
+host:<sourceHostID>/thread:<threadID>/turn:<turnID>/item:<itemID>/row:<rowRole>
+host:<sourceHostID>/thread:<threadID>/request:<requestID>/row:request
+host:<sourceHostID>/thread:<threadID>/system:<systemEventKind>/<sourceSequenceOrTimestamp>
+host:<sourceHostID>/thread:<threadID>/diagnostic:<stableHash>/row:unknown
+```
+
+Dock and Archive use the same thread-card projection ID:
+
+```text
+host:<sourceHostID>/thread:<threadID>/row:threadCard
+```
+
+`view: "dock"` and `view: "archive"` scope where that card is delivered.
+Archive state is payload state, not a separate identity namespace. The
+Dock/Archive card `sourceRef` is:
+
+```text
+host:<sourceHostID>/thread:<threadID>
+```
+
+The current Dock contract has `logicalHostID`. In the post-cutover projection
+contract, `logicalHostID` is a legacy/transition alias for `sourceHostID`.
+If a legacy Dock payload still carries both names, they must map one-to-one.
+If they disagree, the relay must emit a diagnostic or `resyncRequired`; Swift
+must not pick one locally.
+
+`projectionID` is the only production visible identity field. Older local names
+such as `eventID` are historical aliases from the pre-projection Thread Detail
+plan and must not remain as separate wire identity fields after cutover.
+
+### Host Projection Rows
+
+`host:<sourceHostID>/row:host` is the projection identity for a Codex source
+host. Host rows carry labels and connectivity summaries; they do not define a
+second host identity namespace.
+
+Host row payload:
+
+```json
+{
+  "sourceHostID": "amir-m5",
+  "displayName": "Amir M5",
+  "endpointLabels": ["amir-m5.fairy-salmon.ts.net:4510"],
+  "connectivityState": "online",
+  "lastContactAt": "2026-06-01T19:50:00.000Z"
+}
+```
+
+Rules:
+
+- host rows are keyed only by `sourceHostID`;
+- endpoint, Bonjour, LAN, Tailscale, and saved-phone labels are payload labels,
+  never identity;
+- phone saved host configs are bootstrap connection records only. They may have
+  local config IDs for settings UI, but those IDs never appear in
+  `sourceHostID`, `sourceRef`, `projectionID`, `displayOrderKey`, or proof
+  witnesses;
+- thread-card rows reference the host row through `sourceHostID`;
+- host row ordering is stable label order unless a future host view defines a
+  relay-owned `displayOrderKey`.
+
+Host Registry routes use the same projection grammar:
+
+- `host/registry/read`
+- `host/registry/subscribe`
+- `host/registry/update`
+- `host/registry/resync`
+
+`HostRegistrySnapshotDTO` and `HostRegistryUpdateDTO` are shared
+snapshot/update envelopes with `view: "host.registry"` and host-row payloads.
+If the app shows configured endpoints before a relay connection exists, that is
+settings UI backed by phone config, not a projection view and not evidence of
+Codex source identity. Once connected, user-visible Codex source identity,
+labels, connectivity summaries, and proof state come from host projection rows.
+
+### `sourceHostID` Derivation
+
+The relay derives `sourceHostID` with this ordered rule:
+
+1. Use non-empty `CODEX_DOCK_REAL_HOST_ID` from relay-side configuration.
+2. Else use the persisted value in `.codex-dock/source-host-id`.
+3. Else create `.codex-dock/source-host-id` once as
+   `local-<sha256(platform + user + CODEX_HOME + historyUrl)[0..12]>`.
+
+Validation:
+
+- The value must match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`.
+- Endpoint hostnames, Bonjour names, LAN IPs, Tailscale names, saved phone host
+  config, WebSocket connection IDs, and relay process IDs are not
+  `sourceHostID`.
+- Phone saved host config IDs must not appear in `sourceHostID`, `sourceRef`,
+  `projectionID`, `displayOrderKey`, or proof witnesses.
+- `CODEX_DOCK_RELAY_INSTANCE_ID` is process/session identity only. It must not
+  be used in `projectionID`.
+- Test fixtures may set explicit `sourceHostID` values, but they must still use
+  the same projection ID grammar.
+
+This makes identity stable across endpoint relabeling while still allowing
+separate Mac/home Codex sources to stay distinct.
+
+### Single Projection Engine Module
+
+The relay has one production projection engine module:
+
+```text
+scripts/dock-relay-projection-engine.mjs
+```
+
+That module, or its owned package directory, is the only production place where
+helpers named like `projectionIDFor*`, `sourceRefFor*`, row-role mappers,
+`displayOrderKeyFor*`, or projection-engine version constants may live. Thread
+Detail ledger code, Dock state code, Archive state code, Host Registry code,
+Archive Cleanup code, and proof fixtures may call the engine; they must not
+fork visible identity or ordering logic.
+
+Tests may import the pure engine for unit coverage. Acceptance proof may not
+use that import as its expected-ID oracle. Acceptance proof reads IDs from
+emitted projection envelopes only.
+
+### Shared Projection Snapshot And Update Grammar
+
+Each display route emits one shared stream grammar:
+
+```json
+{
+  "schemaVersion": 1,
+  "identityVersion": 1,
+  "projectionEngineVersion": 1,
+  "sourceHostID": "amir-m5",
+  "view": "thread.detail",
+  "threadID": "019e...",
+  "epoch": "projection-...",
+  "seq": 42,
+  "scope": "thread",
+  "complete": true,
+  "freshness": {
+    "state": "fresh",
+    "asOf": "2026-06-01T18:00:00.000Z",
+    "sourceWatermark": "codex-source-..."
+  },
+  "rows": []
+}
+```
+
+Updates are only:
+
+- `snapshot`: replace the declared scope.
+- `upsert`: insert or replace rows by `projectionID`.
+- `delete`: remove rows by `projectionID`.
+- `heartbeat`: prove stream continuity without mutating rows.
+- `resyncRequired`: declare continuity broken and require a replacement
+  snapshot.
+
+Every update carries `epoch` and monotonic `seq`. Swift applies only the active
+epoch and increasing sequence. `seq` is the canonical wire field; do not add a
+parallel `sequence` field for projection streams. Sequence gaps, missing
+epochs, missing `projectionEngineVersion`, or schema/identity/engine version
+mismatches mark the view stale until resync succeeds.
+
+Every projection snapshot and update envelope carries
+`projectionEngineVersion`. Swift stores the active engine version with the
+active epoch. An update with a different `projectionEngineVersion` inside the
+same epoch is invalid; the client rejects it, marks the view stale, and requests
+the matching resync route. A new engine version is accepted only through a
+replacement snapshot with a new epoch.
+
+Route-specific notification methods carry this same update grammar:
+
+| View | Subscribe/read routes | Passive update notification | Resync route |
+| --- | --- | --- | --- |
+| Dock | `dock/subscribe` | `dock/update` | `dock/resync` |
+| Archive | `archive/subscribe` | `archive/update` | `archive/resync` |
+| Archive Cleanup | `archive/cleanup/read`, `archive/cleanup/subscribe` | `archive/cleanup/update` | `archive/cleanup/resync` |
+| Host Registry | `host/registry/read`, `host/registry/subscribe` | `host/registry/update` | `host/registry/resync` |
+| Thread Detail | `thread/detail/read`, `thread/detail/subscribe` | `thread/detail/update` | `thread/detail/resync` |
+
+The notification method name is transport routing only. Identity, ordering,
+freshness, epoch, and sequence semantics come from the shared projection
+payload, not from view-specific client code.
+
+`heartbeat` updates carry `kind`, `schemaVersion`, `identityVersion`,
+`projectionEngineVersion`, `sourceHostID`, `view`, `threadID` when scoped to
+one thread, `epoch`, `seq`, and `freshness`. They carry no `rows`,
+`projectionIDs`, or payload
+mutation. A heartbeat proves stream continuity only; it never marks failed data
+fresh.
+
+### Cross-View Scope And Snapshot Authority
+
+Accepted projection scopes:
+
+| View | Scope | Snapshot authority |
+| --- | --- | --- |
+| `dock` | `view` | Complete active Dock view for one `viewParamsKey`; absent rows are deleted. |
+| `archive` | `view` | Complete Archive view for one `viewParamsKey`; absent rows are deleted. |
+| `archive.cleanup` | `view` | Complete Archive Cleanup candidate view for one `viewParamsKey`; absent rows are deleted. |
+| `dock` | `host` | Complete active Dock view for one `sourceHostID` and `viewParamsKey`. |
+| `archive` | `host` | Complete Archive view for one `sourceHostID` and `viewParamsKey`. |
+| `archive.cleanup` | `host` | Complete cleanup candidate view for one `sourceHostID` and `viewParamsKey`. |
+| `dock` / `archive` / `archive.cleanup` | `window` | Bounded `displayOrderKey` range; only rows inside the declared range are replaced. |
+| `host.registry` | `view` | Complete host registry for one `viewParamsKey`; absent host rows are deleted. |
+| `thread.detail` | `thread` | Complete detail view for one `threadID` and `viewParamsKey`. |
+| `thread.detail` | `window` | Bounded detail `displayOrderKey` range for one thread. |
+
+Dock and Archive stream envelopes omit `threadID` unless the update is
+explicitly scoped to one thread. Card rows carry thread identity in the row
+envelope when present and always in the typed payload. Clients determine
+snapshot authority from `view`, `scope`, `sourceHostID`, `viewParamsKey`, and
+window bounds, not by guessing from row IDs.
+
+For every view, `snapshot` replaces only its declared scope, `upsert` replaces
+exact `projectionID`s, `delete` removes exact `projectionID`s, `heartbeat`
+proves continuity only, and `resyncRequired` makes the active view stale until
+the matching resync route returns a replacement snapshot.
+
+### Dock And Archive Projection DTOs
+
+Dock and Archive use the same required-field rigor as Thread Detail. The route
+names remain `dock/*` and `archive/*`, but the payload is the shared projection
+contract.
+
+`DockSnapshotDTO` and `ArchiveSnapshotDTO`:
+
+```json
+{
+  "kind": "snapshot",
+  "schemaVersion": 1,
+  "identityVersion": 1,
+  "projectionEngineVersion": 1,
+  "sourceHostID": "amir-m5",
+  "view": "dock",
+  "epoch": "projection-...",
+  "seq": 1,
+  "scope": "view",
+  "viewParamsKey": "sha256:...",
+  "complete": true,
+  "order": "displayOrderKeyAscending",
+  "freshness": {
+    "state": "fresh"
+  },
+  "rows": []
+}
+```
+
+`DockUpdateDTO` and `ArchiveUpdateDTO`:
+
+```json
+{
+  "kind": "upsert",
+  "schemaVersion": 1,
+  "identityVersion": 1,
+  "projectionEngineVersion": 1,
+  "sourceHostID": "amir-m5",
+  "view": "dock",
+  "epoch": "projection-...",
+  "seq": 2,
+  "scope": "view",
+  "viewParamsKey": "sha256:...",
+  "order": "displayOrderKeyAscending",
+  "rows": [],
+  "projectionIDs": []
+}
+```
+
+Required fields by update kind are the same as Thread Detail, except
+Dock/Archive envelopes omit `threadID` unless the update is explicitly scoped
+to one thread. `delete` uses `projectionIDs`; card streams do not have
+`deleteCardIDs`. `upsert` uses `rows`; card streams do not have `upsertCards`.
+
+Thread-card row payload:
+
+```json
+{
+  "threadID": "019e...",
+  "backendSessionID": "019e...",
+  "title": "Hill climb experiment",
+  "displaySummary": "Current work summary",
+  "status": "running",
+  "sourceKind": "human",
+  "lane": "human",
+  "archiveState": "active",
+  "repository": "codex-client",
+  "workingDirectory": "/Users/aelaguiz/workspace/codex-client",
+  "branch": "main",
+  "activityAt": "2026-06-01T19:50:00.000Z",
+  "activityAtMs": 1780343400000,
+  "relationship": "root",
+  "forkedFromID": null,
+  "hostDisplayName": "Amir M5",
+  "hostEndpoint": "amir-m5.fairy-salmon.ts.net:4510"
+}
+```
+
+The card `projectionID` is:
+
+```text
+host:<sourceHostID>/thread:<threadID>/row:threadCard
+```
+
+Dock and Archive thread-card `displayOrderKey` is:
+
+```text
+<invertedActivityMillis>|<statusPriority>|<safeProjectionID>
+```
+
+Field rules:
+
+- `activityMillis` is the relay-proven newest activity time for the thread.
+- `invertedActivityMillis = 9999999999999999 - activityMillis`, left-padded to
+  16 decimal digits.
+- `statusPriority` is left-padded to 4 decimal digits and is relay-owned.
+- `safeProjectionID` is the canonical escaped `projectionID` tie breaker.
+- Swift compares the full string only; it never parses it back into fields.
+
+Normative `statusPriority` values:
+
+| Card status | Priority |
+| --- | --- |
+| `needsInput` | `0000` |
+| `needsApproval` | `0000` |
+| `running` | `0001` |
+| `idle` | `0002` |
+| `error` | `0003` |
+| `unknown` | `0004` |
+| any unrecognized active status | `0004` |
+| `dormant` / not loaded | `0005` |
+
+### Archive Cleanup Projection View
+
+Archive Cleanup is its own relay-projected view:
+
+```text
+view: "archive.cleanup"
+```
+
+Routes:
+
+- `archive/cleanup/read`
+- `archive/cleanup/subscribe`
+- `archive/cleanup/update`
+- `archive/cleanup/resync`
+
+Archive Cleanup rows use the same `threadCard` row payload and the same card
+`projectionID` as Dock and Archive:
+
+```text
+host:<sourceHostID>/thread:<threadID>/row:threadCard
+```
+
+Cleanup membership is view membership, not row identity. The cleanup view
+selects active cleanup candidates through relay-owned `viewParams`:
+
+```json
+{
+  "viewParams": {
+    "candidateSource": "activeDock",
+    "hostIDs": null,
+    "statusKinds": null,
+    "olderThan": null,
+    "repositorySearch": "",
+    "branchSearch": "",
+    "textSearch": "",
+    "includeDiagnostics": true,
+    "sort": "displayOrderKeyAscending"
+  }
+}
+```
+
+`viewParamsKey` is required on every Archive Cleanup snapshot/update. Proof for
+Archive Cleanup compares simulator UI to `view: "archive.cleanup"` witness
+envelopes with the same `viewParamsKey`. It never treats a raw Dock stream or a
+client-filtered Dock list as cleanup truth.
+
+### Projection Cache Version And Contract Gate
+
+The relay SQLite cache is a materialized projection, not a source of truth.
+Every stored projection row is valid only for this cache version:
+
+```text
+schemaVersion + identityVersion + projectionEngineVersion + sourceHostID
+```
+
+If any part changes, rows for that host/view are invalid until rebuilt from raw
+Codex state. The relay may keep old rows visible only as explicitly stale rows;
+it must not serve them as fresh under a new identity contract.
+
+The protocol contract source is a schema/generator package:
+
+- one schema source for the shared projection envelope.
+- typed payload schemas for Dock/Archive cards and Thread Detail rows.
+- one accepted wire shape: projection envelope plus nested typed `payload`.
+- `viewParams` and `viewParamsKey` schema for filtered projection views.
+- generated or schema-checked Swift DTOs.
+- Node validation for emitted projection snapshots/updates in tests.
+- fixture corpus generated from the relay projection normalizer and consumed by
+  Swift tests.
+
+Normative package shape:
+
+```text
+contract/projection/projection-envelope.schema.json
+contract/projection/projection-snapshot.schema.json
+contract/projection/projection-update.schema.json
+contract/projection/payloads/dock-thread-card.schema.json
+contract/projection/payloads/thread-detail-row.schema.json
+contract/projection/payloads/host-row.schema.json
+contract/projection/fixtures/*.json
+scripts/dock-relay-projection-engine.mjs
+scripts/generate-projection-contract.mjs
+scripts/check-projection-contract.mjs
+CodexDock/AppServer/ProjectionDTO.swift
+```
+
+The existing `contract/dock/dock-thread-card.schema.json` becomes card-v2
+history after cutover. It is not a co-equal phone-facing display schema.
+
+This is a contract gate, not a linter. If identity version, route grammar, enum
+vocabulary, payload shape, or projection row fields change, Node and Swift tests
+must fail until the single source and fixtures move together.
+
+`revision`, `schemaVersion`, `identityVersion`, and
+`projectionEngineVersion` are separate:
+
+| Field | Bump when |
+| --- | --- |
+| `revision` | Content, freshness, render state, request status, or payload changes for the same `projectionID`. |
+| `schemaVersion` | Projection wire shape changes. |
+| `identityVersion` | `sourceRef` or `projectionID` rules change. |
+| `projectionEngineVersion` | Projection membership, order, freshness, row roles, view params, or payload interpretation changes without a wire-shape or ID-grammar change. |
+
+`revision` is monotonic per `projectionID` inside one cache contract. Cache
+validity uses
+`schemaVersion + identityVersion + projectionEngineVersion + sourceHostID`, not
+`revision`.
+
+For a given `projectionID`, these envelope fields are immutable inside one
+identity version:
+
+- `sourceHostID`
+- `sourceRef`
+- `rowRole`
+- `threadID` when present
+- `view`
+- `schemaVersion`
+- `identityVersion`
+
+If an `upsert` repeats a `projectionID` with any of those fields changed, the
+client rejects the update, marks the view stale, and requests resync. If an
+`upsert` regresses `revision` inside the same epoch, the client rejects it as
+stale or requests resync. If the same `revision` carries different payload
+content, the client treats it as a projection contract violation and requests
+resync.
+
+`epoch` is a relay-generated stream generation identifier. It is unique within
+`sourceHostID + view + scope + viewParamsKey` and is created by the relay when a
+projection stream starts, resyncs after stale state, changes
+`identityVersion`, changes `projectionEngineVersion`, or detects unrecoverable
+sequence/source loss. A new `epoch` is valid only when delivered with a
+replacement snapshot. Updates cannot silently hop epochs.
+
+`sourceWatermark` is upstream freshness evidence, not row identity. It records
+the raw Codex history/live point the relay has normalized into the projection
+ledger. Swift may display or log it as freshness context, but it cannot use it
+to create, sort, dedupe, or delete rows. If the relay cannot prove a watermark
+is still compatible with the current projection cache contract, the affected
+view is stale until resync.
+
+### Projection Identity Laws
+
+1. No production visible row/card ID may be generated from body text, timestamp,
+   local UI state, Swift object lifetime, raw WebSocket request ID alone,
+   `UUID()`, or `crypto.randomUUID()`.
+2. A supported raw Codex item without enough identity does not become a normal
+   message/card row. It becomes a stable diagnostic row or a `resyncRequired`
+   update.
+3. Live, history, reconnect, canonical reread, server request, request
+   resolution, cache rebuild, and proof paths all call the same relay projection
+   normalizer.
+4. Streaming and settled forms of one Codex item share one `projectionID`.
+5. Request controls are attached to the same `projectionID` as their visible
+   row. `requestID` is only the response-routing key.
+6. Sorting is by relay `displayOrderKey` only.
+7. Local metadata can decorate projection rows, but it cannot create fresh
+   production rows or override projection identity/order/freshness.
+8. Diagnostics and health routes can explain state, but cannot be accepted as
+   data truth for the UI.
+9. Test fixtures must use projection DTOs or the relay projection normalizer.
+10. Proof scripts must compare UI state against relay projection snapshots or
+    updates, not against an independent reconstruction of raw Codex truth.
+11. Filters are projection view parameters. Every filtered view has a
+    `viewParamsKey`, and proof compares UI only to the relay projection view
+    with the same key.
+12. Pin and local metadata can decorate existing projection rows, or request a
+    future relay-owned pinned projection view with explicit `viewParamsKey`.
+    Swift cannot use local pin state to create a second row order, second
+    membership set, or alternate cache of projection rows.
+
+### Projection Witness Plane
+
+Acceptance proof compares simulator accessibility state to a retained witness
+of relay-emitted projection snapshots and updates from the system under test.
+
+Required capture mechanism:
+
+- primary path: the proof harness attaches a projection witness recorder to the
+  actual downstream JSON-RPC projection stream for the simulator app session
+  before opening the UI; or
+- the proof harness reads a loopback-only relay diagnostic export, for example
+  `projection/witness/read`, for the exact `sourceHostID`, `view`, `scope`,
+  `threadID`, `viewParamsKey`, and `epoch` under test.
+
+The diagnostic export is not a display route. It may export only projection
+envelopes already emitted by the relay projection engine for that session. It
+must not compute expected IDs from fixture input.
+
+`projection/witness/read` is acceptable only if it returns byte-for-byte
+equivalent projection envelopes retained from the downstream emitter or a
+retained emitter log. It must not rebuild expected rows from SQLite, raw Codex
+payloads, fixture JSON, or helper imports at proof time. If downstream capture
+and diagnostic export disagree, downstream capture wins and the run fails.
+
+Allowed witness sources:
+
+- the same downstream WebSocket projection snapshots/updates delivered to the
+  simulator app;
+- a relay debug export of the active projection ledger for the exact
+  `sourceHostID`, `view`, `scope`, `threadID`, and `viewParamsKey`;
+- structured relay logs that retain the emitted projection envelope while
+  redacting prompt/body text where required.
+
+Forbidden witness sources:
+
+- fixture code that calls projection helper functions to construct expected
+  IDs beside the relay;
+- raw `thread/read`, `thread/turns/list`, or `thread/resume` truth rebuilt into
+  expected UI IDs;
+- `expectedMessageEventIDs`;
+- `expectedMessageProjectionIDs` unless populated directly from the retained
+  projection witness stream.
+- fixture imports of `projectionIDForItem`, `projectionIDForRequest`, or any
+  equivalent helper to populate acceptance expected IDs.
+
+Proof records must name the witness:
+
+```json
+{
+  "projectionWitness": {
+    "source": "downstream-projection-stream",
+    "sourceHostID": "amir-m5",
+    "view": "thread.detail",
+    "scope": "thread",
+    "threadID": "019e...",
+    "viewParamsKey": "sha256:...",
+    "epoch": "projection-...",
+    "lastSeq": 42,
+    "projectionIDs": []
+  }
+}
+```
+
+Loopback-only witness export contract:
+
+`projection/witness/read` request:
+
+```json
+{
+  "sourceHostID": "amir-m5",
+  "view": "thread.detail",
+  "scope": "thread",
+  "threadID": "019e...",
+  "viewParamsKey": "sha256:...",
+  "epoch": "projection-...",
+  "fromSeq": 1,
+  "throughSeq": null
+}
+```
+
+Response:
+
+```json
+{
+  "source": "retained-downstream-emitter-log",
+  "byteEquivalentToDownstream": true,
+  "sourceHostID": "amir-m5",
+  "view": "thread.detail",
+  "scope": "thread",
+  "threadID": "019e...",
+  "viewParamsKey": "sha256:...",
+  "epoch": "projection-...",
+  "lastSeq": 42,
+  "envelopes": [],
+  "projectionIDs": []
+}
+```
+
+Rules:
+
+- `projection/witness/read` is not in the phone production display allow-list.
+- It is loopback/local-test only and must fail closed outside test/diagnostic
+  configuration.
+- `envelopes` are retained emitted projection snapshots/updates, not
+  recomputed projections.
+- `byteEquivalentToDownstream` must be `true`; otherwise proof cannot use this
+  route as witness evidence.
+- `projectionIDs` are derived from `envelopes` by reading emitted row IDs only.
+
+### Command And Pending Row Rule
+
+Mutation routes such as `turn/start`, `turn/steer`, `turn/interrupt`,
+`thread/archive`, `thread/unarchive`, and server-request responses are commands.
+They are not display-truth routes.
+
+Projection v1 intentionally does not include Swift-created optimistic display
+rows. If the product later chooses optimistic rows, they must be relay-owned and
+specified as a contract extension before implementation:
+
+```text
+clientMutationID -> relay pending projection row -> atomic supersession to canonical sourceRef/projectionID
+```
+
+That extension must define an atomic supersession update or an equivalent
+snapshot replacement. Swift must never create a production visible pending row
+from local text, local timestamps, or local UUIDs.
+
+If optimistic rows are added, the contract must specify `clientMutationID`, the
+relay-created pending `projectionID`, the supersession/replacement operation,
+proof that pending and canonical rows never render together, and cache rules
+for pending rows on reconnect, failed send, and relay restart.
+
+Proposed downstream display routes:
+
+- `thread/detail/read`
+- `thread/detail/subscribe`
+- `thread/detail/update`
+- `thread/detail/resync`
+
+Request params:
+
+```json
+{
+  "threadId": "019e...",
+  "window": {
+    "offset": 0,
+    "limit": 250,
+    "afterDisplayOrderKey": null
+  }
+}
+```
+
+`thread/detail/read` returns one `ThreadDetailSnapshotDTO`.
+`thread/detail/subscribe` accepts the same params, returns an initial
+`ThreadDetailSnapshotDTO`, then emits JSON-RPC notifications with method
+`thread/detail/update` and params shaped as `ThreadDetailUpdateDTO`.
+`thread/detail/update` is passive; the phone never calls it as a request.
+`thread/detail/resync` accepts the same params plus optional `epoch` and
+`reason` fields, and returns a replacement `ThreadDetailSnapshotDTO`.
+
+`thread/detail/subscribe` also establishes the relay-side thread binding for
+`turn/start`, `turn/steer`, and `turn/interrupt` on that downstream connection.
+Internally, the relay may open or maintain upstream `thread/resume
+excludeTurns:true`, but raw notifications from that upstream session are
+normalized into projection updates before reaching Swift display state.
+
+Existing raw `thread/read`, `thread/turns/list`, and `thread/resume` may remain
+relay internals and command/session tools, but they must not be accepted as
+production Thread Detail display proof after this contract is implemented.
+
+### ThreadDetailEventDTO
+
+Each visible Thread Detail row is one projection row envelope with a
+Thread Detail payload. The flattened shape that existed during pre-cutover
+Thread Detail work is not accepted after projection cutover.
+
+```json
+{
+  "schemaVersion": 1,
+  "identityVersion": 1,
+  "sourceHostID": "amir-m5",
+  "view": "thread.detail",
+  "threadID": "019e...",
+  "projectionID": "host:amir-m5/thread:019e.../turn:t1/item:i1/row:userMessage",
+  "sourceRef": "host:amir-m5/thread:019e.../turn:t1/item:i1",
+  "rowRole": "userMessage",
+  "revision": 7,
+  "displayOrderKey": "9998239345599999|0000000000|9999999999|9999999999|host%3Aamir-m5%2Fthread%3A019e...",
+  "freshness": {
+    "state": "fresh",
+    "sourceWatermark": "codex-source-..."
+  },
+  "payload": {
+    "turnID": "t1",
+    "itemID": "i1",
+    "itemType": "userMessage",
+    "renderKind": "userMessage",
+    "visibility": "message",
+    "title": "User message",
+    "body": "message text",
+    "eventTime": "2026-06-01T17:30:00.000Z",
+    "activityTime": "2026-06-01T17:30:00.000Z",
+    "turnOrder": 0,
+    "itemOrder": 0,
+    "rowOrder": 0,
+    "renderState": "settled",
+    "requestID": null,
+    "diagnostic": null
+  }
+}
+```
+
+Required row-role mapping:
+
+| `rowRole` | `renderKind` | `visibility` |
+| --- | --- | --- |
+| `userMessage` | `userMessage` | `message` |
+| `agentMessage` | `agentMessage` | `message` |
+| `plan` | `agentMessage` | `thinking` |
+| `reasoning` | `agentMessage` | `thinking` |
+| `command` | `command` | `tooling` |
+| `commandOutput` | `output` | `tooling` |
+| `fileChange` | `request` | `request` |
+| `toolCall` | `command` | `tooling` |
+| `request` | `request` | `request` |
+| `system` | `system` | `system` |
+| `unknown` | `unknown` | `unknown` |
+
+### Thread Detail View Params
+
+`thread/detail/read`, `thread/detail/subscribe`, and `thread/detail/resync` use
+the same `viewParams` shape when the visible Thread Detail view is filtered:
+
+```json
+{
+  "threadID": "019e...",
+  "viewParams": {
+    "visibility": "all",
+    "rowRoles": null,
+    "search": "",
+    "includeDiagnostics": true,
+    "sort": "displayOrderKeyAscending"
+  }
+}
+```
+
+The relay echoes `viewParamsKey` on every snapshot and update. `viewParamsKey`
+is stable-key-order JSON over `viewParams`, hashed as `sha256:<hex>`. Swift
+rejects updates whose `viewParamsKey` does not match the active view.
+
+Defaults:
+
+- `visibility: "all"`; no hidden default message-only filter.
+- `rowRoles: null`; non-empty arrays are positive include filters.
+- `search: ""`; non-empty search is part of the relay projection view, not a
+  local proof oracle.
+- `includeDiagnostics: true` in development proof.
+- `sort: "displayOrderKeyAscending"`; no other v1 sort is accepted.
+
+### Dock And Archive View Params
+
+`dock/subscribe`, `dock/resync`, `archive/subscribe`, and `archive/resync` use
+the same projection-filter pattern. Defaults mean "include every row belonging
+to this view," not a hidden product filter:
+
+```json
+{
+  "viewParams": {
+    "hostIDs": null,
+    "lanes": null,
+    "sourceKinds": null,
+    "statusKinds": null,
+    "branchSearch": "",
+    "repositorySearch": "",
+    "textSearch": "",
+    "includeDiagnostics": true,
+    "sort": "displayOrderKeyAscending"
+  }
+}
+```
+
+Rules:
+
+- `null` arrays mean no filter. Non-empty arrays are positive include filters.
+- `statusKinds: null` includes every status, including `idle`.
+- Any search string that changes visible membership participates in
+  `viewParamsKey`.
+- Dock and Archive membership is selected by `view` and
+  `projection_view_memberships`, not by Swift filtering one broad card list into
+  separate screens.
+
+### ThreadDetailSnapshotDTO
+
+`thread/detail/read`, `thread/detail/resync`, and `ThreadDetailUpdateDTO` with
+`kind: "snapshot"` return the same snapshot shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "identityVersion": 1,
+  "projectionEngineVersion": 1,
+  "sourceHostID": "amir-m5",
+  "view": "thread.detail",
+  "threadID": "019e...",
+  "epoch": "projection-...",
+  "seq": 1,
+  "snapshotID": "detail-snapshot-...",
+  "sourceWatermark": "codex-source-...",
+  "scope": "thread",
+  "viewParamsKey": "sha256:...",
+  "window": null,
+  "rows": [],
+  "complete": true,
+  "nextCursor": null
+}
+```
+
+Required fields:
+
+| Field | Meaning |
+| --- | --- |
+| `schemaVersion` | Snapshot DTO shape version. |
+| `identityVersion` | Projection identity algorithm version used for all rows. |
+| `projectionEngineVersion` | Projection engine behavior version used for membership, order, freshness, row roles, view params, and payload interpretation. |
+| `sourceHostID` | Stable Codex source host identity used in every `projectionID`. |
+| `view` | Always `thread.detail` for Thread Detail snapshots. |
+| `threadID` | Thread represented by the snapshot. |
+| `epoch` | Relay projection epoch. New epoch replaces local ledger. |
+| `seq` | Monotonic update sequence inside `epoch`. |
+| `snapshotID` | Unique snapshot payload id for diagnostics. |
+| `sourceWatermark` | Upstream Codex history/live point normalized by relay. |
+| `scope` | `thread` or `window`. |
+| `viewParamsKey` | Canonical key for the relay-filtered view this snapshot proves. |
+| `window` | Required when `scope` is `window`; otherwise null. |
+| `rows` | Ordered Thread Detail projection rows. |
+| `complete` | Whether this response is complete for its declared scope. |
+| `nextCursor` | Cursor for additional rows, or null. |
+
+Window snapshots use this `window` shape:
+
+```json
+{
+  "order": "displayOrderKeyAscending",
+  "offset": 0,
+  "limit": 250,
+  "firstDisplayOrderKey": "9998239345599999|...",
+  "lastDisplayOrderKey": "9998239345601234|...",
+  "completeBefore": true,
+  "completeAfter": false
+}
+```
+
+Client rules for `scope: "window"`:
+
+- If any `window` field is missing, the snapshot is invalid and the client must
+  request `thread/detail/resync`.
+- Replace only rows for the same `threadID` whose `displayOrderKey` is between
+  `firstDisplayOrderKey` and `lastDisplayOrderKey`, inclusive.
+- Retain rows outside that key range.
+- Delete rows inside that key range when they are absent from the snapshot.
+- `completeBefore` and `completeAfter` describe whether more rows exist before
+  or after the returned key range in display order.
+- Do not infer bounds from row count, `offset`, or `nextCursor` alone.
+
+### ThreadDetailUpdateDTO
+
+`thread/detail/subscribe` emits JSON-RPC notifications with method
+`thread/detail/update`. Notification params are `ThreadDetailUpdateDTO` values.
+
+```json
+{
+  "kind": "snapshot",
+  "schemaVersion": 1,
+  "identityVersion": 1,
+  "projectionEngineVersion": 1,
+  "sourceHostID": "amir-m5",
+  "view": "thread.detail",
+  "threadID": "019e...",
+  "epoch": "projection-...",
+  "seq": 1,
+  "scope": "thread",
+  "viewParamsKey": "sha256:...",
+  "window": null,
+  "rows": [],
+  "complete": true,
+  "nextCursor": null
+}
+```
+
+```json
+{
+  "kind": "upsert",
+  "schemaVersion": 1,
+  "identityVersion": 1,
+  "projectionEngineVersion": 1,
+  "sourceHostID": "amir-m5",
+  "view": "thread.detail",
+  "threadID": "019e...",
+  "epoch": "projection-...",
+  "seq": 2,
+  "viewParamsKey": "sha256:...",
+  "rows": []
+}
+```
+
+```json
+{
+  "kind": "delete",
+  "schemaVersion": 1,
+  "identityVersion": 1,
+  "projectionEngineVersion": 1,
+  "sourceHostID": "amir-m5",
+  "view": "thread.detail",
+  "threadID": "019e...",
+  "epoch": "projection-...",
+  "seq": 3,
+  "viewParamsKey": "sha256:...",
+  "projectionIDs": []
+}
+```
+
+```json
+{
+  "kind": "heartbeat",
+  "schemaVersion": 1,
+  "identityVersion": 1,
+  "projectionEngineVersion": 1,
+  "sourceHostID": "amir-m5",
+  "view": "thread.detail",
+  "threadID": "019e...",
+  "epoch": "projection-...",
+  "seq": 4,
+  "viewParamsKey": "sha256:...",
+  "freshness": {
+    "state": "fresh",
+    "asOf": "2026-06-01T18:00:00.000Z",
+    "sourceWatermark": "codex-source-..."
+  }
+}
+```
+
+```json
+{
+  "kind": "resyncRequired",
+  "schemaVersion": 1,
+  "identityVersion": 1,
+  "projectionEngineVersion": 1,
+  "sourceHostID": "amir-m5",
+  "view": "thread.detail",
+  "threadID": "019e...",
+  "epoch": "projection-...",
+  "seq": 5,
+  "viewParamsKey": "sha256:...",
+  "reason": "identity_gap"
+}
+```
+
+Required fields by update kind:
+
+| `kind` | Required fields |
+| --- | --- |
+| `snapshot` | `kind`, `schemaVersion`, `identityVersion`, `projectionEngineVersion`, `sourceHostID`, `view`, `threadID`, `epoch`, `seq`, `scope`, `viewParamsKey`, `rows`, `complete` |
+| `upsert` | `kind`, `schemaVersion`, `identityVersion`, `projectionEngineVersion`, `sourceHostID`, `view`, `threadID`, `epoch`, `seq`, `viewParamsKey`, `rows` |
+| `delete` | `kind`, `schemaVersion`, `identityVersion`, `projectionEngineVersion`, `sourceHostID`, `view`, `threadID`, `epoch`, `seq`, `viewParamsKey`, `projectionIDs` |
+| `heartbeat` | `kind`, `schemaVersion`, `identityVersion`, `projectionEngineVersion`, `sourceHostID`, `view`, optional `threadID`, `epoch`, `seq`, `viewParamsKey`, `freshness` |
+| `resyncRequired` | `kind`, `schemaVersion`, `identityVersion`, `projectionEngineVersion`, `sourceHostID`, `view`, `threadID`, `epoch`, `seq`, `viewParamsKey`, `reason` |
+
+Client update rules:
+
+- Ignore updates whose `epoch` is not the active epoch.
+- Ignore updates whose `seq` is less than or equal to the last applied sequence
+  for that epoch.
+- Reject updates whose `projectionEngineVersion` differs from the active
+  epoch's engine version.
+- Reject updates whose `viewParamsKey` differs from the active view.
+- A new `epoch` means the client drops the old projection ledger for that
+  thread and applies the new snapshot.
+- `snapshot` replaces the declared snapshot `scope`.
+- `upsert` inserts or replaces rows by exact `projectionID`.
+- `delete` removes rows by exact `projectionID`.
+- `resyncRequired` marks the view stale and requires `thread/detail/resync`.
+
+Epoch and watermark rules:
+
+- `epoch` changes when the relay starts a new detail subscription, changes
+  `identityVersion`, detects unrecoverable upstream sequence loss, or
+  serves an explicit `thread/detail/resync` after stale state.
+- `seq` starts at `1` inside each epoch and increases for every detail
+  update.
+- `snapshotID` is diagnostic only; it is not row identity.
+- `sourceWatermark` is freshness proof and log context; Swift must not use it as
+  row identity.
+
+### Identity Rules
+
+Supported turn-item rows:
+
+```text
+host:<sourceHostID>/thread:<threadID>/turn:<turnID>/item:<itemID>/row:<rowRole>
+```
+
+Server request rows without item identity:
+
+```text
+host:<sourceHostID>/thread:<threadID>/request:<requestID>/row:request
+```
+
+Request rows with turn/item identity but no known item row role:
+
+```text
+host:<sourceHostID>/thread:<threadID>/turn:<turnID>/item:<itemID>/request:<requestID>/row:request
+```
+
+Diagnostics:
+
+```text
+host:<sourceHostID>/thread:<threadID>/diagnostic:<stableHash>/row:unknown
+```
+
+Thread-level system rows:
+
+```text
+host:<sourceHostID>/thread:<threadID>/system:<systemEventKind>/<sourceSequenceOrTimestamp>
+```
+
+Initial `systemEventKind` values:
+
+- `threadStatusChanged`
+- `threadClosed`
+- `identityGap`
+- `identityConflict`
+- `resyncRequired`
+- `upstreamRecovered`
+
+`stableHash` is SHA-256 over non-secret structural fields only:
+
+```text
+identityVersion
+sourceHostID
+threadID
+raw method or item type
+candidate turnID
+candidate itemID
+candidate requestID
+identity error code
+```
+
+It must not include prompt text, transcript text, delta text, command output,
+raw audio, bearer tokens, or full JSON payloads.
+
+No supported message-like row may use `UUID()` or `crypto.randomUUID()` as
+visible identity. Identity gaps and conflicts must become diagnostics or
+`resyncRequired`, not normal visible message rows.
+
+Identity lookup precedence:
+
+| Source | `turnID` | `itemID` |
+| --- | --- | --- |
+| `thread/turns/list` item | `turn.id`, `turn.turnId`, `turn.turnID` | `item.id` |
+| live delta | `params.turnId`, `params.turnID` | `params.itemId`, `params.itemID` |
+| `item/started` or `item/completed` | `params.turnId`, `params.turnID`, `params.turn.id`, `params.item.turnId`, `params.item.turnID` | `params.itemId`, `params.itemID`, `params.item.id` |
+
+Server request identity:
+
+| Field | Source |
+| --- | --- |
+| `threadID` | `params.threadId` |
+| `requestID` | JSON-RPC request `id` |
+| `turnID` | optional `params.turnId`, then `params.turnID` |
+| `itemID` | optional `params.itemId`, then `params.itemID` |
+
+If two present aliases disagree, the relay must emit `resyncRequired` or a
+diagnostic row.
+
+Supported live delta methods:
+
+| Method | `rowRole` | `renderKind` | `visibility` | Text field |
+| --- | --- | --- | --- | --- |
+| `item/agentMessage/delta` | `agentMessage` | `agentMessage` | `message` | `params.delta` |
+| `item/plan/delta` | `plan` | `agentMessage` | `thinking` | `params.delta` |
+| `item/reasoning/summaryTextDelta` | `reasoning` | `agentMessage` | `thinking` | `params.delta` |
+| `item/reasoning/textDelta` | `reasoning` | `agentMessage` | `thinking` | `params.delta` |
+| `item/commandExecution/outputDelta` | `commandOutput` | `output` | `tooling` | `params.delta` |
+
+Streaming deltas and settled history rows for the same item must share
+`projectionID`; the delta method name is not part of visible identity.
+
+Request projection identity:
+
+| Request shape | `projectionID` rule |
+| --- | --- |
+| command approval with `turnID` and `itemID` | `host:<sourceHostID>/thread:<threadID>/turn:<turnID>/item:<itemID>/row:command` |
+| file-change approval with `turnID` and `itemID` | `host:<sourceHostID>/thread:<threadID>/turn:<turnID>/item:<itemID>/row:fileChange` |
+| tool user-input request with `turnID` and `itemID` | `host:<sourceHostID>/thread:<threadID>/turn:<turnID>/item:<itemID>/row:toolCall` |
+| known request with no item row role | `host:<sourceHostID>/thread:<threadID>/turn:<turnID>/item:<itemID>/request:<requestID>/row:request` |
+| request without usable turn/item identity | `host:<sourceHostID>/thread:<threadID>/request:<requestID>/row:request` |
+
+### Ordering And Accessibility
+
+The app sorts Thread Detail rows by `displayOrderKey` ascending and does not
+rebuild ordering from raw turn/item fields.
+
+`displayOrderKey` format:
+
+```text
+<invertedActivityMillis>|<turnOrder>|<invertedItemOrder>|<invertedRowOrder>|<safeProjectionID>
+```
+
+Where:
+
+- `invertedActivityMillis = 9999999999999999 - UnixEpochMilliseconds(activityTime)`,
+  left-padded to 16 digits.
+- `turnOrder` is left-padded to 10 digits, with `0` as the newest turn in the
+  detail window.
+- `invertedItemOrder = 9999999999 - itemOrder`, left-padded to 10 digits.
+- `invertedRowOrder = 9999999999 - rowOrder`, left-padded to 10 digits.
+- `safeProjectionID` uses `AutomationID.safeSegment` escaping.
+
+Worked example:
+
+```text
+9998239345599999|0000000042|9999999999|9999999999|host%3Aamir-m5%2Fthread%3A019e...%2Fturn%3At1%2Fitem%3Ai1%2Frow%3AuserMessage
+```
+
+Accessibility IDs use the same safe-segment rule:
+
+```text
+codexdock.session.message.<safe(projectionID)>
+codexdock.session.request.<safe(projectionID)>
+```
+
+The safe segment rule keeps ASCII letters, ASCII digits, `-`, `.`, and `_`,
+percent-encodes every other UTF-8 byte as uppercase `%XX`, and uses `_` for an
+empty segment.
+
+### Render State
+
+`renderState` is state on the same `projectionID`, not a second identity axis.
+
+Allowed values:
+
+- `streaming`: partial text from a live delta.
+- `live`: full live item or request not yet confirmed by canonical history.
+- `settled`: canonical history has confirmed the row.
+- `stale`: relay knows the row may be outdated while waiting for resync.
+- `diagnostic`: non-message diagnostic row.
+
+Allowed transitions:
+
+```text
+streaming -> live -> settled
+streaming -> settled
+live -> settled
+any non-diagnostic -> stale -> settled
+diagnostic -> diagnostic
+```
+
+An invalid transition must not create a new `projectionID`. The relay should upsert
+the same `projectionID` with the correct state or request resync.
+
+### Ledger Updates
+
+Every `ThreadDetailUpdateDTO` carries `projectionEngineVersion`, `epoch`, and
+monotonic `seq`.
+
+- `snapshot`: replace the declared `scope`.
+- `upsert`: insert or replace rows by `projectionID`.
+- `delete`: remove rows by `projectionID`.
+- `resyncRequired`: mark stale and force `thread/detail/resync`.
+
+For `scope: "thread"`, the snapshot is authoritative for the open thread and
+deletes absent local rows. For `scope: "window"`, the snapshot must include
+`window.order`, `offset`, `limit`, `firstDisplayOrderKey`,
+`lastDisplayOrderKey`, `completeBefore`, and `completeAfter`; only rows inside
+the inclusive display-key range are replaced/deleted.
+
+This contract explicitly replaces the current Thread Detail pattern where a
+Dock-row activity change causes Swift to merge raw canonical history into a
+client-built event index.
+
+### Required Proof
+
+Implementation is not complete until tests prove temporal convergence, not only
+static decoding:
+
+- outbound user live update plus canonical history snapshot converges to one
+  `projectionID` in both arrival orders.
+- live delta plus completed item plus historical item converges to one
+  `projectionID`.
+- request row plus request resolution plus related historical item converges to
+  one visible row identity.
+- reconnect and `thread/detail/resync` replace stale state without preserving
+  raw Swift-normalized rows.
+- simulator proof compares UI accessibility IDs against relay projection ledger
+  projection IDs, not a JS reconstruction of identity.
+- `codex-dock-live-filter-*` scenarios must consume `projectionWitness` or stay
+  quarantined as non-acceptance legacy diagnostics.
+
 ## Forbidden Phone Routes And Side Doors
 
 The phone-facing relay dispatcher is an allow-list. Anything not handled in
 `scripts/dock-relay.mjs` `handleRequest` returns JSON-RPC `-32601`
 `unsupported method`.
 
-Allowed downstream request methods are only:
+Current pre-cutover compatibility request methods are:
 
 - `initialize`
 - `dock/subscribe`
 - `dock/resync`
 - `archive/subscribe`
 - `archive/resync`
+- `thread/detail/read`
+- `thread/detail/subscribe`
+- `thread/detail/resync`
 - `thread/read`
 - `thread/turns/list`
 - `thread/resume`
@@ -139,6 +1408,44 @@ Allowed downstream request methods are only:
 - `turn/interrupt`
 - raw JSON-RPC responses to active forwarded upstream server requests.
 
+Final post-cutover production phone display request methods are only:
+
+- `initialize`
+- `dock/subscribe`
+- `dock/resync`
+- `archive/subscribe`
+- `archive/resync`
+- `archive/cleanup/read`
+- `archive/cleanup/subscribe`
+- `archive/cleanup/resync`
+- `host/registry/read`
+- `host/registry/subscribe`
+- `host/registry/resync`
+- `thread/detail/read`
+- `thread/detail/subscribe`
+- `thread/detail/resync`
+- `thread/archive`
+- `thread/unarchive`
+- `audio/transcription/start`
+- `audio/transcription/append`
+- `audio/transcription/commit`
+- `audio/transcription/cancel`
+- `turn/start`
+- `turn/steer`
+- `turn/interrupt`
+- raw JSON-RPC responses to active forwarded upstream server requests.
+
+Thread Detail display truth must use `thread/detail/*` after the projection
+ledger contract is implemented. Raw `thread/read`, `thread/turns/list`, and
+`thread/resume` may remain only as relay-internal upstream adapter calls,
+loopback-only diagnostics, or explicit migration commands that are not linked
+from production Swift display protocols and are not accepted as proof.
+
+Acceptance rule: after projection cutover, any production Swift display method
+that can call raw `thread/read`, `thread/turns/list`, or `thread/resume` is a
+blocking architecture failure. Those routes may exist only behind boundaries
+that make them impossible to confuse with phone display truth.
+
 Forbidden phone routes include, explicitly:
 
 | Route | Why forbidden phone-side |
@@ -151,6 +1458,10 @@ Forbidden phone routes include, explicitly:
 | `/syncz`, `/statusz`, `/routesz` HTTP responses | Diagnostics only; not data truth and not card freshness proof. |
 | raw app-server `:4500` WebSocket from phone | Forbidden normal app path; relay owns the raw bearer token and upstream fanout. |
 | `CODEX_DOCK_UI_DOCK_STREAM_SCENARIO` scripted streams | DEBUG/UI fixture only; not relay evidence. |
+| raw `thread/read` / `thread/turns/list` / `thread/resume` as Thread Detail display truth after ledger cutover | Would reintroduce Swift-side identity inference beside the relay-owned projection ledger. |
+| `ArchiveCleanupDataEngine` independent Dock stream after projection cutover | Would let cleanup membership, identity, recency, or freshness drift outside the projection engine. Cleanup must use relay-projected rows or a named relay-projected cleanup view. |
+| phone `HostRegistry` config IDs as source identity | Saved endpoint config is connection bootstrap only; relay host projection rows define Codex source identity after connection. |
+| `codex-dock-live-filter-*` without `projectionWitness` | Acceptance proof must compare UI to relay-emitted projection envelopes, not a separate live-filter oracle. |
 
 If a future feature needs a new phone route, it must be added to this allow-list,
 the relay dispatcher, Swift method constants/DTOs, tests, and this reference in
@@ -202,6 +1513,14 @@ currently ignores downstream notifications with no `id`; no route state is
 created by `initialized`.
 
 ### Dock And Archive Streams
+
+Pre-cutover implementation history: this section documents the current card-v2
+stream so existing bugs and migration work can be understood. It is superseded
+for final display architecture by the projection contract above. In the final
+phone-facing contract, Dock and Archive emit projection `rows` with
+`projectionID`, `epoch`, and `seq`; they do not use `logicalHostID::threadID`,
+`delta`, `upsertCards`, `deleteCardIDs`, or `stateGeneration` as production
+display truth.
 
 `dock/subscribe`, `archive/subscribe`
 
@@ -521,6 +1840,11 @@ the method constant, but no matching public `ThreadDetailSession` wrapper path
 like `turnStart` and `turnSteer`.
 
 Focused-command relay gate:
+
+Current-state note: this describes the legacy downstream `thread/resume` gate.
+After the proposed projection cutover, `thread/detail/subscribe` supplies
+the downstream binding for commands while upstream `thread/resume` stays
+relay-internal.
 
 - command requires an active `thread/resume` on the same downstream socket;
 - request `threadId` must match the resumed thread;
@@ -998,6 +2322,12 @@ visible Archive stream.
 
 ### Thread Commands
 
+Current-state note: the bullets below describe the legacy downstream
+`thread/resume` command gate. After the proposed projection cutover,
+`thread/detail/subscribe` establishes the same downstream thread binding for
+`turn/start`, `turn/steer`, and `turn/interrupt`; upstream `thread/resume`
+remains relay-internal.
+
 - `turn/start`
   - Sent when the phone composer has no active in-progress turn.
   - Relay only forwards it after a matching `thread/resume` on the same
@@ -1039,6 +2369,11 @@ Active turn tracking:
   current active turn id.
 
 Relay command gate:
+
+Current-state note: this gate is the legacy raw-detail gate. In the proposed
+projection architecture, replace "successfully completed `thread/resume`"
+with "successfully completed `thread/detail/subscribe` for the same thread";
+the other identity checks still apply.
 
 - `turn/start`, `turn/steer`, and `turn/interrupt` are not history routes.
 - They require the same downstream socket to have successfully completed
@@ -1499,6 +2834,12 @@ SQLite write and delete semantics:
 
 ### Relay-Side Detail Routing
 
+Pre-cutover implementation history: raw `thread/read`, `thread/turns/list`,
+and `thread/resume` are allowed only as relay-internal adapters, mutation/session
+support, or named diagnostics after projection cutover. They are not a
+production Thread Detail display contract once `thread/detail/*` projection
+routes are accepted.
+
 The client calls `thread/read` and `thread/turns/list` on the relay, but the
 relay decides where those calls go.
 
@@ -1589,11 +2930,26 @@ Archive screen uses `expectedView:.archive`; Archive Cleanup uses
 path into the other without preserving the intended view would create a
 production side door.
 
+Post-cutover projection rule: Archive Cleanup cannot keep an independent Dock
+stream as cleanup truth. It must consume relay-projected rows or a named
+relay-projected cleanup view produced by the single projection engine, with its
+own `viewParamsKey` and witness proof. Cleanup may choose active Dock
+candidates, but it must not define identity, membership, recency, or freshness
+outside the projection contract.
+
 ## Local Metadata And Host Identity
 
 Phone-local metadata and host aliasing are allowed only as decoration and
 identity resolution. They must never create rows, change recency, or override
 relay card truth.
+
+Post-cutover projection rule: this section's `logicalHostID`, `orderKey`, and
+pin-order merge details document pre-cutover client behavior. In the projection
+contract, local metadata may decorate projection rows or request a relay-filtered
+view, but it must not override `projectionID`, `displayOrderKey`, freshness, or
+the row set used by acceptance proof. Pins may be rendered as UI chrome only
+unless a future relay-owned pinned projection view is explicitly added to the
+contract and proved with its own `viewParamsKey`.
 
 ### Local Metadata Contract
 
@@ -1832,7 +3188,13 @@ Important current mismatch:
   mark. If upstream archive propagation takes longer than the grace period, a
   later complete active reconcile can allow a row to bounce back into active.
 
-## Thread Detail End-To-End Flow
+## Thread Detail Legacy End-To-End Flow To Replace
+
+This is the current implementation path, not the permanent target. It is kept
+here as audit evidence because it explains the stale-detail and duplicate-row
+bugs. After the proposed Thread Detail projection cutover, production display
+truth must follow the relay-owned `thread/detail/*` flow below instead of this
+raw Swift normalization path.
 
 1. User opens a Dock row.
 2. Swift validates the row belongs to the selected host.
@@ -1862,7 +3224,33 @@ Key source anchors:
 - Request application: `CodexDock/State/ThreadDetailStore.swift:766`.
 - Event normalization: `CodexDock/Models/ThreadEvent.swift:250`.
 
-## Thread Detail Live Event Coverage
+## Proposed Thread Detail Projection Flow
+
+1. User opens a Dock row.
+2. Swift validates the row belongs to the selected host.
+3. Swift creates a detail session and connects to the relay.
+4. Swift sends `initialize`/`initialized`.
+5. Swift calls `thread/detail/read` or `thread/detail/subscribe`.
+6. The relay reads raw Codex history/live sources internally:
+   `thread/read includeTurns:false`, paged `thread/turns/list itemsView:full`,
+   and `thread/resume excludeTurns:true`.
+7. The relay normalizes every display source through the single detail
+   normalizer.
+8. The relay emits `ThreadDetailSnapshotDTO` and `ThreadDetailUpdateDTO`
+   payloads containing relay-generated `projectionID` and `displayOrderKey`.
+9. Swift applies snapshot/upsert/delete/resync operations to a local ledger
+   keyed only by `projectionID`.
+10. Swift renders DTO-backed rows and never infers visible identity from raw
+    Codex turn/item JSON.
+11. Dock-row activity advances may trigger `thread/detail/resync`; they must
+    not merge raw canonical history into a client-built detail index.
+
+## Thread Detail Legacy Live Event Coverage
+
+This section describes current Swift raw-notification behavior. After the
+proposed projection ledger cutover, the relay normalizer owns this coverage and the
+canonical method-to-row-role table in the proposed contract is the production
+display rule.
 
 Relay forwards upstream live notifications as-is after `thread/resume`; Swift
 decides what becomes visible. The handled surface is intentionally smaller than
@@ -1921,7 +3309,11 @@ This is not automatically wrong if the product intentionally hides those events,
 but it is a real protocol assumption: missed live event kinds can make detail
 look incomplete until a future `thread/turns/list` rehydrate includes the data.
 
-## Thread Detail Historical Item Coverage
+## Thread Detail Legacy Historical Item Coverage
+
+This section describes current Swift historical-item normalization. After the
+proposed projection ledger cutover, historical item coverage belongs to the relay
+normalizer and must produce `ThreadDetailEventDTO` rows.
 
 Historical `thread/turns/list` data is normalized by
 `ThreadEventNormalizer.events(from:)`. The supported item taxonomy is:

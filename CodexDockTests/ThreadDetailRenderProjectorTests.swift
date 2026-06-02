@@ -3,29 +3,22 @@ import XCTest
 
 final class ThreadDetailRenderProjectorTests: XCTestCase {
     func testProjectorFiltersVisibleWindowAndAttachesRequestCard() {
+        let projectionID = "host:test/thread:thread-a/turn:turn-1/item:item-1/row:command"
         let event = ThreadEvent(
-            id: "request-approval-1",
-            kind: .request,
+            id: projectionID,
+            kind: .command,
             visibilityCategory: .request,
             title: "Approval",
             body: "Allow command?",
             date: Date(timeIntervalSince1970: 1_000),
             turnID: "turn-1",
-            itemID: "item-1"
-        )
-        let card = ServerRequestCard(
-            id: "request-approval-1",
-            requestID: .string("approval-1"),
-            method: "item/commandExecution/requestApproval",
-            threadID: "thread-a",
-            turnID: "turn-1",
             itemID: "item-1",
-            kind: .commandApproval,
-            title: "Approval",
-            summary: "Allow command?",
-            detail: "Allow command?",
-            params: nil,
-            requestedAt: Date(timeIntervalSince1970: 1_000)
+            displayOrderKey: "0000000000000000000|\(projectionID)",
+            request: ThreadDetailEventRequestDTO(
+                requestID: .string("approval-1"),
+                method: "item/commandExecution/requestApproval",
+                status: "pending"
+            )
         )
         let snapshot = ThreadDetailSnapshot(
             header: makeHeader(),
@@ -37,7 +30,8 @@ final class ThreadDetailRenderProjectorTests: XCTestCase {
                     visibilityCategory: .message,
                     title: "Agent",
                     body: "Done",
-                    date: Date(timeIntervalSince1970: 2_000)
+                    date: Date(timeIntervalSince1970: 2_000),
+                    displayOrderKey: "0000000000000000000|message-1"
                 ),
                 event,
             ]
@@ -45,14 +39,13 @@ final class ThreadDetailRenderProjectorTests: XCTestCase {
 
         let render = ThreadDetailRenderProjector().render(
             snapshot: snapshot,
-            requestCards: [card],
             options: ThreadDetailRenderOptions(filter: .all, visibleLimit: 10),
             revision: RenderRevision(rawValue: 3)
         )
 
         XCTAssertEqual(render.revision, RenderRevision(rawValue: 3))
-        XCTAssertEqual(render.rows.map(\.event.id), ["message-1", "request-approval-1"])
-        XCTAssertEqual(render.rows[1].requestCard?.id, "request-approval-1")
+        XCTAssertEqual(render.rows.map(\.event.id), ["message-1", projectionID])
+        XCTAssertEqual(render.rows[1].requestCard?.id, projectionID)
         XCTAssertTrue(render.hasUnfilteredEvents)
     }
 
@@ -68,6 +61,7 @@ final class ThreadDetailRenderProjectorTests: XCTestCase {
                     title: "User",
                     body: "Older prompt",
                     date: Date(timeIntervalSince1970: 1_000),
+                    displayOrderKey: "0000000000000000001|old-user",
                     activityDate: Date(timeIntervalSince1970: 1_000)
                 ),
                 ThreadEvent(
@@ -77,6 +71,7 @@ final class ThreadDetailRenderProjectorTests: XCTestCase {
                     title: "Agent",
                     body: "Newer answer",
                     date: Date(timeIntervalSince1970: 2_000),
+                    displayOrderKey: "0000000000000000000|new-agent",
                     activityDate: Date(timeIntervalSince1970: 2_000)
                 ),
             ])
@@ -84,7 +79,6 @@ final class ThreadDetailRenderProjectorTests: XCTestCase {
 
         let render = ThreadDetailRenderProjector().render(
             snapshot: snapshot,
-            requestCards: [],
             options: ThreadDetailRenderOptions(filter: .default, visibleLimit: 1),
             revision: RenderRevision(rawValue: 4)
         )
@@ -95,8 +89,10 @@ final class ThreadDetailRenderProjectorTests: XCTestCase {
 
     private func makeHeader() -> ThreadDetailHeader {
         let host = makeHost()
+        let projectionID = "host:\(host.id)/thread:thread-a/row:threadCard"
         let row = DockRowViewModel(
-            id: HostScopedThreadID(hostID: host.id, threadID: "thread-a"),
+            threadIdentity: HostScopedThreadID(hostID: host.id, threadID: "thread-a"),
+            projectionID: projectionID,
             backendSessionID: "backend-thread-a",
             title: "Thread A",
             hostDisplayName: host.displayName,
@@ -106,6 +102,7 @@ final class ThreadDetailRenderProjectorTests: XCTestCase {
             status: .running,
             lastActivity: "now",
             lastActivityDate: Date(timeIntervalSince1970: 1_000),
+            displayOrderKey: "9999999999000000|0001|\(projectionID)",
             summary: "summary",
             rail: .blue,
             label: nil,

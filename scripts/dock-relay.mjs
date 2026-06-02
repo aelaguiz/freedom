@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import crypto from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +22,7 @@ import {
   RELAY_SHUTDOWN_PROCESS_TIMEOUT_MS,
   RELAY_SHUTDOWN_SOCKET_TIMEOUT_MS,
   RELAY_VERSION,
+  THREAD_LIST_MAX_LIMIT,
   UPSTREAM_POOL_LIMITS,
   UPSTREAM_RECONNECT_ATTEMPTS,
   UPSTREAM_RECONNECT_DELAY_MS,
@@ -54,6 +56,10 @@ import {
   DOCK_SUBSCRIBE_METHOD,
 } from "./dock-relay-state-subscriptions.mjs";
 import { relayStateEngineForConfig } from "./dock-relay-state-engine.mjs";
+import {
+  THREAD_DETAIL_UPDATE_METHOD,
+  createThreadDetailLedgerFromThread,
+} from "./dock-relay-thread-detail-ledger.mjs";
 import {
   loadDotEnvFile,
   parsePhoneAuthMode,
@@ -260,7 +266,7 @@ function upstreamReconnectDelayMs(attempt) {
   return exponentialDelay + jitter;
 }
 
-async function resumeThread(config, params = {}, session, downstreamWs) {
+async function resumeThread(config, params = {}, session, downstreamWs, options = {}) {
   if (!params.threadId) {
     throw new Error("thread/resume requires threadId");
   }
@@ -274,6 +280,15 @@ async function resumeThread(config, params = {}, session, downstreamWs) {
   session.upstream?.close();
   session.upstream = null;
   session.acceptedHumanThreadId = null;
+  session.detailSubscription = options.detailSubscription === true
+    ? {
+        threadId: resumeParams.threadId,
+        generation,
+        ledger: null,
+        buffering: true,
+        pendingMessages: [],
+      }
+    : null;
 
   const logger = relayLogger(config);
   const endpoint = await sessionRouterForConfig(config).endpointForThread(resumeParams.threadId);
@@ -298,6 +313,9 @@ async function resumeThread(config, params = {}, session, downstreamWs) {
     });
     return result;
   } catch (error) {
+    if (session.detailSubscription?.generation === generation) {
+      session.detailSubscription = null;
+    }
     client.close();
     logger.warn("thread_resume.failed", {
       threadId: params.threadId,
@@ -313,6 +331,265 @@ async function resumeThread(config, params = {}, session, downstreamWs) {
   }
 }
 
+async function readAllThreadDetailTurns(config, threadId) {
+  const turns = [];
+  const seenCursors = new Set();
+  let cursor = null;
+
+  while (true) {
+    const response = await listThreadTurns(config, {
+      threadId,
+      cursor,
+      limit: THREAD_LIST_MAX_LIMIT,
+      sortDirection: "desc",
+      itemsView: "full",
+    });
+    if (Array.isArray(response?.data)) {
+      turns.push(...response.data);
+    }
+
+    const nextCursor = response?.nextCursor || null;
+    if (!nextCursor) {
+      break;
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw relayError("thread/detail read saw repeated turns cursor", -32000, {
+        subsystem: "thread-detail",
+        reason: "repeated_turns_cursor",
+      });
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+
+  return turns;
+}
+
+async function readThreadDetailLedger(config, params = {}) {
+  if (!params.threadId) {
+    throw new Error("thread/detail requires threadId");
+  }
+  const readResponse = await aggregateThreadRead(config, {
+    threadId: params.threadId,
+    includeTurns: false,
+  });
+  const turns = await readAllThreadDetailTurns(config, params.threadId);
+  const thread = {
+    ...(readResponse?.thread || {}),
+    id: params.threadId,
+    turns,
+  };
+  return createThreadDetailLedgerFromThread(thread, {
+    sourceHostID: config.hostId,
+    threadID: params.threadId,
+  });
+}
+
+function cloneProjectionEnvelope(envelope) {
+  return JSON.parse(JSON.stringify(envelope));
+}
+
+function projectionWitnessStore(config) {
+  if (!config.projectionWitnessEnabled) {
+    return null;
+  }
+  if (!config.projectionWitnessLog) {
+    config.projectionWitnessLog = [];
+  }
+  return config.projectionWitnessLog;
+}
+
+function recordProjectionWitness(config, envelope) {
+  const store = projectionWitnessStore(config);
+  if (!store || !envelope) {
+    return;
+  }
+  store.push({
+    emittedAt: new Date().toISOString(),
+    envelope: cloneProjectionEnvelope(envelope),
+  });
+  const maxEnvelopes = Number(config.projectionWitnessMaxEnvelopes || 1_000);
+  while (store.length > maxEnvelopes) {
+    store.shift();
+  }
+}
+
+function projectionWitnessEnvelopeMatches(envelope, params) {
+  if (params.sourceHostID && envelope.sourceHostID !== params.sourceHostID) {
+    return false;
+  }
+  if (params.view && envelope.view !== params.view) {
+    return false;
+  }
+  if (params.scope && envelope.scope !== params.scope) {
+    return false;
+  }
+  if (params.threadID && envelope.threadID !== params.threadID) {
+    return false;
+  }
+  if (params.viewParamsKey && envelope.viewParamsKey !== params.viewParamsKey) {
+    return false;
+  }
+  if (params.epoch && envelope.epoch !== params.epoch) {
+    return false;
+  }
+  if (params.fromSeq !== undefined && params.fromSeq !== null && Number(envelope.seq) < Number(params.fromSeq)) {
+    return false;
+  }
+  if (params.throughSeq !== undefined && params.throughSeq !== null && Number(envelope.seq) > Number(params.throughSeq)) {
+    return false;
+  }
+  return true;
+}
+
+function projectionIDsFromWitnessEnvelopes(envelopes) {
+  const rowsByProjectionID = new Map();
+  for (const envelope of envelopes) {
+    if (envelope.kind === "delete") {
+      for (const projectionID of envelope.projectionIDs || []) {
+        rowsByProjectionID.delete(projectionID);
+      }
+      continue;
+    }
+    if (envelope.kind === "snapshot" || !envelope.kind) {
+      rowsByProjectionID.clear();
+    }
+    for (const row of envelope.rows || []) {
+      if (row?.projectionID) {
+        rowsByProjectionID.set(row.projectionID, row);
+      }
+    }
+  }
+  return [...rowsByProjectionID.values()]
+    .sort((left, right) => String(left.displayOrderKey).localeCompare(String(right.displayOrderKey)))
+    .map((row) => row.projectionID);
+}
+
+function readProjectionWitness(config, params = {}) {
+  if (!config.projectionWitnessEnabled) {
+    throw relayError("projection witness is disabled", -32601, {
+      subsystem: "projection-witness",
+      reason: "disabled",
+    });
+  }
+  const envelopes = (config.projectionWitnessLog || [])
+    .map((entry) => entry.envelope)
+    .filter((envelope) => projectionWitnessEnvelopeMatches(envelope, params))
+    .sort((left, right) => Number(left.seq || 0) - Number(right.seq || 0))
+    .map(cloneProjectionEnvelope);
+  const lastSeq = envelopes.reduce((max, envelope) => Math.max(max, Number(envelope.seq || 0)), 0);
+  return {
+    source: "retained-downstream-emitter-log",
+    byteEquivalentToDownstream: true,
+    sourceHostID: params.sourceHostID || envelopes.at(-1)?.sourceHostID || null,
+    view: params.view || envelopes.at(-1)?.view || null,
+    scope: params.scope || envelopes.at(-1)?.scope || null,
+    threadID: params.threadID || envelopes.at(-1)?.threadID || null,
+    viewParamsKey: params.viewParamsKey || envelopes.at(-1)?.viewParamsKey || null,
+    epoch: params.epoch || envelopes.at(-1)?.epoch || null,
+    lastSeq,
+    envelopes,
+    projectionIDs: projectionIDsFromWitnessEnvelopes(envelopes),
+  };
+}
+
+function sendThreadDetailUpdate(config, downstreamWs, update) {
+  if (!update) {
+    return;
+  }
+  recordProjectionWitness(config, update);
+  sendJson(downstreamWs, {
+    jsonrpc: "2.0",
+    method: THREAD_DETAIL_UPDATE_METHOD,
+    params: update,
+  });
+}
+
+function handleDetailNotification(config, session, downstreamWs, generation, message) {
+  const detail = session.detailSubscription;
+  if (!detail || detail.generation !== generation) {
+    return false;
+  }
+  if (detail.buffering || !detail.ledger) {
+    detail.pendingMessages.push({ type: "notification", message });
+    return true;
+  }
+  sendThreadDetailUpdate(config, downstreamWs, detail.ledger.applyNotification(message));
+  return true;
+}
+
+function handleDetailRequest(config, session, downstreamWs, generation, message) {
+  const detail = session.detailSubscription;
+  if (!detail || detail.generation !== generation) {
+    return false;
+  }
+  if (detail.buffering || !detail.ledger) {
+    detail.pendingMessages.push({ type: "request", message });
+    return true;
+  }
+  sendThreadDetailUpdate(config, downstreamWs, detail.ledger.applyRequest(message));
+  return true;
+}
+
+function replayPendingDetailMessages(session) {
+  const detail = session.detailSubscription;
+  if (!detail?.ledger) {
+    return;
+  }
+  const pending = detail.pendingMessages.splice(0);
+  for (const entry of pending) {
+    if (entry.type === "notification") {
+      detail.ledger.applyNotification(entry.message);
+    } else if (entry.type === "request") {
+      detail.ledger.applyRequest(entry.message);
+    }
+  }
+}
+
+async function readThreadDetail(config, params = {}) {
+  const ledger = await readThreadDetailLedger(config, params);
+  const snapshot = ledger.snapshot("thread/detail/read");
+  recordProjectionWitness(config, snapshot);
+  return snapshot;
+}
+
+async function subscribeThreadDetail(config, params = {}, session, downstreamWs) {
+  await resumeThread(config, params, session, downstreamWs, { detailSubscription: true });
+  const detail = session.detailSubscription;
+  try {
+    const ledger = await readThreadDetailLedger(config, params);
+    detail.ledger = ledger;
+    replayPendingDetailMessages(session);
+    detail.buffering = false;
+    const snapshot = ledger.snapshot("thread/detail/subscribe");
+    recordProjectionWitness(config, snapshot);
+    return snapshot;
+  } catch (error) {
+    if (session.detailSubscription === detail) {
+      session.detailSubscription = null;
+    }
+    throw error;
+  }
+}
+
+async function resyncThreadDetail(config, params = {}, session) {
+  const ledger = await readThreadDetailLedger(config, params);
+  const detail = session.detailSubscription;
+  if (detail?.threadId === params.threadId) {
+    detail.ledger = ledger;
+    detail.buffering = false;
+    detail.pendingMessages = [];
+    for (const pending of session.pendingServerRequests?.values?.() || []) {
+      if (pending.threadId === params.threadId && pending.message) {
+        ledger.applyRequest(pending.message);
+      }
+    }
+  }
+  const snapshot = ledger.snapshot("thread/detail/resync");
+  recordProjectionWitness(config, snapshot);
+  return snapshot;
+}
+
 function makeSessionUpstreamClient(config, endpoint, session, downstreamWs, generation) {
   let client;
   client = new JsonRpcWebSocketClient(endpoint.url, {
@@ -320,7 +597,9 @@ function makeSessionUpstreamClient(config, endpoint, session, downstreamWs, gene
     logger: relayLogger(config),
     onNotification: (message) => {
       if (isSessionActive(session, downstreamWs, generation)) {
-        sendJson(downstreamWs, message);
+        if (!handleDetailNotification(config, session, downstreamWs, generation, message)) {
+          sendJson(downstreamWs, message);
+        }
       }
     },
     onRequest: (message) => {
@@ -329,8 +608,11 @@ function makeSessionUpstreamClient(config, endpoint, session, downstreamWs, gene
           generation,
           threadId: message?.params?.threadId || session.resumeParams?.threadId || null,
           method: message.method,
+          message,
         });
-        sendJson(downstreamWs, message);
+        if (!handleDetailRequest(config, session, downstreamWs, generation, message)) {
+          sendJson(downstreamWs, message);
+        }
       }
     },
     onClose: () => {
@@ -471,12 +753,14 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       return relayStateEngineForConfig(config).subscribeArchive({ session, downstreamWs, sendJson });
     case ARCHIVE_RESYNC_METHOD:
       return relayStateEngineForConfig(config).resyncArchive({ downstreamWs, sendJson });
-    case "thread/read":
-      return aggregateThreadRead(config, params || {});
-    case "thread/turns/list":
-      return listThreadTurns(config, params || {});
-    case "thread/resume":
-      return resumeThread(config, params || {}, session, downstreamWs);
+    case "thread/detail/read":
+      return readThreadDetail(config, params || {});
+    case "thread/detail/subscribe":
+      return subscribeThreadDetail(config, params || {}, session, downstreamWs);
+    case "thread/detail/resync":
+      return resyncThreadDetail(config, params || {}, session);
+    case "projection/witness/read":
+      return readProjectionWitness(config, params || {});
     case "thread/archive":
     {
       const result = await archiveThread(config, params || {});
@@ -556,6 +840,7 @@ function sessionDebugSnapshot(sessions) {
     threadIDHash: shortHash(session.resumeParams?.threadId),
     acceptedHumanThreadIDHash: shortHash(session.acceptedHumanThreadId),
     pendingServerRequests: session.pendingServerRequests?.size || 0,
+    detailSubscribed: Boolean(session.detailSubscription?.ledger),
   }));
 }
 
@@ -607,11 +892,63 @@ function semanticRouteOutcome(method, result) {
   };
 }
 
+function validSourceHostID(value) {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(String(value || ""));
+}
+
+function sourceHostIDPath(config) {
+  if (config.sourceHostIDPath) {
+    return config.sourceHostIDPath;
+  }
+  return path.join(process.cwd(), ".codex-dock", "source-host-id");
+}
+
+function stableGeneratedSourceHostID(config) {
+  const codexHome = config.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const input = [
+    os.platform(),
+    os.userInfo?.().username || "",
+    codexHome,
+    config.historyUrl || "",
+  ].join("|");
+  return `local-${crypto.createHash("sha256").update(input).digest("hex").slice(0, 12)}`;
+}
+
+function resolveSourceHostID(config) {
+  const explicit = String(config.hostId || process.env.CODEX_DOCK_REAL_HOST_ID || "").trim();
+  if (explicit) {
+    if (!validSourceHostID(explicit)) {
+      throw new Error(`invalid CODEX_DOCK_REAL_HOST_ID/sourceHostID: ${explicit}`);
+    }
+    return explicit;
+  }
+
+  const idPath = sourceHostIDPath(config);
+  try {
+    const persisted = fs.readFileSync(idPath, "utf8").trim();
+    if (persisted) {
+      if (!validSourceHostID(persisted)) {
+        throw new Error(`invalid persisted sourceHostID: ${persisted}`);
+      }
+      return persisted;
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const generated = stableGeneratedSourceHostID(config);
+  fs.mkdirSync(path.dirname(idPath), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(idPath, `${generated}\n`, { mode: 0o600 });
+  return generated;
+}
+
 function startServer(config) {
   config.logger = relayLogger(config);
   const logger = config.logger;
   config.version = config.version || RELAY_VERSION;
-  config.hostId = config.hostId || process.env.CODEX_DOCK_REAL_HOST_ID || os.hostname();
+  config.hostId = resolveSourceHostID(config);
   config.hostName = config.hostName || process.env.CODEX_DOCK_REAL_HOST_NAME || config.hostId;
   config.hostEndpoint = config.hostEndpoint || process.env.CODEX_DOCK_HOST_ENDPOINT || null;
   if (!config.relayStateDatabasePath && process.env.NODE_TEST_CONTEXT) {
@@ -793,6 +1130,7 @@ function startServer(config) {
       dockUnsubscribe: null,
       archiveUnsubscribe: null,
       acceptedHumanThreadId: null,
+      detailSubscription: null,
     };
     sessions.add(session);
     session.realtimeTranscription = new RealtimeTranscriptionManager(config, {
@@ -814,6 +1152,7 @@ function startServer(config) {
       session.realtimeTranscription?.closeAll("downstream_closed");
       session.upstream?.close();
       session.upstream = null;
+      session.detailSubscription = null;
       logger.info("downstream.closed", {
         activeConnections: downstreamSockets.size,
       });
@@ -1069,7 +1408,7 @@ function main() {
     historyBearerToken: readToken(historyTokenFile),
     historyUrl: args["history-url"] || process.env.CODEX_DOCK_HISTORY_APP_SERVER_WS || DEFAULT_HISTORY_APP_SERVER_WS,
     liveEndpoints: parseLiveEndpoints(args["live-endpoints"] || process.env.CODEX_DOCK_LIVE_APP_SERVER_WS || process.env.CODEX_DOCK_LIVE_ENDPOINTS),
-    hostId: args["host-id"] || process.env.CODEX_DOCK_REAL_HOST_ID || os.hostname(),
+    hostId: args["host-id"] || process.env.CODEX_DOCK_REAL_HOST_ID || null,
     hostName: args["host-name"] || process.env.CODEX_DOCK_REAL_HOST_NAME || args["bonjour-name"],
     hostEndpoint: args["host-endpoint"] || process.env.CODEX_DOCK_HOST_ENDPOINT || null,
     codexHome: args["codex-home"] || process.env.CODEX_HOME || path.join(os.homedir(), ".codex"),
@@ -1112,6 +1451,7 @@ export {
   pendingRequestsForActiveThread,
   preferThread,
   RealtimeTranscriptionManager,
+  resolveSourceHostID,
   sanitizeRelayFields,
   startServer,
   statusPriority,

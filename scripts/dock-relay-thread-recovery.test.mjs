@@ -48,6 +48,12 @@ async function startRecoverableThreadAppServer() {
         }));
       } else if (message.method === "thread/read") {
         ws.send(appServerResponse(message.id, { thread }));
+      } else if (message.method === "thread/turns/list") {
+        ws.send(appServerResponse(message.id, {
+          data: [],
+          nextCursor: null,
+          backwardsCursor: null,
+        }));
       } else if (message.method === "thread/resume") {
         resumeCount += 1;
         ws.send(appServerResponse(message.id, { thread }));
@@ -95,14 +101,15 @@ async function withRelay(historyUrl, testFn) {
   }
 }
 
-test("successful live thread upstream recovery closes downstream so the app rehydrates", async () => {
+test("successful live detail upstream recovery closes downstream so the app rehydrates", async () => {
   const appServer = await startRecoverableThreadAppServer();
   try {
     await withRelay(appServer.url, async ({ wsURL }) => {
       const ws = await openWebSocket(wsURL);
       try {
-        const response = await jsonRpcRequest(ws, "thread/resume", { threadId: "thread-a" });
+        const response = await jsonRpcRequest(ws, "thread/detail/subscribe", { threadId: "thread-a" });
         assert.equal(response.error, undefined);
+        assert.equal(response.result?.threadID, "thread-a");
         const close = await waitForWebSocketClose(ws);
         assert.equal(close.code, 1012);
         assert.equal(close.reason, "upstream recovered; rehydrate");

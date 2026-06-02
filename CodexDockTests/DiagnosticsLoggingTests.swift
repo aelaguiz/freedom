@@ -44,9 +44,10 @@ final class DiagnosticsLoggingTests: XCTestCase {
         let expectedRoutes: Set<String> = [
             AppServerMethods.initialize,
             AppServerMethods.initialized,
-            AppServerMethods.threadRead,
-            AppServerMethods.threadResume,
-            AppServerMethods.threadTurnsList,
+            AppServerMethods.threadDetailRead,
+            AppServerMethods.threadDetailSubscribe,
+            AppServerMethods.threadDetailResync,
+            AppServerMethods.threadDetailUpdate,
             AppServerMethods.threadArchive,
             AppServerMethods.threadUnarchive,
             AppServerMethods.dockSubscribe,

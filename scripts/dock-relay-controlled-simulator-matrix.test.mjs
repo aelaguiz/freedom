@@ -269,7 +269,7 @@ test("controlled simulator matrix requires opened-thread detail sweep coverage",
     entries: [
       entry({
         scenario: "detail-history-request",
-        routes: { "thread/read": 1, "thread/turns/list": 2, "thread/resume": 1 },
+        routes: { "thread/detail/subscribe": 1, "thread/detail/update": 1 },
         ui: { scenarioChecks: 0, detailChecks: 3, detailSweeps: 1, detailSweepMessageCardChecks: 4 },
       }),
     ],
@@ -287,7 +287,7 @@ test("controlled simulator matrix requires opened-thread message order coverage"
     entries: [
       entry({
         scenario: "detail-history-request",
-        routes: { "thread/read": 1, "thread/turns/list": 2, "thread/resume": 1 },
+        routes: { "thread/detail/subscribe": 1, "thread/detail/update": 1 },
         ui: {
           scenarioChecks: 0,
           detailChecks: 3,
@@ -306,12 +306,12 @@ test("controlled simulator matrix requires opened-thread message order coverage"
   assert.match(report.findings.map((finding) => finding.code).join(","), /matrix_detail_message_order_checks_missing/u);
 });
 
-test("controlled simulator matrix requires the detail reconnect route shape", () => {
+test("controlled simulator matrix requires the detail reconnect projection route shape", () => {
   const report = buildMatrixReport({
     entries: [
       entry({
         scenario: "detail-reconnect",
-        routes: { "thread/read": 1, "thread/turns/list": 1, "thread/resume": 2 },
+        routes: { "thread/detail/subscribe": 1 },
         ui: { scenarioChecks: 0, detailChecks: 2, detailSweeps: 1, detailSweepMessageCardChecks: 2 },
       }),
     ],

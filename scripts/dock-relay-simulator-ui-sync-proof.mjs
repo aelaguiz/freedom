@@ -297,42 +297,39 @@ function relayOrigin(card) {
   return "unknown";
 }
 
-function relayCardsByKey(relaySample) {
-  const cards = relaySample?.freshDock?.cards || [];
+function relayRowsByProjectionID(relaySample) {
+  const rows = relaySample?.freshDock?.rows || [];
   const byKey = new Map();
-  for (const card of cards) {
-    byKey.set(`${card.logicalHostID}::${card.threadID}`, card);
+  for (const row of rows) {
+    if (row?.projectionID) {
+      byKey.set(row.projectionID, row);
+    }
   }
   return byKey;
 }
 
-function relayCardID(card) {
-  return card?.id || `${card?.logicalHostID || ""}::${card?.threadID || ""}`;
+function relayProjectionID(row) {
+  return row?.projectionID || null;
 }
 
-function relayRenderOrderCardIDs(relaySample) {
+function relayRenderOrderProjectionIDs(relaySample) {
   const freshDock = relaySample?.freshDock || {};
-  const renderOrder = Array.isArray(freshDock.renderOrderCardIDs)
-    ? freshDock.renderOrderCardIDs.filter(Boolean)
+  const renderOrder = Array.isArray(freshDock.renderOrderProjectionIDs)
+    ? freshDock.renderOrderProjectionIDs.filter(Boolean)
     : [];
   if (renderOrder.length) {
     return renderOrder;
   }
-  return (Array.isArray(freshDock.cards) ? freshDock.cards : [])
-    .map(relayCardID)
+  return (Array.isArray(freshDock.rows) ? freshDock.rows : [])
+    .map(relayProjectionID)
     .filter(Boolean);
 }
 
 function relayHostIDs(relaySample) {
   const ids = new Set();
-  for (const host of Array.isArray(relaySample?.freshDock?.hosts) ? relaySample.freshDock.hosts : []) {
-    if (host?.id) {
-      ids.add(host.id);
-    }
-  }
-  for (const card of Array.isArray(relaySample?.freshDock?.cards) ? relaySample.freshDock.cards : []) {
-    if (card?.logicalHostID) {
-      ids.add(card.logicalHostID);
+  for (const row of Array.isArray(relaySample?.freshDock?.rows) ? relaySample.freshDock.rows : []) {
+    if (row?.logicalHostID) {
+      ids.add(row.logicalHostID);
     }
   }
   return [...ids].sort();
@@ -420,15 +417,6 @@ function projectedReferenceOrder(values, reference) {
   return reference.filter((value) => wanted.has(value));
 }
 
-function orderedMessageCardIDs(detail) {
-  const cards = Array.isArray(detail?.messageCards) ? detail.messageCards : [];
-  const ids = cards.map((card) => card?.identifier).filter(Boolean);
-  if (ids.length) {
-    return ids;
-  }
-  return Array.isArray(detail?.messageCardIDs) ? detail.messageCardIDs.filter(Boolean) : [];
-}
-
 function automationSafeSegment(value) {
   let escaped = "";
   for (const byte of Buffer.from(String(value || ""), "utf8")) {
@@ -460,8 +448,76 @@ function requestStatusIdentifier(cardID) {
   return `${requestCardIdentifier(cardID)}.status`;
 }
 
-function messageCardIdentifier(eventID) {
-  return `codexdock.session.message.${automationSafeSegment(eventID)}`;
+function messageCardIdentifier(projectionID) {
+  return `codexdock.session.message.${automationSafeSegment(projectionID)}`;
+}
+
+function decodeAutomationSegment(value) {
+  try {
+    return decodeURIComponent(String(value || ""));
+  } catch {
+    return value || null;
+  }
+}
+
+function isCanonicalProjectionID(value) {
+  return typeof value === "string"
+    && /^host:[^/]+\/thread:[^/]+\/.+\/row:[^/]+$/u.test(value);
+}
+
+function messageProjectionIDFromElement(element) {
+  const parsed = parseSemicolonValue(element?.value || "");
+  if (isCanonicalProjectionID(parsed.projection)) {
+    return parsed.projection;
+  }
+  const prefix = "codexdock.session.message.";
+  if (typeof element?.identifier === "string" && element.identifier.startsWith(prefix)) {
+    const decoded = decodeAutomationSegment(element.identifier.slice(prefix.length));
+    return isCanonicalProjectionID(decoded) ? decoded : null;
+  }
+  return null;
+}
+
+function messageProjectionIDsFromElements(...sources) {
+  const ids = [];
+  const seen = new Set();
+  for (const element of sources.flat()) {
+    const projectionID = messageProjectionIDFromElement(element);
+    if (!projectionID || seen.has(projectionID)) {
+      continue;
+    }
+    seen.add(projectionID);
+    ids.push(projectionID);
+  }
+  return ids;
+}
+
+function allMessageProjectionIDsFromElements(...sources) {
+  const ids = [];
+  for (const element of sources.flat()) {
+    const projectionID = messageProjectionIDFromElement(element);
+    if (projectionID) {
+      ids.push(projectionID);
+    }
+  }
+  return ids;
+}
+
+function duplicateValues(values) {
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const value of values) {
+    if (seen.has(value)) {
+      duplicates.add(value);
+    } else {
+      seen.add(value);
+    }
+  }
+  return [...duplicates];
+}
+
+function orderedMessageProjectionIDs(detail) {
+  return messageProjectionIDsFromElements(Array.isArray(detail?.messageCards) ? detail.messageCards : []);
 }
 
 function detailElements(detail) {
@@ -475,11 +531,13 @@ function detailElement(detail, identifier) {
   return detailElements(detail).find((element) => element?.identifier === identifier) || null;
 }
 
-function detailHasIdentifier(detail, identifier, legacyIDs = []) {
-  return legacyIDs.includes(identifier)
-    || (Array.isArray(detail?.messageCardIDs) && detail.messageCardIDs.includes(identifier))
-    || (Array.isArray(detail?.requestCardIDs) && detail.requestCardIDs.includes(identifier))
-    || Boolean(detailElement(detail, identifier));
+function detailHasIdentifier(detail, identifier) {
+  return Boolean(detailElement(detail, identifier));
+}
+
+function detailHasMessageProjectionID(detail, projectionID) {
+  return messageProjectionIDsFromElements(Array.isArray(detail?.messageCards) ? detail.messageCards : [])
+    .includes(projectionID);
 }
 
 function detailMessageEventCount(detail) {
@@ -510,19 +568,17 @@ function combinedDetailForSample(sample) {
   const sweep = sample?.detailSweep || {};
   return {
     ...detail,
-    messageCardIDs: mergeUniqueValues(detail.messageCardIDs || [], sweep.messageCardIDs || []),
-    requestCardIDs: mergeUniqueValues(detail.requestCardIDs || [], sweep.requestCardIDs || []),
     messageCards: mergeUniqueElements(detail.messageCards || [], sweep.messageCards || []),
     requestElements: mergeUniqueElements(detail.requestElements || [], sweep.requestElements || []),
   };
 }
 
-function orderedCombinedMessageCardIDs(sample) {
+function orderedCombinedMessageProjectionIDs(sample) {
   const sweep = sample?.detailSweep || null;
-  if (sweep && Array.isArray(sweep.messageCardIDs) && sweep.messageCardIDs.length) {
-    return sweep.messageCardIDs.filter(Boolean);
+  if (sweep && Array.isArray(sweep.messageCards) && sweep.messageCards.length) {
+    return orderedMessageProjectionIDs(sweep);
   }
-  return orderedMessageCardIDs(combinedDetailForSample(sample));
+  return orderedMessageProjectionIDs(combinedDetailForSample(sample));
 }
 
 function detailValueObservedAtMS(sample, key) {
@@ -562,12 +618,6 @@ function detailIdentifierObservedAtMS(sample, identifier) {
       times.push(elementObservedAtMS(element, detailRequestFallbackMs));
     }
   }
-  if (Array.isArray(detail.messageCardIDs) && detail.messageCardIDs.includes(identifier)) {
-    times.push(detailMessageFallbackMs);
-  }
-  if (Array.isArray(detail.requestCardIDs) && detail.requestCardIDs.includes(identifier)) {
-    times.push(detailRequestFallbackMs);
-  }
 
   for (const element of Array.isArray(sweep.messageCards) ? sweep.messageCards : []) {
     if (element?.identifier === identifier) {
@@ -578,12 +628,6 @@ function detailIdentifierObservedAtMS(sample, identifier) {
     if (element?.identifier === identifier) {
       times.push(elementObservedAtMS(element, sweepFallbackMs));
     }
-  }
-  if (Array.isArray(sweep.messageCardIDs) && sweep.messageCardIDs.includes(identifier)) {
-    times.push(sweepFallbackMs);
-  }
-  if (Array.isArray(sweep.requestCardIDs) && sweep.requestCardIDs.includes(identifier)) {
-    times.push(sweepFallbackMs);
   }
 
   return earliestObservedAtMS(times);
@@ -620,10 +664,25 @@ function detailSweepMessageCardCount(sample) {
   if (!sweep) {
     return 0;
   }
-  return new Set([
-    ...(Array.isArray(sweep.messageCardIDs) ? sweep.messageCardIDs : []),
-    ...(Array.isArray(sweep.messageCards) ? sweep.messageCards.map((element) => element?.identifier).filter(Boolean) : []),
-  ]).size;
+  return new Set(messageProjectionIDsFromElements(Array.isArray(sweep.messageCards) ? sweep.messageCards : [])).size;
+}
+
+function addDuplicateDetailMessageFailures(failures, sample, detail, source) {
+  const projectionIDs = allMessageProjectionIDsFromElements(
+    Array.isArray(detail?.messageCards) ? detail.messageCards : []
+  );
+  for (const projectionID of duplicateValues(projectionIDs)) {
+    addFailure(
+      failures,
+      sample,
+      "detail_ui_duplicate_message_row",
+      "Simulator detail UI exposed the same message projection row more than once.",
+      {
+        projectionID,
+        source,
+      }
+    );
+  }
 }
 
 function evaluateDetailTransitionSample(sample, transition) {
@@ -655,6 +714,8 @@ function evaluateDetailTransitionSample(sample, transition) {
   const header = parseSemicolonValue(detail.headerValue);
   const truth = transition.truth || {};
   const combinedDetail = combinedDetailForSample(sample);
+  addDuplicateDetailMessageFailures(failures, sample, detail, "detail");
+  addDuplicateDetailMessageFailures(failures, sample, sample?.detailSweep || null, "detailSweep");
   let messageOrderChecks = 0;
   const actualHost = root.host || header.host || null;
   const actualThread = root.thread || header.thread || null;
@@ -728,19 +789,44 @@ function evaluateDetailTransitionSample(sample, transition) {
     }
   }
 
-  const expectedMessageEventIDs = Array.isArray(truth.expectedMessageEventIDs)
-    ? truth.expectedMessageEventIDs
+  const witnessProjectionIDs = Array.isArray(truth.projectionWitness?.projectionIDs)
+    ? truth.projectionWitness.projectionIDs
     : [];
-  for (const eventID of expectedMessageEventIDs) {
-    const expectedMessageCard = messageCardIdentifier(eventID);
-    if (!detailHasIdentifier(combinedDetail, expectedMessageCard, combinedDetail.messageCardIDs || [])) {
+  const nonCanonicalWitnessProjectionIDs = witnessProjectionIDs.filter((projectionID) => !isCanonicalProjectionID(projectionID));
+  if (nonCanonicalWitnessProjectionIDs.length > 0) {
+    addFailure(
+      failures,
+      sample,
+      "detail_projection_witness_noncanonical",
+      "Relay detail projection witness contained non-canonical projection IDs.",
+      { projectionIDs: nonCanonicalWitnessProjectionIDs }
+    );
+  }
+  const legacyExpectedProjectionIDs = Array.isArray(truth.expectedMessageProjectionIDs)
+    ? truth.expectedMessageProjectionIDs
+    : [];
+  if (legacyExpectedProjectionIDs.length > 0) {
+    addFailure(
+      failures,
+      sample,
+      "detail_legacy_expected_projection_ids_present",
+      "Simulator detail proof used legacy expected message projection IDs instead of the relay projection witness.",
+      {
+        legacyProjectionIDs: legacyExpectedProjectionIDs,
+      }
+    );
+  }
+  const expectedMessageProjectionIDs = witnessProjectionIDs.filter(isCanonicalProjectionID);
+  for (const projectionID of expectedMessageProjectionIDs) {
+    const expectedMessageCard = messageCardIdentifier(projectionID);
+    if (!detailHasMessageProjectionID(combinedDetail, projectionID)) {
       addFailure(
         failures,
         sample,
         "detail_ui_message_card_missing",
         "Simulator detail UI did not display an expected opened-thread event row.",
         {
-          eventID,
+          projectionID,
           expectedMessageCard,
         }
       );
@@ -749,11 +835,11 @@ function evaluateDetailTransitionSample(sample, transition) {
     }
   }
 
-  if (expectedMessageEventIDs.length >= 2) {
-    const expectedMessageOrder = expectedMessageEventIDs.map(messageCardIdentifier);
-    const actualMessageOrder = orderedCombinedMessageCardIDs(sample)
-      .filter((identifier) => expectedMessageOrder.includes(identifier));
-    const hasAllExpected = expectedMessageOrder.every((identifier) => actualMessageOrder.includes(identifier));
+  if (expectedMessageProjectionIDs.length >= 2) {
+    const expectedMessageOrder = expectedMessageProjectionIDs;
+    const actualMessageOrder = orderedCombinedMessageProjectionIDs(sample)
+      .filter((projectionID) => expectedMessageOrder.includes(projectionID));
+    const hasAllExpected = expectedMessageOrder.every((projectionID) => actualMessageOrder.includes(projectionID));
     if (hasAllExpected && !orderedSubsequence(actualMessageOrder, expectedMessageOrder)) {
       messageOrderChecks = 1;
       addFailure(
@@ -776,13 +862,13 @@ function evaluateDetailTransitionSample(sample, transition) {
     const requestCardID = truth.requestCardID;
     const expectedRequestCard = requestCardIdentifier(requestCardID);
     const expectedMessageCard = messageCardIdentifier(requestCardID);
-    const hasRequestCard = detailHasIdentifier(combinedDetail, expectedRequestCard, combinedDetail.requestCardIDs || []);
-    const hasRequestMessageCard = detailHasIdentifier(combinedDetail, expectedMessageCard, combinedDetail.messageCardIDs || []);
-    const expectsExactRequestMessageCard = (Array.isArray(truth.expectedMessageEventIDs) ? truth.expectedMessageEventIDs : [])
-      .includes(requestCardID);
+    const hasRequestCard = detailHasIdentifier(combinedDetail, expectedRequestCard);
+    const hasRequestMessageCard = isCanonicalProjectionID(requestCardID)
+      && detailHasMessageProjectionID(combinedDetail, requestCardID);
+    const expectsExactRequestMessageCard = isCanonicalProjectionID(requestCardID)
+      && expectedMessageProjectionIDs.includes(requestCardID);
     const actualEventCount = detailMessageEventCount(detail);
-    const requestEventCountProven = Number.isFinite(expectedEventCount)
-      && actualEventCount === expectedEventCount;
+    const requestEventCountProven = false;
     if (!hasRequestMessageCard && expectsExactRequestMessageCard) {
       addFailure(
         failures,
@@ -799,7 +885,7 @@ function evaluateDetailTransitionSample(sample, transition) {
         failures,
         sample,
         "detail_ui_request_message_unproven",
-        "Simulator detail UI did not prove the server request event row by exact row id or exact event count.",
+        "Simulator detail UI did not prove the server request row by exact canonical projection id.",
         {
           requestCardID,
           expectedMessageCard,
@@ -808,9 +894,7 @@ function evaluateDetailTransitionSample(sample, transition) {
         }
       );
     } else {
-      addEvidenceTime(hasRequestMessageCard
-        ? detailIdentifierObservedAtMS(sample, expectedMessageCard)
-        : detailValueObservedAtMS(sample, "messageList"));
+      addEvidenceTime(detailIdentifierObservedAtMS(sample, expectedMessageCard));
     }
     if (!hasRequestCard) {
       addFailure(
@@ -855,20 +939,21 @@ function evaluateDetailTransitionSample(sample, transition) {
   };
 }
 
-function evaluateDockRows({ sample, rows, relayCards, failures, source }) {
+function evaluateDockRows({ sample, rows, relayRows, failures, source }) {
   const seenKeys = new Set();
   for (const row of rows) {
     const parsed = parseSemicolonValue(row.value);
     const host = parsed.host;
     const thread = parsed.thread;
+    const projectionID = parsed.projection === "none" ? null : parsed.projection;
     const status = parsed.status;
     const origin = parsed.origin;
-    if (!host || !thread) {
+    if (!host || !thread || !projectionID) {
       addFailure(
         failures,
         sample,
         rowFailureCode(source, "row_missing_identity"),
-        "Rendered row did not expose host/thread identity.",
+        "Rendered row did not expose relay projection identity.",
         {
           identifier: row.identifier,
           value: row.value,
@@ -877,7 +962,7 @@ function evaluateDockRows({ sample, rows, relayCards, failures, source }) {
       );
       continue;
     }
-    const key = `${host}::${thread}`;
+    const key = projectionID;
     if (seenKeys.has(key)) {
       addFailure(
         failures,
@@ -889,8 +974,8 @@ function evaluateDockRows({ sample, rows, relayCards, failures, source }) {
       continue;
     }
     seenKeys.add(key);
-    const relayCard = relayCards.get(key);
-    if (!relayCard) {
+    const relayRow = relayRows.get(key);
+    if (!relayRow) {
       addFailure(
         failures,
         sample,
@@ -904,27 +989,27 @@ function evaluateDockRows({ sample, rows, relayCards, failures, source }) {
       );
       continue;
     }
-    if (status && status !== relayCard.status) {
+    if (status && status !== relayRow.status) {
       addFailure(
         failures,
         sample,
         rowFailureCode(source, "row_status_mismatch"),
-        "Rendered row status does not match relay card status.",
+        "Rendered row status does not match relay projection row status.",
         {
           key,
           uiStatus: status,
-          relayStatus: relayCard.status,
+          relayStatus: relayRow.status,
           source,
         }
       );
     }
-    const expectedOrigin = relayOrigin(relayCard);
+    const expectedOrigin = relayOrigin(relayRow);
     if (origin && origin !== expectedOrigin) {
       addFailure(
         failures,
         sample,
         rowFailureCode(source, "row_origin_mismatch"),
-        "Rendered row origin does not match relay card origin.",
+        "Rendered row origin does not match relay projection row origin.",
         {
           key,
           uiOrigin: origin,
@@ -939,14 +1024,14 @@ function evaluateDockRows({ sample, rows, relayCards, failures, source }) {
 
 function rowRelayKey(row) {
   const parsed = parseSemicolonValue(row?.value || "");
-  if (!parsed.host || !parsed.thread) {
+  if (!parsed.projection || parsed.projection === "none") {
     return null;
   }
-  return `${parsed.host}::${parsed.thread}`;
+  return parsed.projection;
 }
 
 function evaluateDockRowOrder({ sample, rows, relaySample, failures, source }) {
-  const expectedOrder = relayRenderOrderCardIDs(relaySample);
+  const expectedOrder = relayRenderOrderProjectionIDs(relaySample);
   const actualOrder = rows.map(rowRelayKey).filter(Boolean);
   if (expectedOrder.length < 2 || actualOrder.length < 2) {
     return 0;
@@ -1001,8 +1086,8 @@ function evaluateUISample(sample, relaySample) {
   }
   const rootValue = sample.dockRootValue || "";
   const rows = Array.isArray(sample.dockRows) ? sample.dockRows : [];
-  const relayCards = relayCardsByKey(relaySample);
-  const relayRowCount = Number(relaySample?.freshDock?.cardCount ?? relaySample?.freshDock?.totalRows);
+  const relayRows = relayRowsByProjectionID(relaySample);
+  const relayRowCount = Number(relaySample?.freshDock?.rowCount ?? relaySample?.freshDock?.totalRows);
   const uiRootRows = parseRootRowCount(rootValue);
   const rootLens = parseRootLens(rootValue);
   const usesRelayGlobalOrder = !rootLens || rootLens === "newest";
@@ -1018,7 +1103,7 @@ function evaluateUISample(sample, relaySample) {
       failures,
       sample,
       "dock_ui_root_count_mismatch",
-      "Dock root rendered row count does not match relay fresh Dock card count.",
+      "Dock root rendered row count does not match relay fresh Dock projection row count.",
       { uiRootRows, relayRowCount }
     );
   }
@@ -1027,7 +1112,7 @@ function evaluateUISample(sample, relaySample) {
     addFailure(failures, sample, "dock_ui_missing_rows", "Relay has Dock rows but the rendered UI exposed no visible Dock rows.");
   }
 
-  evaluateDockRows({ sample, rows, relayCards, failures, source: "visible" });
+  evaluateDockRows({ sample, rows, relayRows, failures, source: "visible" });
   const visibleOrderChecks = usesRelayGlobalOrder
     ? evaluateDockRowOrder({
         sample,
@@ -1044,7 +1129,7 @@ function evaluateUISample(sample, relaySample) {
     const sweepSeenKeys = evaluateDockRows({
       sample,
       rows: sweepRows,
-      relayCards,
+      relayRows,
       failures,
       source: "sweep",
     });
@@ -1064,7 +1149,7 @@ function evaluateUISample(sample, relaySample) {
         failures,
         sample,
         "dock_ui_sweep_count_mismatch",
-        "Checkpoint sweep row count does not match relay fresh Dock card count.",
+        "Checkpoint sweep row count does not match relay fresh Dock projection row count.",
         {
           sweepRows: sweepSeenKeys.size,
           relayRowCount,
@@ -1073,7 +1158,7 @@ function evaluateUISample(sample, relaySample) {
       );
     }
     if (!sweepIsPartial) {
-      for (const key of relayCards.keys()) {
+      for (const key of relayRows.keys()) {
         if (!sweepSeenKeys.has(key)) {
           addFailure(
             failures,

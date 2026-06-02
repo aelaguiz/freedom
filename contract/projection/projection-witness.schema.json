@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-dock.local/contract/projection/projection-witness.schema.json",
+  "title": "Codex Dock Projection Witness",
+  "description": "Debug proof shape for projection/witness/read. It is intentionally projection-shaped so tests cannot invent alternate expected identities.",
+  "type": "object",
+  "required": [
+    "source",
+    "byteEquivalentToDownstream",
+    "sourceHostID",
+    "view",
+    "scope",
+    "threadID",
+    "viewParamsKey",
+    "epoch",
+    "lastSeq",
+    "envelopes",
+    "projectionIDs"
+  ],
+  "properties": {
+    "source": {
+      "const": "retained-downstream-emitter-log"
+    },
+    "byteEquivalentToDownstream": {
+      "const": true
+    },
+    "sourceHostID": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "view": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "dock",
+        "archive",
+        "thread.detail",
+        null
+      ]
+    },
+    "scope": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "threadID": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "viewParamsKey": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "epoch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "lastSeq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "envelopes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "identityVersion",
+          "projectionEngineVersion",
+          "view",
+          "sourceHostID",
+          "threadID",
+          "epoch",
+          "seq",
+          "rows"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          },
+          "identityVersion": {
+            "const": 1
+          },
+          "projectionEngineVersion": {
+            "const": 1
+          },
+          "view": {
+            "enum": [
+              "dock",
+              "archive",
+              "thread.detail"
+            ]
+          },
+          "sourceHostID": {
+            "type": "string",
+            "minLength": 1
+          },
+          "threadID": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "epoch": {
+            "type": "string",
+            "minLength": 1
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "projectionID",
+                "sourceRef",
+                "rowRole",
+                "displayOrderKey"
+              ],
+              "properties": {
+                "projectionID": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sourceRef": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "rowRole": {
+                  "$ref": "https://codex-dock.local/contract/projection/row-role.schema.json"
+                },
+                "displayOrderKey": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "projectionIDs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "projectionIDs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "additionalProperties": false
+}

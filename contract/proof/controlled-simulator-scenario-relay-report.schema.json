@@ -4,7 +4,7 @@
   "title": "Codex Dock Controlled Simulator Scenario Relay Report",
   "type": "object",
   "required": ["schemaVersion", "kind", "status", "proofRunID", "mode", "scenario", "startedAt", "endedAt", "relayUrl", "summary", "samples", "scenarios", "clientPathEvidence", "findings"],
-  "additionalProperties": true,
+  "additionalProperties": false,
   "properties": {
     "schemaVersion": { "const": 1 },
     "kind": { "const": "codex-dock-controlled-simulator-scenario-relay-report" },
@@ -18,7 +18,12 @@
     "summary": {
       "type": "object",
       "required": ["ok", "clientPathOK", "scenario", "scenarioOK", "clientPathRouteCounts"],
-      "additionalProperties": true,
+      "propertyNames": {
+        "not": {
+          "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
+        }
+      },
+      "additionalProperties": { "$ref": "#/definitions/proofValue" },
       "properties": {
         "ok": { "type": "boolean" },
         "clientPathOK": { "type": "boolean" },
@@ -30,17 +35,32 @@
         }
       }
     },
-    "samples": { "type": "array" },
-    "scenarios": { "type": "array", "minItems": 1 },
+    "samples": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/proofValue" }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/proofValue" }
+    },
     "clientPathEvidence": { "$ref": "#/definitions/clientPathEvidence" },
-    "findings": { "type": "array" }
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/proofValue" }
+    }
   },
   "definitions": {
     "status": { "enum": ["pass", "fail", "blocked", "not_run"] },
     "clientPathEvidence": {
       "type": "object",
       "required": ["routes", "routeCounts"],
-      "additionalProperties": true,
+      "propertyNames": {
+        "not": {
+          "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
+        }
+      },
+      "additionalProperties": { "$ref": "#/definitions/proofValue" },
       "properties": {
         "routes": {
           "type": "array",
@@ -51,6 +71,27 @@
           "additionalProperties": { "type": "number" }
         }
       }
+    },
+    "proofValue": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/proofValue" }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
+            }
+          },
+          "additionalProperties": { "$ref": "#/definitions/proofValue" }
+        }
+      ]
     }
   }
 }

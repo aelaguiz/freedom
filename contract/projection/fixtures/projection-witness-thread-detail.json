@@ -1,0 +1,38 @@
+{
+  "source": "retained-downstream-emitter-log",
+  "byteEquivalentToDownstream": true,
+  "sourceHostID": "home",
+  "view": "thread.detail",
+  "scope": "thread",
+  "threadID": "thread-1",
+  "viewParamsKey": "sha256:test",
+  "epoch": "epoch-1",
+  "lastSeq": 1,
+  "envelopes": [
+    {
+      "kind": "snapshot",
+      "schemaVersion": 1,
+      "identityVersion": 1,
+      "projectionEngineVersion": 1,
+      "sourceHostID": "home",
+      "view": "thread.detail",
+      "threadID": "thread-1",
+      "epoch": "epoch-1",
+      "seq": 1,
+      "scope": "thread",
+      "viewParamsKey": "sha256:test",
+      "rows": [
+        {
+          "projectionID": "host:home/thread:thread-1/turn:turn-1/item:item-1/row:userMessage",
+          "sourceRef": "host:home/thread:thread-1/turn:turn-1/item:item-1",
+          "rowRole": "userMessage",
+          "displayOrderKey": "0000000000000001|0000000001|9999999998|9999999998|host:home%2Fthread:thread-1%2Fturn:turn-1%2Fitem:item-1%2Frow:userMessage"
+        }
+      ],
+      "projectionIDs": []
+    }
+  ],
+  "projectionIDs": [
+    "host:home/thread:thread-1/turn:turn-1/item:item-1/row:userMessage"
+  ]
+}

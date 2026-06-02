@@ -44,17 +44,14 @@ public struct AppServerThreadDetailSessionFactory: ThreadDetailSessionMaking {
 private actor AppServerThreadDetailSession: ThreadDetailSession {
     nonisolated let connectionStates: AsyncStream<AppServerConnectionState>
     nonisolated let notifications: AsyncStream<JSONRPCNotification>
-    nonisolated let serverRequests: AsyncStream<JSONRPCRequest>
 
     private let host: DockHostConfiguration
     private let makeClient: @Sendable (DockRelayEndpoint) -> AppServerClient
     private let connectionStateContinuation: AsyncStream<AppServerConnectionState>.Continuation
     private let notificationContinuation: AsyncStream<JSONRPCNotification>.Continuation
-    private let serverRequestContinuation: AsyncStream<JSONRPCRequest>.Continuation
     private var client: AppServerClient?
     private var connectionStateTask: Task<Void, Never>?
     private var notificationTask: Task<Void, Never>?
-    private var serverRequestTask: Task<Void, Never>?
 
     init(
         host: DockHostConfiguration,
@@ -64,23 +61,18 @@ private actor AppServerThreadDetailSession: ThreadDetailSession {
         self.makeClient = makeClient
         let connectionStates = AsyncStream.makeStream(of: AppServerConnectionState.self)
         let notifications = AsyncStream.makeStream(of: JSONRPCNotification.self)
-        let serverRequests = AsyncStream.makeStream(of: JSONRPCRequest.self)
         self.connectionStates = connectionStates.stream
         self.connectionStateContinuation = connectionStates.continuation
         self.notifications = notifications.stream
         self.notificationContinuation = notifications.continuation
-        self.serverRequests = serverRequests.stream
-        self.serverRequestContinuation = serverRequests.continuation
         self.connectionStateContinuation.yield(.idle)
     }
 
     deinit {
         connectionStateTask?.cancel()
         notificationTask?.cancel()
-        serverRequestTask?.cancel()
         connectionStateContinuation.finish()
         notificationContinuation.finish()
-        serverRequestContinuation.finish()
     }
 
     func connectAndInitialize(
@@ -96,36 +88,25 @@ private actor AppServerThreadDetailSession: ThreadDetailSession {
         return connection.initializeResponse
     }
 
-    func threadRead(
-        params: ThreadReadParams,
+    func threadDetailSubscribe(
+        params: ThreadDetailParams,
         timeout: Duration
-    ) async throws -> ThreadReadResponseDTO {
-        try await requireClient().threadRead(
+    ) async throws -> ThreadDetailSnapshotDTO {
+        try await requireClient().threadDetailSubscribe(
             params: params,
             timeout: timeout,
-            observabilityContext: context(for: AppServerMethods.threadRead)
+            observabilityContext: context(for: AppServerMethods.threadDetailSubscribe)
         )
     }
 
-    func threadTurnsList(
-        params: ThreadTurnsListParams,
+    func threadDetailResync(
+        params: ThreadDetailParams,
         timeout: Duration
-    ) async throws -> ThreadTurnsListResponseDTO {
-        try await requireClient().threadTurnsList(
+    ) async throws -> ThreadDetailSnapshotDTO {
+        try await requireClient().threadDetailResync(
             params: params,
             timeout: timeout,
-            observabilityContext: context(for: AppServerMethods.threadTurnsList)
-        )
-    }
-
-    func threadResume(
-        params: ThreadResumeParams,
-        timeout: Duration
-    ) async throws -> ThreadResumeResponseDTO {
-        try await requireClient().threadResume(
-            params: params,
-            timeout: timeout,
-            observabilityContext: context(for: AppServerMethods.threadResume)
+            observabilityContext: context(for: AppServerMethods.threadDetailResync)
         )
     }
 
@@ -152,19 +133,16 @@ private actor AppServerThreadDetailSession: ThreadDetailSession {
     func disconnect() async {
         connectionStateTask?.cancel()
         notificationTask?.cancel()
-        serverRequestTask?.cancel()
         let client = client
         self.client = nil
         await client?.disconnect()
         connectionStateContinuation.finish()
         notificationContinuation.finish()
-        serverRequestContinuation.finish()
     }
 
     private func startForwarding(from client: AppServerClient) {
         connectionStateTask?.cancel()
         notificationTask?.cancel()
-        serverRequestTask?.cancel()
 
         let connectionStateContinuation = connectionStateContinuation
         connectionStateTask = Task { [client] in
@@ -180,12 +158,6 @@ private actor AppServerThreadDetailSession: ThreadDetailSession {
             }
         }
 
-        let serverRequestContinuation = serverRequestContinuation
-        serverRequestTask = Task { [client] in
-            for await request in client.serverRequests {
-                serverRequestContinuation.yield(request)
-            }
-        }
     }
 
     private func requireClient() throws -> AppServerClient {

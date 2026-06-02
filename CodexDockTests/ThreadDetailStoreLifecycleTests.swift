@@ -41,7 +41,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         try await waitForDetailStore {
             store.requestCards.count == 1
         }
-        store.updateRequestCardInput(cardID: "request-approval-1", draft: "Looks good")
+        store.updateRequestCardInput(cardID: try XCTUnwrap(store.requestCards.first?.id), draft: "Looks good")
 
         lifecycle.handle(.background)
 
@@ -57,12 +57,11 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         XCTAssertEqual(store.requestCards.count, 1)
         XCTAssertEqual(store.requestCards[0].inputDraft, "Looks good")
         XCTAssertEqual(store.requestCards[0].status, .pending)
-        let readParams = await session.readParamsSnapshot()
-        let turnsListParams = await session.turnsListParamsSnapshot()
-        let resumeParams = await session.resumeParamsSnapshot()
-        XCTAssertEqual(readParams.count, 1)
-        XCTAssertEqual(turnsListParams.count, 1)
-        XCTAssertEqual(resumeParams.count, 1)
+        XCTAssertEqual(session.detailSubscribeParamsSnapshot().count, 1)
+        XCTAssertEqual(session.detailResyncParamsSnapshot().count, 0)
+        XCTAssertEqual(session.readParamsSnapshot(), [])
+        XCTAssertEqual(session.turnsListParamsSnapshot(), [])
+        XCTAssertEqual(session.resumeParamsSnapshot(), [])
     }
 
     @MainActor
@@ -116,21 +115,15 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
                 && snapshot.events.contains { $0.body == "Rehydrated turn" }
         }
 
-        let readParams = await session.readParamsSnapshot()
-        let turnsListParams = await session.turnsListParamsSnapshot()
-        let resumeParams = await session.resumeParamsSnapshot()
-        XCTAssertEqual(readParams, [
-            ThreadReadParams(threadId: "thread-1", includeTurns: false),
-            ThreadReadParams(threadId: "thread-1", includeTurns: false),
+        XCTAssertEqual(session.detailSubscribeParamsSnapshot(), [
+            ThreadDetailParams(threadId: "thread-1"),
         ])
-        XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
+        XCTAssertEqual(session.detailResyncParamsSnapshot(), [
+            ThreadDetailParams(threadId: "thread-1"),
         ])
-        XCTAssertEqual(resumeParams, [
-            ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
-            ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
-        ])
+        XCTAssertEqual(session.readParamsSnapshot(), [])
+        XCTAssertEqual(session.turnsListParamsSnapshot(), [])
+        XCTAssertEqual(session.resumeParamsSnapshot(), [])
     }
 
     @MainActor
@@ -170,7 +163,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         await session.emitConnectionState(.reconnecting(attempt: 1, reason: "transport closed"))
         await session.emitConnectionState(.connected)
         try await waitForDetailStoreAsync {
-            await session.resumeParamsSnapshot().count == 2
+            session.detailResyncParamsSnapshot().count == 1
         }
 
         await session.emitNotification(
@@ -242,7 +235,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         try await waitForDetailStore {
             store.requestCards.count == 1
         }
-        store.updateRequestCardInput(cardID: "request-approval-1", draft: "Looks good")
+        store.updateRequestCardInput(cardID: try XCTUnwrap(store.requestCards.first?.id), draft: "Looks good")
 
         await session.emitConnectionState(.reconnecting(attempt: 1, reason: "transport closed"))
         await session.emitConnectionState(.connected)
@@ -311,21 +304,15 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
                 && snapshot.events.contains { $0.body == "Foreground resumed turn" }
         }
 
-        let readParams = await session.readParamsSnapshot()
-        let turnsListParams = await session.turnsListParamsSnapshot()
-        let resumeParams = await session.resumeParamsSnapshot()
-        XCTAssertEqual(readParams, [
-            ThreadReadParams(threadId: "thread-1", includeTurns: false),
-            ThreadReadParams(threadId: "thread-1", includeTurns: false),
+        XCTAssertEqual(session.detailSubscribeParamsSnapshot(), [
+            ThreadDetailParams(threadId: "thread-1"),
         ])
-        XCTAssertEqual(turnsListParams, [
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
-            ThreadTurnsListParams(threadId: "thread-1", limit: 250, sortDirection: .desc, itemsView: .full),
+        XCTAssertEqual(session.detailResyncParamsSnapshot(), [
+            ThreadDetailParams(threadId: "thread-1"),
         ])
-        XCTAssertEqual(resumeParams, [
-            ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
-            ThreadResumeParams(threadId: "thread-1", excludeTurns: true),
-        ])
+        XCTAssertEqual(session.readParamsSnapshot(), [])
+        XCTAssertEqual(session.turnsListParamsSnapshot(), [])
+        XCTAssertEqual(session.resumeParamsSnapshot(), [])
     }
 
     @MainActor
@@ -371,8 +358,8 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             return snapshot.liveState == .reconnecting("Resuming")
         }
         try await Task.sleep(for: .milliseconds(50))
-        let readParamsBeforeReconnect = await session.readParamsSnapshot()
-        XCTAssertEqual(readParamsBeforeReconnect.count, 1)
+        XCTAssertEqual(session.detailSubscribeParamsSnapshot().count, 1)
+        XCTAssertEqual(session.detailResyncParamsSnapshot().count, 0)
 
         await session.emitConnectionState(.connected)
 
@@ -383,8 +370,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             return snapshot.liveState == .live
                 && snapshot.events.contains { $0.body == "Rehydrated after socket returned" }
         }
-        let readParamsAfterReconnect = await session.readParamsSnapshot()
-        XCTAssertEqual(readParamsAfterReconnect.count, 2)
+        XCTAssertEqual(session.detailResyncParamsSnapshot().count, 1)
     }
 
     @MainActor
@@ -497,8 +483,9 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             return XCTFail("Expected loaded state, got \(store.state)")
         }
         XCTAssertEqual(snapshot.liveState, .closed)
-        let readParams = await session.readParamsSnapshot()
-        XCTAssertEqual(readParams.count, 1)
+        XCTAssertEqual(session.detailSubscribeParamsSnapshot().count, 1)
+        XCTAssertEqual(session.detailResyncParamsSnapshot().count, 0)
+        XCTAssertEqual(session.readParamsSnapshot(), [])
     }
 
     @MainActor
@@ -539,7 +526,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             return snapshot.liveState == .live
         }
 
-        let startParams = await session.turnStartParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [
             TurnStartParams.text(threadId: "thread-1", text: "Do not replay this"),
         ])
@@ -589,7 +576,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
                 && store.composer.voice.lastError == "Dictation stopped because the app moved to the background."
         }
         XCTAssertEqual(store.composer.draft, "Keep this spoken partial")
-        let startParams = await session.turnStartParamsSnapshot()
+        let startParams = session.turnStartParamsSnapshot()
         XCTAssertEqual(startParams, [])
     }
 }

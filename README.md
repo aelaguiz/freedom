@@ -169,10 +169,11 @@ normal for the personal physical-phone relay path; it is not shown as missing
 credentials.
 
 Live Session detail connections reconnect automatically when recovery is safe.
-After reconnect, the app re-runs the full detail rehydrate path:
-`thread/read includeTurns:false`, paged `thread/turns/list` until `nextCursor`
-is exhausted, and `thread/resume excludeTurns:true`. The turn-list page size is
-a transport guard, not a total message cap. Failed user sends are not silently
+Swift consumes relay-owned `thread/detail/subscribe`, `thread/detail/update`,
+and `thread/detail/resync` projection rows. The relay may still use raw
+`thread/read includeTurns:false`, paged `thread/turns/list`, and upstream
+`thread/resume excludeTurns:true` internally, but those raw routes are not the
+phone-facing Thread Detail display contract. Failed user sends are not silently
 replayed. If the relay loses its upstream session, it either re-resumes upstream
 or closes the phone WebSocket so Swift can mark the detail stale or reconnect.
 
@@ -180,7 +181,7 @@ When iOS backgrounds the app, root refresh and reconnect attempts pause instead
 of spending retry budget. Open details keep visible events, request action
 state, and draft text but are no longer labeled fresh. Active voice capture is
 cancelled without auto-submitting. On foreground resume, Dock and Archive
-refresh from root, open details rehydrate through the same full detail path, and
+refresh from root, open details rehydrate through `thread/detail/resync`, and
 the indicator moves through `Backgrounded` / `Resuming` / `Reconnecting` as
 appropriate.
 
