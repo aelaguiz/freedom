@@ -2,7 +2,21 @@
 
 Plan: `docs/CODEX_DOCK_LIVE_UPDATE_ARCHITECTURE_AND_TESTING_REFERENCE_2026-06-01.md`
 Started: 2026-06-01
-Status: complete
+Status: superseded history
+
+## Supersession Notice - 2026-06-02
+
+This worklog is historical evidence for the older 2026-06-01 implementation
+slice. It is not current readiness evidence for the rebuilt client
+communication, catch-up, relay projection, proof, and deletion architecture.
+
+Current source of truth:
+
+- `docs/CODEX_DOCK_LIVE_UPDATE_ARCHITECTURE_AND_TESTING_REFERENCE_2026-06-01.md`
+
+Do not use the old `complete` phase ledger below to claim the current
+architecture has been implemented. The current plan intentionally supersedes
+that older phase structure.
 
 ## North Star
 

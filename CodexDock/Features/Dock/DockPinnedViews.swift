@@ -1,14 +1,8 @@
 import SwiftUI
-#if os(iOS)
-import UIKit
-
-private let dockPinnedRowCellReuseID = "DockPinnedRowCell"
-#endif
 
 struct DockSwipeActionRow<Content: View>: View {
     let row: DockRowViewModel
     let actionID: AutomationID
-    let resetToken: RenderRevision
     let onTogglePinned: () -> Void
     let canOpen: Bool
     let onOpen: () -> Void
@@ -43,9 +37,6 @@ struct DockSwipeActionRow<Content: View>: View {
             closeAction(animated: false)
         }
         .onChange(of: row.isPinned) { _, _ in
-            closeAction(animated: false)
-        }
-        .onChange(of: resetToken) { _, _ in
             closeAction(animated: false)
         }
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -97,9 +88,8 @@ struct DockSwipeActionRow<Content: View>: View {
     }
 
     private func closeAction(animated: Bool = true) {
-        // Render revisions are data updates. Do not open a spring transaction
-        // unless there is an actual swipe offset to close; list reorders must
-        // not leave duplicate accessibility rows during live updates.
+        // A live Dock update should not reset the action surface. Only close
+        // when the user acts or the row's semantic identity/pin state changes.
         guard offset != 0 else {
             return
         }
@@ -120,43 +110,68 @@ struct DockPinnedSectionView<RowContent: View>: View {
     let onUnpin: (DockRowViewModel) -> Void
     let onOpen: (DockRowViewModel) -> Void
     @ViewBuilder let rowContent: (DockRowViewModel) -> RowContent
+    @State private var isReorderPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button {
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                    isCollapsed.toggle()
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                        isCollapsed.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Label(headerTitle, systemImage: "pin.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .accessibilityAddTraits(.isHeader)
+                            .codexAutomationID(AutomationID.Dock.pinnedHeader)
+
+                        Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                    }
                 }
-            } label: {
-                HStack(spacing: 8) {
-                    Label(headerTitle, systemImage: "pin.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .accessibilityAddTraits(.isHeader)
-                        .codexAutomationID(AutomationID.Dock.pinnedHeader)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Pinned")
+                .accessibilityValue(isCollapsed ? "Collapsed, \(headerTitle)" : "Expanded, \(headerTitle)")
+                .codexAutomationID(AutomationID.Dock.pinnedToggleButton)
 
-                    Spacer(minLength: 8)
+                Spacer(minLength: 8)
 
-                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
+                if projection.pinnedRows.count > 1 {
+                    Button {
+                        isReorderPresented = true
+                    } label: {
+                        Label("Reorder", systemImage: "arrow.up.arrow.down")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Reorder pinned rows")
+                    .codexAutomationID(AutomationID.Dock.pinnedReorderButton)
                 }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Pinned")
-            .accessibilityValue(isCollapsed ? "Collapsed, \(headerTitle)" : "Expanded, \(headerTitle)")
-            .codexAutomationID(AutomationID.Dock.pinnedToggleButton)
 
             if !isCollapsed {
                 DockPinnedRowsList(
                     rows: projection.pinnedRows,
-                    onReorder: onMove,
                     onUnpin: onUnpin,
                     onOpen: onOpen,
                     rowContent: rowContent
                 )
             }
+        }
+        .sheet(isPresented: $isReorderPresented) {
+            DockPinnedReorderView(
+                rows: projection.pinnedRows,
+                onCancel: { isReorderPresented = false },
+                onSave: { rows in
+                    isReorderPresented = false
+                    onMove(rows)
+                },
+                rowContent: rowContent
+            )
         }
         .accessibilityElement(children: .contain)
         .accessibilityValue(headerTitle)
@@ -204,282 +219,88 @@ struct DockPinnedHiddenHintView: View {
 
 struct DockPinnedRowsList<RowContent: View>: View {
     let rows: [DockRowViewModel]
-    let onReorder: ([DockRowViewModel]) -> Void
     let onUnpin: (DockRowViewModel) -> Void
     let onOpen: (DockRowViewModel) -> Void
     @ViewBuilder let rowContent: (DockRowViewModel) -> RowContent
-    @State private var measuredListHeight: CGFloat = 0
 
-    private let estimatedRowHeight: CGFloat = 130
     private let rowSpacing: CGFloat = 10
 
     var body: some View {
-        Group {
-            #if os(iOS)
-            DockPinnedReorderCollectionView(
-                rows: rows,
-                rowSpacing: rowSpacing,
-                onReorder: onReorder,
-                onUnpin: onUnpin,
-                onOpen: onOpen,
-                onHeightChange: updateMeasuredListHeight,
-                rowContent: rowContent
-            )
-            .frame(height: listHeight)
-            #else
-            VStack(alignment: .leading, spacing: rowSpacing) {
-                ForEach(rows) { row in
+        LazyVStack(alignment: .leading, spacing: rowSpacing) {
+            ForEach(rows) { row in
+                DockSwipeActionRow(
+                    row: row,
+                    actionID: AutomationID.Dock.rowAction(
+                        hostID: row.hostID,
+                        threadID: row.threadID,
+                        action: .unpin
+                    ),
+                    onTogglePinned: {
+                        onUnpin(row)
+                    },
+                    canOpen: true,
+                    onOpen: {
+                        onOpen(row)
+                    }
+                ) {
                     rowContent(row)
                 }
             }
-            #endif
         }
         .codexAutomationID(AutomationID.Dock.pinnedRowsList)
     }
-
-    private var listHeight: CGFloat {
-        max(1, measuredListHeight > 0 ? measuredListHeight : estimatedListHeight)
-    }
-
-    private var estimatedListHeight: CGFloat {
-        guard !rows.isEmpty else {
-            return 1
-        }
-        return (CGFloat(rows.count) * estimatedRowHeight) + (CGFloat(max(0, rows.count - 1)) * rowSpacing)
-    }
-
-    private func updateMeasuredListHeight(_ height: CGFloat) {
-        let nextHeight = max(1, ceil(height))
-        guard nextHeight.isFinite, abs(measuredListHeight - nextHeight) > 0.5 else {
-            return
-        }
-        measuredListHeight = nextHeight
-    }
 }
 
-#if os(iOS)
-private struct DockPinnedReorderCollectionView<RowContent: View>: UIViewRepresentable {
-    let rows: [DockRowViewModel]
-    let rowSpacing: CGFloat
-    let onReorder: ([DockRowViewModel]) -> Void
-    let onUnpin: (DockRowViewModel) -> Void
-    let onOpen: (DockRowViewModel) -> Void
-    let onHeightChange: (CGFloat) -> Void
+private struct DockPinnedReorderView<RowContent: View>: View {
+    @State private var rows: [DockRowViewModel]
+    let onCancel: () -> Void
+    let onSave: ([DockRowViewModel]) -> Void
     @ViewBuilder let rowContent: (DockRowViewModel) -> RowContent
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
+    init(
+        rows: [DockRowViewModel],
+        onCancel: @escaping () -> Void,
+        onSave: @escaping ([DockRowViewModel]) -> Void,
+        @ViewBuilder rowContent: @escaping (DockRowViewModel) -> RowContent
+    ) {
+        _rows = State(initialValue: rows)
+        self.onCancel = onCancel
+        self.onSave = onSave
+        self.rowContent = rowContent
     }
 
-    func makeUIView(context: Context) -> UICollectionView {
-        let coordinator = context.coordinator
-        var configuration = UICollectionLayoutListConfiguration(appearance: .plain)
-        configuration.backgroundColor = .clear
-        configuration.showsSeparators = false
-        configuration.trailingSwipeActionsConfigurationProvider = { indexPath in
-            coordinator.trailingSwipeActionsConfiguration(for: indexPath)
+    var body: some View {
+        NavigationStack {
+            reorderList
+            .navigationTitle("Reorder pinned")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        onSave(rows)
+                    }
+                }
+            }
         }
-        let layout = UICollectionViewCompositionalLayout.list(using: configuration)
-
-        let collectionView = PinnedCollectionView(frame: .zero, collectionViewLayout: layout)
-        collectionView.backgroundColor = .clear
-        collectionView.alwaysBounceVertical = false
-        collectionView.isScrollEnabled = false
-        collectionView.showsHorizontalScrollIndicator = false
-        collectionView.showsVerticalScrollIndicator = false
-        collectionView.dataSource = context.coordinator
-        collectionView.delegate = context.coordinator
-        collectionView.register(UICollectionViewListCell.self, forCellWithReuseIdentifier: dockPinnedRowCellReuseID)
-        collectionView.accessibilityIdentifier = AutomationID.Dock.pinnedRowsList.rawValue
-        collectionView.onContentHeightChange = { [weak coordinator] height in
-            coordinator?.reportMeasuredHeight(height)
-        }
-
-        let longPress = UILongPressGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handleLongPress(_:))
-        )
-        longPress.minimumPressDuration = 0.35
-        longPress.cancelsTouchesInView = true
-        longPress.delegate = context.coordinator
-        collectionView.addGestureRecognizer(longPress)
-
-        return collectionView
+        .codexAutomationID(AutomationID.Dock.pinnedReorderSheet)
     }
 
-    func updateUIView(_ collectionView: UICollectionView, context: Context) {
-        context.coordinator.parent = self
-        guard !context.coordinator.isMoving else {
-            return
-        }
-        context.coordinator.workingRows = rows
-        collectionView.reloadData()
-        collectionView.collectionViewLayout.invalidateLayout()
-        collectionView.setNeedsLayout()
-        collectionView.layoutIfNeeded()
-        context.coordinator.reportMeasuredHeight(collectionView.collectionViewLayout.collectionViewContentSize.height)
-    }
-
-    final class PinnedCollectionView: UICollectionView {
-        var onContentHeightChange: ((CGFloat) -> Void)?
-        private var lastContentHeight: CGFloat = 0
-
-        override func layoutSubviews() {
-            super.layoutSubviews()
-            let height = collectionViewLayout.collectionViewContentSize.height
-            guard height.isFinite, abs(height - lastContentHeight) > 0.5 else {
-                return
+    @ViewBuilder
+    private var reorderList: some View {
+        let list = List {
+            ForEach(rows) { row in
+                rowContent(row)
             }
-            lastContentHeight = height
-            onContentHeightChange?(height)
-        }
-    }
-
-    final class Coordinator: NSObject, UICollectionViewDataSource, UICollectionViewDelegate, UIGestureRecognizerDelegate {
-        var parent: DockPinnedReorderCollectionView
-        var workingRows: [DockRowViewModel]
-        var isMoving = false
-        private var lastReportedHeight: CGFloat = 0
-
-        init(_ parent: DockPinnedReorderCollectionView) {
-            self.parent = parent
-            self.workingRows = parent.rows
-        }
-
-        func reportMeasuredHeight(_ height: CGFloat) {
-            guard height.isFinite, abs(height - lastReportedHeight) > 0.5 else {
-                return
-            }
-            lastReportedHeight = height
-            DispatchQueue.main.async { [weak self] in
-                self?.parent.onHeightChange(height)
+            .onMove { source, destination in
+                rows.move(fromOffsets: source, toOffset: destination)
             }
         }
-
-        func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-            workingRows.count
-        }
-
-        func collectionView(
-            _ collectionView: UICollectionView,
-            cellForItemAt indexPath: IndexPath
-        ) -> UICollectionViewCell {
-            let cell = collectionView.dequeueReusableCell(
-                withReuseIdentifier: dockPinnedRowCellReuseID,
-                for: indexPath
-            )
-            guard let cell = cell as? UICollectionViewListCell else {
-                return cell
-            }
-            cell.contentConfiguration = nil
-            cell.backgroundColor = .clear
-            cell.contentView.backgroundColor = .clear
-            cell.backgroundConfiguration = .clear()
-
-            guard indexPath.item < workingRows.count else {
-                return cell
-            }
-
-            let row = workingRows[indexPath.item]
-            cell.contentConfiguration = UIHostingConfiguration {
-                parent.rowContent(row)
-                    .padding(.vertical, parent.rowSpacing / 2)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-            }
-            .margins(.all, 0)
-            return cell
-        }
-
-        func collectionView(_ collectionView: UICollectionView, canMoveItemAt indexPath: IndexPath) -> Bool {
-            indexPath.item < workingRows.count
-        }
-
-        func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-            guard indexPath.item < workingRows.count else {
-                return
-            }
-            parent.onOpen(workingRows[indexPath.item])
-        }
-
-        func collectionView(
-            _ collectionView: UICollectionView,
-            moveItemAt sourceIndexPath: IndexPath,
-            to destinationIndexPath: IndexPath
-        ) {
-            guard sourceIndexPath.item != destinationIndexPath.item,
-                  sourceIndexPath.item < workingRows.count else {
-                return
-            }
-
-            let row = workingRows.remove(at: sourceIndexPath.item)
-            let insertionIndex = Swift.max(0, Swift.min(workingRows.count, destinationIndexPath.item))
-            workingRows.insert(row, at: insertionIndex)
-        }
-
-        func trailingSwipeActionsConfiguration(for indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-            guard indexPath.item < workingRows.count else {
-                return nil
-            }
-
-            let row = workingRows[indexPath.item]
-            let action = UIContextualAction(style: .destructive, title: "Unpin") { [weak self] _, _, completion in
-                self?.parent.onUnpin(row)
-                completion(true)
-            }
-            action.image = UIImage(systemName: "pin.slash")
-
-            let configuration = UISwipeActionsConfiguration(actions: [action])
-            configuration.performsFirstActionWithFullSwipe = true
-            return configuration
-        }
-
-        @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
-            guard let collectionView = gesture.view as? UICollectionView else {
-                return
-            }
-
-            let location = gesture.location(in: collectionView)
-            switch gesture.state {
-            case .began:
-                guard let indexPath = collectionView.indexPathForItem(at: location) else {
-                    return
-                }
-                workingRows = parent.rows
-                guard collectionView.beginInteractiveMovementForItem(at: indexPath) else {
-                    isMoving = false
-                    workingRows = parent.rows
-                    return
-                }
-                isMoving = true
-            case .changed:
-                guard isMoving else {
-                    return
-                }
-                collectionView.updateInteractiveMovementTargetPosition(location)
-            case .ended:
-                guard isMoving else {
-                    return
-                }
-                collectionView.endInteractiveMovement()
-                isMoving = false
-                parent.onReorder(workingRows)
-            default:
-                collectionView.cancelInteractiveMovement()
-                isMoving = false
-                workingRows = parent.rows
-            }
-        }
-
-        func gestureRecognizer(
-            _ gestureRecognizer: UIGestureRecognizer,
-            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-        ) -> Bool {
-            if gestureRecognizer is UILongPressGestureRecognizer
-                || otherGestureRecognizer is UILongPressGestureRecognizer {
-                return false
-            }
-            return true
-        }
+        #if os(iOS)
+        list.environment(\.editMode, .constant(.active))
+        #else
+        list
+        #endif
     }
 }
-#endif

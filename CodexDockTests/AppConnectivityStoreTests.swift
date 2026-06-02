@@ -75,7 +75,7 @@ final class AppConnectivityStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDockPartialHostStateRollsUpToPartial() throws {
+    func testDockWindowedLoadedHostStateRollsUpToOnline() throws {
         let host = makeConnectivityHost()
         let store = AppConnectivityStore(hosts: [host])
         let hostViewModel = DockHostViewModel(host: host)
@@ -88,7 +88,65 @@ final class AppConnectivityStoreTests: XCTestCase {
                     hostStates: [
                         DockHostStateViewModel(
                             host: hostViewModel,
-                            status: .partial(rowCount: 1, message: "Agents: offline")
+                            status: .loaded(
+                                rowCount: 250,
+                                window: DockHostWindow(visibleRows: 250, totalRows: 964)
+                            )
+                        ),
+                    ],
+                    rows: []
+                )
+            )
+        )
+
+        XCTAssertEqual(store.overallStatus, .online("250 sessions"))
+        XCTAssertEqual(store.hosts[0].phase, .online("250 sessions"))
+    }
+
+    @MainActor
+    func testArchiveWindowedLoadedHostStateRollsUpToOnline() throws {
+        let host = makeConnectivityHost()
+        let store = AppConnectivityStore(hosts: [host])
+        let hostViewModel = DockHostViewModel(host: host)
+
+        store.reportArchiveState(
+            .loaded(
+                ArchiveSnapshot(
+                    hosts: [hostViewModel],
+                    hostStates: [
+                        DockHostStateViewModel(
+                            host: hostViewModel,
+                            status: .loaded(
+                                rowCount: 125,
+                                window: DockHostWindow(visibleRows: 125, totalRows: 500)
+                            )
+                        ),
+                    ],
+                    hostIdentityResolver: .empty,
+                    sections: []
+                )
+            )
+        )
+
+        XCTAssertEqual(store.overallStatus, .online("125 sessions"))
+        XCTAssertEqual(store.hosts[0].phase, .online("125 sessions"))
+    }
+
+    @MainActor
+    func testDockDegradedHostStateRollsUpToPartial() throws {
+        let host = makeConnectivityHost()
+        let store = AppConnectivityStore(hosts: [host])
+        let hostViewModel = DockHostViewModel(host: host)
+
+        store.reportDockState(
+            .loaded(
+                DockSnapshot(
+                    host: hostViewModel,
+                    hosts: [hostViewModel],
+                    hostStates: [
+                        DockHostStateViewModel(
+                            host: hostViewModel,
+                            status: .degraded(rowCount: 1, message: "Agents: offline")
                         ),
                     ],
                     rows: []

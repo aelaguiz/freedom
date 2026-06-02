@@ -88,6 +88,26 @@ final class SystemHealthProjectorTests: XCTestCase {
         XCTAssertFalse(status?.detail.contains(AppServerMethods.threadDetailUpdate) ?? true)
     }
 
+    func testGlobalPartialWithoutRouteEvidenceDoesNotDegradeCategories() {
+        let host = HostConnectivitySnapshot(
+            id: "home",
+            displayName: "Home",
+            endpoint: "home.local:4510",
+            phase: .online("250 sessions")
+        )
+
+        let snapshot = SystemHealthProjector().snapshot(
+            hosts: [host],
+            overallStatus: .partial("Home: Showing 250 of 964")
+        )
+
+        XCTAssertEqual(snapshot.status(for: .dockFeed)?.label, "Not checked")
+        XCTAssertEqual(snapshot.status(for: .threadDetail)?.label, "Not checked")
+        XCTAssertEqual(snapshot.status(for: .archive)?.label, "Not checked")
+        XCTAssertEqual(snapshot.status(for: .voice)?.label, "Not checked")
+        XCTAssertEqual(snapshot.status(for: .diagnostics)?.label, "Not checked")
+    }
+
     func testNoHostsMapsEveryCategoryToNotChecked() {
         let snapshot = SystemHealthProjector().snapshot(
             hosts: [],

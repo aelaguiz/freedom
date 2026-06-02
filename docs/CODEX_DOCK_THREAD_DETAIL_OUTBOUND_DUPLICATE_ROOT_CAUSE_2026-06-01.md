@@ -14,9 +14,30 @@ iPhone 17 simulator proof. Default two-host proof is not accepted yet because
 
 Related:
 
+- `docs/CODEX_DOCK_IDENTITY_DRIFT_ELIMINATION_PLAN_2026-06-02.md`
+  is the 2026-06-02 model-consensus plan that tightens this doc's broader
+  architecture into a finish-the-cutover plan and explicitly rejects overbuilt
+  pending/optimistic machinery.
 - `docs/CODEX_DOCK_LIVE_UPDATE_ARCHITECTURE_AND_TESTING_REFERENCE_2026-06-01.md`
+  is now the canonical client live-update, projection-runtime, freshness, and
+  proof reference. Its section `0.7 Canonical Client Projection Runtime
+  Architecture` supersedes this doc where client sync, catch-up, lifecycle, or
+  proof ownership differs.
 - `docs/CODEX_DOCK_PROTOCOL_AND_UPDATE_ARCHITECTURE_REFERENCE_2026-05-31.md`
 - `docs/CODEX_DOCK_RELAY_DATA_CONTRACT_AND_LEASE_DRIFT_AUDIT_2026-05-31.md`
+
+## 2026-06-02 Supersession Note
+
+The current identity-specific plan is
+`docs/CODEX_DOCK_IDENTITY_DRIFT_ELIMINATION_PLAN_2026-06-02.md`. The current
+holistic client runtime plan is
+`docs/CODEX_DOCK_LIVE_UPDATE_ARCHITECTURE_AND_TESTING_REFERENCE_2026-06-01.md`
+section `0.7 Canonical Client Projection Runtime Architecture`. Together, they
+keep this doc's core invariant, but supersede the broader sections that
+required pending-row supersession, `clientMutationID`, transaction grammar,
+`archive.cleanup` projection streams, `system.health` projection streams,
+`host.registry` projection streams, or a universal projection-row store. Those
+sections remain below as historical context.
 
 ## 2026-06-01 Current Ask Answer
 

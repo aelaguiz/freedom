@@ -26,7 +26,8 @@
       "required": ["bundleIdentifier"],
       "additionalProperties": false,
       "properties": {
-        "bundleIdentifier": { "type": "string", "minLength": 1 }
+        "bundleIdentifier": { "type": "string", "minLength": 1 },
+        "configuredBuildNumber": { "type": ["string", "null"] }
       }
     },
     "launchMode": { "type": "string", "minLength": 1 },

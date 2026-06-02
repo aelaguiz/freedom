@@ -565,7 +565,7 @@ final class DockStoreStreamTests: XCTestCase {
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.hostStates.map(\.status) == [.partial(rowCount: 1, message: "refresh failed")] }
+            where: { $0.hostStates.map(\.status) == [.degraded(rowCount: 1, message: "refresh failed")] }
         ) else {
             return XCTFail("Expected stale heartbeat to retain rows, got \(store.state)")
         }
@@ -597,7 +597,7 @@ final class DockStoreStreamTests: XCTestCase {
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.hostStates.map(\.status) == [.partial(rowCount: 1, message: "Offline: Relay stream heartbeat timed out")] }
+            where: { $0.hostStates.map(\.status) == [.degraded(rowCount: 1, message: "Offline: Relay stream heartbeat timed out")] }
         ) else {
             return XCTFail("Expected missing heartbeat to retain rows and mark host stale, got \(store.state)")
         }
@@ -662,7 +662,7 @@ final class DockStoreStreamTests: XCTestCase {
         XCTAssertEqual(updatedSnapshot.hostStates.map(\.status), [.loaded(rowCount: 2)])
     }
 
-    func testTerminalIncompleteWindowStaysPartialAfterDroppingNonHumanCards() async throws {
+    func testTerminalIncompleteWindowStaysLoadedAfterDroppingNonHumanCards() async throws {
         let host = makeHost()
         var table = ThreadCardTable()
         table.reset(hosts: [host])
@@ -686,11 +686,15 @@ final class DockStoreStreamTests: XCTestCase {
 
         XCTAssertEqual(result, .applied)
         XCTAssertEqual(snapshot.rows.map(\.threadID), ["human-final"])
-        XCTAssertEqual(snapshot.hostStates.map(\.status), [.partial(rowCount: 1, message: "Showing 1 of 2")])
+        XCTAssertEqual(
+            snapshot.hostStates.map(\.status),
+            [.loaded(rowCount: 1, window: DockHostWindow(visibleRows: 1, totalRows: 2))]
+        )
+        XCTAssertFalse(snapshot.isPartial)
     }
 
     @MainActor
-    func testWindowedSnapshotIsExplicitlyPartial() async throws {
+    func testWindowedSnapshotIsLoadedWithWindowAnnotation() async throws {
         let host = makeHost()
         let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
@@ -711,12 +715,20 @@ final class DockStoreStreamTests: XCTestCase {
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.hostStates.map(\.status) == [.partial(rowCount: 1, message: "Showing 1 of 3")] }
+            where: {
+                $0.hostStates.map(\.status) == [
+                    .loaded(rowCount: 1, window: DockHostWindow(visibleRows: 1, totalRows: 3))
+                ]
+            }
         ) else {
-            return XCTFail("Expected windowed snapshot to be partial, got \(store.state)")
+            return XCTFail("Expected windowed snapshot to be loaded with a window annotation, got \(store.state)")
         }
-        XCTAssertTrue(snapshot.isPartial)
+        XCTAssertFalse(snapshot.isPartial)
         XCTAssertEqual(snapshot.rows.map(\.threadID), ["thread-a"])
+        XCTAssertEqual(
+            snapshot.project(options: .init()).summary.text.contains("Showing 1 of 3"),
+            true
+        )
     }
 
     @MainActor
@@ -868,7 +880,7 @@ final class DockStoreStreamTests: XCTestCase {
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.hostStates.map(\.status) == [.partial(rowCount: 1, message: "Offline: Relay stream closed")] }
+            where: { $0.hostStates.map(\.status) == [.degraded(rowCount: 1, message: "Offline: Relay stream closed")] }
         ) else {
             return XCTFail("Expected closed stream to retain rows and mark host offline, got \(store.state)")
         }

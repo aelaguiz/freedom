@@ -38,6 +38,26 @@ final class ConnectivityDataEngineTests: XCTestCase {
         XCTAssertEqual(loaded.overallStatus, .online("3 sessions"))
     }
 
+    func testEngineTreatsWindowedLoadedEventsAsOnline() async throws {
+        let host = makeHost()
+        let registry = try HostRegistry(hosts: [host])
+        let engine = ConnectivityDataEngine(registry: registry)
+
+        let snapshot = await engine.apply(
+            ConnectivityRuntimeEvent(
+                source: .dock,
+                hostID: host.id,
+                route: "dock/subscribe",
+                status: "250 sessions, Showing 250 of 964",
+                phase: .online("250 sessions"),
+                recordedAt: Date(timeIntervalSince1970: 2_000)
+            )
+        )
+
+        XCTAssertEqual(snapshot.hosts.map(\.phase), [.online("250 sessions")])
+        XCTAssertEqual(snapshot.overallStatus, .online("250 sessions"))
+    }
+
     @MainActor
     func testConnectivityScreenStoreDrainsRuntimeSinkDownstream() async throws {
         let host = makeHost()

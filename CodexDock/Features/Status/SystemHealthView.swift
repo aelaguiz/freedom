@@ -12,6 +12,7 @@ public struct SystemHealthView<RelaySettingsDestination: View>: View {
     private let relaySettingsDestination: (() -> RelaySettingsDestination)?
     private let onClose: @MainActor () -> Void
     private let projector = SystemHealthProjector()
+    @State private var didRequestInitialDiagnostics = false
 
     public init(
         store: AppConnectivityStore,
@@ -61,6 +62,13 @@ public struct SystemHealthView<RelaySettingsDestination: View>: View {
         .accessibilityElement(children: .contain)
         .codexAutomationID(AutomationID.SystemHealth.root)
         .accessibilityValue("\(snapshot.summary.label): \(snapshot.summary.message)")
+        .task {
+            guard !didRequestInitialDiagnostics else {
+                return
+            }
+            didRequestInitialDiagnostics = true
+            await store.refreshRelayDiagnostics()
+        }
     }
 
     private var snapshot: SystemHealthSnapshot {

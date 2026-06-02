@@ -136,7 +136,7 @@ struct HostFailureRow: View {
         switch hostState.status {
         case .checking:
             return "Checking"
-        case .loaded, .partial, .empty:
+        case .loaded, .empty, .degraded:
             return hostState.status.subtitle
         case .offline(let message), .error(let message):
             return "\(hostState.status.subtitle): \(message)"

@@ -392,11 +392,27 @@ public struct DockSnapshot: Equatable, Sendable {
     }
 }
 
+public struct DockHostWindow: Equatable, Sendable {
+    public let visibleRows: Int
+    public let totalRows: Int
+
+    public init(visibleRows: Int, totalRows: Int) {
+        self.visibleRows = visibleRows
+        self.totalRows = max(totalRows, visibleRows)
+    }
+
+    public var message: String {
+        totalRows > visibleRows
+            ? "Showing \(visibleRows) of \(totalRows)"
+            : "Windowed"
+    }
+}
+
 public enum DockHostLoadStatus: Equatable, Sendable {
     case checking
-    case loaded(rowCount: Int)
-    case partial(rowCount: Int, message: String)
+    case loaded(rowCount: Int, window: DockHostWindow? = nil)
     case empty
+    case degraded(rowCount: Int, message: String)
     case offline(String)
     case error(String)
 
@@ -404,12 +420,14 @@ public enum DockHostLoadStatus: Equatable, Sendable {
         switch self {
         case .checking:
             return "Checking"
-        case .loaded(let rowCount):
+        case .loaded(let rowCount, nil):
             return "\(rowCount) sessions"
-        case .partial(let rowCount, let message):
-            return "\(rowCount) sessions, partial: \(message)"
+        case .loaded(let rowCount, .some(let window)):
+            return "\(rowCount) sessions, \(window.message)"
         case .empty:
             return "Online, no sessions"
+        case .degraded(let rowCount, let message):
+            return "\(rowCount) sessions, degraded: \(message)"
         case .offline:
             return "Offline"
         case .error:
@@ -421,23 +439,30 @@ public enum DockHostLoadStatus: Equatable, Sendable {
         switch self {
         case .offline, .error:
             return true
-        case .checking, .loaded, .partial, .empty:
+        case .checking, .loaded, .empty, .degraded:
             return false
         }
     }
 
-    public var isPartial: Bool {
-        if case .partial = self {
+    public var isDegraded: Bool {
+        if case .degraded = self {
             return true
         }
         return false
+    }
+
+    public var window: DockHostWindow? {
+        if case .loaded(_, let window) = self {
+            return window
+        }
+        return nil
     }
 
     public var unavailableMessage: String? {
         switch self {
         case .offline(let message), .error(let message):
             return message
-        case .checking, .loaded, .partial, .empty:
+        case .checking, .loaded, .empty, .degraded:
             return nil
         }
     }

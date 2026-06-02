@@ -160,6 +160,7 @@ private struct DockCardProjectionProjector {
         if snapshot.isPartial {
             parts.append("Partial")
         }
+        parts.append(contentsOf: windowSummaryTexts)
 
         return DockProjectionSummary(
             text: parts.joined(separator: " · "),
@@ -220,6 +221,15 @@ private struct DockCardProjectionProjector {
             return "Repos: \(selectedCount)"
         }
         return "Repos: \(selectedCount), search: \(query)"
+    }
+
+    private var windowSummaryTexts: [String] {
+        snapshot.hostStates.compactMap { hostState in
+            guard let window = hostState.status.window else {
+                return nil
+            }
+            return "\(hostState.host.displayName): \(window.message)"
+        }
     }
 
     private func availableFacets() -> DockProjectionFacets {

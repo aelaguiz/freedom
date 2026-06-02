@@ -73,7 +73,7 @@ struct ThreadCardTable: Equatable, Sendable {
         var state = statesByHostID[host.id] ?? HostStreamState()
         let rowCount = state.cardsByID.count
         state.status = rowCount > 0
-            ? .partial(rowCount: rowCount, message: "Reconnecting")
+            ? .degraded(rowCount: rowCount, message: "Reconnecting")
             : .checking
         statesByHostID[host.id] = state
     }
@@ -84,10 +84,10 @@ struct ThreadCardTable: Equatable, Sendable {
         let rowCount = state.cardsByID.count
         switch failure {
         case .offline:
-            state.status = rowCount > 0 ? .partial(rowCount: rowCount, message: "Offline: \(message)") : .offline(message)
+            state.status = rowCount > 0 ? .degraded(rowCount: rowCount, message: "Offline: \(message)") : .offline(message)
             state.freshness = DockStreamFreshnessDTO(status: .offline, lastError: message)
         case .error:
-            state.status = rowCount > 0 ? .partial(rowCount: rowCount, message: message) : .error(message)
+            state.status = rowCount > 0 ? .degraded(rowCount: rowCount, message: message) : .error(message)
             state.freshness = DockStreamFreshnessDTO(status: .error, lastError: message)
         }
         statesByHostID[host.id] = state
@@ -122,7 +122,8 @@ struct ThreadCardTable: Equatable, Sendable {
             freshness: update.freshness,
             rowCount: state.cardsByID.count,
             complete: state.complete,
-            totalRows: state.totalRows
+            totalRows: state.totalRows,
+            window: state.window
         )
         statesByHostID[host.id] = state
         return .applied
@@ -176,7 +177,8 @@ struct ThreadCardTable: Equatable, Sendable {
             freshness: state.freshness,
             rowCount: state.cardsByID.count,
             complete: state.complete,
-            totalRows: state.totalRows
+            totalRows: state.totalRows,
+            window: state.window
         )
         statesByHostID[host.id] = state
         return .applied
@@ -361,7 +363,7 @@ struct ThreadCardTable: Equatable, Sendable {
                     (host.id, sortedCards(for: host))
                 }
             ),
-            isPartial: hosts.contains(where: isCheckingOrPartial)
+            isPartial: hosts.contains(where: needsProgressContext)
         )
     }
 
@@ -411,47 +413,57 @@ struct ThreadCardTable: Equatable, Sendable {
         }
     }
 
-    private func isCheckingOrPartial(_ host: DockHostConfiguration) -> Bool {
+    private func needsProgressContext(_ host: DockHostConfiguration) -> Bool {
         let status = statesByHostID[host.id]?.status
         if case .checking = status {
             return true
         }
-        return status?.isPartial == true
+        return status?.isDegraded == true
     }
 
     private func hostStatus(
         freshness: DockStreamFreshnessDTO?,
         rowCount: Int,
         complete: Bool,
-        totalRows: Int?
+        totalRows: Int?,
+        window: DockStreamWindowDTO?
     ) -> DockHostLoadStatus {
-        if !complete {
-            let visibleRows = rowCount
-            let knownTotal = max(totalRows ?? visibleRows, visibleRows)
-            let message = knownTotal > visibleRows
-                ? "Showing \(visibleRows) of \(knownTotal)"
-                : "Partial window"
-            return .partial(rowCount: visibleRows, message: message)
-        }
+        let loadedWindow = hostWindow(rowCount: rowCount, complete: complete, totalRows: totalRows, window: window)
         guard let freshness else {
-            return rowCount == 0 ? .checking : .loaded(rowCount: rowCount)
+            return rowCount == 0 && loadedWindow == nil ? .checking : .loaded(rowCount: rowCount, window: loadedWindow)
         }
         switch freshness.status {
         case .fresh:
-            return rowCount == 0 ? .empty : .loaded(rowCount: rowCount)
+            if rowCount == 0, loadedWindow == nil {
+                return .empty
+            }
+            return .loaded(rowCount: rowCount, window: loadedWindow)
         case .stale:
-            return .partial(rowCount: rowCount, message: freshness.lastError ?? "Stale")
+            return .degraded(rowCount: rowCount, message: freshness.lastError ?? "Stale")
         case .offline:
             let message = freshness.lastError ?? "Offline"
-            return rowCount > 0 ? .partial(rowCount: rowCount, message: "Offline: \(message)") : .offline(message)
+            return rowCount > 0 ? .degraded(rowCount: rowCount, message: "Offline: \(message)") : .offline(message)
         case .error:
             let message = freshness.lastError ?? "Error"
-            return rowCount > 0 ? .partial(rowCount: rowCount, message: message) : .error(message)
+            return rowCount > 0 ? .degraded(rowCount: rowCount, message: message) : .error(message)
         case .unknown:
-            return rowCount == 0 ? .checking : .partial(rowCount: rowCount, message: "Refreshing")
+            return rowCount == 0 ? .checking : .loaded(rowCount: rowCount, window: loadedWindow)
         }
     }
 
+    private func hostWindow(
+        rowCount: Int,
+        complete: Bool,
+        totalRows: Int?,
+        window: DockStreamWindowDTO?
+    ) -> DockHostWindow? {
+        guard !complete else {
+            return nil
+        }
+        let visibleRows = rowCount
+        let knownTotal = max(totalRows ?? window?.rowCount ?? visibleRows, visibleRows)
+        return DockHostWindow(visibleRows: visibleRows, totalRows: knownTotal)
+    }
 }
 
 private struct ThreadCardProjectionSourceKey: Hashable, Sendable {

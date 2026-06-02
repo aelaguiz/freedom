@@ -13,6 +13,8 @@ final class AutomationIDTests: XCTestCase {
         XCTAssertEqual(AutomationID.Dock.pinnedSection.rawValue, "codexdock.dock.pinned.section")
         XCTAssertEqual(AutomationID.Dock.pinnedHeader.rawValue, "codexdock.dock.pinned.header")
         XCTAssertEqual(AutomationID.Dock.pinnedToggleButton.rawValue, "codexdock.dock.pinned.toggle")
+        XCTAssertEqual(AutomationID.Dock.pinnedReorderButton.rawValue, "codexdock.dock.pinned.reorder")
+        XCTAssertEqual(AutomationID.Dock.pinnedReorderSheet.rawValue, "codexdock.dock.pinned.reorder.sheet")
         XCTAssertEqual(AutomationID.Dock.pinnedRowsList.rawValue, "codexdock.dock.pinned.rows")
         XCTAssertEqual(AutomationID.Dock.pinnedBodyDivider.rawValue, "codexdock.dock.pinned.body-divider")
         XCTAssertEqual(AutomationID.Dock.pinnedHiddenHint.rawValue, "codexdock.dock.pinned.hidden")

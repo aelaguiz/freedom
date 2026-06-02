@@ -300,7 +300,7 @@ public struct DockHostIdentityResolver: Equatable, Sendable {
             return false
         }
         switch status {
-        case .loaded, .partial, .empty:
+        case .loaded, .degraded, .empty:
             return true
         case .checking, .offline, .error:
             return false

@@ -373,9 +373,9 @@ public final class ArchiveStore: ObservableObject {
         switch status {
         case .checking:
             return .checking
-        case .loaded(let rowCount):
+        case .loaded(let rowCount, _):
             return .online("\(rowCount) sessions")
-        case .partial(_, let message):
+        case .degraded(_, let message):
             return .partial(message)
         case .empty:
             return .online("Online, no sessions")

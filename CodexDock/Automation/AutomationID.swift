@@ -179,6 +179,8 @@ public extension AutomationID {
         public static let pinnedSection = AutomationID("codexdock.dock.pinned.section")
         public static let pinnedHeader = AutomationID("codexdock.dock.pinned.header")
         public static let pinnedToggleButton = AutomationID("codexdock.dock.pinned.toggle")
+        public static let pinnedReorderButton = AutomationID("codexdock.dock.pinned.reorder")
+        public static let pinnedReorderSheet = AutomationID("codexdock.dock.pinned.reorder.sheet")
         public static let pinnedRowsList = AutomationID("codexdock.dock.pinned.rows")
         public static let pinnedBodyDivider = AutomationID("codexdock.dock.pinned.body-divider")
         public static let pinnedHiddenHint = AutomationID("codexdock.dock.pinned.hidden")

@@ -287,7 +287,7 @@ function sampleProofReports() {
       capturedAt: "2026-06-01T00:00:00Z",
       finishedAt: "2026-06-01T00:00:01Z",
       simulator: { name: "iPhone 17", udid: "sim-udid" },
-      app: { bundleIdentifier: "com.aelaguiz.CodexDockApp" },
+      app: { bundleIdentifier: "com.aelaguiz.CodexDockApp", configuredBuildNumber: "202606020001" },
       launchMode: "activate",
       didRelaunch: false,
       stateBefore: "runningForeground",

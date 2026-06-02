@@ -422,9 +422,9 @@ public final class AppConnectivityStore: ObservableObject, AppConnectivityReport
             switch hostState.status {
             case .checking:
                 phase = .checking
-            case .loaded(let rowCount):
+            case .loaded(let rowCount, _):
                 phase = .online("\(rowCount) sessions")
-            case .partial(_, let message):
+            case .degraded(_, let message):
                 phase = .partial(message)
             case .empty:
                 phase = .online("Online, no sessions")

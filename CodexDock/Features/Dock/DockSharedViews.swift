@@ -17,7 +17,7 @@ struct HostSummaryView: View {
         switch hostState.status {
         case .checking:
             self.subtitle = hostState.status.subtitle
-        case .loaded, .partial, .empty:
+        case .loaded, .empty, .degraded:
             self.subtitle = hostState.status.subtitle
         case .offline(let message), .error(let message):
             self.subtitle = "\(hostState.status.subtitle): \(message)"

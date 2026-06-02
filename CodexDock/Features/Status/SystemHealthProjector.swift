@@ -75,8 +75,8 @@ public struct SystemHealthProjector: Sendable {
             case .threadDetail, .archive, .voice:
                 return .notChecked("No recent \(category.title.lowercased()) evidence.")
             }
-        case .partial(let message):
-            return .degraded(message, nextAction: "Run check or open host details.")
+        case .partial:
+            return .notChecked("No route evidence for \(category.title.lowercased()).")
         case .offline(let message), .error(let message), .configurationError(let message), .unconfigured(let message):
             return .failed(message, nextAction: "Open Relay Settings.")
         case .backgrounded(let message):

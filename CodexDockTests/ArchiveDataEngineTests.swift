@@ -42,6 +42,48 @@ final class ArchiveDataEngineTests: XCTestCase {
         XCTAssertEqual(snapshot.hostStates.map(\.status), [.loaded(rowCount: 1)])
     }
 
+    func testFreshWindowedArchiveSnapshotIsLoadedWithWindowAnnotation() async throws {
+        let host = makeHost()
+        let registry = try HostRegistry(hosts: [host])
+        let engine = ArchiveDataEngine(
+            registry: registry,
+            metadataStore: InMemoryLocalThreadMetadataStore(),
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+        let card = threadCardFixture(
+            host: host,
+            threadID: "thread-windowed",
+            title: "Archived windowed row",
+            status: .dormant,
+            updatedAt: 2_000,
+            view: .archive
+        )
+
+        await engine.loadLocalMetadata()
+        await engine.ensureHosts()
+        _ = await engine.applySnapshot(
+            dockStreamSnapshot(
+                host: host,
+                epoch: "archive-windowed",
+                seq: 1,
+                cards: [card],
+                view: .archive,
+                complete: false,
+                totalRows: 2,
+                window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1, nextOffset: 1)
+            ),
+            host: host
+        )
+
+        let loadedSnapshot = await engine.snapshot()
+        let snapshot = try XCTUnwrap(loadedSnapshot)
+
+        XCTAssertEqual(snapshot.rowCount, 1)
+        XCTAssertEqual(snapshot.hostStates.map(\.status), [
+            .loaded(rowCount: 1, window: DockHostWindow(visibleRows: 1, totalRows: 2))
+        ])
+    }
+
     func testEngineBuildsResolverForLogicalHostRowsLoadedFromEndpointHost() async throws {
         let host = makeHost(url: "ws://amir-m5.fairy-salmon.ts.net:4510")
         let registry = try HostRegistry(hosts: [host])

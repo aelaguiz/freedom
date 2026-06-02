@@ -712,8 +712,7 @@ public struct DockView: View {
             } else {
                 projectedContent(
                     projection,
-                    snapshot: snapshot,
-                    revision: renderSnapshot.revision
+                    snapshot: snapshot
                 )
             }
         }
@@ -722,8 +721,7 @@ public struct DockView: View {
     @ViewBuilder
     private func projectedContent(
         _ projection: DockCardProjection,
-        snapshot: DockSnapshot,
-        revision: RenderRevision
+        snapshot: DockSnapshot
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             if !projection.pinnedRows.isEmpty {
@@ -751,7 +749,7 @@ public struct DockView: View {
             case .newest:
                 LazyVStack(spacing: 10) {
                     ForEach(projection.rows) { row in
-                        dockRow(row, resetToken: revision)
+                        dockRow(row)
                     }
                     ForEach(contextualHostStates(in: snapshot)) { hostState in
                         hostContextRow(
@@ -765,8 +763,7 @@ public struct DockView: View {
                     ForEach(projection.groups) { group in
                         projectionGroup(
                             group,
-                            collapsedIDs: $collapsedHostGroupIDs,
-                            resetToken: revision
+                            collapsedIDs: $collapsedHostGroupIDs
                         )
                     }
                 }
@@ -775,8 +772,7 @@ public struct DockView: View {
                     ForEach(projection.groups) { group in
                         projectionGroup(
                             group,
-                            collapsedIDs: $collapsedBranchGroupIDs,
-                            resetToken: revision
+                            collapsedIDs: $collapsedBranchGroupIDs
                         )
                     }
                     ForEach(contextualHostStates(in: snapshot)) { hostState in
@@ -826,8 +822,7 @@ public struct DockView: View {
 
     private func dockRow(
         _ row: DockRowViewModel,
-        showsPinIndicator: Bool = false,
-        resetToken: RenderRevision = .zero
+        showsPinIndicator: Bool = false
     ) -> some View {
         DockSwipeActionRow(
             row: row,
@@ -836,7 +831,6 @@ public struct DockView: View {
                 threadID: row.threadID,
                 action: row.isPinned ? .unpin : .pin
             ),
-            resetToken: resetToken,
             onTogglePinned: {
                 Task {
                     await store.setPinned(!row.isPinned, for: row)
@@ -892,8 +886,7 @@ public struct DockView: View {
 
     private func projectionGroup(
         _ group: DockProjectionGroupViewModel,
-        collapsedIDs: Binding<Set<String>>,
-        resetToken: RenderRevision
+        collapsedIDs: Binding<Set<String>>
     ) -> some View {
         let isCollapsed = collapsedIDs.wrappedValue.contains(group.id)
         let groupAutomationID = group.kind == .host
@@ -930,7 +923,7 @@ public struct DockView: View {
             } else if !isCollapsed {
                 LazyVStack(spacing: 10) {
                     ForEach(group.rows) { row in
-                        dockRow(row, resetToken: resetToken)
+                        dockRow(row)
                     }
                 }
             }
@@ -951,7 +944,7 @@ public struct DockView: View {
 
     private func contextualHostStates(in snapshot: DockSnapshot) -> [DockHostStateViewModel] {
         snapshot.hostStates.filter { hostState in
-            hostState.status == .checking || hostState.status.isPartial || hostState.status.isUnavailable
+            hostState.status == .checking || hostState.status.isDegraded || hostState.status.isUnavailable
         }
     }
 
