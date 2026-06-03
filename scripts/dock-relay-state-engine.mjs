@@ -579,6 +579,7 @@ class RelayStateEngine {
       sourceHostID: host.id,
       epoch,
       seq,
+      generation: this.subscriptions.generation,
       view,
       scope: "view",
       viewParamsKey: `${view}:${host.id}`,
@@ -711,6 +712,7 @@ class RelayStateEngine {
       sourceHostID: publicHostFromConfig(this.config).id,
       epoch,
       seq: this.store.currentSeqForView(view),
+      generation: this.subscriptions.generation,
       view,
       scope: "view",
       viewParamsKey: `${view}:${publicHostFromConfig(this.config).id}`,
@@ -950,6 +952,7 @@ class RelayStateEngine {
       && this.store.cardTruthCompleteForHost(host.id, { archived });
     const complete = truthComplete && offset + bounded.cards.length >= bounded.totalRows;
     return this.subscriptions.cardDelta({
+      kind: "page",
       view: snapshot.view,
       seq: snapshot.seq,
       sourceHostID: host.id,

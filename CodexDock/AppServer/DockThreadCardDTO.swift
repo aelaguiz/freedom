@@ -10,6 +10,7 @@ public enum ThreadCardStreamView: String, Codable, Equatable, Sendable {
 
 public enum DockStreamKind: String, Codable, Equatable, Sendable {
     case snapshot
+    case page
     case upsert
     case delete
     case heartbeat
@@ -455,11 +456,13 @@ public struct ThreadCardStreamUpdateDTO: Codable, Equatable, Sendable {
     public let window: DockStreamWindowDTO?
     public let epoch: String
     public let seq: Int64
+    public let generation: Int
     public let asOf: String?
     public let order: String
     public let freshness: DockStreamFreshnessDTO
     public let rows: [DockThreadCardDTO]?
     public let projectionIDs: [String]?
+    public let reason: String?
 
     public init(
         kind: DockStreamKind,
@@ -475,11 +478,13 @@ public struct ThreadCardStreamUpdateDTO: Codable, Equatable, Sendable {
         window: DockStreamWindowDTO? = nil,
         epoch: String,
         seq: Int64,
+        generation: Int = 1,
         asOf: String? = nil,
         order: String = "displayOrderKeyAscending",
         freshness: DockStreamFreshnessDTO = DockStreamFreshnessDTO(status: .fresh),
         rows: [DockThreadCardDTO]? = nil,
-        projectionIDs: [String]? = nil
+        projectionIDs: [String]? = nil,
+        reason: String? = nil
     ) {
         self.kind = kind
         self.schemaVersion = schemaVersion
@@ -494,10 +499,12 @@ public struct ThreadCardStreamUpdateDTO: Codable, Equatable, Sendable {
         self.window = window
         self.epoch = epoch
         self.seq = seq
+        self.generation = generation
         self.asOf = asOf
         self.order = order
         self.freshness = freshness
         self.rows = rows
         self.projectionIDs = projectionIDs
+        self.reason = reason
     }
 }

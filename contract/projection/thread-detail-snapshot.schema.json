@@ -13,6 +13,7 @@
     "threadID",
     "epoch",
     "seq",
+    "generation",
     "rows"
   ],
   "properties": {
@@ -43,6 +44,10 @@
     "seq": {
       "type": "integer",
       "minimum": 0
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
     },
     "snapshotID": {
       "type": [

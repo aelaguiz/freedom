@@ -57,5 +57,6 @@
       "summarySource": "assistant_label"
     }
   ],
-  "projectionIDs": []
+  "projectionIDs": [],
+  "generation": 1
 }

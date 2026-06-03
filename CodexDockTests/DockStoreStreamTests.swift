@@ -732,7 +732,7 @@ final class DockStoreStreamTests: XCTestCase {
     }
 
     @MainActor
-    func testWindowedSnapshotCompletesWithStreamedCatchupDeltas() async throws {
+    func testWindowedSnapshotCompletesWithStreamedCatchupPages() async throws {
         let host = makeHost()
         let connection = ManualThreadCardStreamConnection(
             subscribeSnapshot: dockStreamSnapshot(
@@ -752,7 +752,7 @@ final class DockStoreStreamTests: XCTestCase {
         await store.load()
         await connection.send(
             ThreadCardStreamUpdateDTO(
-                kind: .upsert,
+                kind: .page,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
                 identityVersion: 1,
                 projectionEngineVersion: 1,
@@ -764,7 +764,7 @@ final class DockStoreStreamTests: XCTestCase {
                 totalRows: 3,
                 window: DockStreamWindowDTO(offset: 1, limit: 1, rowCount: 1, nextOffset: 2),
                 epoch: "epoch-1",
-                seq: 2,
+                seq: 1,
                 order: "displayOrderKeyAscending",
                 rows: [
                     threadCardFixture(host: host, threadID: "thread-b", title: "Window row B", updatedAt: 900)
@@ -774,7 +774,7 @@ final class DockStoreStreamTests: XCTestCase {
         )
         await connection.send(
             ThreadCardStreamUpdateDTO(
-                kind: .upsert,
+                kind: .page,
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
                 identityVersion: 1,
                 projectionEngineVersion: 1,
@@ -786,7 +786,7 @@ final class DockStoreStreamTests: XCTestCase {
                 totalRows: 3,
                 window: DockStreamWindowDTO(offset: 2, limit: 1, rowCount: 1),
                 epoch: "epoch-1",
-                seq: 3,
+                seq: 1,
                 order: "displayOrderKeyAscending",
                 rows: [
                     threadCardFixture(host: host, threadID: "thread-c", title: "Window row C", updatedAt: 800)

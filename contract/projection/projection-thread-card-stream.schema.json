@@ -16,12 +16,14 @@
     "order",
     "epoch",
     "seq",
+    "generation",
     "freshness"
   ],
   "properties": {
     "kind": {
       "enum": [
         "snapshot",
+        "page",
         "upsert",
         "delete",
         "resyncRequired",
@@ -66,6 +68,11 @@
       "type": "integer",
       "minimum": 0
     },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Relay-owned projection generation. Snapshot starts a generation; page extends that generation; live mutations must match it."
+    },
     "asOf": {
       "type": "string"
     },
@@ -94,6 +101,12 @@
         "type": "string",
         "minLength": 1
       }
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "not": {

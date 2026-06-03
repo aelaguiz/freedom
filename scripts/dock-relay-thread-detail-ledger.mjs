@@ -32,6 +32,7 @@ class ThreadDetailLedger {
     this.threadID = threadID || null;
     this.epoch = epoch;
     this.seq = seq;
+    this.generation = 1;
     this.rowsByProjectionID = new Map();
     this.requestProjectionIDByRequestID = new Map();
     this.activeTurnID = null;
@@ -59,6 +60,7 @@ class ThreadDetailLedger {
       threadID: this.threadID,
       epoch: this.epoch,
       seq: this.seq,
+      generation: this.generation,
       rows: this.rowsByProjectionID.values(),
       activeTurnID: this.activeTurnID,
       source,
@@ -197,6 +199,7 @@ class ThreadDetailLedger {
       threadID: this.threadID,
       epoch: this.epoch,
       seq: this.seq,
+      generation: this.generation,
       viewParamsKey: THREAD_DETAIL_DEFAULT_VIEW_PARAMS_KEY,
       order: THREAD_DETAIL_ORDER,
       activeTurnID: this.activeTurnID,

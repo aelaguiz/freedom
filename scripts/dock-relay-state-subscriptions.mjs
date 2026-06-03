@@ -33,6 +33,7 @@ function sequenceFields(store, hub, view) {
     projectionEngineVersion: 1,
     epoch: hub.epoch,
     seq,
+    generation: hub.generation,
   };
 }
 
@@ -61,6 +62,7 @@ class StateSubscriptionHub {
     this.updateSoftLimitBytes = updateSoftLimitBytes;
     this.subscribers = new Set();
     this.epoch = crypto.randomUUID();
+    this.generation = 1;
     this.heartbeatTimer = null;
   }
 
@@ -96,9 +98,11 @@ class StateSubscriptionHub {
     totalRows,
     complete = undefined,
     window = undefined,
+    kind = null,
+    reason = null,
   }) {
     const resolvedSourceHostID = sourceHostID || "unknown";
-    const kind = rows.length > 0 ? "upsert" : (projectionIDs.length > 0 ? "delete" : "heartbeat");
+    const resolvedKind = kind || (rows.length > 0 ? "upsert" : (projectionIDs.length > 0 ? "delete" : "heartbeat"));
     const effectiveWindow = window || (
       complete !== undefined && Number.isFinite(Number(totalRows))
         ? buildWindow({
@@ -110,7 +114,7 @@ class StateSubscriptionHub {
         : undefined
     );
     return {
-      kind,
+      kind: resolvedKind,
       ...sequenceFields(this.store, this, view),
       seq,
       sourceHostID: resolvedSourceHostID,
@@ -124,6 +128,7 @@ class StateSubscriptionHub {
       freshness,
       rows,
       projectionIDs,
+      reason,
     };
   }
 

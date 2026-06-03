@@ -10,6 +10,7 @@ public struct ThreadDetailParams: Codable, Equatable, Sendable {
 
 public enum ThreadDetailUpdateKind: String, Codable, Equatable, Sendable {
     case snapshot
+    case page
     case upsert
     case delete
     case heartbeat
@@ -218,6 +219,7 @@ public struct ThreadDetailSnapshotDTO: Codable, Equatable, Sendable {
     public let threadID: String
     public let epoch: String
     public let seq: Int64
+    public let generation: Int
     public let snapshotID: String?
     public let scope: String?
     public let viewParamsKey: String?
@@ -240,6 +242,7 @@ public struct ThreadDetailSnapshotDTO: Codable, Equatable, Sendable {
         threadID: String,
         epoch: String = "test",
         seq: Int64 = 0,
+        generation: Int = 1,
         snapshotID: String? = nil,
         scope: String? = "thread",
         viewParamsKey: String? = nil,
@@ -257,6 +260,7 @@ public struct ThreadDetailSnapshotDTO: Codable, Equatable, Sendable {
         self.threadID = threadID
         self.epoch = epoch
         self.seq = seq
+        self.generation = generation
         self.snapshotID = snapshotID
         self.scope = scope
         self.viewParamsKey = viewParamsKey
@@ -278,6 +282,7 @@ public struct ThreadDetailUpdateDTO: Codable, Equatable, Sendable {
     public let threadID: String
     public let epoch: String
     public let seq: Int64
+    public let generation: Int
     public let viewParamsKey: String?
     public let order: String?
     public let freshness: ThreadDetailFreshnessDTO?
@@ -297,6 +302,7 @@ public struct ThreadDetailUpdateDTO: Codable, Equatable, Sendable {
         threadID: String,
         epoch: String = "test",
         seq: Int64 = 0,
+        generation: Int = 1,
         viewParamsKey: String? = nil,
         order: String? = nil,
         freshness: ThreadDetailFreshnessDTO? = nil,
@@ -315,6 +321,7 @@ public struct ThreadDetailUpdateDTO: Codable, Equatable, Sendable {
         self.threadID = threadID
         self.epoch = epoch
         self.seq = seq
+        self.generation = generation
         self.viewParamsKey = viewParamsKey
         self.order = order
         self.freshness = freshness

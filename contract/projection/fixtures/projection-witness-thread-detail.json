@@ -29,7 +29,8 @@
           "displayOrderKey": "0000000000000001|0000000001|9999999998|9999999998|host:home%2Fthread:thread-1%2Fturn:turn-1%2Fitem:item-1%2Frow:userMessage"
         }
       ],
-      "projectionIDs": []
+      "projectionIDs": [],
+      "generation": 1
     }
   ],
   "projectionIDs": [
