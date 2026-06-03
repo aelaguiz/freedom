@@ -205,19 +205,19 @@ test("controlled simulator matrix accepts a passing required scenario", () => {
   assert.equal(report.findings.length, 0);
 });
 
-test("controlled simulator matrix counts the invoked scenario when a variant reuses a base fixture", () => {
+test("controlled simulator matrix requires variant fixtures to report the invoked scenario", () => {
   const report = buildMatrixReport({
     entries: [
       entry({
         scenario: "detail-replay-pressure",
         routes: { "thread/detail/subscribe": 1, "thread/detail/update": 1 },
-        relay: { scenario: "detail-history-request" },
+        relay: { scenario: "detail-replay-pressure" },
         ui: {
           scenarioChecks: 0,
-          detailChecks: 3,
+          detailChecks: 4,
           detailSweeps: 1,
-          detailSweepMessageCardChecks: 8,
-          detailMessageOrderChecks: 2,
+          detailSweepMessageCardChecks: 10,
+          detailMessageOrderChecks: 3,
         },
       }),
     ],
@@ -237,13 +237,13 @@ test("controlled simulator matrix rejects unapproved invoked-scenario fixture mi
     entry({
       scenario: "detail-replay-pressure",
       routes: { "thread/detail/subscribe": 1, "thread/detail/update": 1 },
-      relay: { scenario: "thread-activity" },
+      relay: { scenario: "detail-history-request" },
       ui: {
         scenarioChecks: 0,
-        detailChecks: 3,
+        detailChecks: 4,
         detailSweeps: 1,
-        detailSweepMessageCardChecks: 8,
-        detailMessageOrderChecks: 2,
+        detailSweepMessageCardChecks: 10,
+        detailMessageOrderChecks: 3,
       },
     }),
     { maxUiLagMs: 2_000 }

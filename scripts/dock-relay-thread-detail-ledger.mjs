@@ -38,7 +38,7 @@ class ThreadDetailLedger {
     this.activeTurnID = null;
   }
 
-  replaceFromThread(thread, source = "thread/detail/read") {
+  replaceFromThread(thread, source = "thread/detail/subscribe") {
     const threadID = thread?.id || this.threadID;
     this.threadID = threadID;
     this.rowsByProjectionID = new Map();

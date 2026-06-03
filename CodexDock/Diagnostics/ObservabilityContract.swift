@@ -50,7 +50,6 @@ public enum ObservabilityContract {
     public static let routes: [ObservabilityRouteConfig] = [
         ObservabilityRouteConfig(name: AppServerMethods.initialize, probeSafety: .autoProbeSafe, appCritical: true),
         ObservabilityRouteConfig(name: AppServerMethods.initialized, probeSafety: .passiveOnly),
-        ObservabilityRouteConfig(name: AppServerMethods.threadDetailRead, probeSafety: .manualOnly),
         ObservabilityRouteConfig(name: AppServerMethods.threadDetailSubscribe, probeSafety: .passiveOnly, appCritical: true),
         ObservabilityRouteConfig(name: AppServerMethods.threadDetailResync, probeSafety: .manualOnly, appCritical: true),
         ObservabilityRouteConfig(name: AppServerMethods.threadDetailUpdate, probeSafety: .passiveOnly, appCritical: true),

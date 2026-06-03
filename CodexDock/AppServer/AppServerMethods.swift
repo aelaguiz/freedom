@@ -3,7 +3,6 @@ import Foundation
 public enum AppServerMethods {
     public static let initialize = "initialize"
     public static let initialized = "initialized"
-    public static let threadDetailRead = "thread/detail/read"
     public static let threadDetailSubscribe = "thread/detail/subscribe"
     public static let threadDetailResync = "thread/detail/resync"
     public static let threadDetailUpdate = "thread/detail/update"

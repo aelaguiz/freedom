@@ -553,11 +553,6 @@ function replayPendingDetailMessages(session) {
   }
 }
 
-async function readThreadDetail(config, params = {}) {
-  const ledger = await readThreadDetailLedger(config, params);
-  return ledger.snapshot("thread/detail/read");
-}
-
 async function subscribeThreadDetail(config, params = {}, session, downstreamWs) {
   await resumeThread(config, params, session, downstreamWs, { detailSubscription: true });
   const detail = session.detailSubscription;
@@ -773,8 +768,6 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       return relayStateEngineForConfig(config).subscribeArchive({ session, downstreamWs, sendJson });
     case ARCHIVE_RESYNC_METHOD:
       return relayStateEngineForConfig(config).resyncArchive({ downstreamWs, sendJson });
-    case "thread/detail/read":
-      return readThreadDetail(config, params || {});
     case "thread/detail/subscribe":
       return subscribeThreadDetail(config, params || {}, session, downstreamWs);
     case "thread/detail/resync":

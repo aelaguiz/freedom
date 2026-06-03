@@ -173,7 +173,7 @@ test("simulator UI sync contract accepts transition coverage sections", () => {
   assertProofReport(report, { sourcePath: "sim-ui-transition-coverage-sample" });
 });
 
-test("passing proof cannot use thread/detail/read as production route evidence", () => {
+test("passing proof cannot use thread/detail/read as route evidence", () => {
   const report = sampleProofReports().find(
     (candidate) => candidate.kind === "codex-dock-relay-sync-audit-report"
   );
@@ -185,7 +185,7 @@ test("passing proof cannot use thread/detail/read as production route evidence",
 
   const errors = validateProofReport(report, { sourcePath: "relay-sync-audit-sample" });
 
-  assert.match(errors.join("\n"), /manual diagnostic routes cannot satisfy live-update proof/u);
+  assert.match(errors.join("\n"), /forbidden routes cannot satisfy live-update proof/u);
   assert.match(errors.join("\n"), /must include relay-owned Dock, Archive, or Thread Detail client routes/u);
 });
 

@@ -86,7 +86,20 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
             sampleIndex += 1
             waitUntilNextSample(startedAt: detailReadySampleStartedAt, sampleMS: config.sampleMS)
 
-            try DisplayedUIArtifactWriter.markReady(to: config.readyPath)
+            if config.foregroundCycleBeforeReady == true {
+                XCUIDevice.shared.press(.home)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.75))
+                try DisplayedUIArtifactWriter.markReady(to: config.readyPath)
+                let delay = TimeInterval(config.foregroundResumeDelayMS ?? config.sampleMS) / 1000.0
+                RunLoop.current.run(until: Date().addingTimeInterval(max(0.1, delay)))
+                app.activate()
+                XCTAssertNotNil(
+                    app.displayedUIWaitForElement(identifierPrefix: AutomationID.Session.root(threadID: openThreadID).rawValue, timeout: 15),
+                    "Displayed sync proof did not return to target thread detail after the foreground cycle for \(openThreadID)."
+                )
+            } else {
+                try DisplayedUIArtifactWriter.markReady(to: config.readyPath)
+            }
 
             let deadline = Date().addingTimeInterval(TimeInterval(config.durationMS) / 1000.0)
             var didTapRequestAction = false
@@ -215,6 +228,8 @@ private struct DisplayedUISyncConfig: Codable {
     var requestAction: String?
     var detailFilter: String?
     var dockLenses: [String]?
+    var foregroundCycleBeforeReady: Bool?
+    var foregroundResumeDelayMS: Int?
 
     var resolvedHostIDs: [String] {
         hosts

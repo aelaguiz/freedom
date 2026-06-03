@@ -1121,19 +1121,21 @@ async function createControlledMultiHostFixture({ options, tempDir, host, getRow
 }
 
 async function runArchiveToggleScenario(options) {
+  const scenarioName = options.scenario;
+  const isMutationAckProjectionRefresh = scenarioName === "mutation-ack-projection-refresh-failure";
   const routeEvents = [];
   const findings = [];
   const transitions = [];
   const samples = [];
   const startedAtMs = Date.now();
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-sim-archive-toggle-"));
-  const hostID = "sim-archive-toggle-fixture";
-  const threadID = "sim-archive-toggle-thread";
-  const existingArchivedID = "sim-archive-toggle-existing-archived";
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `codex-dock-sim-${scenarioName}-`));
+  const hostID = `sim-${scenarioName}-fixture`;
+  const threadID = `sim-${scenarioName}-thread`;
+  const existingArchivedID = `sim-${scenarioName}-existing-archived`;
   const archivedThreadIDs = new Set([existingArchivedID]);
   const rows = [
-    fixtureThreadWithStatus(threadID, "Simulator archive-toggle active row", 2_000, { type: "idle" }),
-    fixtureThreadWithStatus(existingArchivedID, "Simulator archive-toggle archived row", 1_000, { type: "idle" }),
+    fixtureThreadWithStatus(threadID, `Simulator ${scenarioName} active row`, 2_000, { type: "idle" }),
+    fixtureThreadWithStatus(existingArchivedID, `Simulator ${scenarioName} archived row`, 1_000, { type: "idle" }),
   ];
 
   const rowForID = (thread) => rows.find((row) => row.id === thread) || null;
@@ -1146,7 +1148,7 @@ async function runArchiveToggleScenario(options) {
       const message = JSON.parse(data.toString());
       if (message.method === "initialize") {
         sendFixtureResult(ws, message.id, {
-          userAgent: "codex-sim-archive-toggle-fixture",
+          userAgent: `codex-sim-${scenarioName}-fixture`,
           codexHome: tempDir,
           platformFamily: "unix",
           platformOs: "macos",
@@ -1198,7 +1200,7 @@ async function runArchiveToggleScenario(options) {
     port: 0,
     phoneAuth: "none",
     hostId: hostID,
-    hostName: "Simulator Archive Toggle Fixture",
+    hostName: `Simulator ${scenarioName} Fixture`,
     hostEndpoint: "127.0.0.1:0",
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
@@ -1250,22 +1252,22 @@ async function runArchiveToggleScenario(options) {
     if (!initialWait.ok) {
       transitionFailure(
         findings,
-        "scenario_archive_toggle_initial_row_missing",
-        "archive-toggle fixture did not start with only the active row visible through the fixture relay stream",
+        `scenario_${scenarioName}_initial_row_missing`,
+        `${scenarioName} fixture did not start with only the active row visible through the fixture relay stream`,
         { threadID, existingArchivedID }
       );
     }
     if (!initialArchiveWait.ok) {
       transitionFailure(
         findings,
-        "scenario_archive_toggle_initial_archive_row_missing",
-        "archive-toggle fixture did not start with the existing archived row visible through the fixture Archive stream",
+        `scenario_${scenarioName}_initial_archive_row_missing`,
+        `${scenarioName} fixture did not start with the existing archived row visible through the fixture Archive stream`,
         { threadID, existingArchivedID }
       );
     }
 
     const initial = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
-    findings.push(...scenarioComparisonFindings({ phase: "archive-toggle-initial", comparison: initial.comparison }));
+    findings.push(...scenarioComparisonFindings({ phase: `${scenarioName}-initial`, comparison: initial.comparison }));
     samples.push({
       sampleIndex: 0,
       startedAt: new Date(startedAtMs).toISOString(),
@@ -1275,7 +1277,7 @@ async function runArchiveToggleScenario(options) {
 
     writeJSON(options.readyOut, {
       ready: true,
-      scenario: "archive-toggle",
+      scenario: scenarioName,
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
@@ -1289,7 +1291,7 @@ async function runArchiveToggleScenario(options) {
     await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 5_000));
 
     const archiveStartedAtMs = Date.now();
-    recordClientRoute(routeEvents, "thread/archive", "controlled archive-toggle archives active row", { threadID });
+    recordClientRoute(routeEvents, "thread/archive", `controlled ${scenarioName} archives active row`, { threadID });
     const archiveResponse = await streamProbe.client.request("thread/archive", { threadId: threadID });
     const archiveAcknowledgedAtMs = Date.now();
     const archiveWait = await waitForStreamCondition({
@@ -1312,28 +1314,28 @@ async function runArchiveToggleScenario(options) {
     if (!archiveWait.ok) {
       transitionFailure(
         findings,
-        "scenario_archive_toggle_archive_not_seen",
-        "archive-toggle fixture did not remove the archived row from the long-lived Dock stream",
+        `scenario_${scenarioName}_archive_not_seen`,
+        `${scenarioName} fixture did not remove the archived row from the long-lived Dock stream`,
         { threadID }
       );
     }
     if (!archiveViewWait.ok) {
       transitionFailure(
         findings,
-        "scenario_archive_toggle_archive_not_seen_in_archive_stream",
-        "archive-toggle fixture did not add the archived row to the long-lived Archive stream",
+        `scenario_${scenarioName}_archive_not_seen_in_archive_stream`,
+        `${scenarioName} fixture did not add the archived row to the long-lived Archive stream`,
         { threadID }
       );
     } else if (archiveLag.exceeded) {
       transitionFailure(
         findings,
-        "scenario_archive_toggle_archive_lag_exceeded",
-        "archive-toggle archive transition exceeded the stream lag budget",
+        `scenario_${scenarioName}_archive_lag_exceeded`,
+        `${scenarioName} archive transition exceeded the stream lag budget`,
         { threadID, observedLagMs: archiveLag.lag_change_to_relay_ms, maxStreamLagMs: options.maxStreamLagMs }
       );
     }
     const afterArchive = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
-    findings.push(...scenarioComparisonFindings({ phase: "archive", comparison: afterArchive.comparison }));
+    findings.push(...scenarioComparisonFindings({ phase: `${scenarioName}-archive`, comparison: afterArchive.comparison }));
     transitions.push({
       name: "archive",
       kind: "archive",
@@ -1355,7 +1357,7 @@ async function runArchiveToggleScenario(options) {
     await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 5_000));
 
     const unarchiveStartedAtMs = Date.now();
-    recordClientRoute(routeEvents, "thread/unarchive", "controlled archive-toggle unarchives row", { threadID });
+    recordClientRoute(routeEvents, "thread/unarchive", `controlled ${scenarioName} unarchives row`, { threadID });
     const unarchiveResponse = await streamProbe.client.request("thread/unarchive", { threadId: threadID });
     const unarchiveAcknowledgedAtMs = Date.now();
     const unarchiveWait = await waitForStreamCondition({
@@ -1378,28 +1380,28 @@ async function runArchiveToggleScenario(options) {
     if (!unarchiveWait.ok) {
       transitionFailure(
         findings,
-        "scenario_archive_toggle_unarchive_not_seen",
-        "archive-toggle fixture did not restore the unarchived row to the long-lived Dock stream",
+        `scenario_${scenarioName}_unarchive_not_seen`,
+        `${scenarioName} fixture did not restore the unarchived row to the long-lived Dock stream`,
         { threadID }
       );
     }
     if (!unarchiveViewWait.ok) {
       transitionFailure(
         findings,
-        "scenario_archive_toggle_unarchive_not_seen_in_archive_stream",
-        "archive-toggle fixture did not remove the unarchived row from the long-lived Archive stream",
+        `scenario_${scenarioName}_unarchive_not_seen_in_archive_stream`,
+        `${scenarioName} fixture did not remove the unarchived row from the long-lived Archive stream`,
         { threadID }
       );
     } else if (unarchiveLag.exceeded) {
       transitionFailure(
         findings,
-        "scenario_archive_toggle_unarchive_lag_exceeded",
-        "archive-toggle unarchive transition exceeded the stream lag budget",
+        `scenario_${scenarioName}_unarchive_lag_exceeded`,
+        `${scenarioName} unarchive transition exceeded the stream lag budget`,
         { threadID, observedLagMs: unarchiveLag.lag_change_to_relay_ms, maxStreamLagMs: options.maxStreamLagMs }
       );
     }
     const afterUnarchive = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
-    findings.push(...scenarioComparisonFindings({ phase: "unarchive", comparison: afterUnarchive.comparison }));
+    findings.push(...scenarioComparisonFindings({ phase: `${scenarioName}-unarchive`, comparison: afterUnarchive.comparison }));
     transitions.push({
       name: "unarchive",
       kind: "unarchive",
@@ -1419,39 +1421,70 @@ async function runArchiveToggleScenario(options) {
       freshDock: sanitizeDockSnapshotForReport(afterUnarchive.freshDock),
     });
 
+    if (isMutationAckProjectionRefresh) {
+      const refreshStartedAtMs = Date.now();
+      const refreshResult = await streamProbe.resync("controlled_simulator_mutation_ack_projection_refresh");
+      const refreshComparison = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+      findings.push(...scenarioComparisonFindings({ phase: `${scenarioName}-projection-refresh`, comparison: refreshComparison.comparison }));
+      transitions.push({
+        name: "projection-refresh-after-mutation-ack",
+        kind: "projection-refresh-after-mutation-ack",
+        route: "dock/resync",
+        wait: {
+          ok: true,
+          observedAt: refreshResult.finishedAt,
+          observedAtMs: Date.parse(refreshResult.finishedAt),
+        },
+        lag: scenarioLagSummary({
+          transition: "projection-refresh-after-mutation-ack",
+          startedAtMs: refreshStartedAtMs,
+          acknowledgedAtMs: refreshStartedAtMs,
+          observedAtMs: Date.parse(refreshResult.finishedAt),
+          maxStreamLagMs: options.maxStreamLagMs,
+        }),
+        resync: refreshResult,
+        freshDock: sanitizeDockSnapshotForReport(refreshComparison.freshDock),
+        streamComparison: refreshComparison.comparison,
+      });
+    }
+
     const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
     findings.push(...requiredRouteFindings(
       clientPathEvidence,
-      ["dock/subscribe", "dock/update", "archive/subscribe", "archive/update", "thread/archive", "thread/unarchive"]
+      isMutationAckProjectionRefresh
+        ? ["dock/subscribe", "dock/update", "dock/resync", "archive/subscribe", "archive/update", "thread/archive", "thread/unarchive"]
+        : ["dock/subscribe", "dock/update", "archive/subscribe", "archive/update", "thread/archive", "thread/unarchive"]
     ));
     const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
     const report = {
       schemaVersion: 1,
       kind: "codex-dock-controlled-simulator-scenario-relay-report",
       mode: "scenario",
-      scenario: "archive-toggle",
+      scenario: scenarioName,
       startedAt: new Date(startedAtMs).toISOString(),
       endedAt: new Date().toISOString(),
       relayUrl,
       summary: {
         ok: scenarioOK,
         clientPathOK: scenarioOK,
-        scenario: "archive-toggle",
+        scenario: scenarioName,
         scenarioOK,
         scenarioCount: 1,
         scenarioTransitionCount: transitions.length,
-        implementedScenarios: ["archive-toggle"],
+        implementedScenarios: [scenarioName],
         unimplementedRequiredScenarios: [],
         failures: findings.length,
         clientPathRouteCounts: clientPathEvidence.routeCounts,
       },
       samples,
       scenarios: [{
-        id: "archive-toggle",
+        id: scenarioName,
         ok: scenarioOK,
         actuator: {
-          type: "controlled archive/unarchive through relay RPC",
-          routes: ["thread/archive", "thread/unarchive"],
+          type: isMutationAckProjectionRefresh
+            ? "controlled archive/unarchive through relay RPC plus explicit projection refresh proof"
+            : "controlled archive/unarchive through relay RPC",
+          routes: isMutationAckProjectionRefresh ? ["thread/archive", "thread/unarchive", "dock/resync"] : ["thread/archive", "thread/unarchive"],
           clientExercised: true,
         },
         target: {
@@ -1559,16 +1592,18 @@ function multiHostIsolationFindings({ label, snapshot, host, expectedThreadIDs, 
 }
 
 async function runLargeListCheckpointScenario(options) {
+  const scenarioName = options.scenario;
+  const isRootCatchupWindowContract = scenarioName === "root-catchup-window-contract";
   const routeEvents = [];
   const findings = [];
   const samples = [];
   const startedAtMs = Date.now();
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-sim-large-list-"));
-  const hostID = "sim-large-list-fixture";
-  const rowCount = 18;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `codex-dock-sim-${scenarioName}-`));
+  const hostID = `sim-${scenarioName}-fixture`;
+  const rowCount = isRootCatchupWindowContract ? 32 : 18;
   const sourceRows = Array.from({ length: rowCount }, (_, index) => fixtureThread(
-    `sim-large-list-${String(index + 1).padStart(2, "0")}`,
-    `Simulator large list row ${index + 1}`,
+    `sim-${scenarioName}-${String(index + 1).padStart(2, "0")}`,
+    `Simulator ${scenarioName} row ${index + 1}`,
     10_000 - index
   ));
 
@@ -1579,7 +1614,7 @@ async function runLargeListCheckpointScenario(options) {
       const message = JSON.parse(data.toString());
       if (message.method === "initialize") {
         sendFixtureResult(ws, message.id, {
-          userAgent: "codex-sim-large-list-fixture",
+          userAgent: `codex-sim-${scenarioName}-fixture`,
           codexHome: tempDir,
           platformFamily: "unix",
           platformOs: "macos",
@@ -1620,7 +1655,7 @@ async function runLargeListCheckpointScenario(options) {
     port: 0,
     phoneAuth: "none",
     hostId: hostID,
-    hostName: "Simulator Large List Fixture",
+    hostName: `Simulator ${scenarioName} Fixture`,
     hostEndpoint: "127.0.0.1:0",
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
@@ -1628,6 +1663,7 @@ async function runLargeListCheckpointScenario(options) {
     observabilityDir: false,
     relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
     relayStateAutoStart: false,
+    relayStateSnapshotSoftLimitBytes: isRootCatchupWindowContract ? 4_096 : undefined,
     logger: {
       debug() {},
       info() {},
@@ -1665,14 +1701,22 @@ async function runLargeListCheckpointScenario(options) {
     if (!initialWait.ok) {
       transitionFailure(
         findings,
-        "scenario_large_list_initial_rows_missing",
-        "large-list fixture did not expose all expected rows through the fixture relay stream",
+        `scenario_${scenarioName}_initial_rows_missing`,
+        `${scenarioName} fixture did not expose all expected rows through the fixture relay stream`,
         { expectedRows: rowCount }
+      );
+    }
+    if (isRootCatchupWindowContract && !streamProbe.notifications.some((notification) => notification.kind === "page")) {
+      transitionFailure(
+        findings,
+        "scenario_root_catchup_window_page_missing",
+        "root-catchup-window-contract did not force an explicit page update after the bounded snapshot",
+        { expectedRows: rowCount, notificationKinds: streamProbe.notifications.map((notification) => notification.kind) }
       );
     }
 
     const initial = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
-    findings.push(...scenarioComparisonFindings({ phase: "large-list-initial", comparison: initial.comparison }));
+    findings.push(...scenarioComparisonFindings({ phase: `${scenarioName}-initial`, comparison: initial.comparison }));
     samples.push({
       sampleIndex: 0,
       startedAt: new Date(startedAtMs).toISOString(),
@@ -1687,7 +1731,7 @@ async function runLargeListCheckpointScenario(options) {
 
     writeJSON(options.readyOut, {
       ready: true,
-      scenario: "large-list-checkpoint",
+      scenario: scenarioName,
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
@@ -1704,7 +1748,7 @@ async function runLargeListCheckpointScenario(options) {
     }
 
     const checkpoint = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
-    findings.push(...scenarioComparisonFindings({ phase: "large-list-checkpoint", comparison: checkpoint.comparison }));
+    findings.push(...scenarioComparisonFindings({ phase: `${scenarioName}-checkpoint`, comparison: checkpoint.comparison }));
     samples.push({
       sampleIndex: 1,
       startedAt: new Date().toISOString(),
@@ -1718,29 +1762,31 @@ async function runLargeListCheckpointScenario(options) {
       schemaVersion: 1,
       kind: "codex-dock-controlled-simulator-scenario-relay-report",
       mode: "scenario",
-      scenario: "large-list-checkpoint",
+      scenario: scenarioName,
       startedAt: new Date(startedAtMs).toISOString(),
       endedAt: new Date().toISOString(),
       relayUrl,
       summary: {
         ok: scenarioOK,
         clientPathOK: scenarioOK,
-        scenario: "large-list-checkpoint",
+        scenario: scenarioName,
         scenarioOK,
         scenarioCount: 1,
         scenarioTransitionCount: 0,
-        implementedScenarios: ["large-list-checkpoint"],
+        implementedScenarios: [scenarioName],
         unimplementedRequiredScenarios: [],
         failures: findings.length,
         clientPathRouteCounts: clientPathEvidence.routeCounts,
       },
       samples,
       scenarios: [{
-        id: "large-list-checkpoint",
+        id: scenarioName,
         ok: scenarioOK,
         actuator: {
-          type: "controlled large Dock list through real relay and simulator checkpoint sweep",
-          routes: ["dock/subscribe"],
+          type: isRootCatchupWindowContract
+            ? "controlled bounded root snapshot plus explicit page catch-up through real relay and simulator checkpoint sweep"
+            : "controlled large Dock list through real relay and simulator checkpoint sweep",
+          routes: isRootCatchupWindowContract ? ["dock/subscribe", "dock/update"] : ["dock/subscribe"],
           clientExercised: true,
           note: "The fixture exposes enough Dock rows that the actual simulator checkpoint sweep must scroll and compare rows beyond the initial viewport.",
         },
@@ -1777,21 +1823,28 @@ async function runLargeListCheckpointScenario(options) {
 }
 
 async function runThreadActivityScenario(options) {
+  const scenarioName = options.scenario;
+  const isCurrentWorkVisible = scenarioName === "current-work-visible";
   const routeEvents = [];
   const findings = [];
   const transitions = [];
   const samples = [];
   const startedAtMs = Date.now();
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-sim-thread-activity-"));
-  const hostID = "sim-thread-activity-fixture";
-  const stableThreadID = "sim-thread-activity-stable";
-  const movingThreadID = "sim-thread-activity-moving";
-  const newThreadID = "sim-thread-activity-new";
-  const updatedPreview = "Simulator fixture existing row after new turn";
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `codex-dock-sim-${scenarioName}-`));
+  const hostID = `sim-${scenarioName}-fixture`;
+  const stableThreadID = `sim-${scenarioName}-stable`;
+  const movingThreadID = `sim-${scenarioName}-moving`;
+  const newThreadID = isCurrentWorkVisible ? `sim-${scenarioName}-loaded-work` : `sim-${scenarioName}-new`;
+  const updatedPreview = isCurrentWorkVisible
+    ? "Simulator current work advanced while loaded"
+    : "Simulator fixture existing row after new turn";
   let sourceRows = [
     fixtureThread(stableThreadID, "Simulator fixture stable row", 200),
     fixtureThread(movingThreadID, "Simulator fixture moving row before update", 100),
   ];
+  let currentWorkRow = fixtureThread(newThreadID, "Simulator current work absent from thread list", 300);
+  let loadedThreadIDs = [];
+  const allRows = () => isCurrentWorkVisible ? [...sourceRows, currentWorkRow] : sourceRows;
 
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise((resolve) => historyServer.once("listening", resolve));
@@ -1800,7 +1853,7 @@ async function runThreadActivityScenario(options) {
       const message = JSON.parse(data.toString());
       if (message.method === "initialize") {
         sendFixtureResult(ws, message.id, {
-          userAgent: "codex-sim-thread-activity-fixture",
+          userAgent: `codex-sim-${scenarioName}-fixture`,
           codexHome: tempDir,
           platformFamily: "unix",
           platformOs: "macos",
@@ -1812,11 +1865,11 @@ async function runThreadActivityScenario(options) {
           backwardsCursor: null,
         });
       } else if (message.method === "thread/loaded/list") {
-        sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
+        sendFixtureResult(ws, message.id, { data: loadedThreadIDs, nextCursor: null });
       } else if (message.method === "thread/read" || message.method === "thread/resume") {
-        sendFixtureThreadRead(ws, message, fixtureRowForMessage(sourceRows, message));
+        sendFixtureThreadRead(ws, message, fixtureRowForMessage(allRows(), message));
       } else if (message.method === "thread/turns/list") {
-        sendFixtureThreadTurnsList(ws, message, fixtureRowForMessage(sourceRows, message));
+        sendFixtureThreadTurnsList(ws, message, fixtureRowForMessage(allRows(), message));
       }
     });
   });
@@ -1826,7 +1879,7 @@ async function runThreadActivityScenario(options) {
     port: 0,
     phoneAuth: "none",
     hostId: hostID,
-    hostName: "Simulator Thread Activity Fixture",
+    hostName: `Simulator ${scenarioName} Fixture`,
     hostEndpoint: "127.0.0.1:0",
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
@@ -1861,16 +1914,22 @@ async function runThreadActivityScenario(options) {
     const initialWait = await waitForStreamCondition({
       streamProbe,
       timeoutMs: options.dockCollectionTimeoutMs,
-      predicate: (snapshot) => (
-        dockSnapshotThreadIndex(snapshot, stableThreadID) === 0
-        && dockSnapshotThreadIndex(snapshot, movingThreadID) === 1
-      ),
+      predicate: (snapshot) => isCurrentWorkVisible
+        ? (
+          dockSnapshotThreadIndex(snapshot, stableThreadID) === 0
+          && dockSnapshotThreadIndex(snapshot, movingThreadID) === 1
+          && !dockSnapshotHasThread(snapshot, newThreadID)
+        )
+        : (
+          dockSnapshotThreadIndex(snapshot, stableThreadID) === 0
+          && dockSnapshotThreadIndex(snapshot, movingThreadID) === 1
+        ),
     });
     if (!initialWait.ok) {
       transitionFailure(
         findings,
-        "scenario_thread_activity_initial_order_missing",
-        "initial fixture rows did not appear in the expected Dock order before simulator launch",
+        `scenario_${scenarioName}_initial_order_missing`,
+        `initial ${scenarioName} fixture rows did not appear in the expected Dock order before simulator launch`,
         { expectedOrder: [stableThreadID, movingThreadID] }
       );
     }
@@ -1886,7 +1945,7 @@ async function runThreadActivityScenario(options) {
 
     writeJSON(options.readyOut, {
       ready: true,
-      scenario: "thread-activity",
+      scenario: scenarioName,
       relayUrl,
       hosts: `127.0.0.1:${relayPort}`,
       target: {
@@ -1901,12 +1960,17 @@ async function runThreadActivityScenario(options) {
     await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 1_500));
 
     const newStartedAtMs = Date.now();
-    sourceRows = [
-      fixtureThread(newThreadID, "Simulator fixture newly created row", 300),
-      fixtureThread(stableThreadID, "Simulator fixture stable row", 200),
-      fixtureThread(movingThreadID, "Simulator fixture moving row before update", 100),
-    ];
-    await relayConfig.relayStateEngine.reconcileDock({ reason: "controlled_simulator_thread_activity_new_thread" });
+    if (isCurrentWorkVisible) {
+      loadedThreadIDs = [newThreadID];
+      await relayConfig.relayStateEngine.reconcileDock({ reason: "controlled_simulator_current_work_loaded_session" });
+    } else {
+      sourceRows = [
+        fixtureThread(newThreadID, "Simulator fixture newly created row", 300),
+        fixtureThread(stableThreadID, "Simulator fixture stable row", 200),
+        fixtureThread(movingThreadID, "Simulator fixture moving row before update", 100),
+      ];
+      await relayConfig.relayStateEngine.reconcileDock({ reason: "controlled_simulator_thread_activity_new_thread" });
+    }
     const newWait = await waitForStreamCondition({
       streamProbe,
       timeoutMs: options.dockCollectionTimeoutMs,
@@ -1924,11 +1988,11 @@ async function runThreadActivityScenario(options) {
       maxStreamLagMs: options.maxStreamLagMs,
     });
     if (!newWait.ok) {
-      transitionFailure(findings, "scenario_new_thread_not_seen", "new thread did not appear at the top of the fixture relay stream", {
+      transitionFailure(findings, `scenario_${scenarioName}_new_thread_not_seen`, "new or loaded thread did not appear at the top of the fixture relay stream", {
         threadID: newThreadID,
       });
     } else if (newLag.exceeded) {
-      transitionFailure(findings, "scenario_new_thread_lag_exceeded", "new thread appeared after the relay lag budget", {
+      transitionFailure(findings, `scenario_${scenarioName}_new_thread_lag_exceeded`, "new or loaded thread appeared after the relay lag budget", {
         observedLagMs: newLag.lag_change_to_relay_ms,
         maxStreamLagMs: options.maxStreamLagMs,
       });
@@ -1937,7 +2001,7 @@ async function runThreadActivityScenario(options) {
     findings.push(...scenarioComparisonFindings({ phase: "new-thread", comparison: newComparison.comparison }));
     transitions.push({
       name: "new-thread",
-      kind: "new-thread",
+      kind: isCurrentWorkVisible ? "current-work-loaded-session" : "new-thread",
       iteration: 1,
       route: "dock/update",
       wait: newWait,
@@ -1952,19 +2016,25 @@ async function runThreadActivityScenario(options) {
     }
 
     const turnStartedAtMs = Date.now();
-    sourceRows = [
-      fixtureThread(movingThreadID, updatedPreview, 400),
-      fixtureThread(newThreadID, "Simulator fixture newly created row", 300),
-      fixtureThread(stableThreadID, "Simulator fixture stable row", 200),
-    ];
-    await relayConfig.relayStateEngine.reconcileDock({ reason: "controlled_simulator_thread_activity_new_turn_order" });
+    if (isCurrentWorkVisible) {
+      currentWorkRow = fixtureThread(newThreadID, updatedPreview, 500);
+      await relayConfig.relayStateEngine.reconcileDock({ reason: "controlled_simulator_current_work_live_advance" });
+    } else {
+      sourceRows = [
+        fixtureThread(movingThreadID, updatedPreview, 400),
+        fixtureThread(newThreadID, "Simulator fixture newly created row", 300),
+        fixtureThread(stableThreadID, "Simulator fixture stable row", 200),
+      ];
+      await relayConfig.relayStateEngine.reconcileDock({ reason: "controlled_simulator_thread_activity_new_turn_order" });
+    }
     const turnWait = await waitForStreamCondition({
       streamProbe,
       timeoutMs: options.dockCollectionTimeoutMs,
       predicate: (snapshot) => {
-        const card = dockSnapshotCardForThread(snapshot, movingThreadID);
-        return dockSnapshotThreadIndex(snapshot, movingThreadID) === 0
-          && dockSnapshotThreadIndex(snapshot, newThreadID) === 1
+        const targetThreadID = isCurrentWorkVisible ? newThreadID : movingThreadID;
+        const card = dockSnapshotCardForThread(snapshot, targetThreadID);
+        return dockSnapshotThreadIndex(snapshot, targetThreadID) === 0
+          && (isCurrentWorkVisible || dockSnapshotThreadIndex(snapshot, newThreadID) === 1)
           && card?.displaySummary === updatedPreview;
       },
     });
@@ -1976,11 +2046,11 @@ async function runThreadActivityScenario(options) {
       maxStreamLagMs: options.maxStreamLagMs,
     });
     if (!turnWait.ok) {
-      transitionFailure(findings, "scenario_new_turn_order_not_seen", "existing thread update did not move the row to the top in the fixture relay stream", {
-        threadID: movingThreadID,
+      transitionFailure(findings, `scenario_${scenarioName}_new_turn_order_not_seen`, "existing or loaded thread update did not move the row to the top in the fixture relay stream", {
+        threadID: isCurrentWorkVisible ? newThreadID : movingThreadID,
       });
     } else if (turnLag.exceeded) {
-      transitionFailure(findings, "scenario_new_turn_order_lag_exceeded", "existing thread update moved order after the relay lag budget", {
+      transitionFailure(findings, `scenario_${scenarioName}_new_turn_order_lag_exceeded`, "existing or loaded thread update moved order after the relay lag budget", {
         observedLagMs: turnLag.lag_change_to_relay_ms,
         maxStreamLagMs: options.maxStreamLagMs,
       });
@@ -1989,7 +2059,7 @@ async function runThreadActivityScenario(options) {
     findings.push(...scenarioComparisonFindings({ phase: "new-turn-order", comparison: turnComparison.comparison }));
     transitions.push({
       name: "new-turn-order",
-      kind: "new-turn-order",
+      kind: isCurrentWorkVisible ? "current-work-live-advance" : "new-turn-order",
       iteration: 1,
       route: "dock/update",
       wait: turnWait,
@@ -2005,25 +2075,25 @@ async function runThreadActivityScenario(options) {
       schemaVersion: 1,
       kind: "codex-dock-controlled-simulator-scenario-relay-report",
       mode: "scenario",
-      scenario: "thread-activity",
+      scenario: scenarioName,
       startedAt: new Date(startedAtMs).toISOString(),
       endedAt: new Date().toISOString(),
       relayUrl,
       summary: {
         ok: scenarioOK,
         clientPathOK: scenarioOK,
-        scenario: "thread-activity",
+        scenario: scenarioName,
         scenarioOK,
         scenarioCount: 1,
         scenarioTransitionCount: transitions.length,
-        implementedScenarios: ["thread-activity"],
+        implementedScenarios: [scenarioName],
         unimplementedRequiredScenarios: [],
         failures: findings.length,
         clientPathRouteCounts: clientPathEvidence.routeCounts,
       },
       samples,
       scenarios: [{
-        id: "thread-activity",
+        id: scenarioName,
         ok: scenarioOK,
         target: {
           sourceHostID: hostID,
@@ -3930,16 +4000,18 @@ async function runSpawnEdgeScenario(options) {
 }
 
 async function runDetailReconnectScenario(options) {
+  const scenarioName = options.scenario;
+  const isForegroundResumeScenario = scenarioName === "foreground-resume-all-surfaces";
   const routeEvents = [];
   const simulatorRouteEvents = [];
   const findings = [];
   const transitions = [];
   const samples = [];
   const startedAtMs = Date.now();
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-sim-detail-reconnect-"));
-  const hostID = "sim-detail-reconnect-fixture";
-  const threadID = "sim-detail-reconnect-thread";
-  const threadRow = fixtureThread(threadID, "Simulator detail reconnect fixture row", 100);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `codex-dock-sim-${scenarioName}-`));
+  const hostID = `sim-${scenarioName}-fixture`;
+  const threadID = `sim-${scenarioName}-thread`;
+  const threadRow = fixtureThread(threadID, `Simulator ${scenarioName} fixture row`, 100);
   const initialTurn = fixtureTurn("turn-reconnect-initial", 1_700_000_001, [
     fixtureAgentMessageItem("agent-initial", "Simulator detail before reconnect"),
   ]);
@@ -3971,7 +4043,7 @@ async function runDetailReconnectScenario(options) {
       if (message.method === "initialize") {
         recordClientRoute(routeEvents, "initialize", "simulator app initialized detail-reconnect fixture", { threadID });
         sendFixtureResult(ws, message.id, {
-          userAgent: "codex-sim-detail-reconnect-fixture",
+          userAgent: `codex-sim-${scenarioName}-fixture`,
           codexHome: tempDir,
           platformFamily: "unix",
           platformOs: "macos",
@@ -4039,7 +4111,7 @@ async function runDetailReconnectScenario(options) {
     port: 0,
     phoneAuth: "none",
     hostId: hostID,
-    hostName: "Simulator Detail Reconnect Fixture",
+    hostName: `Simulator ${scenarioName} Fixture`,
     hostEndpoint: "127.0.0.1:0",
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
     historyBearerToken: "history-token",
@@ -4130,7 +4202,7 @@ async function runDetailReconnectScenario(options) {
 
     writeJSON(options.readyOut, {
       ready: true,
-      scenario: "detail-reconnect",
+      scenario: scenarioName,
       relayUrl,
       simulatorRelayUrl: simulatorProxy.url,
       hosts: simulatorProxy.endpoint,
@@ -4143,6 +4215,10 @@ async function runDetailReconnectScenario(options) {
         openThreadID: threadID,
         detailFilter: "all",
         detailCheckpointSweep: true,
+        foregroundCycleBeforeReady: isForegroundResumeScenario,
+        foregroundResumeDelayMS: isForegroundResumeScenario
+          ? Math.max(options.scenarioHoldMs + 750, 1_250)
+          : undefined,
       },
       at: new Date().toISOString(),
     });
@@ -4287,25 +4363,25 @@ async function runDetailReconnectScenario(options) {
       schemaVersion: 1,
       kind: "codex-dock-controlled-simulator-scenario-relay-report",
       mode: "scenario",
-      scenario: "detail-reconnect",
+      scenario: scenarioName,
       startedAt: new Date(startedAtMs).toISOString(),
       endedAt: new Date().toISOString(),
       relayUrl,
       summary: {
         ok: scenarioOK,
         clientPathOK: scenarioOK,
-        scenario: "detail-reconnect",
+        scenario: scenarioName,
         scenarioOK,
         scenarioCount: 1,
         scenarioTransitionCount: transitions.length,
-        implementedScenarios: ["detail-reconnect"],
+        implementedScenarios: [scenarioName],
         unimplementedRequiredScenarios: [],
         failures: findings.length,
         clientPathRouteCounts: clientPathEvidence.routeCounts,
       },
       samples,
       scenarios: [{
-        id: "detail-reconnect",
+        id: scenarioName,
         ok: scenarioOK,
         target: {
           sourceHostID: hostID,
@@ -4343,16 +4419,18 @@ async function runDetailReconnectScenario(options) {
 }
 
 async function runDetailHistoryRequestScenario(options) {
+  const scenarioName = options.scenario;
+  const isReplayPressure = scenarioName === "detail-replay-pressure";
   const routeEvents = [];
   const simulatorRouteEvents = [];
   const findings = [];
   const transitions = [];
   const samples = [];
   const startedAtMs = Date.now();
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-sim-detail-history-"));
-  const hostID = "sim-detail-history-fixture";
-  const threadID = "sim-detail-history-request-thread";
-  const requestID = "approval-history-1";
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `codex-dock-sim-${scenarioName}-`));
+  const hostID = `sim-${scenarioName}-fixture`;
+  const threadID = `sim-${scenarioName}-thread`;
+  const requestID = isReplayPressure ? "approval-replay-pressure-1" : "approval-history-1";
   const requestTurnID = "turn-live-request";
   const requestItemID = "cmd-history-live";
   const requestCardID = projectionIDForCommandApprovalRequest({
@@ -4361,7 +4439,7 @@ async function runDetailHistoryRequestScenario(options) {
     turnID: requestTurnID,
     itemID: requestItemID,
   });
-  const threadRow = fixtureThread(threadID, "Simulator full detail fixture row", 100);
+  const threadRow = fixtureThread(threadID, `Simulator ${scenarioName} fixture row`, 100);
   const historicalTurns = [
     fixtureTurn("turn-history-1", 1_700_000_001, [
       fixtureUserMessageItem("user-seed", "Simulator detail history user seed"),
@@ -4411,7 +4489,7 @@ async function runDetailHistoryRequestScenario(options) {
       if (message.method === "initialize") {
         recordClientRoute(routeEvents, "initialize", "simulator app initialized detail-history fixture", { threadID });
         sendFixtureResult(ws, message.id, {
-          userAgent: "codex-sim-detail-history-fixture",
+          userAgent: `codex-sim-${scenarioName}-fixture`,
           codexHome: tempDir,
           platformFamily: "unix",
           platformOs: "macos",
@@ -4519,7 +4597,7 @@ async function runDetailHistoryRequestScenario(options) {
     port: 0,
     phoneAuth: "none",
     hostId: hostID,
-    hostName: "Simulator Detail History Fixture",
+    hostName: `Simulator ${scenarioName} Fixture`,
     hostEndpoint: "127.0.0.1:0",
     projectionWitnessEnabled: true,
     historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
@@ -4610,7 +4688,7 @@ async function runDetailHistoryRequestScenario(options) {
 
     writeJSON(options.readyOut, {
       ready: true,
-      scenario: "detail-history-request",
+      scenario: scenarioName,
       relayUrl,
       simulatorRelayUrl: simulatorProxy.url,
       hosts: simulatorProxy.endpoint,
@@ -4669,6 +4747,7 @@ async function runDetailHistoryRequestScenario(options) {
 
     let initialProjectionWitness = null;
     let liveProjectionWitness = null;
+    let replayPressureProjectionWitness = null;
     let requestProjectionWitness = null;
     let resolutionProjectionWitness = null;
     if (detailLoadedWait.ok && detailSubscribeWait.ok) {
@@ -4728,6 +4807,42 @@ async function runDetailHistoryRequestScenario(options) {
         );
       }
 
+      if (isReplayPressure) {
+        for (let index = 0; index < 3; index += 1) {
+          const pressureNotification = {
+            jsonrpc: "2.0",
+            method: "item/agentMessage/delta",
+            params: {
+              threadId: threadID,
+              turnId: `turn-replay-pressure-${index + 1}`,
+              itemId: `agent-replay-pressure-${index + 1}`,
+              delta: `Simulator replay pressure detail delta ${index + 1}`,
+            },
+          };
+          detailWs.send(JSON.stringify(pressureNotification));
+          await sleep(25);
+        }
+        replayPressureProjectionWitness = await waitForDetailProjectionWitness({
+          client: streamProbe.client,
+          sourceHostID: hostID,
+          threadID,
+          minProjectionCount: (liveProjectionWitness?.projectionIDs?.length || initialProjectionCount) + 3,
+          timeoutMs: projectionTransitionTimeoutMs,
+        });
+        if (replayPressureProjectionWitness?.byteEquivalentToDownstream !== true) {
+          transitionFailure(
+            findings,
+            "scenario_detail_replay_pressure_projection_witness_missing",
+            "detail-replay-pressure burst did not produce byte-equivalent relay projection witness rows",
+            {
+              threadID,
+              expectedProjectionCount: (liveProjectionWitness?.projectionIDs?.length || initialProjectionCount) + 3,
+              timeoutMs: projectionTransitionTimeoutMs,
+            }
+          );
+        }
+      }
+
       await sleep(options.scenarioHoldMs);
       upstreamRequestSentAtMs = Date.now();
       const requestMessage = {
@@ -4755,7 +4870,7 @@ async function runDetailHistoryRequestScenario(options) {
         client: streamProbe.client,
         sourceHostID: hostID,
         threadID,
-        minProjectionCount: (liveProjectionWitness?.projectionIDs?.length || initialProjectionCount) + 1,
+        minProjectionCount: (replayPressureProjectionWitness?.projectionIDs?.length || liveProjectionWitness?.projectionIDs?.length || initialProjectionCount) + 1,
         requestID,
         timeoutMs: projectionTransitionTimeoutMs,
       });
@@ -4875,6 +4990,33 @@ async function runDetailHistoryRequestScenario(options) {
         witness: liveProjectionWitness,
       }),
     });
+    if (isReplayPressure) {
+      transitions.push({
+        name: "detail-replay-pressure-burst",
+        kind: "detail-replay-pressure-burst",
+        iteration: 1,
+        route: "thread/detail/update",
+        wait: {
+          ok: replayPressureProjectionWitness?.byteEquivalentToDownstream === true,
+          observedAt: replayPressureProjectionWitness?.emittedAt || null,
+          observedAtMs: replayPressureProjectionWitness ? Date.now() : null,
+        },
+        lag: scenarioLagSummary({
+          transition: "detail-replay-pressure-burst",
+          startedAtMs: liveUpdateSentAtMs || detailLoadedAtMs || startedAtMs,
+          acknowledgedAtMs: liveUpdateSentAtMs || detailLoadedAtMs || startedAtMs,
+          observedAtMs: replayPressureProjectionWitness ? Date.now() : null,
+          maxStreamLagMs: options.maxStreamLagMs,
+        }),
+        detailTruth: detailTruthFromWitness({
+          kind: "detail-replay-pressure-burst",
+          sourceHostID: hostID,
+          detailHostID: simulatorProxy.endpoint,
+          threadID,
+          witness: replayPressureProjectionWitness,
+        }),
+      });
+    }
     transitions.push({
       name: "detail-history-request-visible",
       kind: "detail-history-request-visible",
@@ -4939,25 +5081,25 @@ async function runDetailHistoryRequestScenario(options) {
       schemaVersion: 1,
       kind: "codex-dock-controlled-simulator-scenario-relay-report",
       mode: "scenario",
-      scenario: "detail-history-request",
+      scenario: scenarioName,
       startedAt: new Date(startedAtMs).toISOString(),
       endedAt: new Date().toISOString(),
       relayUrl,
       summary: {
         ok: scenarioOK,
         clientPathOK: scenarioOK,
-        scenario: "detail-history-request",
+        scenario: scenarioName,
         scenarioOK,
         scenarioCount: 1,
         scenarioTransitionCount: transitions.length,
-        implementedScenarios: ["detail-history-request"],
+        implementedScenarios: [scenarioName],
         unimplementedRequiredScenarios: [],
         failures: findings.length,
         clientPathRouteCounts: clientPathEvidence.routeCounts,
       },
       samples,
       scenarios: [{
-        id: "detail-history-request",
+        id: scenarioName,
         ok: scenarioOK,
         target: {
           sourceHostID: hostID,

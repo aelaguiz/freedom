@@ -39,7 +39,6 @@ const ROUTE_NAMES = Object.freeze({
   syncz: "syncz",
   initialize: "initialize",
   initialized: "initialized",
-  threadDetailRead: "thread/detail/read",
   threadDetailSubscribe: "thread/detail/subscribe",
   threadDetailResync: "thread/detail/resync",
   threadDetailUpdate: "thread/detail/update",
@@ -134,13 +133,6 @@ const ROUTE_CONFIGS = Object.freeze({
     kind: "json-rpc-notification",
     probeSafety: PROBE_SAFETY.PASSIVE_ONLY,
     parentRoute: ROUTE_NAMES.initialize,
-  }),
-  [ROUTE_NAMES.threadDetailRead]: route({
-    name: ROUTE_NAMES.threadDetailRead,
-    kind: "json-rpc",
-    probeSafety: PROBE_SAFETY.MANUAL_ONLY,
-    budgetMs: 15_000,
-    payloadPolicy: "thread-detail-projection-summary",
   }),
   [ROUTE_NAMES.threadDetailSubscribe]: route({
     name: ROUTE_NAMES.threadDetailSubscribe,

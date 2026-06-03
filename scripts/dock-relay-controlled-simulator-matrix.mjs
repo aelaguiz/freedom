@@ -62,10 +62,10 @@ const SCENARIO_REQUIREMENTS = {
   },
   "detail-replay-pressure": {
     routes: ["thread/detail/subscribe", "thread/detail/update"],
-    minDetailTransitionChecks: 3,
+    minDetailTransitionChecks: 4,
     minDetailSweeps: 1,
-    minDetailSweepMessageCardChecks: 8,
-    minDetailMessageOrderChecks: 2,
+    minDetailSweepMessageCardChecks: 10,
+    minDetailMessageOrderChecks: 3,
   },
   "large-list-checkpoint": {
     routes: ["dock/subscribe"],
@@ -74,7 +74,7 @@ const SCENARIO_REQUIREMENTS = {
     minDockSweepOrderChecks: 1,
   },
   "root-catchup-window-contract": {
-    routes: ["dock/subscribe"],
+    routes: ["dock/subscribe", "dock/update"],
     minCheckpointSweeps: 1,
     minCheckpointSweepRowChecks: 12,
     minDockSweepOrderChecks: 1,
@@ -125,18 +125,10 @@ const SCENARIO_REQUIREMENTS = {
     minCheckpointSweeps: 1,
   },
   "mutation-ack-projection-refresh-failure": {
-    routes: ["dock/subscribe", "dock/update", "archive/subscribe", "archive/update", "thread/archive", "thread/unarchive"],
-    minScenarioTransitionChecks: 2,
+    routes: ["dock/subscribe", "dock/update", "dock/resync", "archive/subscribe", "archive/update", "thread/archive", "thread/unarchive"],
+    minScenarioTransitionChecks: 3,
     minCheckpointSweeps: 1,
   },
-};
-
-const SCENARIO_REPORT_ALIASES = {
-  "current-work-visible": ["thread-activity"],
-  "detail-replay-pressure": ["detail-history-request"],
-  "foreground-resume-all-surfaces": ["detail-reconnect"],
-  "mutation-ack-projection-refresh-failure": ["archive-toggle"],
-  "root-catchup-window-contract": ["large-list-checkpoint"],
 };
 
 function usage() {
@@ -259,7 +251,7 @@ function scenarioFor(entry) {
 }
 
 function allowedReportedScenariosFor(scenario) {
-  return new Set([scenario, ...(SCENARIO_REPORT_ALIASES[scenario] || [])]);
+  return new Set([scenario]);
 }
 
 function transitionChecks(uiReport) {
@@ -315,7 +307,7 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
   ) {
     failures.push({
       code: "matrix_reported_scenario_mismatch",
-      message: `Report directory ${directoryScenario} contained relay scenario ${reportedScenario}, which is not an allowed fixture alias.`,
+      message: `Report directory ${directoryScenario} contained relay scenario ${reportedScenario}; strict matrix proof requires the invoked scenario to report itself.`,
       scenario: directoryScenario,
       expected: [...allowedReportedScenariosFor(directoryScenario)].sort(),
       actual: reportedScenario,

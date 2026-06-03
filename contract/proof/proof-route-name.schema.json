@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://codex-dock.local/contract/proof/proof-route-name.schema.json",
   "title": "Codex Dock Proof Report Route Name Allow-List",
-  "description": "Allowed route names when proof reports use route names as map keys. Manual and relay-internal routes may be reported as diagnostics, but separate semantic checks prevent them from satisfying passing live-update proof.",
+  "description": "Allowed route names when proof reports use route names as map keys. Unsupported side-door and relay-internal routes may appear only as failure evidence; semantic checks prevent them from satisfying passing live-update proof.",
   "enum": [
     "archive/resync",
     "archive/subscribe",

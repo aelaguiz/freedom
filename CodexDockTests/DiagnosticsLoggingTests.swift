@@ -44,7 +44,6 @@ final class DiagnosticsLoggingTests: XCTestCase {
         let expectedRoutes: Set<String> = [
             AppServerMethods.initialize,
             AppServerMethods.initialized,
-            AppServerMethods.threadDetailRead,
             AppServerMethods.threadDetailSubscribe,
             AppServerMethods.threadDetailResync,
             AppServerMethods.threadDetailUpdate,
@@ -74,7 +73,6 @@ final class DiagnosticsLoggingTests: XCTestCase {
         XCTAssertEqual(ObservabilityContract.config(for: AppServerMethods.turnStart).probeSafety, .passiveOnly)
         XCTAssertEqual(ObservabilityContract.config(for: AppServerMethods.threadArchive).probeSafety, .passiveOnly)
         XCTAssertEqual(ObservabilityContract.config(for: AppServerMethods.audioTranscriptionStart).probeSafety, .passiveOnly)
-        XCTAssertFalse(ObservabilityContract.config(for: AppServerMethods.threadDetailRead).appCritical)
         XCTAssertTrue(ObservabilityContract.config(for: AppServerMethods.dockSubscribe).appCritical)
         XCTAssertTrue(ObservabilityContract.config(for: AppServerMethods.archiveSubscribe).appCritical)
     }

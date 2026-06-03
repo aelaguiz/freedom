@@ -164,15 +164,15 @@ test("dock/subscribe orders cards by proven newest turn activity, not raw thread
   }
 });
 
-test("thread/detail/read does not seed projection witness truth", async () => {
+test("thread/detail/read is not a callable projection side door", async () => {
   const appServer = await startCanonicalActivityAppServer();
   try {
     await withRelay(appServer.url, async ({ wsURL }) => {
       const ws = await openWebSocket(wsURL);
       try {
         const read = await jsonRpcRequest(ws, "thread/detail/read", { threadId: "newer" });
-        assert.equal(read.error, undefined);
-        assert.equal(read.result.view, "thread.detail");
+        assert.equal(read.error?.code, -32601);
+        assert.match(read.error?.message || "", /unsupported method/u);
 
         const witness = await jsonRpcRequest(ws, "projection/witness/read", {
           sourceHostID: "home",

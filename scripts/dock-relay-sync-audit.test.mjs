@@ -184,7 +184,7 @@ test("sync audit rejects raw app-server relay URLs", () => {
   );
 });
 
-test("sync audit treats thread detail read as diagnostic instead of client path proof", () => {
+test("sync audit rejects thread detail read as client path proof", () => {
   const evidence = summarizeClientPathEvents([
     { route: "thread/detail/read", countedAsClientPath: false },
     { route: "thread/detail/subscribe", countedAsClientPath: true },

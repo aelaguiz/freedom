@@ -374,8 +374,7 @@ function classifyRelayRequestError(method, error) {
       retryable: error.data.retryable ?? error.code !== -32602,
     };
   }
-  if (method === "thread/detail/read"
-    || method === "thread/detail/resync"
+  if (method === "thread/detail/resync"
     || method === "thread/archive" || method === "thread/unarchive") {
     return {
       subsystem: "history",

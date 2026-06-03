@@ -33,7 +33,7 @@ const CLIENT_CARD_ROUTES = new Set([
   "thread/detail/resync",
   "thread/detail/update",
 ]);
-const MANUAL_DIAGNOSTIC_ONLY_ROUTES = new Set([
+const FORBIDDEN_PROOF_ROUTES = new Set([
   "thread/detail/read",
 ]);
 const FORBIDDEN_SIMULATOR_DOWNSTREAM_ROUTES = new Set([
@@ -204,9 +204,9 @@ function semanticProofErrors(report) {
     errors.push("passing live-update proof must include relay-owned client route evidence");
   }
   if (status === "pass" && routes.size > 0) {
-    const diagnosticOnlyRoutes = [...routes].filter((route) => MANUAL_DIAGNOSTIC_ONLY_ROUTES.has(route));
-    if (diagnosticOnlyRoutes.length > 0) {
-      errors.push(`manual diagnostic routes cannot satisfy live-update proof: ${diagnosticOnlyRoutes.join(", ")}`);
+    const forbiddenProofRoutes = [...routes].filter((route) => FORBIDDEN_PROOF_ROUTES.has(route));
+    if (forbiddenProofRoutes.length > 0) {
+      errors.push(`forbidden routes cannot satisfy live-update proof: ${forbiddenProofRoutes.join(", ")}`);
     }
     const hasClientCardRoute = [...routes].some((route) => CLIENT_CARD_ROUTES.has(route));
     if (!hasClientCardRoute) {
