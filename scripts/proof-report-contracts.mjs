@@ -23,10 +23,12 @@ const CLIENT_CARD_ROUTES = new Set([
   "archive/subscribe",
   "archive/update",
   "archive/resync",
-  "thread/detail/read",
   "thread/detail/subscribe",
   "thread/detail/resync",
   "thread/detail/update",
+]);
+const MANUAL_DIAGNOSTIC_ONLY_ROUTES = new Set([
+  "thread/detail/read",
 ]);
 const PASSING_PROOF_KINDS_REQUIRE_ROUTES = new Set([
   "codex-dock-relay-sync-audit-report",
@@ -165,6 +167,10 @@ function semanticProofErrors(report) {
     errors.push("passing live-update proof must include relay-owned client route evidence");
   }
   if (status === "pass" && routes.size > 0) {
+    const diagnosticOnlyRoutes = [...routes].filter((route) => MANUAL_DIAGNOSTIC_ONLY_ROUTES.has(route));
+    if (diagnosticOnlyRoutes.length > 0) {
+      errors.push(`manual diagnostic routes cannot satisfy live-update proof: ${diagnosticOnlyRoutes.join(", ")}`);
+    }
     const hasClientCardRoute = [...routes].some((route) => CLIENT_CARD_ROUTES.has(route));
     if (!hasClientCardRoute) {
       errors.push("passing proof must include relay-owned Dock, Archive, or Thread Detail client routes");

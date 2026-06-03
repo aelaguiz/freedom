@@ -57,7 +57,6 @@ const CLIENT_PATH_ROUTES = new Set([
   "archive/resync",
   "thread/archive",
   "thread/unarchive",
-  "thread/detail/read",
   "thread/detail/subscribe",
   "thread/detail/resync",
   "thread/detail/update",
@@ -3875,7 +3874,7 @@ async function runDetailReconnectScenario(options) {
         name: "detail-reconnect-initial",
         kind: "detail-reconnect-initial",
         iteration: 1,
-        route: "thread/detail/read",
+        route: "projection/witness/read",
         wait: {
           ok: true,
           observedAt: new Date(initialProofAtMs).toISOString(),

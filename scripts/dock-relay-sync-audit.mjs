@@ -59,7 +59,6 @@ const CLIENT_PATH_ROUTES = new Set([
   "archive/resync",
   "thread/archive",
   "thread/unarchive",
-  "thread/detail/read",
   "thread/detail/subscribe",
   "thread/detail/resync",
   "thread/detail/update",
@@ -1834,27 +1833,6 @@ async function probeThreadDetail(target, options, routeEvents = null) {
     threadID: target.threadID,
   });
   try {
-    phase = "read";
-    recordRoute(routeEvents, "thread/detail/read", "detail client-path projection read", {
-      threadID: target.threadID,
-    });
-    const readResponse = await client.request("thread/detail/read", {
-      threadId: target.threadID,
-    });
-    const read = projectionSnapshotSummary(readResponse, target.threadID);
-    if (!read.ok) {
-      findings.push({
-        code: "detail_wrong_thread",
-        severity: "error",
-        message: "thread/detail/read returned a malformed projection or the wrong selected thread",
-        expectedThreadID: target.threadID,
-          actualThreadID: read.threadID,
-          view: read.view,
-          duplicateProjectionIDs: read.duplicateProjectionIDs,
-          malformedRows: read.malformedRows,
-        });
-    }
-
     let subscribe = null;
     let subscribeOk = null;
     let resync = null;
@@ -1940,7 +1918,11 @@ async function probeThreadDetail(target, options, routeEvents = null) {
       startedAt,
       endedAt: new Date().toISOString(),
       target,
-      read,
+      read: {
+        attempted: false,
+        ok: null,
+        diagnosticOnly: true,
+      },
       subscribe: {
         attempted: options.detailLive,
         ok: subscribeOk,
@@ -1970,7 +1952,7 @@ async function probeThreadDetail(target, options, routeEvents = null) {
       startedAt,
       endedAt: new Date().toISOString(),
       target,
-      read: { ok: false, threadID: null },
+      read: { attempted: false, ok: null, diagnosticOnly: true },
       turns: null,
       resume: { attempted: false, ok: null, threadID: null },
       liveObservation,
@@ -2584,14 +2566,6 @@ function detailReconnectProbeFindings({ label, probe }) {
       probeFindings: probe?.findings || [],
     });
   }
-  if (probe?.read?.ok !== true) {
-    findings.push({
-      code: `scenario_detail_reconnect_${label}_read_failed`,
-      severity: "error",
-      message: `detail ${label} probe did not load the selected thread through thread/detail/read`,
-      threadID: probe?.target?.threadID || null,
-    });
-  }
   if (probe?.subscribe?.ok !== true) {
     findings.push({
       code: `scenario_detail_reconnect_${label}_subscribe_failed`,
@@ -2621,7 +2595,7 @@ function detailReconnectProbeFindings({ label, probe }) {
 
 function detailReconnectRouteFindings(clientPathEvidence) {
   const routeCounts = clientPathEvidence?.routeCounts || {};
-  const required = ["thread/detail/read", "thread/detail/subscribe", "thread/detail/resync"];
+  const required = ["thread/detail/subscribe", "thread/detail/resync"];
   return required
     .filter((route) => Number(routeCounts[route] || 0) < 2)
     .map((route) => ({
@@ -2663,7 +2637,7 @@ async function runDetailReconnectScenario(options) {
       endedAt: new Date().toISOString(),
       actuator: {
         type: "relay detail projection reconnect through actual client routes",
-        routes: ["thread/detail/read", "thread/detail/subscribe", "thread/detail/resync"],
+        routes: ["thread/detail/subscribe", "thread/detail/resync"],
         clientExercised: true,
       },
       target: null,
@@ -2705,7 +2679,7 @@ async function runDetailReconnectScenario(options) {
     name: "detail-reconnect",
     kind: "detail-reconnect",
     iteration: 1,
-    routes: ["thread/detail/read", "thread/detail/subscribe", "thread/detail/resync"],
+    routes: ["thread/detail/subscribe", "thread/detail/resync"],
     wait: {
       ok: secondProbe?.subscribe?.ok === true,
       observedAt: Number.isFinite(Number(reconnectObservedAtMs)) ? new Date(reconnectObservedAtMs).toISOString() : null,
@@ -2723,9 +2697,9 @@ async function runDetailReconnectScenario(options) {
     endedAt: new Date().toISOString(),
     actuator: {
       type: "relay detail projection reconnect through actual client routes",
-      routes: ["thread/detail/read", "thread/detail/subscribe", "thread/detail/resync"],
+      routes: ["thread/detail/subscribe", "thread/detail/resync"],
       clientExercised: true,
-      note: "The scenario opens an actual Dock row, completes projection read, live projection subscribe, and projection resync, closes that detail session, then repeats the same client route sequence before accepting live state.",
+      note: "The scenario opens an actual Dock row, completes live projection subscribe and projection resync, closes that detail session, then repeats the same client route sequence before accepting live state.",
     },
     target,
     beforeDock: sanitizeDockSnapshotForReport(beforeDock),
@@ -3315,35 +3289,35 @@ async function runSpawnEdgeScenario(options) {
       });
     }
 
-    let readRejection = null;
+    let subscribeRejection = null;
     try {
       await withRelayClient(fixtureOptions, null, async (client) => {
-        recordRoute(routeEvents, "thread/detail/read", "spawn-edge scenario child projection rejection read", {
+        recordRoute(routeEvents, "thread/detail/subscribe", "spawn-edge scenario child projection rejection subscribe", {
           threadID: childThreadID,
         });
-        return client.request("thread/detail/read", {
+        return client.request("thread/detail/subscribe", {
           threadId: childThreadID,
         });
       }, routeEvents);
     } catch (error) {
-      readRejection = error;
+      subscribeRejection = error;
     }
-    if (readRejection?.code !== -32043) {
+    if (subscribeRejection?.code !== -32043) {
       findings.push({
-        code: "scenario_spawn_edge_read_not_rejected",
+        code: "scenario_spawn_edge_subscribe_not_rejected",
         severity: "error",
-        message: "thread/detail/read for spawned child did not reject with the human-only filter code",
+        message: "thread/detail/subscribe for spawned child did not reject with the human-only filter code",
         threadID: childThreadID,
-        actualCode: readRejection?.code || null,
-        actualMessage: readRejection?.message || null,
+        actualCode: subscribeRejection?.code || null,
+        actualMessage: subscribeRejection?.message || null,
       });
-    } else if (readRejection?.data?.reason !== "not_base_level" && readRejection?.data?.reason !== "sub_agent") {
+    } else if (subscribeRejection?.data?.reason !== "not_base_level" && subscribeRejection?.data?.reason !== "sub_agent") {
       findings.push({
-        code: "scenario_spawn_edge_read_wrong_rejection_reason",
+        code: "scenario_spawn_edge_subscribe_wrong_rejection_reason",
         severity: "error",
-        message: "thread/detail/read for spawned child rejected with an unexpected human-only reason",
+        message: "thread/detail/subscribe for spawned child rejected with an unexpected human-only reason",
         threadID: childThreadID,
-        actualReason: readRejection?.data?.reason || null,
+        actualReason: subscribeRejection?.data?.reason || null,
       });
     }
 
@@ -3351,14 +3325,14 @@ async function runSpawnEdgeScenario(options) {
       name: "spawn-edge",
       kind: "spawn-edge",
       iteration: 1,
-      routes: ["dock/update", "dock/subscribe", "thread/detail/read"],
+      routes: ["dock/update", "dock/subscribe", "thread/detail/subscribe"],
       wait: spawnWait,
       lag: spawnLag,
       freshDock: sanitizeDockSnapshotForReport(freshDock),
       streamComparison,
-      readRejection: normalizeForComparison({
-        code: readRejection?.code || null,
-        reason: readRejection?.data?.reason || null,
+      subscribeRejection: normalizeForComparison({
+        code: subscribeRejection?.code || null,
+        reason: subscribeRejection?.data?.reason || null,
       }),
     });
 
@@ -3369,9 +3343,9 @@ async function runSpawnEdgeScenario(options) {
       endedAt: new Date().toISOString(),
       actuator: {
         type: "controlled app-server subagent spawn absence fixture through real relay Dock and detail routes",
-        routes: ["dock/subscribe", "dock/update", "thread/detail/read"],
+        routes: ["dock/subscribe", "dock/update", "thread/detail/subscribe"],
         clientExercised: true,
-        note: "The fixture changes app-server thread/list rows to model a new subagent spawn; proof expects the child to stay absent from human-only Dock streams and to reject through thread/detail/read.",
+        note: "The fixture changes app-server thread/list rows to model a new subagent spawn; proof expects the child to stay absent from human-only Dock streams and to reject through thread/detail/subscribe.",
       },
       target: {
         sourceHostID: host.id,

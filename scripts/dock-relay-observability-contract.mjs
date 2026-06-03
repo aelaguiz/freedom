@@ -139,7 +139,6 @@ const ROUTE_CONFIGS = Object.freeze({
     name: ROUTE_NAMES.threadDetailRead,
     kind: "json-rpc",
     probeSafety: PROBE_SAFETY.MANUAL_ONLY,
-    appCritical: true,
     budgetMs: 15_000,
     payloadPolicy: "thread-detail-projection-summary",
   }),

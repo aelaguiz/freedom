@@ -7,6 +7,7 @@ import {
   emptyDockStreamState,
   parseArgs,
   sanitizeDockSnapshotForReport,
+  summarizeClientPathEvents,
 } from "./dock-relay-sync-audit.mjs";
 import { RELAY_STATE_STREAM_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
 import { projectionIDForThreadCard } from "./dock-relay-projection-engine.mjs";
@@ -180,4 +181,15 @@ test("sync audit rejects raw app-server relay URLs", () => {
     () => parseArgs(["--relay-url", "ws://127.0.0.1:4500"]),
     /Dock relay, not the raw app-server :4500/u,
   );
+});
+
+test("sync audit treats thread detail read as diagnostic instead of client path proof", () => {
+  const evidence = summarizeClientPathEvents([
+    { route: "thread/detail/read", countedAsClientPath: false },
+    { route: "thread/detail/subscribe", countedAsClientPath: true },
+  ]);
+
+  assert.equal(evidence.routeCounts["thread/detail/read"], undefined);
+  assert.equal(evidence.routeCounts["thread/detail/subscribe"], 1);
+  assert.equal(evidence.nonClientPathRoutes["thread/detail/read"], 1);
 });
