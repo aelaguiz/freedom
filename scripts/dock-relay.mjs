@@ -553,7 +553,21 @@ function replayPendingDetailMessages(session) {
   }
 }
 
+function isArchivedProjectionThread(config, threadId) {
+  const card = relayStateEngineForConfig(config).cardForThread(threadId);
+  return card?.archiveState === "archived";
+}
+
 async function subscribeThreadDetail(config, params = {}, session, downstreamWs) {
+  // Archived threads are read-only projection views; upstream thread/resume is
+  // only for live command sessions.
+  if (isArchivedProjectionThread(config, params.threadId)) {
+    const ledger = await readThreadDetailLedger(config, params);
+    const snapshot = ledger.snapshot("thread/detail/subscribe");
+    recordProjectionWitness(config, snapshot);
+    return snapshot;
+  }
+
   await resumeThread(config, params, session, downstreamWs, { detailSubscription: true });
   const detail = session.detailSubscription;
   try {

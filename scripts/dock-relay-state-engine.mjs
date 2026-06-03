@@ -204,6 +204,11 @@ class RelayStateEngine {
     return this.reconciler.schedule(request);
   }
 
+  cardForThread(threadID) {
+    const host = publicHostFromConfig(this.config);
+    return this.store.cardForThread({ hostID: host.id, threadID });
+  }
+
   scheduleLiveLeaseExpiryReconciliation(hostID) {
     if (this.liveLeaseExpiryTimer) {
       clearTimeout(this.liveLeaseExpiryTimer);
