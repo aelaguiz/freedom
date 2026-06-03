@@ -45,6 +45,14 @@ function messageIdentifierForProjection(projectionID) {
   return `codexdock.session.message.${encodeAutomationSegment(projectionID)}`;
 }
 
+function messageListValue({ events, projections = [], requestStatuses = [] }) {
+  const encodedProjections = projections.map(encodeAutomationSegment).join("|");
+  const encodedRequestStatuses = requestStatuses
+    .map(([cardID, status]) => `${encodeAutomationSegment(cardID)}=${status}`)
+    .join("|");
+  return `events=${events}; filter=all; projections=${encodedProjections}; request-statuses=${encodedRequestStatuses}`;
+}
+
 function relayReport({ finishedAt = "2026-05-31T00:00:01.000Z", status = "idle" } = {}) {
   return {
     startedAt: "2026-05-31T00:00:00.000Z",
@@ -144,6 +152,14 @@ function hostSummary({
   return {
     identifier: `codexdock.dock.host.${identifierHost}`,
     value: `${host}; endpoint=127.0.0.1:4510; ${text}`,
+    label: text,
+  };
+}
+
+function globalConnectivity(text = "Partial: 127.0.0.1, controlled source refresh failure") {
+  return {
+    identifier: "codexdock.connectivity.global",
+    value: text,
     label: text,
   };
 }
@@ -273,7 +289,11 @@ function detailRequestUISample({ sampledAt, finishedAt = null, capturedAt = samp
       headerCapturedAt: capturedAt,
       headerValue: "host=sim-server-request-fixture; thread=sim-server-request-thread; live=Live",
       messageListCapturedAt: capturedAt,
-      messageListValue: "loaded",
+      messageListValue: messageListValue({
+        events: 1,
+        projections: [requestProjectionID],
+        requestStatuses: [[requestProjectionID, status]],
+      }),
       messageCardsCapturedAt: capturedAt,
       requestElementsCapturedAt: capturedAt,
       messageCards: [{
@@ -507,7 +527,11 @@ function detailHistoryUISample({ sampledAt }) {
       rootIdentifier: "codexdock.session.root.sim-detail-history-request-thread",
       rootValue: "loaded; host=sim-detail-history-fixture; thread=sim-detail-history-request-thread; live=Live; events=3",
       headerValue: "host=sim-detail-history-fixture; thread=sim-detail-history-request-thread; live=Live",
-      messageListValue: "events=3; filter=all",
+      messageListValue: messageListValue({
+        events: 3,
+        projections: [projectionIDs.request, projectionIDs.agent, projectionIDs.user],
+        requestStatuses: [[projectionIDs.request, "Resolved"]],
+      }),
       messageCards: [
         messageCard(projectionIDs.request, "kind=request; request=approval-history-1; request-status=Resolved", "Command approval"),
       ],
@@ -1217,6 +1241,20 @@ test("simulator UI proof accepts single-host configured-host aliases for freshne
   assert.deepEqual(evaluation.failures, []);
 });
 
+test("simulator UI proof accepts global connectivity as single-host freshness display", () => {
+  const evaluation = evaluateUISample(
+    {
+      ...uiSample({ sampledAt: "2026-05-31T00:00:02.500Z" }),
+      globalConnectivity: globalConnectivity(),
+      hostSummaries: [],
+    },
+    sourceRefreshRelayReport().scenarios[0].transitions[0],
+  );
+
+  assert.equal(evaluation.ok, true);
+  assert.deepEqual(evaluation.failures, []);
+});
+
 test("simulator UI proof fails source-refresh stale transitions without visible host freshness", () => {
   const report = buildRenderedUIReport({
     relayReport: sourceRefreshRelayReport(),
@@ -1312,6 +1350,131 @@ test("simulator UI proof scores detail lag from captured evidence time", () => {
   );
 });
 
+test("simulator UI proof scores request transitions from the list-level detail dump before slow element scans", () => {
+  const resolvedSample = detailRequestUISample({
+    sampledAt: "2026-05-31T00:00:03.050Z",
+    capturedAt: "2026-05-31T00:00:05.800Z",
+    finishedAt: "2026-05-31T00:00:05.900Z",
+    status: "Resolved",
+  });
+  resolvedSample.detail.rootCapturedAt = "2026-05-31T00:00:03.080Z";
+  resolvedSample.detail.headerCapturedAt = "2026-05-31T00:00:03.090Z";
+  resolvedSample.detail.messageListCapturedAt = "2026-05-31T00:00:03.100Z";
+  resolvedSample.detail.messageCardsCapturedAt = "2026-05-31T00:00:05.700Z";
+  resolvedSample.detail.requestElementsCapturedAt = "2026-05-31T00:00:05.800Z";
+  resolvedSample.detail.messageCards = resolvedSample.detail.messageCards.map((element) => ({
+    ...element,
+    capturedAt: "2026-05-31T00:00:05.700Z",
+  }));
+  resolvedSample.detail.requestElements = resolvedSample.detail.requestElements.map((element) => ({
+    ...element,
+    capturedAt: "2026-05-31T00:00:05.800Z",
+  }));
+
+  const report = buildRenderedUIReport({
+    relayReport: serverRequestRelayReport(),
+    uiSamples: [
+      uiSample({ sampledAt: "2026-05-31T00:00:01.200Z" }),
+      detailRequestUISample({ sampledAt: "2026-05-31T00:00:02.100Z", status: "Pending" }),
+      resolvedSample,
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.deepEqual(
+    report.detailTransitionCoverage.checks.map((check) => [check.transition, check.observedLagMs]),
+    [["server-request-visible", 100], ["server-request-resolution", 100]],
+  );
+});
+
+test("simulator UI proof scores request status from message rows before slow request control scans", () => {
+  const requestProjectionID = detailRequestProjectionID({
+    host: "sim-server-request-fixture",
+    thread: "sim-server-request-thread",
+    request: "approval-1",
+  });
+  const pendingSample = detailRequestUISample({
+    sampledAt: "2026-05-31T00:00:02.050Z",
+    capturedAt: "2026-05-31T00:00:02.400Z",
+    status: "Pending",
+  });
+  pendingSample.detail.messageListCapturedAt = "2026-05-31T00:00:02.100Z";
+  pendingSample.detail.messageListValue = messageListValue({
+    events: 1,
+    projections: [requestProjectionID],
+    requestStatuses: [],
+  });
+  pendingSample.detail.messageCardsCapturedAt = "2026-05-31T00:00:02.400Z";
+  pendingSample.detail.messageCards = pendingSample.detail.messageCards.map((element) => ({
+    ...element,
+    capturedAt: "2026-05-31T00:00:02.400Z",
+  }));
+  pendingSample.detail.requestElementsCapturedAt = "2026-05-31T00:00:05.800Z";
+  pendingSample.detail.requestElements = pendingSample.detail.requestElements.map((element) => ({
+    ...element,
+    capturedAt: "2026-05-31T00:00:05.800Z",
+  }));
+
+  const report = buildRenderedUIReport({
+    relayReport: serverRequestRelayReport(),
+    uiSamples: [
+      uiSample({ sampledAt: "2026-05-31T00:00:01.200Z" }),
+      pendingSample,
+      detailRequestUISample({ sampledAt: "2026-05-31T00:00:03.200Z", status: "Resolved" }),
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.deepEqual(
+    report.detailTransitionCoverage.checks.map((check) => [check.transition, check.observedLagMs]),
+    [["server-request-visible", 400], ["server-request-resolution", 200]],
+  );
+});
+
+test("simulator UI proof accepts later row evidence when a non-atomic sample has a stale list count", () => {
+  const relay = serverRequestRelayReport();
+  for (const transition of relay.scenarios[0].transitions) {
+    transition.detailTruth.expectedMessageEventCount = 1;
+  }
+  const pendingSample = detailRequestUISample({
+    sampledAt: "2026-05-31T00:00:02.050Z",
+    capturedAt: "2026-05-31T00:00:02.400Z",
+    status: "Pending",
+  });
+  pendingSample.detail.messageListCapturedAt = "2026-05-31T00:00:02.100Z";
+  pendingSample.detail.messageListValue = "events=0; filter=all; projections=; request-statuses=";
+  pendingSample.finishedAt = "2026-05-31T00:00:05.900Z";
+  pendingSample.detail.finishedAt = "2026-05-31T00:00:05.900Z";
+  pendingSample.detail.messageCardsCapturedAt = "2026-05-31T00:00:05.800Z";
+  pendingSample.detail.requestElementsCapturedAt = "2026-05-31T00:00:05.800Z";
+  pendingSample.detail.messageCards = pendingSample.detail.messageCards.map((element) => ({
+    ...element,
+    capturedAt: "2026-05-31T00:00:02.400Z",
+  }));
+  pendingSample.detail.requestElements = pendingSample.detail.requestElements.map((element) => ({
+    ...element,
+    capturedAt: "2026-05-31T00:00:05.800Z",
+  }));
+
+  const report = buildRenderedUIReport({
+    relayReport: relay,
+    uiSamples: [
+      uiSample({ sampledAt: "2026-05-31T00:00:01.200Z" }),
+      pendingSample,
+      detailRequestUISample({ sampledAt: "2026-05-31T00:00:03.250Z", status: "Resolved" }),
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.deepEqual(
+    report.detailTransitionCoverage.checks.map((check) => [check.transition, check.observedLagMs]),
+    [["server-request-visible", 400], ["server-request-resolution", 250]],
+  );
+});
+
 test("simulator UI proof scores detail sample that starts before transition but captures after it", () => {
   const report = buildRenderedUIReport({
     relayReport: serverRequestRelayReport(),
@@ -1354,11 +1517,12 @@ test("simulator UI proof scores opened-thread history through a detail sweep", (
 
 test("simulator UI proof fails opened-thread detail rows rendered out of newest-first order", () => {
   const sample = detailHistoryUISample({ sampledAt: "2026-05-31T00:00:03.250Z" });
-  sample.detailSweep.messageCards = [
-    sample.detailSweep.messageCards[2],
-    sample.detailSweep.messageCards[1],
-    sample.detailSweep.messageCards[0],
-  ];
+  const projectionIDs = detailHistoryProjectionIDs();
+  sample.detail.messageListValue = messageListValue({
+    events: 3,
+    projections: [projectionIDs.user, projectionIDs.agent, projectionIDs.request],
+    requestStatuses: [[projectionIDs.request, "Resolved"]],
+  });
 
   const report = buildRenderedUIReport({
     relayReport: detailHistoryRelayReport(),

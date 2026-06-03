@@ -340,6 +340,10 @@ function sampleHostSummaries(sample) {
   return Array.isArray(sample?.hostSummaries) ? sample.hostSummaries : [];
 }
 
+function sampleGlobalConnectivity(sample) {
+  return sample?.globalConnectivity || null;
+}
+
 function sampleHostSummary(sample, hostID, allowSingleHostFallback = false) {
   const expectedIdentifier = dockHostSummaryIdentifier(hostID);
   const summaries = sampleHostSummaries(sample);
@@ -349,6 +353,10 @@ function sampleHostSummary(sample, hostID, allowSingleHostFallback = false) {
   )) || null;
   if (exact) {
     return exact;
+  }
+  const globalConnectivity = sampleGlobalConnectivity(sample);
+  if (allowSingleHostFallback && globalConnectivity) {
+    return globalConnectivity;
   }
   return allowSingleHostFallback && summaries.length === 1 ? summaries[0] : null;
 }
@@ -547,6 +555,59 @@ function detailMessageEventCount(detail) {
   return Number.isFinite(count) ? count : null;
 }
 
+function detailMessageListProjectionIDs(detail) {
+  const parsed = parseSemicolonValue(detail?.messageListValue || "");
+  return String(parsed.projections || "")
+    .split("|")
+    .map((value) => decodeAutomationSegment(value.trim()))
+    .filter(isCanonicalProjectionID);
+}
+
+function detailMessageListHasProjectionID(detail, projectionID) {
+  return detailMessageListProjectionIDs(detail).includes(projectionID);
+}
+
+function detailMessageListRequestStatusInfo(sample, detail, cardID) {
+  const parsed = parseSemicolonValue(detail?.messageListValue || "");
+  const encodedStatuses = String(parsed["request-statuses"] || "")
+    .split("|")
+    .filter(Boolean);
+  for (const entry of encodedStatuses) {
+    const equals = entry.indexOf("=");
+    if (equals === -1) {
+      continue;
+    }
+    const decodedCardID = decodeAutomationSegment(entry.slice(0, equals).trim());
+    if (decodedCardID !== cardID) {
+      continue;
+    }
+    return {
+      status: entry.slice(equals + 1).trim() || null,
+      observedAtMs: detailValueObservedAtMS(sample, "messageList"),
+    };
+  }
+  return {
+    status: null,
+    observedAtMs: null,
+  };
+}
+
+function detailMessageCardRequestStatusInfo(sample, detail, cardID) {
+  const messageCardID = messageCardIdentifier(cardID);
+  const messageCard = detailElement(detail, messageCardID);
+  const parsedCard = parseSemicolonValue(messageCard?.value || "");
+  if (parsedCard["request-status"]) {
+    return {
+      status: parsedCard["request-status"],
+      observedAtMs: detailIdentifierObservedAtMS(sample, messageCardID),
+    };
+  }
+  return {
+    status: null,
+    observedAtMs: null,
+  };
+}
+
 function mergeUniqueValues(...sources) {
   return [...new Set(sources.flat().filter(Boolean))];
 }
@@ -663,7 +724,38 @@ function detailIdentifierObservedAtMS(sample, identifier) {
   return earliestObservedAtMS(times);
 }
 
+function detailMessageProjectionObservedAtMS(sample, projectionID, messageListProjectionIDs, messageListObservedAtMs) {
+  if (messageListProjectionIDs.includes(projectionID)) {
+    return messageListObservedAtMs;
+  }
+  return detailIdentifierObservedAtMS(sample, messageCardIdentifier(projectionID));
+}
+
+function detailMessageProjectionSetObservedAtMS(sample, projectionIDs, messageListProjectionIDs, messageListObservedAtMs) {
+  const observedTimes = projectionIDs
+    .map((projectionID) => detailMessageProjectionObservedAtMS(
+      sample,
+      projectionID,
+      messageListProjectionIDs,
+      messageListObservedAtMs,
+    ))
+    .filter((value) => Number.isFinite(value));
+  return observedTimes.length === projectionIDs.length
+    ? latestObservedAtMS(observedTimes, null)
+    : null;
+}
+
 function detailRequestStatusInfo(sample, detail, cardID) {
+  const messageListStatus = detailMessageListRequestStatusInfo(sample, sample?.detail || detail, cardID);
+  if (messageListStatus.status) {
+    return messageListStatus;
+  }
+
+  const messageCardStatus = detailMessageCardRequestStatusInfo(sample, detail, cardID);
+  if (messageCardStatus.status) {
+    return messageCardStatus;
+  }
+
   const statusID = requestStatusIdentifier(cardID);
   const statusElement = detailElement(detail, statusID);
   if (statusElement) {
@@ -742,8 +834,14 @@ function evaluateDetailTransitionSample(sample, transition) {
 
   const root = parseSemicolonValue(detail.rootValue);
   const header = parseSemicolonValue(detail.headerValue);
+  const messageListProjectionIDs = detailMessageListProjectionIDs(detail);
+  const messageListObservedAtMs = detailValueObservedAtMS(sample, "messageList");
   const truth = transition.truth || {};
   const combinedDetail = combinedDetailForSample(sample);
+  const witnessProjectionIDs = Array.isArray(truth.projectionWitness?.projectionIDs)
+    ? truth.projectionWitness.projectionIDs
+    : [];
+  const witnessMessageProjectionIDs = witnessProjectionIDs.filter(isCanonicalProjectionID);
   addDuplicateDetailMessageFailures(failures, sample, detail, "detail");
   addDuplicateDetailMessageFailures(failures, sample, sample?.detailSweep || null, "detailSweep");
   let messageOrderChecks = 0;
@@ -803,7 +901,12 @@ function evaluateDetailTransitionSample(sample, transition) {
   const expectedEventCount = Number(truth.expectedMessageEventCount);
   if (Number.isFinite(expectedEventCount)) {
     const actualEventCount = detailMessageEventCount(detail);
-    if (actualEventCount !== expectedEventCount) {
+    const elementProjectionIDs = messageProjectionIDsFromElements(
+      Array.isArray(combinedDetail.messageCards) ? combinedDetail.messageCards : []
+    );
+    const observedProjectionIDs = mergeUniqueValues(messageListProjectionIDs, elementProjectionIDs);
+    const observedProjectionCount = observedProjectionIDs.length;
+    if (actualEventCount !== expectedEventCount && observedProjectionCount < expectedEventCount) {
       addFailure(
         failures,
         sample,
@@ -815,13 +918,21 @@ function evaluateDetailTransitionSample(sample, transition) {
         }
       );
     } else {
-      addEvidenceTime(detailValueObservedAtMS(sample, "messageList"));
+      const countEvidenceProjectionIDs = witnessMessageProjectionIDs.length >= expectedEventCount
+        ? witnessMessageProjectionIDs.slice(0, expectedEventCount)
+        : observedProjectionIDs.slice(0, expectedEventCount);
+      const countEvidenceObservedAtMs = detailMessageProjectionSetObservedAtMS(
+        sample,
+        countEvidenceProjectionIDs,
+        messageListProjectionIDs,
+        messageListObservedAtMs,
+      );
+      addEvidenceTime(actualEventCount === expectedEventCount
+        ? detailValueObservedAtMS(sample, "messageList")
+        : (countEvidenceObservedAtMs ?? detailCollectionObservedAtMS(sample, "message")));
     }
   }
 
-  const witnessProjectionIDs = Array.isArray(truth.projectionWitness?.projectionIDs)
-    ? truth.projectionWitness.projectionIDs
-    : [];
   const nonCanonicalWitnessProjectionIDs = witnessProjectionIDs.filter((projectionID) => !isCanonicalProjectionID(projectionID));
   if (nonCanonicalWitnessProjectionIDs.length > 0) {
     addFailure(
@@ -832,10 +943,11 @@ function evaluateDetailTransitionSample(sample, transition) {
       { projectionIDs: nonCanonicalWitnessProjectionIDs }
     );
   }
-  const witnessMessageProjectionIDs = witnessProjectionIDs.filter(isCanonicalProjectionID);
   for (const projectionID of witnessMessageProjectionIDs) {
     const expectedMessageCard = messageCardIdentifier(projectionID);
-    if (!detailHasMessageProjectionID(combinedDetail, projectionID)) {
+    const hasMessageListProjection = messageListProjectionIDs.includes(projectionID);
+    const hasElementProjection = detailHasMessageProjectionID(combinedDetail, projectionID);
+    if (!hasMessageListProjection && !hasElementProjection) {
       addFailure(
         failures,
         sample,
@@ -847,13 +959,21 @@ function evaluateDetailTransitionSample(sample, transition) {
         }
       );
     } else {
-      addEvidenceTime(detailIdentifierObservedAtMS(sample, expectedMessageCard));
+      addEvidenceTime(detailMessageProjectionObservedAtMS(
+        sample,
+        projectionID,
+        messageListProjectionIDs,
+        messageListObservedAtMs,
+      ));
     }
   }
 
   if (witnessMessageProjectionIDs.length >= 2) {
     const expectedMessageOrder = witnessMessageProjectionIDs;
-    const actualMessageOrder = orderedCombinedMessageProjectionIDs(sample)
+    const actualMessageOrderSource = messageListProjectionIDs.length
+      ? messageListProjectionIDs
+      : orderedCombinedMessageProjectionIDs(sample);
+    const actualMessageOrder = actualMessageOrderSource
       .filter((projectionID) => expectedMessageOrder.includes(projectionID));
     const hasAllExpected = expectedMessageOrder.every((projectionID) => actualMessageOrder.includes(projectionID));
     if (hasAllExpected && !orderedSubsequence(actualMessageOrder, expectedMessageOrder)) {
@@ -870,7 +990,14 @@ function evaluateDetailTransitionSample(sample, transition) {
       );
     } else if (hasAllExpected) {
       messageOrderChecks = 1;
-      addEvidenceTime(detailCollectionObservedAtMS(sample, "message"));
+      addEvidenceTime(messageListProjectionIDs.length
+        ? messageListObservedAtMs
+        : (detailMessageProjectionSetObservedAtMS(
+          sample,
+          expectedMessageOrder,
+          messageListProjectionIDs,
+          messageListObservedAtMs,
+        ) ?? detailCollectionObservedAtMS(sample, "message")));
     }
   }
 
@@ -878,9 +1005,15 @@ function evaluateDetailTransitionSample(sample, transition) {
     const requestCardID = truth.requestCardID;
     const expectedRequestCard = requestCardIdentifier(requestCardID);
     const expectedMessageCard = messageCardIdentifier(requestCardID);
-    const hasRequestCard = detailHasIdentifier(combinedDetail, expectedRequestCard);
+    const messageListStatusInfo = detailMessageListRequestStatusInfo(sample, detail, requestCardID);
+    const messageCardStatusInfo = detailMessageCardRequestStatusInfo(sample, combinedDetail, requestCardID);
+    const hasRequestCard = Boolean(messageListStatusInfo.status || messageCardStatusInfo.status)
+      || detailHasIdentifier(combinedDetail, expectedRequestCard);
     const hasRequestMessageCard = isCanonicalProjectionID(requestCardID)
-      && detailHasMessageProjectionID(combinedDetail, requestCardID);
+      && (
+        messageListProjectionIDs.includes(requestCardID)
+        || detailHasMessageProjectionID(combinedDetail, requestCardID)
+      );
     const expectsExactRequestMessageCard = isCanonicalProjectionID(requestCardID)
       && witnessMessageProjectionIDs.includes(requestCardID);
     const actualEventCount = detailMessageEventCount(detail);
@@ -910,7 +1043,12 @@ function evaluateDetailTransitionSample(sample, transition) {
         }
       );
     } else {
-      addEvidenceTime(detailIdentifierObservedAtMS(sample, expectedMessageCard));
+      addEvidenceTime(detailMessageProjectionObservedAtMS(
+        sample,
+        requestCardID,
+        messageListProjectionIDs,
+        messageListObservedAtMs,
+      ));
     }
     if (!hasRequestCard) {
       addFailure(
@@ -924,7 +1062,11 @@ function evaluateDetailTransitionSample(sample, transition) {
         }
       );
     } else {
-      addEvidenceTime(detailIdentifierObservedAtMS(sample, expectedRequestCard));
+      addEvidenceTime(messageListStatusInfo.status
+        ? messageListObservedAtMs
+        : (messageCardStatusInfo.status
+          ? messageCardStatusInfo.observedAtMs
+          : detailIdentifierObservedAtMS(sample, expectedRequestCard)));
     }
     const actualStatusInfo = detailRequestStatusInfo(sample, combinedDetail, requestCardID);
     const actualStatus = actualStatusInfo.status;

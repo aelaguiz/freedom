@@ -131,6 +131,14 @@ const SCENARIO_REQUIREMENTS = {
   },
 };
 
+const SCENARIO_REPORT_ALIASES = {
+  "current-work-visible": ["thread-activity"],
+  "detail-replay-pressure": ["detail-history-request"],
+  "foreground-resume-all-surfaces": ["detail-reconnect"],
+  "mutation-ack-projection-refresh-failure": ["archive-toggle"],
+  "root-catchup-window-contract": ["large-list-checkpoint"],
+};
+
 function usage() {
   return [
     "Usage:",
@@ -234,11 +242,24 @@ function routeCountsFor(entry) {
   return entry.relayReport?.clientPathEvidence?.routeCounts || {};
 }
 
-function scenarioFor(entry) {
+function directoryScenarioFor(entry) {
+  const candidate = path.basename(path.resolve(entry?.dir || ""));
+  return Object.prototype.hasOwnProperty.call(SCENARIO_REQUIREMENTS, candidate) ? candidate : null;
+}
+
+function reportedScenarioFor(entry) {
   return entry.relayReport?.summary?.scenario
     || entry.relayReport?.scenario
     || entry.uiReport?.relayReport?.scenario
     || null;
+}
+
+function scenarioFor(entry) {
+  return directoryScenarioFor(entry) || reportedScenarioFor(entry);
+}
+
+function allowedReportedScenariosFor(scenario) {
+  return new Set([scenario, ...(SCENARIO_REPORT_ALIASES[scenario] || [])]);
 }
 
 function transitionChecks(uiReport) {
@@ -262,6 +283,8 @@ function maxObservedTransitionLag(uiReport) {
 function evaluateReportEntry(entry, { maxUiLagMs }) {
   const failures = [];
   const scenario = scenarioFor(entry);
+  const directoryScenario = directoryScenarioFor(entry);
+  const reportedScenario = reportedScenarioFor(entry);
   const requirements = SCENARIO_REQUIREMENTS[scenario] || {};
   const routeCounts = routeCountsFor(entry);
   const relaySummary = entry.relayReport?.summary || {};
@@ -283,6 +306,19 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
     failures.push({
       code: "matrix_scenario_missing",
       message: "Controlled simulator report did not name its scenario.",
+    });
+  }
+  if (
+    directoryScenario
+    && reportedScenario
+    && !allowedReportedScenariosFor(directoryScenario).has(reportedScenario)
+  ) {
+    failures.push({
+      code: "matrix_reported_scenario_mismatch",
+      message: `Report directory ${directoryScenario} contained relay scenario ${reportedScenario}, which is not an allowed fixture alias.`,
+      scenario: directoryScenario,
+      expected: [...allowedReportedScenariosFor(directoryScenario)].sort(),
+      actual: reportedScenario,
     });
   }
   if (relaySummary.ok !== true || relaySummary.clientPathOK !== true) {

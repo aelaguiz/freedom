@@ -22,6 +22,7 @@ struct DisplayedUISample: Codable {
     var dockRootValue: String
     var dockRowsCapturedAt: String
     var dockRows: [DisplayedUIDockRow]
+    var globalConnectivity: DisplayedUIElementSnapshot?
     var hostSummaries: [DisplayedUIElementSnapshot]
     var dockSweep: DisplayedUIDockSweep?
     var detail: DisplayedUIDetail?
@@ -95,6 +96,7 @@ struct DisplayedUIDetail: Codable {
         let identifier = AutomationID.RequestCard.card(cardID: cardID).rawValue
         return requestCardIDs.contains(identifier)
             || requestElements.contains(where: { $0.identifier == identifier })
+            || containsMessageCard(projectionID: cardID)
     }
 
     func containsMessageCard(projectionID: String) -> Bool {
@@ -184,9 +186,8 @@ extension XCUIApplication {
 
     func firstVisibleDockRow(timeout: TimeInterval) -> XCUIElement? {
         let deadline = Date().addingTimeInterval(timeout)
-        let predicate = NSPredicate(format: "identifier BEGINSWITH %@", "codexdock.dock.row.")
         while Date() < deadline {
-            let rows = buttons.matching(predicate).allElementsBoundByIndex
+            let rows = dockRowElements()
             for row in rows.prefix(50) {
                 guard !row.identifier.contains(".action.") else {
                     continue
@@ -390,7 +391,9 @@ extension XCUIApplication {
     func captureDisplayedUISample(
         index: Int,
         includeDockSweep: Bool = false,
-        includeDetailSweep: Bool = false
+        includeDetailSweep: Bool = false,
+        includeDetailRequestElements: Bool = true,
+        configuredHostIDs: [String] = []
     ) -> DisplayedUISample {
         let sampledAt = codexDockISO8601Now()
         let dockRoot = displayedUIElement(id: AutomationID.Dock.root.rawValue)
@@ -398,12 +401,13 @@ extension XCUIApplication {
         let dockRows = visibleDockRows()
         let dockRowsCapturedAt = codexDockISO8601Now()
         let dockSweep = includeDockSweep ? checkpointDockSweep(rootValue: rootValue) : nil
-        let detail = visibleDetail()
+        let detail = visibleDetail(includeRequestElements: includeDetailRequestElements)
         let detailSweep = includeDetailSweep ? checkpointDetailSweep() : nil
+        let globalConnectivity = detail == nil ? globalConnectivitySnapshot() : nil
         // Dock host summaries are Dock-screen evidence only. Querying them from
         // Thread Detail forces a broad accessibility scan and can drop the UI
         // test connection before the real detail sample is written.
-        let hostSummaries = detail == nil ? hostSummarySnapshots() : []
+        let hostSummaries = detail == nil && configuredHostIDs.isEmpty ? hostSummarySnapshots() : []
         return DisplayedUISample(
             sampleIndex: index,
             sampledAt: sampledAt,
@@ -411,6 +415,7 @@ extension XCUIApplication {
             dockRootValue: rootValue,
             dockRowsCapturedAt: dockRowsCapturedAt,
             dockRows: dockRows,
+            globalConnectivity: globalConnectivity,
             hostSummaries: hostSummaries,
             dockSweep: dockSweep,
             detail: detail,
@@ -656,9 +661,8 @@ extension XCUIApplication {
     }
 
     private func visibleDockRows() -> [DisplayedUIDockRow] {
-        let predicate = NSPredicate(format: "identifier BEGINSWITH %@", "codexdock.dock.row.")
         var rows: [DisplayedUIDockRow] = []
-        let candidates = buttons.matching(predicate).allElementsBoundByIndex
+        let candidates = dockRowElements()
         for row in candidates.prefix(80) {
             guard !row.identifier.contains(".action.") else {
                 continue
@@ -678,15 +682,33 @@ extension XCUIApplication {
         return rows.sorted(by: displayedUITopToBottomOrder)
     }
 
-    private func hostSummarySnapshots() -> [DisplayedUIElementSnapshot] {
-        elementSnapshots(prefix: "codexdock.dock.host.")
-            .filter { snapshot in
-                !snapshot.identifier.hasSuffix(".retry")
-                    && !snapshot.identifier.hasSuffix(".relay-settings")
-            }
+    private func dockRowElements() -> [XCUIElement] {
+        let predicate = NSPredicate(format: "identifier BEGINSWITH %@", "codexdock.dock.row.")
+        return buttons.matching(predicate).allElementsBoundByIndex
     }
 
-    private func visibleDetail() -> DisplayedUIDetail? {
+    private func globalConnectivitySnapshot() -> DisplayedUIElementSnapshot? {
+        let element = displayedUIElement(id: AutomationID.Connectivity.globalIndicator.rawValue)
+        guard element.exists else {
+            return nil
+        }
+        return DisplayedUIElementSnapshot(
+            identifier: element.identifier,
+            capturedAt: codexDockISO8601Now(),
+            value: element.displayedUIStringValue,
+            label: element.label,
+            frame: DisplayedUIFrame(element.frame)
+        )
+    }
+
+    private func hostSummarySnapshots() -> [DisplayedUIElementSnapshot] {
+        elementSnapshots(prefix: "codexdock.dock.host.").filter { snapshot in
+            !snapshot.identifier.hasSuffix(".retry")
+                && !snapshot.identifier.hasSuffix(".relay-settings")
+        }
+    }
+
+    private func visibleDetail(includeRequestElements: Bool = true) -> DisplayedUIDetail? {
         let startedAt = codexDockISO8601Now()
         let root = displayedUIWaitForElement(identifierPrefix: "codexdock.session.root.", timeout: 0.1)
         guard let root, root.exists else {
@@ -702,8 +724,10 @@ extension XCUIApplication {
         let messageListCapturedAt = codexDockISO8601Now()
         let messageCards = elementSnapshots(prefix: "codexdock.session.message.", in: root)
         let messageCardsCapturedAt = codexDockISO8601Now()
-        let requestElements = elementSnapshots(prefix: "codexdock.session.request.", in: root)
-        let requestElementsCapturedAt = codexDockISO8601Now()
+        let requestElements = includeRequestElements
+            ? elementSnapshots(prefix: "codexdock.session.request.", in: root)
+            : []
+        let requestElementsCapturedAt = includeRequestElements ? codexDockISO8601Now() : messageCardsCapturedAt
         return DisplayedUIDetail(
             startedAt: startedAt,
             finishedAt: codexDockISO8601Now(),
@@ -729,21 +753,23 @@ extension XCUIApplication {
     }
 
     private func elementSnapshots(prefix: String) -> [DisplayedUIElementSnapshot] {
-        let predicate = NSPredicate(format: "identifier BEGINSWITH %@", prefix)
-        return elementSnapshots(matching: descendants(matching: .any).matching(predicate))
+        let elements = descendants(matching: .any).allElementsBoundByIndex
+        return elementSnapshots(elements: elements, prefix: prefix)
     }
 
     private func elementSnapshots(prefix: String, in root: XCUIElement) -> [DisplayedUIElementSnapshot] {
-        let predicate = NSPredicate(format: "identifier BEGINSWITH %@", prefix)
-        return elementSnapshots(matching: root.descendants(matching: .any).matching(predicate))
+        let elements = root.descendants(matching: .any).allElementsBoundByIndex
+        return elementSnapshots(elements: elements, prefix: prefix)
     }
 
-    private func elementSnapshots(matching query: XCUIElementQuery) -> [DisplayedUIElementSnapshot] {
-        let elements = query.allElementsBoundByIndex
+    private func elementSnapshots(elements: [XCUIElement], prefix: String) -> [DisplayedUIElementSnapshot] {
         var snapshots: [DisplayedUIElementSnapshot] = []
         var seen = Set<String>()
-        for element in elements.prefix(120) {
+        for element in elements {
             let identifier = element.identifier
+            guard identifier.hasPrefix(prefix) else {
+                continue
+            }
             guard seen.insert(identifier).inserted else {
                 continue
             }
@@ -759,6 +785,9 @@ extension XCUIApplication {
                     frame: frame
                 )
             )
+            if snapshots.count >= 120 {
+                break
+            }
         }
         // Displayed-UI proof must preserve visual order. Sorting by identifier
         // hides the exact class of newest-first bugs this harness exists to catch.

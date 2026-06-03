@@ -1286,7 +1286,7 @@ async function runArchiveToggleScenario(options) {
       at: new Date().toISOString(),
     });
     await waitForFile(options.uiReadyIn, options.waitTimeoutMs, "simulator UI sampler readiness");
-    await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 1_500));
+    await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 5_000));
 
     const archiveStartedAtMs = Date.now();
     recordClientRoute(routeEvents, "thread/archive", "controlled archive-toggle archives active row", { threadID });
@@ -1352,7 +1352,7 @@ async function runArchiveToggleScenario(options) {
       finishedAt: new Date().toISOString(),
       freshDock: sanitizeDockSnapshotForReport(afterArchive.freshDock),
     });
-    await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 1_500));
+    await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 5_000));
 
     const unarchiveStartedAtMs = Date.now();
     recordClientRoute(routeEvents, "thread/unarchive", "controlled archive-toggle unarchives row", { threadID });
@@ -5020,6 +5020,7 @@ async function runServerRequestScenario(options) {
   let resolveRequestSent;
   let resolveForwardedResponse;
   let resolveResolutionSent;
+  let resolveResumeReady;
   const requestSentPromise = new Promise((resolve) => {
     resolveRequestSent = resolve;
   });
@@ -5029,6 +5030,36 @@ async function runServerRequestScenario(options) {
   const resolutionSentPromise = new Promise((resolve) => {
     resolveResolutionSent = resolve;
   });
+  const resumeReadyPromise = new Promise((resolve) => {
+    resolveResumeReady = resolve;
+  });
+  const sendServerRequest = ({ ws, resumedThreadID }) => {
+    if (upstreamRequestSentAtMs !== null) {
+      return;
+    }
+    upstreamRequestSentAtMs = Date.now();
+    const requestMessage = {
+      jsonrpc: "2.0",
+      id: requestID,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: resumedThreadID,
+        turnId: requestTurnID,
+        itemId: requestItemID,
+        command: ["make", "test"],
+        cwd: tempDir,
+      },
+    };
+    ws.send(JSON.stringify(requestMessage));
+    resolveRequestSent({
+      sentAtMs: upstreamRequestSentAtMs,
+      message: {
+        id: requestID,
+        method: requestMessage.method,
+        threadID,
+      },
+    });
+  };
 
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise((resolve) => historyServer.once("listening", resolve));
@@ -5085,30 +5116,10 @@ async function runServerRequestScenario(options) {
             turns: [],
           },
         });
-        setTimeout(() => {
-          upstreamRequestSentAtMs = Date.now();
-          const requestMessage = {
-            jsonrpc: "2.0",
-            id: requestID,
-            method: "item/commandExecution/requestApproval",
-            params: {
-              threadId: message.params?.threadId || threadID,
-              turnId: requestTurnID,
-              itemId: requestItemID,
-              command: ["make", "test"],
-              cwd: tempDir,
-            },
-          };
-          ws.send(JSON.stringify(requestMessage));
-          resolveRequestSent({
-            sentAtMs: upstreamRequestSentAtMs,
-          message: {
-            id: requestID,
-            method: requestMessage.method,
-            threadID,
-          },
+        resolveResumeReady({
+          ws,
+          resumedThreadID: message.params?.threadId || threadID,
         });
-        }, 10);
       } else if (!message.method && String(message.id) === requestID) {
         upstreamResponseReceivedAtMs = Date.now();
         forwardedResponse = proofMessageSummary({
@@ -5257,6 +5268,10 @@ async function runServerRequestScenario(options) {
 
     const detailWaitTimeoutMs = Math.min(options.dockCollectionTimeoutMs, options.waitTimeoutMs);
     const projectionTransitionTimeoutMs = detailTransitionWitnessTimeoutMs(options, detailWaitTimeoutMs);
+    const resumeReadyWait = await waitForAsyncEvent(resumeReadyPromise, detailWaitTimeoutMs);
+    if (resumeReadyWait.ok) {
+      sendServerRequest(resumeReadyWait.value);
+    }
     const detailSubscribeWait = await waitForRecordedRouteEvent({
       events: simulatorRouteEvents,
       route: "thread/detail/subscribe",

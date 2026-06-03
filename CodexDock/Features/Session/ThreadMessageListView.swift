@@ -110,7 +110,29 @@ struct ThreadMessageListView: View {
         }
         .accessibilityElement(children: .contain)
         .codexAutomationID(AutomationID.Session.messageList)
-        .accessibilityValue("events=\(rows.count); filter=\(filter.id)")
+        .accessibilityValue(messageListAutomationValue)
+    }
+
+    private var messageListAutomationValue: String {
+        let projectionIDs = rows
+            .map { AutomationID.safeSegment($0.event.id) }
+            .joined(separator: "|")
+        let requestStatuses = rows
+            .compactMap { row -> String? in
+                guard let requestCard = row.requestCard else {
+                    return nil
+                }
+                return "\(AutomationID.safeSegment(requestCard.id))=\(requestCard.status.label)"
+            }
+            .joined(separator: "|")
+        // This is the canonical rendered detail-list dump for live-update proof:
+        // derived from the same rows drawn below, not from a second data path.
+        return [
+            "events=\(rows.count)",
+            "filter=\(filter.id)",
+            "projections=\(projectionIDs)",
+            "request-statuses=\(requestStatuses)",
+        ].joined(separator: "; ")
     }
 }
 

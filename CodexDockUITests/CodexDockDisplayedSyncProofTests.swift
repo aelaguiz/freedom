@@ -33,6 +33,19 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
         var sampleCount = 0
         var observedLoadedDock = false
         var sampleIndex = 0
+        func captureSample(
+            index: Int,
+            includeDockSweep: Bool = false,
+            includeDetailSweep: Bool = false
+        ) -> DisplayedUISample {
+            app.captureDisplayedUISample(
+                index: index,
+                includeDockSweep: includeDockSweep,
+                includeDetailSweep: includeDetailSweep,
+                includeDetailRequestElements: false,
+                configuredHostIDs: config.resolvedHostIDs
+            )
+        }
         func record(_ sample: DisplayedUISample) throws {
             sampleCount += 1
             observedLoadedDock = observedLoadedDock || sample.dockRootValue.contains("loaded")
@@ -41,10 +54,10 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
 
         if let openThreadID = config.openThreadID {
             let firstSampleStartedAt = Date()
-            try record(app.captureDisplayedUISample(index: sampleIndex))
+            try record(captureSample(index: sampleIndex))
             sampleIndex += 1
             waitUntilNextSample(startedAt: firstSampleStartedAt, sampleMS: config.sampleMS)
-            try record(app.captureDisplayedUISample(index: sampleIndex))
+            try record(captureSample(index: sampleIndex))
             sampleIndex += 1
 
             guard let row = app.visibleDockRow(hostID: config.openHostID, threadID: openThreadID, timeout: 15) else {
@@ -63,6 +76,15 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
                 )
             }
             _ = app.scrollDetailMessagesIntoEvidencePosition(timeout: 5)
+            let detailReadySampleStartedAt = Date()
+            let detailReadySample = captureSample(index: sampleIndex)
+            XCTAssertNotNil(
+                detailReadySample.detail,
+                "Displayed sync proof must capture a real Thread Detail sample before allowing the controlled fixture to emit detail mutations."
+            )
+            try record(detailReadySample)
+            sampleIndex += 1
+            waitUntilNextSample(startedAt: detailReadySampleStartedAt, sampleMS: config.sampleMS)
 
             try DisplayedUIArtifactWriter.markReady(to: config.readyPath)
 
@@ -70,7 +92,7 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
             var didTapRequestAction = false
             repeat {
                 let sampleStartedAt = Date()
-                let sample = app.captureDisplayedUISample(index: sampleIndex)
+                let sample = captureSample(index: sampleIndex)
                 try record(sample)
                 sampleIndex += 1
                 if !didTapRequestAction,
@@ -96,7 +118,7 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
             } while Date() < deadline
 
             if config.detailCheckpointSweep == true {
-                try record(app.captureDisplayedUISample(index: sampleIndex, includeDetailSweep: true))
+                try record(captureSample(index: sampleIndex, includeDetailSweep: true))
                 sampleIndex += 1
             }
         } else {
@@ -111,13 +133,13 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
                     selectDockLens(lens, app: app, root: root),
                     "Displayed sync proof could not switch Dock lens to \(lens.rawValue)."
                 )
-                try record(app.captureDisplayedUISample(index: sampleIndex))
+                try record(captureSample(index: sampleIndex))
                 sampleIndex += 1
                 waitUntilNextSample(startedAt: sampleStartedAt, sampleMS: config.sampleMS)
             } while Date() < deadline
 
             if config.checkpointSweep == true {
-                try record(app.captureDisplayedUISample(index: sampleIndex, includeDockSweep: true))
+                try record(captureSample(index: sampleIndex, includeDockSweep: true))
                 sampleIndex += 1
             }
         }
@@ -128,11 +150,11 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
                 if root.waitForDisplayedUIStringValue(matching: { value in
                     value.contains("loaded") && !value.contains("Partial")
                 }, timeout: 10) {
-                    try record(app.captureDisplayedUISample(index: sampleIndex, includeDockSweep: true))
+                    try record(captureSample(index: sampleIndex, includeDockSweep: true))
                     sampleIndex += 1
                 }
             } else if elementExists(app.displayedUIElement(id: AutomationID.Dock.root.rawValue)) {
-                try record(app.captureDisplayedUISample(index: sampleIndex))
+                try record(captureSample(index: sampleIndex))
                 sampleIndex += 1
             }
         }
@@ -193,6 +215,13 @@ private struct DisplayedUISyncConfig: Codable {
     var requestAction: String?
     var detailFilter: String?
     var dockLenses: [String]?
+
+    var resolvedHostIDs: [String] {
+        hosts
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
 
     var resolvedDockLenses: [DockLensID] {
         let parsed = (dockLenses ?? [DockLensID.newest.rawValue])

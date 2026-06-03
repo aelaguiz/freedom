@@ -205,6 +205,54 @@ test("controlled simulator matrix accepts a passing required scenario", () => {
   assert.equal(report.findings.length, 0);
 });
 
+test("controlled simulator matrix counts the invoked scenario when a variant reuses a base fixture", () => {
+  const report = buildMatrixReport({
+    entries: [
+      entry({
+        scenario: "detail-replay-pressure",
+        routes: { "thread/detail/subscribe": 1, "thread/detail/update": 1 },
+        relay: { scenario: "detail-history-request" },
+        ui: {
+          scenarioChecks: 0,
+          detailChecks: 3,
+          detailSweeps: 1,
+          detailSweepMessageCardChecks: 8,
+          detailMessageOrderChecks: 2,
+        },
+      }),
+    ],
+    requiredScenarios: ["detail-replay-pressure"],
+    minPasses: 1,
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.equal(report.scenarios[0].scenario, "detail-replay-pressure");
+  assert.equal(report.scenarios[0].passingReportCount, 1);
+  assert.equal(report.findings.length, 0);
+});
+
+test("controlled simulator matrix rejects unapproved invoked-scenario fixture mismatches", () => {
+  const result = evaluateReportEntry(
+    entry({
+      scenario: "detail-replay-pressure",
+      routes: { "thread/detail/subscribe": 1, "thread/detail/update": 1 },
+      relay: { scenario: "thread-activity" },
+      ui: {
+        scenarioChecks: 0,
+        detailChecks: 3,
+        detailSweeps: 1,
+        detailSweepMessageCardChecks: 8,
+        detailMessageOrderChecks: 2,
+      },
+    }),
+    { maxUiLagMs: 2_000 }
+  );
+
+  assert.equal(result.ok, false);
+  assert.match(result.failures.map((failure) => failure.code).join(","), /matrix_reported_scenario_mismatch/u);
+});
+
 test("controlled simulator matrix fails missing required scenarios", () => {
   const report = buildMatrixReport({
     entries: [entry()],
