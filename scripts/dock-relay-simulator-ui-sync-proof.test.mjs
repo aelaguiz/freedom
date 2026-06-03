@@ -1140,6 +1140,33 @@ test("simulator UI proof scores scenario archive and unarchive transition window
   );
 });
 
+test("simulator UI proof scores scenario lag from Dock evidence read start", () => {
+  const slowPassingSample = {
+    ...uiSample({ sampledAt: "2026-05-31T00:00:05.200Z" }),
+    dockRowsCaptureStartedAt: "2026-05-31T00:00:05.400Z",
+    dockRowsCapturedAt: "2026-05-31T00:00:07.300Z",
+    finishedAt: "2026-05-31T00:00:07.500Z",
+  };
+  const report = buildRenderedUIReport({
+    relayReport: scenarioRelayReport(),
+    uiSamples: [
+      emptyUISample({ sampledAt: "2026-05-31T00:00:02.400Z" }),
+      slowPassingSample,
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.equal(report.summary.scenarioTransitionFailures, 0);
+  assert.deepEqual(
+    report.scenarioTransitionCoverage.checks.map((check) => [check.transition, check.observedLagMs, check.firstPassingSampleAt]),
+    [
+      ["archive", 400, "2026-05-31T00:00:02.400Z"],
+      ["unarchive", 400, "2026-05-31T00:00:05.400Z"],
+    ],
+  );
+});
+
 test("simulator UI proof keeps same-visible-state internal transitions observable", () => {
   const relay = scenarioRelayReport();
   relay.scenarios[0].transitions.push({

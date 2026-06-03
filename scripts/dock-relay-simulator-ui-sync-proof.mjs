@@ -116,7 +116,10 @@ function parseRootLens(rootValue) {
 }
 
 function dateMS(value) {
-  const parsed = Date.parse(value || 0);
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -124,8 +127,22 @@ function sampleTimeMS(sample) {
   // `finishedAt` may include a long checkpoint sweep after visible rows were
   // read. Dock-row comparisons use the row capture time when the UI sampler
   // provides it.
-  const value = Date.parse(sample.dockRowsCapturedAt || sample.sampledAt || sample.finishedAt || sample.startedAt || 0);
+  const timestamp = sample.dockRowsCapturedAt || sample.sampledAt || sample.finishedAt || sample.startedAt;
+  const value = timestamp ? Date.parse(timestamp) : 0;
   return Number.isFinite(value) ? value : 0;
+}
+
+function dockEvidenceObservedAtMS(sample) {
+  // Scenario-transition lag is about when the matching Dock evidence read
+  // began, not how long XCUITest spent walking the accessibility tree.
+  return firstDateMS(
+    sample?.dockRowsCaptureStartedAt,
+    sample?.dockRootCapturedAt,
+    sample?.dockRowsCapturedAt,
+    sample?.sampledAt,
+    sample?.finishedAt,
+    sample?.startedAt,
+  ) ?? 0;
 }
 
 function firstDateMS(...values) {
@@ -1438,6 +1455,8 @@ function evaluateUISample(sample, relaySample) {
   return {
     ok: failures.length === 0,
     scored: !detailOnlySample,
+    observedAt: isoFromMS(dockEvidenceObservedAtMS(sample)),
+    observedAtMs: dockEvidenceObservedAtMS(sample),
     relaySampleIndex: relaySample?.sampleIndex ?? null,
     relaySampleFinishedAt: relaySample?.finishedAt || relaySample?.startedAt || null,
     rootValue,
@@ -1521,7 +1540,7 @@ function evaluateScenarioTransitionCoverage({ uiSamples, transitions, maxUiLagMs
     }));
     const firstPassing = evaluations.find((entry) => entry.evaluation.scored && entry.evaluation.ok) || null;
     const observedLagMs = firstPassing
-      ? Math.max(0, sampleTimeMS(firstPassing.sample) - transition.atMs)
+      ? Math.max(0, (firstPassing.evaluation.observedAtMs ?? sampleTimeMS(firstPassing.sample)) - transition.atMs)
       : null;
     const check = {
       scenarioID: transition.scenarioID,
@@ -1529,7 +1548,7 @@ function evaluateScenarioTransitionCoverage({ uiSamples, transitions, maxUiLagMs
       route: transition.route,
       relaySeenAt: transition.at,
       uiSampleCount: candidates.length,
-      firstPassingSampleAt: firstPassing?.sample?.sampledAt || null,
+      firstPassingSampleAt: firstPassing?.evaluation?.observedAt || firstPassing?.sample?.sampledAt || null,
       observedLagMs,
       ok: Boolean(firstPassing) && observedLagMs <= maxUiLagMs,
       failures: evaluations.flatMap((entry) => entry.evaluation.failures),
@@ -1555,7 +1574,7 @@ function evaluateScenarioTransitionCoverage({ uiSamples, transitions, maxUiLagMs
         observedMs: observedLagMs,
         budgetMs: maxUiLagMs,
         relaySeenAt: transition.at,
-        firstPassingSampleAt: firstPassing.sample.sampledAt || null,
+        firstPassingSampleAt: firstPassing.evaluation.observedAt || firstPassing.sample.sampledAt || null,
       });
     }
   }

@@ -312,6 +312,29 @@ test("controlled simulator matrix requires checkpoint Dock order coverage", () =
   assert.match(report.findings.map((finding) => finding.code).join(","), /matrix_dock_sweep_order_checks_missing/u);
 });
 
+test("controlled simulator matrix accepts root catchup partial sweep with visible order coverage", () => {
+  const report = buildMatrixReport({
+    entries: [
+      entry({
+        scenario: "root-catchup-window-contract",
+        routes: { "dock/subscribe": 1, "dock/update": 1 },
+        ui: {
+          scenarioChecks: 0,
+          checkpointSweepRowChecks: 17,
+          dockVisibleOrderChecks: 1,
+          dockSweepOrderChecks: 0,
+        },
+      }),
+    ],
+    requiredScenarios: ["root-catchup-window-contract"],
+    minPasses: 1,
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.equal(report.findings.length, 0);
+});
+
 test("controlled simulator matrix requires opened-thread detail sweep coverage", () => {
   const report = buildMatrixReport({
     entries: [

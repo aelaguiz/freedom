@@ -20,6 +20,8 @@ struct DisplayedUISample: Codable {
     var sampledAt: String
     var finishedAt: String
     var dockRootValue: String
+    var dockRootCapturedAt: String
+    var dockRowsCaptureStartedAt: String
     var dockRowsCapturedAt: String
     var dockRows: [DisplayedUIDockRow]
     var globalConnectivity: DisplayedUIElementSnapshot?
@@ -187,9 +189,13 @@ extension XCUIApplication {
     func firstVisibleDockRow(timeout: TimeInterval) -> XCUIElement? {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let rows = dockRowElements()
-            for row in rows.prefix(50) {
-                guard !row.identifier.contains(".action.") else {
+            let rowIdentifiers = dockRowIdentifiers()
+            for identifier in rowIdentifiers.prefix(50) {
+                guard !identifier.contains(".action.") else {
+                    continue
+                }
+                let row = displayedUIElement(id: identifier)
+                guard row.exists else {
                     continue
                 }
                 guard isVisibleForTap(row.frame) else {
@@ -398,9 +404,16 @@ extension XCUIApplication {
         let sampledAt = codexDockISO8601Now()
         let dockRoot = displayedUIElement(id: AutomationID.Dock.root.rawValue)
         let rootValue = dockRoot.exists ? dockRoot.displayedUIStringValue : "not-visible"
-        let dockRows = dockRootRowCount(rootValue) == 0 || isDockEmptyStateVisible()
-            ? []
-            : visibleDockRows()
+        let dockRootCapturedAt = codexDockISO8601Now()
+        let dockRowsCaptureStartedAt = codexDockISO8601Now()
+        let dockRows: [DisplayedUIDockRow]
+        if !dockRoot.exists || dockRootRowCount(rootValue) == 0 || isDockEmptyStateVisible() {
+            dockRows = []
+        } else {
+            // Thread Detail proof must not broad-scan Dock rows; detail update
+            // timing is measured from the accessibility state captured here.
+            dockRows = visibleDockRows()
+        }
         let dockRowsCapturedAt = codexDockISO8601Now()
         let dockSweep = includeDockSweep ? checkpointDockSweep(rootValue: rootValue) : nil
         let detail = visibleDetail(includeRequestElements: includeDetailRequestElements)
@@ -415,6 +428,8 @@ extension XCUIApplication {
             sampledAt: sampledAt,
             finishedAt: codexDockISO8601Now(),
             dockRootValue: rootValue,
+            dockRootCapturedAt: dockRootCapturedAt,
+            dockRowsCaptureStartedAt: dockRowsCaptureStartedAt,
             dockRowsCapturedAt: dockRowsCapturedAt,
             dockRows: dockRows,
             globalConnectivity: globalConnectivity,
@@ -487,7 +502,7 @@ extension XCUIApplication {
         let deadline = Date().addingTimeInterval(20)
         var stopReason = "maxSteps"
 
-        if expectedRootRows == 0 || isDockEmptyStateVisible() {
+        if rootValue == "not-visible" || expectedRootRows == 0 || isDockEmptyStateVisible() {
             return DisplayedUIDockSweep(
                 startedAt: startedAt,
                 finishedAt: codexDockISO8601Now(),
@@ -680,30 +695,66 @@ extension XCUIApplication {
 
     private func visibleDockRows() -> [DisplayedUIDockRow] {
         var rows: [DisplayedUIDockRow] = []
-        let candidates = dockRowElements()
-        for row in candidates.prefix(80) {
-            guard !row.identifier.contains(".action.") else {
+        guard !isDockEmptyStateVisible() else {
+            return []
+        }
+        let candidates = dockRowIdentifiers()
+        guard !isDockEmptyStateVisible() else {
+            return []
+        }
+        for identifier in candidates.prefix(80) {
+            guard !identifier.contains(".action.") else {
                 continue
             }
-            guard isVisibleForTap(row.frame) else {
+            let row = displayedUIElement(id: identifier)
+            guard row.exists else {
+                continue
+            }
+            let frame = row.frame
+            guard isVisibleForTap(frame) else {
                 continue
             }
             rows.append(
                 DisplayedUIDockRow(
-                    identifier: row.identifier,
+                    identifier: identifier,
                     value: row.displayedUIStringValue,
                     label: row.label,
-                    frame: DisplayedUIFrame(row.frame)
+                    frame: DisplayedUIFrame(frame)
                 )
             )
         }
         return rows.sorted(by: displayedUITopToBottomOrder)
     }
 
-    private func dockRowElements() -> [XCUIElement] {
-        descendants(matching: .any).allElementsBoundByIndex.filter { element in
-            element.elementType == .button && element.identifier.hasPrefix("codexdock.dock.row.")
+    private func dockRowIdentifiers() -> [String] {
+        var identifiers: [String] = []
+        var seen = Set<String>()
+        for rawLine in debugDescription.split(separator: "\n") {
+            let line = String(rawLine)
+            guard line.contains("Button"),
+                  let identifier = accessibilityIdentifier(inDebugDescriptionLine: line),
+                  identifier.hasPrefix("codexdock.dock.row."),
+                  seen.insert(identifier).inserted else {
+                continue
+            }
+            identifiers.append(identifier)
         }
+        return identifiers
+    }
+
+    private func accessibilityIdentifier(inDebugDescriptionLine line: String) -> String? {
+        for quote in ["'", "\""] {
+            let marker = "identifier: \(quote)"
+            guard let start = line.range(of: marker) else {
+                continue
+            }
+            let remainder = line[start.upperBound...]
+            guard let end = remainder.firstIndex(of: Character(quote)) else {
+                continue
+            }
+            return String(remainder[..<end])
+        }
+        return nil
     }
 
     private func globalConnectivitySnapshot() -> DisplayedUIElementSnapshot? {

@@ -77,7 +77,7 @@ const SCENARIO_REQUIREMENTS = {
     routes: ["dock/subscribe", "dock/update"],
     minCheckpointSweeps: 1,
     minCheckpointSweepRowChecks: 12,
-    minDockSweepOrderChecks: 1,
+    minDockVisibleOrderChecks: 1,
   },
   "thread-activity": {
     routes: ["dock/subscribe", "dock/update"],
@@ -310,7 +310,7 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
       message: `Report directory ${directoryScenario} contained relay scenario ${reportedScenario}; strict matrix proof requires the invoked scenario to report itself.`,
       scenario: directoryScenario,
       expected: [...allowedReportedScenariosFor(directoryScenario)].sort(),
-      actual: reportedScenario,
+      reportedScenario,
     });
   }
   if (relaySummary.ok !== true || relaySummary.clientPathOK !== true) {
@@ -356,7 +356,7 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
         scenario,
         route,
         expected: expectedCount,
-        actual: actualCount,
+        observedCount: actualCount,
       });
     }
   }
@@ -366,7 +366,7 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
       message: `Scenario ${scenario} did not record enough rendered scenario transition checks.`,
       scenario,
       expected: requirements.minScenarioTransitionChecks || 0,
-      actual: scenarioChecks,
+      observedCount: scenarioChecks,
     });
   }
   if (detailChecks < (requirements.minDetailTransitionChecks || 0)) {
@@ -375,7 +375,7 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
       message: `Scenario ${scenario} did not record enough rendered detail transition checks.`,
       scenario,
       expected: requirements.minDetailTransitionChecks || 0,
-      actual: detailChecks,
+      observedCount: detailChecks,
     });
   }
   if (checkpointSweeps < (requirements.minCheckpointSweeps || 0)) {
@@ -384,7 +384,7 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
       message: `Scenario ${scenario} did not include the required checkpoint sweep.`,
       scenario,
       expected: requirements.minCheckpointSweeps || 0,
-      actual: checkpointSweeps,
+      observedCount: checkpointSweeps,
     });
   }
   if (checkpointSweepRowChecks < (requirements.minCheckpointSweepRowChecks || 0)) {
@@ -393,7 +393,7 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
       message: `Scenario ${scenario} did not checkpoint enough rendered Dock rows.`,
       scenario,
       expected: requirements.minCheckpointSweepRowChecks || 0,
-      actual: checkpointSweepRowChecks,
+      observedCount: checkpointSweepRowChecks,
     });
   }
   if (dockVisibleOrderChecks < (requirements.minDockVisibleOrderChecks || 0)) {
@@ -402,7 +402,7 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
       message: `Scenario ${scenario} did not prove enough visible Dock row ordering.`,
       scenario,
       expected: requirements.minDockVisibleOrderChecks || 0,
-      actual: dockVisibleOrderChecks,
+      observedCount: dockVisibleOrderChecks,
     });
   }
   if (dockSweepOrderChecks < (requirements.minDockSweepOrderChecks || 0)) {
@@ -411,7 +411,7 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
       message: `Scenario ${scenario} did not prove checkpoint Dock row ordering.`,
       scenario,
       expected: requirements.minDockSweepOrderChecks || 0,
-      actual: dockSweepOrderChecks,
+      observedCount: dockSweepOrderChecks,
     });
   }
   if (detailSweeps < (requirements.minDetailSweeps || 0)) {
@@ -420,7 +420,7 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
       message: `Scenario ${scenario} did not include the required opened-thread detail sweep.`,
       scenario,
       expected: requirements.minDetailSweeps || 0,
-      actual: detailSweeps,
+      observedCount: detailSweeps,
     });
   }
   if (detailSweepMessageCardChecks < (requirements.minDetailSweepMessageCardChecks || 0)) {
@@ -429,7 +429,7 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
       message: `Scenario ${scenario} did not sweep enough opened-thread detail rows.`,
       scenario,
       expected: requirements.minDetailSweepMessageCardChecks || 0,
-      actual: detailSweepMessageCardChecks,
+      observedCount: detailSweepMessageCardChecks,
     });
   }
   if (detailMessageOrderChecks < (requirements.minDetailMessageOrderChecks || 0)) {
@@ -438,7 +438,7 @@ function evaluateReportEntry(entry, { maxUiLagMs }) {
       message: `Scenario ${scenario} did not prove opened-thread message ordering.`,
       scenario,
       expected: requirements.minDetailMessageOrderChecks || 0,
-      actual: detailMessageOrderChecks,
+      observedCount: detailMessageOrderChecks,
     });
   }
   if (uiSummary.scenarioTransitionFailures || uiSummary.detailTransitionFailures) {
@@ -520,7 +520,7 @@ function buildMatrixReport({ entries, requiredScenarios = DEFAULT_REQUIRED_SCENA
         message: `Required controlled simulator scenario ${scenario} has ${passingReports.length} passing report(s), expected ${minPasses}.`,
         scenario,
         expected: minPasses,
-        actual: passingReports.length,
+        observedCount: passingReports.length,
       });
     }
     if (duplicateReportDirs.length) {
