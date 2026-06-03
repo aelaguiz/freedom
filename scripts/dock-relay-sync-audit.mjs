@@ -704,6 +704,7 @@ function emptyDockStreamState() {
   return {
     epoch: null,
     seq: null,
+    generation: null,
     view: null,
     complete: null,
     totalRows: null,
@@ -760,17 +761,17 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
         view: payload.view,
       }));
     });
-    if (findings.some((finding) => finding.severity === "error")) {
-      state.needsResync = true;
-    }
+    const hasErrors = findings.some((finding) => finding.severity === "error");
     state.epoch = payload.epoch || null;
     state.seq = Number.isFinite(Number(payload.seq)) ? Number(payload.seq) : null;
+    state.generation = Number.isFinite(Number(payload.generation)) ? Number(payload.generation) : null;
     state.view = payload.view || null;
     state.complete = payload.complete ?? null;
     state.totalRows = Number.isFinite(Number(payload.totalRows)) ? Number(payload.totalRows) : null;
     state.window = payload.window || null;
     state.freshness = payload.freshness || null;
     state.cardsByID = cardsByID(rows);
+    state.needsResync = hasErrors;
     state.lastPayloadKind = "snapshot";
     state.lastReceivedAt = receivedAt;
     return findings;
@@ -779,6 +780,7 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
   if (payload.kind === "heartbeat") {
     const seq = Number.isFinite(Number(payload.seq)) ? Number(payload.seq) : null;
     const totalRows = Number.isFinite(Number(payload.totalRows)) ? Number(payload.totalRows) : null;
+    const generation = Number.isFinite(Number(payload.generation)) ? Number(payload.generation) : null;
     if (state.epoch && payload.epoch && state.epoch !== payload.epoch) {
       findings.push({
         code: "dock_stream_epoch_changed",
@@ -801,8 +803,20 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
       });
       state.needsResync = true;
     }
+    if (generation !== null && state.generation !== null && generation !== state.generation) {
+      findings.push({
+        code: "dock_stream_generation_changed",
+        severity: "warning",
+        message: "dock/update heartbeat generation does not match current stream generation",
+        expectedGeneration: state.generation,
+        actualGeneration: generation,
+        receivedAt,
+      });
+      state.needsResync = true;
+    }
     state.epoch = payload.epoch || state.epoch;
     state.seq = seq ?? state.seq;
+    state.generation = generation ?? state.generation;
     state.view = payload.view || state.view;
     if (payload.complete === true) {
       state.complete = totalRows === null ? state.complete : state.cardsByID.size >= totalRows;
@@ -813,6 +827,111 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
     state.window = payload.window || state.window;
     state.freshness = payload.freshness || state.freshness;
     state.lastPayloadKind = "heartbeat";
+    state.lastReceivedAt = receivedAt;
+    return findings;
+  }
+
+  if (payload.kind === "page") {
+    const seq = Number.isFinite(Number(payload.seq)) ? Number(payload.seq) : null;
+    const generation = Number.isFinite(Number(payload.generation)) ? Number(payload.generation) : null;
+    const totalRows = Number.isFinite(Number(payload.totalRows)) ? Number(payload.totalRows) : null;
+    const window = payload.window && typeof payload.window === "object" ? payload.window : null;
+    if (!state.epoch || state.seq === null || state.generation === null) {
+      findings.push({
+        code: "dock_stream_page_without_snapshot",
+        severity: "error",
+        message: "dock/update page arrived before an initial snapshot opened the stream",
+        receivedAt,
+      });
+      state.needsResync = true;
+    }
+    if (state.epoch && payload.epoch && state.epoch !== payload.epoch) {
+      findings.push({
+        code: "dock_stream_epoch_changed",
+        severity: "warning",
+        message: "dock stream epoch changed; resync is required",
+        previousEpoch: state.epoch,
+        actualEpoch: payload.epoch,
+        receivedAt,
+      });
+      state.needsResync = true;
+    }
+    if (seq !== null && state.seq !== null && seq !== state.seq) {
+      findings.push({
+        code: "dock_stream_page_sequence_gap",
+        severity: "error",
+        message: "dock/update page seq must match the current stream seq",
+        expectedSeq: state.seq,
+        actualSeq: seq,
+        receivedAt,
+      });
+      state.needsResync = true;
+    }
+    if (generation !== null && state.generation !== null && generation !== state.generation) {
+      findings.push({
+        code: "dock_stream_page_generation_gap",
+        severity: "error",
+        message: "dock/update page generation must match the current stream generation",
+        expectedGeneration: state.generation,
+        actualGeneration: generation,
+        receivedAt,
+      });
+      state.needsResync = true;
+    }
+    const rows = Array.isArray(payload.rows) ? payload.rows : [];
+    if (
+      !window
+      || !Number.isFinite(Number(window.offset))
+      || !Number.isFinite(Number(window.limit))
+      || !Number.isFinite(Number(window.rowCount))
+      || totalRows === null
+      || Number(window.offset) < 0
+      || Number(window.limit) < 0
+      || Number(window.rowCount) !== rows.length
+      || totalRows < Number(window.rowCount)
+    ) {
+      findings.push({
+        code: "dock_stream_page_window_invalid",
+        severity: "error",
+        message: "dock/update page is missing its catch-up window contract",
+        receivedAt,
+      });
+      state.needsResync = true;
+    }
+    rows.forEach((card, index) => {
+      findings.push(...projectionCardValidationFindings(card, {
+        receivedAt,
+        index,
+        view: payload.view || state.view,
+      }));
+    });
+    if (Array.isArray(payload.projectionIDs) && payload.projectionIDs.length > 0) {
+      findings.push({
+        code: "dock_stream_page_delete_ids_present",
+        severity: "error",
+        message: "dock/update page must extend the catch-up window without deleting projection IDs",
+        receivedAt,
+      });
+      state.needsResync = true;
+    }
+    if (findings.some((finding) => finding.severity === "error")) {
+      state.needsResync = true;
+    }
+    for (const card of rows) {
+      const id = cardID(card);
+      if (id) {
+        state.cardsByID.set(id, card);
+      }
+    }
+    state.epoch = payload.epoch || state.epoch;
+    state.seq = seq ?? state.seq;
+    state.generation = generation ?? state.generation;
+    state.view = payload.view || state.view;
+    state.complete = payload.complete ?? state.complete;
+    state.totalRows = totalRows ?? state.totalRows;
+    state.window = window || state.window;
+    state.freshness = payload.freshness || state.freshness;
+    state.lastPayloadKind = "page";
     state.lastReceivedAt = receivedAt;
     return findings;
   }
@@ -828,7 +947,7 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
     findings.push({
       code: "dock_stream_unknown_payload_kind",
       severity: "error",
-      message: "dock stream payload kind is neither snapshot, upsert, delete, heartbeat, nor resyncRequired",
+      message: "dock stream payload kind is neither snapshot, page, upsert, delete, heartbeat, nor resyncRequired",
       actual: payload.kind || null,
       receivedAt,
     });
@@ -837,6 +956,7 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
   }
 
   const seq = Number.isFinite(Number(payload.seq)) ? Number(payload.seq) : null;
+  const generation = Number.isFinite(Number(payload.generation)) ? Number(payload.generation) : null;
   if (state.epoch && payload.epoch && state.epoch !== payload.epoch) {
     findings.push({
       code: "dock_stream_epoch_changed",
@@ -855,6 +975,17 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
       message: "dock/update seq is not contiguous with current stream seq",
       expectedSeq: state.seq + 1,
       actualSeq: seq,
+      receivedAt,
+    });
+      state.needsResync = true;
+  }
+  if (generation !== null && state.generation !== null && generation !== state.generation) {
+    findings.push({
+      code: "dock_stream_generation_changed",
+      severity: "warning",
+      message: "dock/update mutation generation does not match current stream generation",
+      expectedGeneration: state.generation,
+      actualGeneration: generation,
       receivedAt,
     });
     state.needsResync = true;
@@ -882,6 +1013,7 @@ function applyDockPayload(state, payload, receivedAt = new Date().toISOString())
   }
   state.epoch = payload.epoch || state.epoch;
   state.seq = seq ?? state.seq;
+  state.generation = generation ?? state.generation;
   state.view = payload.view || state.view;
   state.complete = payload.complete ?? state.complete;
   state.totalRows = Number.isFinite(Number(payload.totalRows)) ? Number(payload.totalRows) : state.totalRows;
@@ -913,6 +1045,7 @@ function snapshotFromStreamState(state) {
     schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
     epoch: state.epoch || null,
     seq: state.seq ?? null,
+    generation: state.generation ?? null,
     view: state.view || null,
     complete: state.complete ?? null,
     totalRows: state.totalRows ?? cards.length,
@@ -1199,6 +1332,8 @@ async function collectDockClientPathSnapshot(options, routeEvents = null) {
   const findings = [];
   const notifications = [];
   const resyncs = [];
+  const pendingNotifications = [];
+  let initialSnapshotApplied = false;
   let lastUpdate = null;
   let lastAppliedAtMs = null;
   let wake = null;
@@ -1249,6 +1384,10 @@ async function collectDockClientPathSnapshot(options, routeEvents = null) {
         seq: message.params?.seq ?? null,
         window: message.params?.window || null,
       });
+      if (!initialSnapshotApplied) {
+        pendingNotifications.push({ payload: message.params, receivedAt });
+        return;
+      }
       apply(message.params, "notification", receivedAt);
     },
   });
@@ -1259,6 +1398,10 @@ async function collectDockClientPathSnapshot(options, routeEvents = null) {
     recordRoute(routeEvents, "dock/subscribe", "collect complete Dock state from client-path subscription");
     const snapshot = await client.request("dock/subscribe", {});
     apply(snapshot, "subscribe");
+    initialSnapshotApplied = true;
+    for (const notification of pendingNotifications.splice(0)) {
+      apply(notification.payload, "notification", notification.receivedAt);
+    }
     const deadline = Date.now() + options.dockCollectionTimeoutMs;
 
     while (!isDockStreamStateComplete(state, lastUpdate)) {
@@ -1377,6 +1520,10 @@ class DockStreamProbe {
     this.archiveResyncs = [];
     this.closed = false;
     this.wake = null;
+    this.dockInitialSnapshotApplied = false;
+    this.archiveInitialSnapshotApplied = false;
+    this.pendingDockNotifications = [];
+    this.pendingArchiveNotifications = [];
     this.state = emptyDockStreamState();
     this.archiveState = emptyDockStreamState();
     this.client = new JsonRpcWebSocketClient(options.relayUrl, {
@@ -1395,6 +1542,8 @@ class DockStreamProbe {
     recordRoute(this.routeEvents, "dock/subscribe", "open long-lived Dock stream subscription");
     const snapshot = await this.client.request("dock/subscribe", {});
     this.applyPayload(snapshot, "subscribe");
+    this.dockInitialSnapshotApplied = true;
+    this.flushPendingDockNotifications();
     return snapshot;
   }
 
@@ -1402,6 +1551,8 @@ class DockStreamProbe {
     recordRoute(this.routeEvents, "archive/subscribe", "open long-lived Archive stream subscription");
     const snapshot = await this.client.request("archive/subscribe", {});
     this.applyArchivePayload(snapshot, "subscribe");
+    this.archiveInitialSnapshotApplied = true;
+    this.flushPendingArchiveNotifications();
     return snapshot;
   }
 
@@ -1418,13 +1569,11 @@ class DockStreamProbe {
         kind: message.params?.kind || null,
         seq: message.params?.seq ?? null,
       };
-      this.applyArchivePayload(message.params, "notification", receivedAt);
-      if (message.params?.kind === "upsert" || message.params?.kind === "delete" || message.params?.kind === "snapshot") {
-        // Store the post-apply stream state so simulator UI proof can compare
-        // against live truth at notification time, not just sparse resyncs.
-        notification.snapshot = sanitizeDockSnapshotForReport(this.archiveSnapshot());
+      if (!this.archiveInitialSnapshotApplied) {
+        this.pendingArchiveNotifications.push({ message, receivedAt, notification });
+        return;
       }
-      this.archiveNotifications.push(notification);
+      this.applyArchiveNotification(message, receivedAt, notification);
       return;
     }
     if (message?.method !== "dock/update") {
@@ -1440,13 +1589,43 @@ class DockStreamProbe {
       kind: message.params?.kind || null,
       seq: message.params?.seq ?? null,
     };
+    if (!this.dockInitialSnapshotApplied) {
+      this.pendingDockNotifications.push({ message, receivedAt, notification });
+      return;
+    }
+    this.applyDockNotification(message, receivedAt, notification);
+  }
+
+  applyArchiveNotification(message, receivedAt, notification) {
+      this.applyArchivePayload(message.params, "notification", receivedAt);
+      if (message.params?.kind === "upsert" || message.params?.kind === "delete" || message.params?.kind === "snapshot" || message.params?.kind === "page") {
+        // Store the post-apply stream state so simulator UI proof can compare
+        // against live truth at notification time, not just sparse resyncs.
+        notification.snapshot = sanitizeDockSnapshotForReport(this.archiveSnapshot());
+      }
+      this.archiveNotifications.push(notification);
+  }
+
+  applyDockNotification(message, receivedAt, notification) {
     this.applyPayload(message.params, "notification", receivedAt);
-    if (message.params?.kind === "upsert" || message.params?.kind === "delete" || message.params?.kind === "snapshot") {
+    if (message.params?.kind === "upsert" || message.params?.kind === "delete" || message.params?.kind === "snapshot" || message.params?.kind === "page") {
       // Store the post-apply stream state so simulator UI proof can compare
       // against live truth at notification time, not just sparse resyncs.
       notification.snapshot = sanitizeDockSnapshotForReport(this.snapshot());
     }
     this.notifications.push(notification);
+  }
+
+  flushPendingDockNotifications() {
+    for (const pending of this.pendingDockNotifications.splice(0)) {
+      this.applyDockNotification(pending.message, pending.receivedAt, pending.notification);
+    }
+  }
+
+  flushPendingArchiveNotifications() {
+    for (const pending of this.pendingArchiveNotifications.splice(0)) {
+      this.applyArchiveNotification(pending.message, pending.receivedAt, pending.notification);
+    }
   }
 
   applyPayload(payload, source, receivedAt = new Date().toISOString()) {

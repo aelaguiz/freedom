@@ -1675,6 +1675,9 @@ async function runLargeListCheckpointScenario(options) {
   };
   const relay = startServer(relayConfig);
   await relay.listening;
+  if (isRootCatchupWindowContract) {
+    await relayConfig.relayStateEngine.reconcileDock({ reason: "controlled_simulator_root_catchup_preload" });
+  }
   const relayPort = relay.server.address().port;
   const relayUrl = `ws://127.0.0.1:${relayPort}`;
   const fixtureOptions = {
@@ -1710,8 +1713,7 @@ async function runLargeListCheckpointScenario(options) {
       transitionFailure(
         findings,
         "scenario_root_catchup_window_page_missing",
-        "root-catchup-window-contract did not force an explicit page update after the bounded snapshot",
-        { expectedRows: rowCount, notificationKinds: streamProbe.notifications.map((notification) => notification.kind) }
+        "root-catchup-window-contract did not force an explicit page update after the bounded snapshot"
       );
     }
 

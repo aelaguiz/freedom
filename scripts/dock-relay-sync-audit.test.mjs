@@ -10,7 +10,12 @@ import {
   summarizeClientPathEvents,
 } from "./dock-relay-sync-audit.mjs";
 import { RELAY_STATE_STREAM_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
-import { projectionIDForThreadCard } from "./dock-relay-projection-engine.mjs";
+import {
+  PROJECTION_ENGINE_VERSION,
+  PROJECTION_IDENTITY_VERSION,
+  PROJECTION_SCHEMA_VERSION,
+  projectionIDForThreadCard,
+} from "./dock-relay-projection-engine.mjs";
 
 const emptyWindow = {
   offset: 0,
@@ -26,6 +31,7 @@ function snapshot(overrides = {}) {
     schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
     epoch: "epoch-1",
     seq: 7,
+    generation: 1,
     view: "dock",
     complete: true,
     totalRows: 0,
@@ -33,6 +39,30 @@ function snapshot(overrides = {}) {
     freshness: { status: "fresh" },
     hosts: [],
     rows: [],
+    ...overrides,
+  };
+}
+
+function threadCard(threadID, order = "001", overrides = {}) {
+  const projectionID = projectionIDForThreadCard({ sourceHostID: "host", threadID });
+  return {
+    id: projectionID,
+    projectionID,
+    schemaVersion: PROJECTION_SCHEMA_VERSION,
+    identityVersion: PROJECTION_IDENTITY_VERSION,
+    projectionEngineVersion: PROJECTION_ENGINE_VERSION,
+    sourceHostID: "host",
+    logicalHostID: "host",
+    view: "dock",
+    sourceRef: `thread:${threadID}`,
+    rowRole: "threadCard",
+    threadID,
+    status: "idle",
+    lane: "human",
+    sourceKind: "human",
+    activityAt: "2026-06-01T00:00:00.000Z",
+    activityAtMs: 1_780_272_000_000,
+    displayOrderKey: `${order}|host%3Ahost%2Fthread%3A${threadID}%2Frow%3AthreadCard`,
     ...overrides,
   };
 }
@@ -101,6 +131,120 @@ test("sync audit applies canonical upsert updates with contiguous sequence numbe
   assert.deepEqual(findings, []);
   assert.equal(state.needsResync, false);
   assert.equal(state.seq, 8);
+});
+
+test("sync audit applies page catch-up without advancing sequence", () => {
+  const state = emptyDockStreamState();
+  assert.deepEqual(applyDockPayload(state, snapshot({
+    seq: 7,
+    complete: false,
+    totalRows: 2,
+    window: {
+      offset: 0,
+      limit: 1,
+      rowCount: 1,
+      totalRows: 2,
+      nextOffset: 1,
+    },
+    rows: [threadCard("thread-a", "001")],
+  })), []);
+
+  const findings = applyDockPayload(state, {
+    kind: "page",
+    schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
+    epoch: "epoch-1",
+    seq: 7,
+    generation: 1,
+    view: "dock",
+    complete: true,
+    totalRows: 2,
+    window: {
+      offset: 1,
+      limit: 1,
+      rowCount: 1,
+      totalRows: 2,
+      nextOffset: null,
+    },
+    freshness: { status: "fresh" },
+    rows: [threadCard("thread-b", "002")],
+    projectionIDs: [],
+  });
+
+  assert.deepEqual(findings, []);
+  assert.equal(state.needsResync, false);
+  assert.equal(state.seq, 7);
+  assert.equal(state.lastPayloadKind, "page");
+  assert.deepEqual([...state.cardsByID.values()].map((row) => row.threadID).sort(), ["thread-a", "thread-b"]);
+});
+
+test("sync audit rejects same-sequence upsert catch-up", () => {
+  const state = emptyDockStreamState();
+  assert.deepEqual(applyDockPayload(state, snapshot({ seq: 7 })), []);
+
+  const findings = applyDockPayload(state, {
+    kind: "upsert",
+    schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
+    epoch: "epoch-1",
+    seq: 7,
+    generation: 1,
+    view: "dock",
+    complete: false,
+    totalRows: 1,
+    window: {
+      offset: 1,
+      limit: 1,
+      rowCount: 1,
+      totalRows: 1,
+      nextOffset: null,
+    },
+    freshness: { status: "fresh" },
+    rows: [threadCard("thread-b", "002")],
+    projectionIDs: [],
+  });
+
+  assert.equal(state.needsResync, true);
+  assert.equal(findings.some((finding) => finding.code === "dock_stream_sequence_gap"), true);
+});
+
+test("sync audit clears resync need when a replacement snapshot recovers the stream", () => {
+  const state = emptyDockStreamState();
+  assert.deepEqual(applyDockPayload(state, snapshot({ seq: 7 })), []);
+
+  const gapFindings = applyDockPayload(state, {
+    kind: "upsert",
+    schemaVersion: RELAY_STATE_STREAM_SCHEMA_VERSION,
+    epoch: "epoch-1",
+    seq: 9,
+    generation: 1,
+    view: "dock",
+    complete: true,
+    totalRows: 0,
+    window: emptyWindow,
+    freshness: { status: "fresh" },
+    rows: [],
+    projectionIDs: [],
+  });
+
+  assert.equal(gapFindings.some((finding) => finding.code === "dock_stream_sequence_gap"), true);
+  assert.equal(state.needsResync, true);
+
+  const snapshotFindings = applyDockPayload(state, snapshot({
+    seq: 9,
+    rows: [threadCard("thread-a")],
+    totalRows: 1,
+    window: {
+      offset: 0,
+      limit: 1,
+      rowCount: 1,
+      totalRows: 1,
+      nextOffset: null,
+    },
+  }));
+
+  assert.deepEqual(snapshotFindings, []);
+  assert.equal(state.needsResync, false);
+  assert.equal(state.seq, 9);
+  assert.deepEqual([...state.cardsByID.values()].map((row) => row.threadID), ["thread-a"]);
 });
 
 test("sync audit rejects old delta grammar even when baseSeq is present", () => {
