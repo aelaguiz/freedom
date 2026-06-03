@@ -816,8 +816,42 @@ public struct DockView: View {
         case .loaded(let renderSnapshot):
             let snapshot = renderSnapshot.snapshot
             let pinnedCount = renderSnapshot.projection.pinnedRows.count
-            return "loaded; rows=\(snapshot.rowCount); pinned=\(pinnedCount); lens=\(selectedLens.rawValue); search=\(!searchText.isEmpty); filters=\(filterState.activeFilterCount); \(activeSummaryText)"
+            let visibleRows = dockAutomationRows(in: renderSnapshot.projection)
+            let encodedRowValues = visibleRows
+                .map { row in
+                    let identifier = AutomationID.Dock.row(hostID: row.hostID, threadID: row.threadID).rawValue
+                    return automationEncoded("\(identifier)=\(row.automationValue)")
+                }
+                .joined(separator: "|")
+            return "loaded; rows=\(snapshot.rowCount); visibleRows=\(visibleRows.count); pinned=\(pinnedCount); lens=\(selectedLens.rawValue); search=\(!searchText.isEmpty); filters=\(filterState.activeFilterCount); rowValues=\(encodedRowValues); \(activeSummaryText)"
         }
+    }
+
+    private func dockAutomationRows(in projection: DockCardProjection) -> [DockRowViewModel] {
+        var rows: [DockRowViewModel] = []
+        if !isPinnedCollapsed {
+            rows.append(contentsOf: projection.pinnedRows)
+        }
+        switch selectedLens {
+        case .newest:
+            rows.append(contentsOf: projection.rows)
+        case .host:
+            for group in projection.groups where !collapsedHostGroupIDs.contains(group.id) {
+                rows.append(contentsOf: group.rows)
+            }
+        case .branch:
+            for group in projection.groups where !collapsedBranchGroupIDs.contains(group.id) {
+                rows.append(contentsOf: group.rows)
+            }
+        }
+
+        var seen = Set<String>()
+        return rows.filter { seen.insert($0.projectionID).inserted }
+    }
+
+    private func automationEncoded(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
     private func dockRow(

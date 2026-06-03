@@ -147,6 +147,13 @@ struct DisplayedUIFrame: Codable {
         width = frame.width
         height = frame.height
     }
+
+    init(minX: Double, minY: Double, width: Double, height: Double) {
+        self.minX = minX
+        self.minY = minY
+        self.width = width
+        self.height = height
+    }
 }
 
 @MainActor
@@ -398,7 +405,9 @@ extension XCUIApplication {
         let dockRootCapturedAt = codexDockISO8601Now()
         let dockRowsCaptureStartedAt = codexDockISO8601Now()
         let dockRows: [DisplayedUIDockRow]
-        if !dockRoot.exists || dockRootRowCount(rootValue) == 0 || isDockEmptyStateVisible() {
+        if let rootRows = dockRowsFromRootValue(rootValue) {
+            dockRows = rootRows
+        } else if !dockRoot.exists || dockRootRowCount(rootValue) == 0 || isDockEmptyStateVisible() {
             dockRows = []
         } else {
             // Thread Detail proof must not broad-scan Dock rows; detail update
@@ -590,6 +599,34 @@ extension XCUIApplication {
         return nil
     }
 
+    private func dockRowsFromRootValue(_ rootValue: String) -> [DisplayedUIDockRow]? {
+        guard let field = codexDockAutomationField("rowValues", in: rootValue) else {
+            return nil
+        }
+        guard !field.isEmpty else {
+            return []
+        }
+        return field.split(separator: "|").enumerated().compactMap { index, encoded in
+            let raw = String(encoded)
+            let decoded = raw.removingPercentEncoding ?? raw
+            guard let separator = decoded.firstIndex(of: "=") else {
+                return nil
+            }
+            let identifier = String(decoded[..<separator])
+            let valueStart = decoded.index(after: separator)
+            let value = String(decoded[valueStart...])
+            guard identifier.hasPrefix("codexdock.dock.row.") else {
+                return nil
+            }
+            return DisplayedUIDockRow(
+                identifier: identifier,
+                value: value,
+                label: "",
+                frame: DisplayedUIFrame(minX: 0, minY: Double(index), width: 1, height: 1)
+            )
+        }
+    }
+
     private func checkpointDetailSweep() -> DisplayedUIDetailSweep {
         let startedAt = codexDockISO8601Now()
         var messageCardIDs: [String] = []
@@ -733,10 +770,7 @@ extension XCUIApplication {
         // child labels can share the same projection-backed ID, and XCUITest
         // can report the row role as Button or PopUpButton across runs. Resolve
         // exact-ID matches by visible size so proof code uses the row container.
-        let elements = candidates ?? dockRowElementCandidates(
-            predicate: NSPredicate(format: "identifier == %@", id),
-            allowAnyFallback: true
-        )
+        let elements = candidates ?? dockRowElementCandidates(id: id)
         return elements
             .filter { $0.identifier == id }
             .filter { isVisibleForTap($0.frame) }
@@ -746,25 +780,21 @@ extension XCUIApplication {
     }
 
     private func dockRowElementCandidates() -> [XCUIElement] {
-        dockRowElementCandidates(
-            predicate: NSPredicate(format: "identifier BEGINSWITH %@", "codexdock.dock.row."),
-            allowAnyFallback: false
-        )
+        dockRowElementCandidates { $0.hasPrefix("codexdock.dock.row.") }
     }
 
-    private func dockRowElementCandidates(
-        predicate: NSPredicate,
-        allowAnyFallback: Bool
-    ) -> [XCUIElement] {
-        let roleMatches =
-            buttons.matching(predicate).allElementsBoundByIndex
-            + descendants(matching: .popUpButton).matching(predicate).allElementsBoundByIndex
-        guard roleMatches.isEmpty, allowAnyFallback else {
-            return roleMatches
-        }
+    private func dockRowElementCandidates(id: String) -> [XCUIElement] {
+        dockRowElementCandidates { $0 == id }
+    }
+
+    private func dockRowElementCandidates(_ matches: (String) -> Bool) -> [XCUIElement] {
+        // SwiftUI can report the same Dock row as Button or PopUpButton across
+        // simulator runs, and XCTest predicate queries can record a failure when
+        // a legitimate archive/delete transition leaves zero rows. Enumerate
+        // first, then filter by the stable accessibility identifier contract.
         return descendants(matching: .any)
-            .matching(predicate)
             .allElementsBoundByIndex
+            .filter { matches($0.identifier) }
     }
 
     private func globalConnectivitySnapshot() -> DisplayedUIElementSnapshot? {
