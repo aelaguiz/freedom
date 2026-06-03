@@ -4,7 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_MAX_LAG_MS = 5000;
+const DEFAULT_MAX_LAG_MS = 2000;
 
 function usage() {
   return [
@@ -12,7 +12,7 @@ function usage() {
     "  node scripts/codex-dock-live-filter-compare.mjs --relay-truth <path> --ui-proof <path> --json-out <path> [options]",
     "",
     "Options:",
-    "  --max-lag-ms <ms>       Nearest relay sample window. Default: 5000.",
+    "  --max-lag-ms <ms>       Nearest relay sample window. Default: 2000.",
     "  --require-moving        Require movement in a sampled relay filter and matching UI movement.",
   ].join("\n");
 }
@@ -194,8 +194,9 @@ function uiSampleTimeMS(sample) {
 }
 
 function relaySampleTimeMS(sample) {
-  // Relay truth here comes from thread/detail/read projection rows. The sample
-  // is known only after that read finishes, so finishedAt is the canonical clock.
+  // Relay truth here comes from retained projection witness envelopes. The
+  // sample is known only after that witness read finishes, so finishedAt is the
+  // canonical clock.
   return timestamp(sample?.finishedAt) ?? timestamp(sample?.sampledAt);
 }
 

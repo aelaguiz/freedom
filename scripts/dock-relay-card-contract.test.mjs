@@ -130,6 +130,7 @@ async function withRelay(historyUrl, testFn, overrides = {}) {
     hostId: "home",
     hostName: "Home",
     codexHome: "/tmp/codex-client-test",
+    ...overrides,
   };
   const server = startServer(config);
   await server.listening;
@@ -158,6 +159,36 @@ test("dock/subscribe orders cards by proven newest turn activity, not raw thread
         ws.close();
       }
     });
+  } finally {
+    await appServer.close();
+  }
+});
+
+test("thread/detail/read does not seed projection witness truth", async () => {
+  const appServer = await startCanonicalActivityAppServer();
+  try {
+    await withRelay(appServer.url, async ({ wsURL }) => {
+      const ws = await openWebSocket(wsURL);
+      try {
+        const read = await jsonRpcRequest(ws, "thread/detail/read", { threadId: "newer" });
+        assert.equal(read.error, undefined);
+        assert.equal(read.result.view, "thread.detail");
+
+        const witness = await jsonRpcRequest(ws, "projection/witness/read", {
+          sourceHostID: "home",
+          view: "thread.detail",
+          scope: "thread",
+          threadID: "newer",
+        });
+        assert.equal(witness.error, undefined);
+        assert.equal(witness.result.byteEquivalentToDownstream, true);
+        assert.equal(witness.result.lastSeq, 0);
+        assert.deepEqual(witness.result.envelopes, []);
+        assert.deepEqual(witness.result.projectionIDs, []);
+      } finally {
+        ws.close();
+      }
+    }, { projectionWitnessEnabled: true });
   } finally {
     await appServer.close();
   }

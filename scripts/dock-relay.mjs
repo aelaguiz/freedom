@@ -548,9 +548,7 @@ function replayPendingDetailMessages(session) {
 
 async function readThreadDetail(config, params = {}) {
   const ledger = await readThreadDetailLedger(config, params);
-  const snapshot = ledger.snapshot("thread/detail/read");
-  recordProjectionWitness(config, snapshot);
-  return snapshot;
+  return ledger.snapshot("thread/detail/read");
 }
 
 async function subscribeThreadDetail(config, params = {}, session, downstreamWs) {

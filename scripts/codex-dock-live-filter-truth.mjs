@@ -18,6 +18,7 @@ function usage() {
     "",
     "Options:",
     "  --relay-url <ws-url>       Relay WebSocket URL. Default: ws://127.0.0.1:4510.",
+    "  --source-host-id <id>      Expected relay source host. Defaults to the Dock card sourceHostID.",
     "  --duration-ms <ms>         Sampling duration. Default: 30000.",
     "  --sample-ms <ms>           Sampling interval. Default: 1000.",
     "  --visible-limit <count>    Thread Detail visible row window. Default: 240.",
@@ -28,6 +29,7 @@ function parseArgs(argv = process.argv.slice(2)) {
   const options = {
     relayUrl: DEFAULT_RELAY_URL,
     threadID: null,
+    sourceHostID: null,
     jsonOut: null,
     durationMS: DEFAULT_DURATION_MS,
     sampleMS: DEFAULT_SAMPLE_MS,
@@ -49,6 +51,8 @@ function parseArgs(argv = process.argv.slice(2)) {
       options.relayUrl = next();
     } else if (arg === "--thread-id") {
       options.threadID = next();
+    } else if (arg === "--source-host-id") {
+      options.sourceHostID = next();
     } else if (arg === "--json-out") {
       options.jsonOut = next();
     } else if (arg === "--duration-ms") {
@@ -145,23 +149,70 @@ function summarizeCard(card) {
   };
 }
 
-async function readDetailProjection(client, threadID) {
-  const snapshot = await client.request("thread/detail/read", {
-    threadId: threadID,
-  });
-  const rows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+async function readDetailProjection(client, threadID, sourceHostID = null) {
+  const params = {
+    view: "thread.detail",
+    scope: "thread",
+    threadID,
+  };
+  if (sourceHostID) {
+    params.sourceHostID = sourceHostID;
+  }
+  const witness = await client.request("projection/witness/read", params);
+  if (witness?.byteEquivalentToDownstream !== true) {
+    throw new Error("projection witness did not report byte-equivalent downstream envelopes");
+  }
+  if (!Array.isArray(witness?.envelopes) || witness.envelopes.length === 0) {
+    throw new Error("projection witness has no retained Thread Detail envelopes for this thread");
+  }
+  const rows = projectionRowsFromWitness(witness);
   return {
-    source: "thread/detail/read",
-    threadID: snapshot?.threadID || null,
-    sourceHostID: snapshot?.sourceHostID || null,
-    view: snapshot?.view || null,
-    viewParamsKey: snapshot?.viewParamsKey || null,
-    seq: snapshot?.seq ?? null,
-    epoch: snapshot?.epoch || null,
-    projectionEngineVersion: snapshot?.projectionEngineVersion ?? null,
+    source: "projection/witness/read",
+    byteEquivalentToDownstream: witness?.byteEquivalentToDownstream === true,
+    threadID: witness?.threadID || null,
+    sourceHostID: witness?.sourceHostID || null,
+    view: witness?.view || null,
+    viewParamsKey: witness?.viewParamsKey || null,
+    seq: witness?.lastSeq ?? null,
+    epoch: witness?.epoch || null,
+    projectionEngineVersion: rows.at(-1)?.projectionEngineVersion ?? null,
     rowCount: rows.length,
+    envelopeCount: Array.isArray(witness?.envelopes) ? witness.envelopes.length : 0,
+    projectionIDs: Array.isArray(witness?.projectionIDs) ? witness.projectionIDs : [],
     rows,
   };
+}
+
+function projectionRowsFromWitness(witness) {
+  const rowsByProjectionID = new Map();
+  for (const envelope of witness?.envelopes || []) {
+    if (envelope.kind === "delete") {
+      for (const projectionID of envelope.projectionIDs || []) {
+        rowsByProjectionID.delete(projectionID);
+      }
+      continue;
+    }
+    if (envelope.kind === "snapshot" || !envelope.kind) {
+      rowsByProjectionID.clear();
+    }
+    for (const row of envelope.rows || []) {
+      if (row?.projectionID) {
+        rowsByProjectionID.set(row.projectionID, {
+          ...row,
+          projectionEngineVersion: envelope.projectionEngineVersion ?? null,
+        });
+      }
+    }
+  }
+  return [...rowsByProjectionID.values()]
+    .sort((left, right) => {
+      const leftOrder = typeof left?.displayOrderKey === "string" ? left.displayOrderKey : "";
+      const rightOrder = typeof right?.displayOrderKey === "string" ? right.displayOrderKey : "";
+      if (leftOrder !== rightOrder) {
+        return leftOrder.localeCompare(rightOrder);
+      }
+      return String(left?.projectionID || "").localeCompare(String(right?.projectionID || ""));
+    });
 }
 
 function increment(map, key, by = 1) {
@@ -193,15 +244,16 @@ function rowMatchesFilter(row, filter) {
 }
 
 function projectionRowTruth(row) {
+  const payload = row?.payload || {};
   return {
     projectionID: row?.projectionID || null,
     sourceHostID: row?.sourceHostID || null,
     displayOrderKey: row?.displayOrderKey || null,
-    kind: row?.renderKind || row?.itemType || "unknown",
-    visibility: row?.visibility || "unknown",
-    itemType: row?.itemType || "unknown",
-    turnID: row?.turnID || null,
-    itemID: row?.itemID || null,
+    kind: payload.renderKind || row?.renderKind || row?.rowRole || row?.itemType || "unknown",
+    visibility: payload.visibility || row?.visibility || "unknown",
+    itemType: payload.itemType || row?.itemType || row?.rowRole || "unknown",
+    turnID: payload.turnID || row?.turnID || null,
+    itemID: payload.itemID || row?.itemID || null,
   };
 }
 
@@ -253,7 +305,7 @@ function filterCountsFromProjectionRows(projectionRows, visibleLimit) {
     ]),
   );
   return {
-    source: "thread/detail/read",
+    source: "projection/witness/read",
     turnCount: new Set(rows.map((row) => row.turnID).filter(Boolean)).size,
     pageLimited: false,
     rawItemCount: null,
@@ -273,7 +325,8 @@ function filterCountsFromProjectionRows(projectionRows, visibleLimit) {
 async function sampleThread(client, options, index) {
   const sampledAt = new Date().toISOString();
   const dock = await readDockCard(client, options.threadID);
-  const detail = await readDetailProjection(client, options.threadID);
+  const sourceHostID = options.sourceHostID || dock.targetCard?.sourceHostID || null;
+  const detail = await readDetailProjection(client, options.threadID, sourceHostID);
   return {
     index,
     sampledAt,
@@ -288,6 +341,9 @@ async function sampleThread(client, options, index) {
       seq: detail.seq,
       epoch: detail.epoch,
       projectionEngineVersion: detail.projectionEngineVersion,
+      byteEquivalentToDownstream: detail.byteEquivalentToDownstream,
+      envelopeCount: detail.envelopeCount,
+      projectionIDCount: detail.projectionIDs.length,
       rowCount: detail.rowCount,
     },
     turns: {
@@ -364,6 +420,7 @@ async function run(options) {
     kind: "codex-dock-live-filter-relay-truth",
     relayUrl: options.relayUrl,
     threadID: options.threadID,
+    sourceHostID: options.sourceHostID,
     durationMS: options.durationMS,
     sampleMS: options.sampleMS,
     visibleLimit: options.visibleLimit,

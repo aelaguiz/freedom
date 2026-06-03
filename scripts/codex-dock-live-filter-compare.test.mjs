@@ -166,7 +166,7 @@ test("live filter compare scores Thread Detail UI at message list capture time",
   assert.equal(report.runEvaluations[0].expectedEvents, 11);
 });
 
-test("live filter compare does not use unfinished relay reads as settled truth", () => {
+test("live filter compare does not use unfinished projection witness samples as settled truth", () => {
   const report = compare(
     {
       summary: { moving: true },

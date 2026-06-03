@@ -279,20 +279,6 @@ public actor AppServerClient {
         try await send(.response(JSONRPCResponse(id: id, result: result)))
     }
 
-    public func threadDetailRead(
-        params: ThreadDetailParams,
-        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
-        observabilityContext: AppServerRequestObservabilityContext? = nil
-    ) async throws -> ThreadDetailSnapshotDTO {
-        try await sendRequest(
-            method: AppServerMethods.threadDetailRead,
-            params: try JSONValue.encoded(params),
-            timeout: timeout,
-            observabilityContext: observabilityContext,
-            as: ThreadDetailSnapshotDTO.self
-        )
-    }
-
     public func threadDetailSubscribe(
         params: ThreadDetailParams,
         timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
