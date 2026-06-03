@@ -194,7 +194,7 @@ extension XCUIApplication {
                 guard !identifier.contains(".action.") else {
                     continue
                 }
-                let row = displayedUIElement(id: identifier)
+                let row = dockRowButton(id: identifier)
                 guard row.exists else {
                     continue
                 }
@@ -212,7 +212,7 @@ extension XCUIApplication {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if let hostID {
-                let exact = displayedUIElement(id: AutomationID.Dock.row(hostID: hostID, threadID: threadID).rawValue)
+                let exact = dockRowButton(id: AutomationID.Dock.row(hostID: hostID, threadID: threadID).rawValue)
                 if exact.exists, isVisibleForTap(exact.frame) {
                     return exact
                 }
@@ -222,7 +222,7 @@ extension XCUIApplication {
             if let row = rows.first(where: { candidate in
                 candidate.value.contains("thread=\(threadID);") || candidate.value.contains("thread=\(threadID)")
             }) {
-                let element = displayedUIElement(id: row.identifier)
+                let element = dockRowButton(id: row.identifier)
                 if element.exists, isVisibleForTap(element.frame) {
                     return element
                 }
@@ -706,7 +706,7 @@ extension XCUIApplication {
             guard !identifier.contains(".action.") else {
                 continue
             }
-            let row = displayedUIElement(id: identifier)
+            let row = dockRowButton(id: identifier)
             guard row.exists else {
                 continue
             }
@@ -740,6 +740,14 @@ extension XCUIApplication {
             identifiers.append(identifier)
         }
         return identifiers
+    }
+
+    private func dockRowButton(id: String) -> XCUIElement {
+        // Dock rows intentionally expose rich child text. The row button and
+        // child labels can share the same projection-backed ID, so proof code
+        // must resolve the row through the Button role instead of an any-element
+        // query that XCUITest treats as ambiguous.
+        buttons.matching(NSPredicate(format: "identifier == %@", id)).firstMatch
     }
 
     private func accessibilityIdentifier(inDebugDescriptionLine line: String) -> String? {
