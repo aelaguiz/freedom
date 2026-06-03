@@ -162,6 +162,11 @@ private struct ThreadMessageCard: View {
             Text(event.title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
+                // The visible title carries the canonical row marker because
+                // nested request controls can shadow a container identifier in
+                // XCUITest. Request cards are decorations on this projection row.
+                .accessibilityValue(messageAutomationValue)
+                .codexAutomationID(AutomationID.Session.messageCard(projectionID: event.id))
 
             Text(event.body)
                 .font(bodyFont)
@@ -178,7 +183,6 @@ private struct ThreadMessageCard: View {
         .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityValue(messageAutomationValue)
-        .codexAutomationID(AutomationID.Session.messageCard(projectionID: event.id))
     }
 
     @ViewBuilder
