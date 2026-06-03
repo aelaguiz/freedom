@@ -96,6 +96,12 @@ struct DisplayedUIDetail: Codable {
         return requestCardIDs.contains(identifier)
             || requestElements.contains(where: { $0.identifier == identifier })
     }
+
+    func containsMessageCard(projectionID: String) -> Bool {
+        let identifier = AutomationID.Session.messageCard(projectionID: projectionID).rawValue
+        return messageCardIDs.contains(identifier)
+            || messageCards.contains(where: { $0.identifier == identifier })
+    }
 }
 
 struct DisplayedUIDetailSweep: Codable {
@@ -688,14 +694,16 @@ extension XCUIApplication {
         }
         let rootValue = root.displayedUIStringValue
         let rootCapturedAt = codexDockISO8601Now()
-        let messageCards = elementSnapshots(prefix: "codexdock.session.message.", in: root)
-        let messageCardsCapturedAt = codexDockISO8601Now()
-        let requestElements = elementSnapshots(prefix: "codexdock.session.request.", in: root)
-        let requestElementsCapturedAt = codexDockISO8601Now()
+        // Capture scalar state before expensive row enumeration so proof lag is
+        // based on when the UI exposed the state, not XCUITest scan overhead.
         let headerValue = optionalStringValue(id: AutomationID.Session.header.rawValue)
         let headerCapturedAt = codexDockISO8601Now()
         let messageListValue = optionalStringValue(id: AutomationID.Session.messageList.rawValue)
         let messageListCapturedAt = codexDockISO8601Now()
+        let messageCards = elementSnapshots(prefix: "codexdock.session.message.", in: root)
+        let messageCardsCapturedAt = codexDockISO8601Now()
+        let requestElements = elementSnapshots(prefix: "codexdock.session.request.", in: root)
+        let requestElementsCapturedAt = codexDockISO8601Now()
         return DisplayedUIDetail(
             startedAt: startedAt,
             finishedAt: codexDockISO8601Now(),

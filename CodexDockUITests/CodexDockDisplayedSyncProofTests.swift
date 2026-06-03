@@ -78,9 +78,13 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
                    let detail = sample.detail {
                     if let cardID = config.requestCardID,
                        detail.containsRequestCard(cardID: cardID) == true,
+                       // Do not mutate a controlled request until the UI dump
+                       // has proved the same relay projection row is visible.
+                       detail.containsMessageCard(projectionID: cardID) == true,
                        app.tapRequestAction(cardID: cardID, action: action, timeout: 0.2) {
                         didTapRequestAction = true
-                    } else if app.tapFirstRequestAction(
+                    } else if config.requestCardID == nil,
+                              app.tapFirstRequestAction(
                         requestElementIdentifiers: detail.requestCardIDs,
                         action: action,
                         timeout: 0.2

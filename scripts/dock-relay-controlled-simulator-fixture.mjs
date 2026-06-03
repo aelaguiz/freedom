@@ -10,7 +10,10 @@ import WebSocket, { WebSocketServer } from "ws";
 import { startServer } from "./dock-relay.mjs";
 import { RELAY_STATE_STREAM_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
 import { threadMatchesSourceKinds } from "./dock-relay-source-filter.mjs";
-import { projectionIDForThreadCard } from "./dock-relay-projection-engine.mjs";
+import {
+  projectionIDForThreadCard,
+  projectionIDForThreadItem,
+} from "./dock-relay-projection-engine.mjs";
 import {
   DockStreamProbe,
   cardID,
@@ -360,6 +363,18 @@ function detailTruthFromWitness({
     ...(expectedStatus ? { expectedStatus } : {}),
     requestVisible: requestVisible && Boolean(requestCardID),
   };
+}
+
+function projectionIDForCommandApprovalRequest({ sourceHostID, threadID, turnID, itemID }) {
+  // Item-backed command approvals are request-decorated command rows. Keep the
+  // UI sampler on the same relay-owned row identity instead of generic buttons.
+  return projectionIDForThreadItem({
+    sourceHostID,
+    threadID,
+    turnID,
+    itemID,
+    rowRole: "command",
+  });
 }
 
 function sendFixtureResult(ws, id, result) {
@@ -4338,6 +4353,14 @@ async function runDetailHistoryRequestScenario(options) {
   const hostID = "sim-detail-history-fixture";
   const threadID = "sim-detail-history-request-thread";
   const requestID = "approval-history-1";
+  const requestTurnID = "turn-live-request";
+  const requestItemID = "cmd-history-live";
+  const requestCardID = projectionIDForCommandApprovalRequest({
+    sourceHostID: hostID,
+    threadID,
+    turnID: requestTurnID,
+    itemID: requestItemID,
+  });
   const threadRow = fixtureThread(threadID, "Simulator full detail fixture row", 100);
   const historicalTurns = [
     fixtureTurn("turn-history-1", 1_700_000_001, [
@@ -4599,6 +4622,7 @@ async function runDetailHistoryRequestScenario(options) {
       uiConfig: {
         openHostID: hostID,
         openThreadID: threadID,
+        requestCardID,
         requestAction: "approve",
         detailFilter: "all",
         detailCheckpointSweep: true,
@@ -4712,8 +4736,8 @@ async function runDetailHistoryRequestScenario(options) {
         method: "item/commandExecution/requestApproval",
         params: {
           threadId: threadID,
-          turnId: "turn-live-request",
-          itemId: "cmd-history-live",
+          turnId: requestTurnID,
+          itemId: requestItemID,
           command: ["make", "detail-proof"],
           cwd: tempDir,
         },
@@ -4980,6 +5004,14 @@ async function runServerRequestScenario(options) {
   const hostID = "sim-server-request-fixture";
   const threadID = "sim-server-request-thread";
   const requestID = "approval-1";
+  const requestTurnID = "turn-live";
+  const requestItemID = "cmd-live";
+  const requestCardID = projectionIDForCommandApprovalRequest({
+    sourceHostID: hostID,
+    threadID,
+    turnID: requestTurnID,
+    itemID: requestItemID,
+  });
   const threadRow = fixtureThread(threadID, "Simulator server request fixture row", 100);
   let upstreamRequestSentAtMs = null;
   let upstreamResponseReceivedAtMs = null;
@@ -5061,8 +5093,8 @@ async function runServerRequestScenario(options) {
             method: "item/commandExecution/requestApproval",
             params: {
               threadId: message.params?.threadId || threadID,
-              turnId: "turn-live",
-              itemId: "cmd-live",
+              turnId: requestTurnID,
+              itemId: requestItemID,
               command: ["make", "test"],
               cwd: tempDir,
             },
@@ -5216,6 +5248,7 @@ async function runServerRequestScenario(options) {
       uiConfig: {
         openHostID: hostID,
         openThreadID: threadID,
+        requestCardID,
         requestAction: "approve",
       },
       at: new Date().toISOString(),
