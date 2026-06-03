@@ -70,6 +70,28 @@ test("sim UI dump contract accepts visible thread detail card identifiers", () =
   assertProofReport(report, { sourcePath: "sim-ui-dump-thread-sample" });
 });
 
+test("sim UI dump contract accepts visible global connectivity evidence", () => {
+  const report = simUIDumpSample();
+  report.sampleAfter = {
+    sampleIndex: 0,
+    sampledAt: "2026-06-01T00:00:00Z",
+    finishedAt: "2026-06-01T00:00:01Z",
+    dockRootValue: "loaded; rows=1",
+    dockRowsCapturedAt: "2026-06-01T00:00:00Z",
+    dockRows: [],
+    globalConnectivity: {
+      capturedAt: "2026-06-01T00:00:00Z",
+      identifier: "codexdock.connectivity.global",
+      label: "Online 1/2",
+      value: "Partial: Home: JSON-RPC request `initialize` was cancelled",
+      frame: { minX: 1, minY: 2, width: 3, height: 4 },
+    },
+    hostSummaries: [],
+  };
+
+  assertProofReport(report, { sourcePath: "sim-ui-dump-connectivity-sample" });
+});
+
 test("proof contracts reject unknown nested proof fields", () => {
   const report = simUIDumpSample();
   report.sampleAfter = {
@@ -187,6 +209,23 @@ test("passing proof cannot use thread/detail/read as route evidence", () => {
 
   assert.match(errors.join("\n"), /property name must be valid/u);
   assert.match(errors.join("\n"), /must include relay-owned Dock, Archive, or Thread Detail client routes/u);
+});
+
+test("blocked proof can record non-client route counts without counting them as client path proof", () => {
+  const report = sampleProofReports().find(
+    (candidate) => candidate.kind === "codex-dock-controlled-simulator-scenario-relay-report"
+  );
+  report.status = "blocked";
+  report.clientPathEvidence = {
+    routes: ["thread/detail/subscribe"],
+    routeCounts: { "thread/detail/subscribe": 1 },
+    nonClientPathRoutes: [
+      { route: "thread/detail/read", count: 2 },
+      { route: "thread/read", count: 1 },
+    ],
+  };
+
+  assertProofReport(report, { sourcePath: "controlled-scenario-non-client-route-sample" });
 });
 
 test("passing controlled simulator proof rejects simulator-app downstream raw detail routes", () => {

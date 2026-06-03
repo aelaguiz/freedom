@@ -4457,6 +4457,8 @@ async function runDetailHistoryRequestScenario(options) {
   let detailWs = null;
   let detailLoadedAtMs = null;
   let liveUpdateSentAtMs = null;
+  let replayPressureBurstSentAtMs = null;
+  let replayPressureWitnessAtMs = null;
   let upstreamRequestSentAtMs = null;
   let upstreamResponseReceivedAtMs = null;
   let resolutionSentAtMs = null;
@@ -4810,6 +4812,7 @@ async function runDetailHistoryRequestScenario(options) {
       }
 
       if (isReplayPressure) {
+        replayPressureBurstSentAtMs = Date.now();
         for (let index = 0; index < 3; index += 1) {
           const pressureNotification = {
             jsonrpc: "2.0",
@@ -4831,6 +4834,7 @@ async function runDetailHistoryRequestScenario(options) {
           minProjectionCount: (liveProjectionWitness?.projectionIDs?.length || initialProjectionCount) + 3,
           timeoutMs: projectionTransitionTimeoutMs,
         });
+        replayPressureWitnessAtMs = replayPressureProjectionWitness ? Date.now() : null;
         if (replayPressureProjectionWitness?.byteEquivalentToDownstream !== true) {
           transitionFailure(
             findings,
@@ -5000,14 +5004,14 @@ async function runDetailHistoryRequestScenario(options) {
         route: "thread/detail/update",
         wait: {
           ok: replayPressureProjectionWitness?.byteEquivalentToDownstream === true,
-          observedAt: replayPressureProjectionWitness?.emittedAt || null,
-          observedAtMs: replayPressureProjectionWitness ? Date.now() : null,
+          observedAt: replayPressureWitnessAtMs ? new Date(replayPressureWitnessAtMs).toISOString() : null,
+          observedAtMs: replayPressureWitnessAtMs,
         },
         lag: scenarioLagSummary({
           transition: "detail-replay-pressure-burst",
-          startedAtMs: liveUpdateSentAtMs || detailLoadedAtMs || startedAtMs,
-          acknowledgedAtMs: liveUpdateSentAtMs || detailLoadedAtMs || startedAtMs,
-          observedAtMs: replayPressureProjectionWitness ? Date.now() : null,
+          startedAtMs: replayPressureBurstSentAtMs || liveUpdateSentAtMs || detailLoadedAtMs || startedAtMs,
+          acknowledgedAtMs: replayPressureBurstSentAtMs || liveUpdateSentAtMs || detailLoadedAtMs || startedAtMs,
+          observedAtMs: replayPressureWitnessAtMs,
           maxStreamLagMs: options.maxStreamLagMs,
         }),
         detailTruth: detailTruthFromWitness({
