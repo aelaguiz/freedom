@@ -348,6 +348,12 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
 
         await store.load()
         await session.emitConnectionState(.reconnecting(attempt: 1, reason: "transport closed"))
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.liveState == .reconnecting("transport closed")
+        }
         lifecycle.handle(.background)
         lifecycle.handle(.active)
 
