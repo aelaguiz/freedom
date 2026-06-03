@@ -149,6 +149,7 @@
     "failedSamples",
     "failedScenarioCount",
     "failures",
+    "fileID",
     "finalArchiveState",
     "finalState",
     "findingCount",

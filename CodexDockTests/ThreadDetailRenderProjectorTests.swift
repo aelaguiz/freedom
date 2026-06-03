@@ -49,6 +49,27 @@ final class ThreadDetailRenderProjectorTests: XCTestCase {
         XCTAssertTrue(render.hasUnfilteredEvents)
     }
 
+    func testProjectorKeepsFileChangePayloadOnRequestRow() {
+        let event = ThreadEvent(detailEvent: makeProjectedFileChangeEvent())
+        let snapshot = ThreadDetailSnapshot(
+            header: makeHeader(),
+            liveState: .live,
+            events: [event]
+        )
+
+        let render = ThreadDetailRenderProjector().render(
+            snapshot: snapshot,
+            options: ThreadDetailRenderOptions(filter: .default, visibleLimit: 10),
+            revision: RenderRevision(rawValue: 5)
+        )
+
+        XCTAssertEqual(render.rows.count, 1)
+        XCTAssertEqual(render.rows[0].event.fileChange?.summary.fileCount, 1)
+        XCTAssertEqual(render.rows[0].event.fileChange?.changes[0].path, "CodexDock/AppServer/ThreadDetailDTO.swift")
+        XCTAssertEqual(render.rows[0].requestCard?.kind, .fileChangeApproval)
+        XCTAssertEqual(render.rows[0].event.kind, .request)
+    }
+
     func testProjectorAppliesVisibleLimitAfterFilteringOrderedEvents() {
         let snapshot = ThreadDetailSnapshot(
             header: makeHeader(),

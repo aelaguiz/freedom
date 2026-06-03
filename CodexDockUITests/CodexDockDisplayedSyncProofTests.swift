@@ -103,6 +103,7 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
 
             let deadline = Date().addingTimeInterval(TimeInterval(config.durationMS) / 1000.0)
             var didTapRequestAction = false
+            var didCompleteFileChangeReview = false
             repeat {
                 let sampleStartedAt = Date()
                 let sample = captureSample(index: sampleIndex)
@@ -125,6 +126,26 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
                         timeout: 0.2
                     ) {
                         didTapRequestAction = true
+                    }
+                }
+                if !didCompleteFileChangeReview,
+                   let eventID = config.fileChangeReviewEventID,
+                   let fileID = config.fileChangeReviewFileID,
+                   let requestCardID = config.fileChangeReviewRequestCardID,
+                   let detail = sample.detail,
+                   detail.containsMessageCard(projectionID: eventID) == true {
+                    let requestPrefix = AutomationID.RequestCard.card(cardID: requestCardID).rawValue
+                    let requestVisible = detail.requestCardIDs.contains { identifier in
+                        identifier == requestPrefix || identifier.hasPrefix("\(requestPrefix).")
+                    } || detail.requestStatus(cardID: requestCardID) != nil
+                    if requestVisible,
+                       app.completeFileChangeReviewFlow(
+                        eventID: eventID,
+                        fileID: fileID,
+                        requestCardID: requestCardID,
+                        timeout: 5
+                       ) {
+                        didCompleteFileChangeReview = true
                     }
                 }
                 waitUntilNextSample(startedAt: sampleStartedAt, sampleMS: config.sampleMS)
@@ -230,6 +251,9 @@ private struct DisplayedUISyncConfig: Codable {
     var dockLenses: [String]?
     var foregroundCycleBeforeReady: Bool?
     var foregroundResumeDelayMS: Int?
+    var fileChangeReviewEventID: String?
+    var fileChangeReviewFileID: String?
+    var fileChangeReviewRequestCardID: String?
 
     var resolvedHostIDs: [String] {
         hosts

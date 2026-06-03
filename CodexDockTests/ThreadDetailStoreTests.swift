@@ -488,6 +488,36 @@ final class ThreadDetailStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testConnectionOfflinePreservesLoadedFileChangeDiffData() async throws {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            detailSubscribeResult: .success(.thread("thread-1")),
+            projectionRowsResult: .success([makeProjectedFileChangeEvent()]),
+            detailResyncResult: .success(.thread("thread-1"))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session)
+        )
+
+        await store.load()
+        await session.emitConnectionState(.offline(reason: "transport closed"))
+
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state,
+                  case let .stale(message) = snapshot.liveState,
+                  let event = snapshot.events.first else {
+                return false
+            }
+            return message == "transport closed"
+                && event.fileChange?.changes.first?.diff?.contains("+new line") == true
+                && store.requestCards.first?.status == .pending
+        }
+    }
+
+    @MainActor
     func testConnectionErrorMarksLoadedLiveDetailStale() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
@@ -823,6 +853,93 @@ final class ThreadDetailStoreTests: XCTestCase {
         let sentResponses = session.sentResponsesSnapshot()
         XCTAssertEqual(
             sentResponses,
+            [
+                SentServerResponse(
+                    id: .string("approval-1"),
+                    result: .object(["decision": .string("accept")])
+                ),
+            ]
+        )
+        XCTAssertEqual(store.requestCards[0].status, .resolved)
+    }
+
+    @MainActor
+    func testFileChangeApprovalRequiresViewedFileBeforeDirectResponse() async throws {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let fileChangeRow = makeProjectedFileChangeEvent()
+        let session = FakeThreadDetailSession(
+            detailSubscribeResult: .success(.thread("thread-1")),
+            projectionRowsResult: .success([fileChangeRow]),
+            detailResyncResult: .success(.thread("thread-1"))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session),
+            now: { Date(timeIntervalSince1970: 3_000) }
+        )
+
+        await store.load()
+        let cardID = try XCTUnwrap(store.requestCards.first?.id)
+
+        await store.respond(to: cardID, action: .accept)
+
+        XCTAssertEqual(session.sentResponsesSnapshot(), [])
+        XCTAssertEqual(store.requestCards[0].status, .failed("1 changed file(s) have not been opened yet."))
+
+        let event = try XCTUnwrap(store.requestCards.first.flatMap { card in
+            if case let .loaded(snapshot) = store.state {
+                return snapshot.events.first(where: { $0.id == card.id })
+            }
+            return nil
+        })
+        let fileChange = try XCTUnwrap(event.fileChange)
+        let fileID = try XCTUnwrap(FileChangeReviewState(
+            eventID: event.id,
+            fileChange: fileChange,
+            viewedFileIDs: []
+        ).files.first?.id)
+
+        store.markFileChangeFileViewed(eventID: cardID, fileID: fileID)
+        await store.respond(to: cardID, action: .accept)
+
+        XCTAssertEqual(
+            session.sentResponsesSnapshot(),
+            [
+                SentServerResponse(
+                    id: .string("approval-1"),
+                    result: .object(["decision": .string("accept")])
+                ),
+            ]
+        )
+        XCTAssertEqual(store.requestCards[0].status, .resolved)
+    }
+
+    @MainActor
+    func testFileChangeApprovalCanProceedAfterExplicitRiskConfirmation() async throws {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            detailSubscribeResult: .success(.thread("thread-1")),
+            projectionRowsResult: .success([makeProjectedFileChangeEvent()]),
+            detailResyncResult: .success(.thread("thread-1"))
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session),
+            now: { Date(timeIntervalSince1970: 3_000) }
+        )
+
+        await store.load()
+        let cardID = try XCTUnwrap(store.requestCards.first?.id)
+
+        store.confirmFileChangeApprovalRisk(cardID: cardID)
+        await store.respond(to: cardID, action: .accept)
+
+        XCTAssertEqual(
+            session.sentResponsesSnapshot(),
             [
                 SentServerResponse(
                     id: .string("approval-1"),

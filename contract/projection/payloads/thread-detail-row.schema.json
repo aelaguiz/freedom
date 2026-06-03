@@ -203,6 +203,139 @@
               },
               "additionalProperties": false
             },
+            "fileChange": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "required": [
+                "version",
+                "status",
+                "approvalRequired",
+                "summary",
+                "changes"
+              ],
+              "properties": {
+                "version": {
+                  "const": 1
+                },
+                "status": {
+                  "enum": [
+                    "completed",
+                    "pending",
+                    "applied",
+                    "declined",
+                    "failed",
+                    "unknown"
+                  ]
+                },
+                "approvalRequired": {
+                  "type": "boolean"
+                },
+                "summary": {
+                  "type": "object",
+                  "required": [
+                    "fileCount",
+                    "additions",
+                    "deletions",
+                    "truncated"
+                  ],
+                  "properties": {
+                    "fileCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "additions": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "deletions": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "changes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "path",
+                      "oldPath",
+                      "kind",
+                      "additions",
+                      "deletions",
+                      "diffAvailability",
+                      "diff",
+                      "truncated"
+                    ],
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "oldPath": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "kind": {
+                        "enum": [
+                          "add",
+                          "update",
+                          "delete",
+                          "move",
+                          "unknown"
+                        ]
+                      },
+                      "additions": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "deletions": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "diffAvailability": {
+                        "enum": [
+                          "available",
+                          "binary",
+                          "generated",
+                          "tooLarge",
+                          "missing",
+                          "unsupported",
+                          "unknown"
+                        ]
+                      },
+                      "diff": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      },
+                      "unavailableReason": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "unavailableReason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            },
             "diagnostic": {}
           },
           "additionalProperties": false

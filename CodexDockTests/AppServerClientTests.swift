@@ -1171,6 +1171,102 @@ final class AppServerClientTests: XCTestCase {
         XCTAssertEqual(resyncResponse.threadID, "thread-1")
     }
 
+    func testThreadDetailSnapshotDecodesOptionalFileChangePayload() throws {
+        let data = Data(#"""
+        {
+          "schemaVersion": 1,
+          "identityVersion": 1,
+          "projectionEngineVersion": 1,
+          "sourceHostID": "test-host",
+          "view": "thread.detail",
+          "threadID": "thread-1",
+          "epoch": "epoch-1",
+          "seq": 1,
+          "generation": 1,
+          "rows": [
+            {
+              "schemaVersion": 1,
+              "identityVersion": 1,
+              "projectionEngineVersion": 1,
+              "sourceHostID": "test-host",
+              "view": "thread.detail",
+              "threadID": "thread-1",
+              "projectionID": "host:test-host/thread:thread-1/turn:turn-1/item:item-file-1/row:fileChange",
+              "sourceRef": "host:test-host/thread:thread-1/turn:turn-1/item:item-file-1",
+              "rowRole": "fileChange",
+              "displayOrderKey": "0001|fileChange",
+              "revision": 1,
+              "payload": {
+                "itemType": "fileChange",
+                "visibility": "request",
+                "renderKind": "request",
+                "title": "File change",
+                "body": "1 file changed, +2 -1",
+                "renderState": "settled",
+                "requestID": null,
+                "request": null,
+                "diagnostic": null,
+                "fileChange": {
+                  "version": 1,
+                  "status": "completed",
+                  "approvalRequired": false,
+                  "summary": {
+                    "fileCount": 1,
+                    "additions": 2,
+                    "deletions": 1,
+                    "truncated": false
+                  },
+                  "changes": [
+                    {
+                      "path": "CodexDock/AppServer/ThreadDetailDTO.swift",
+                      "oldPath": null,
+                      "kind": "update",
+                      "additions": 2,
+                      "deletions": 1,
+                      "diffAvailability": "available",
+                      "diff": "@@ -1,3 +1,4 @@\n import Foundation\n-old line\n+new line\n+added line\n context\n",
+                      "truncated": false
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "schemaVersion": 1,
+              "identityVersion": 1,
+              "projectionEngineVersion": 1,
+              "sourceHostID": "test-host",
+              "view": "thread.detail",
+              "threadID": "thread-1",
+              "projectionID": "host:test-host/thread:thread-1/turn:turn-1/item:item-legacy/row:fileChange",
+              "sourceRef": "host:test-host/thread:thread-1/turn:turn-1/item:item-legacy",
+              "rowRole": "fileChange",
+              "displayOrderKey": "0002|fileChange",
+              "revision": 1,
+              "payload": {
+                "itemType": "fileChange",
+                "visibility": "request",
+                "renderKind": "request",
+                "title": "File change",
+                "body": "File changes are available on desktop.",
+                "renderState": "settled",
+                "requestID": null,
+                "request": null,
+                "diagnostic": null
+              }
+            }
+          ]
+        }
+        """#.utf8)
+
+        let snapshot = try JSONDecoder().decode(ThreadDetailSnapshotDTO.self, from: data)
+
+        XCTAssertEqual(snapshot.rows[0].fileChange?.version, 1)
+        XCTAssertEqual(snapshot.rows[0].fileChange?.summary.fileCount, 1)
+        XCTAssertEqual(snapshot.rows[0].fileChange?.changes[0].diffAvailability, "available")
+        XCTAssertNil(snapshot.rows[1].fileChange)
+    }
+
     func testThreadDetailSessionAddsTraceMetadataToDetailRoutes() async throws {
         let host = try DockHostConfiguration(host: "home.fairy-salmon.ts.net", port: 4510)
         let transport = ScriptedAppServerTransport()

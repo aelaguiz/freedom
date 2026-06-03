@@ -54,6 +54,65 @@
         "request": null,
         "diagnostic": null
       }
+    },
+    {
+      "schemaVersion": 1,
+      "identityVersion": 1,
+      "projectionEngineVersion": 1,
+      "sourceHostID": "test-host",
+      "view": "thread.detail",
+      "threadID": "thread-a",
+      "projectionID": "host:test-host/thread:thread-a/turn:turn-1/item:item-file-1/row:fileChange",
+      "sourceRef": "host:test-host/thread:thread-a/turn:turn-1/item:item-file-1",
+      "rowRole": "fileChange",
+      "displayOrderKey": "0000000000000001|000001|host:test-host/thread:thread-a/turn:turn-1/item:item-file-1/row:fileChange",
+      "revision": 1,
+      "freshness": {
+        "state": "fresh",
+        "asOf": "2026-06-01T00:00:01.000Z",
+        "sourceWatermark": "2026-06-01T00:00:01.000Z"
+      },
+      "payload": {
+        "itemType": "fileChange",
+        "visibility": "request",
+        "renderKind": "request",
+        "title": "File change",
+        "body": "1 file changed, +2 -1",
+        "eventTime": "2026-06-01T00:00:01.000Z",
+        "activityTime": "2026-06-01T00:00:01.000Z",
+        "turnID": "turn-1",
+        "itemID": "item-file-1",
+        "turnOrder": 1,
+        "itemOrder": 2,
+        "rowOrder": 0,
+        "renderState": "settled",
+        "requestID": null,
+        "request": null,
+        "diagnostic": null,
+        "fileChange": {
+          "version": 1,
+          "status": "completed",
+          "approvalRequired": false,
+          "summary": {
+            "fileCount": 1,
+            "additions": 2,
+            "deletions": 1,
+            "truncated": false
+          },
+          "changes": [
+            {
+              "path": "CodexDock/AppServer/ThreadDetailDTO.swift",
+              "oldPath": null,
+              "kind": "update",
+              "additions": 2,
+              "deletions": 1,
+              "diffAvailability": "available",
+              "diff": "@@ -1,3 +1,4 @@\n import Foundation\n-old line\n+new line\n+added line\n context\n",
+              "truncated": false
+            }
+          ]
+        }
+      }
     }
   ],
   "generation": 1

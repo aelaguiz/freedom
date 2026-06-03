@@ -27,6 +27,12 @@
           "sourceRef": "host:home/thread:thread-1/turn:turn-1/item:item-1",
           "rowRole": "userMessage",
           "displayOrderKey": "0000000000000001|0000000001|9999999998|9999999998|host:home%2Fthread:thread-1%2Fturn:turn-1%2Fitem:item-1%2Frow:userMessage"
+        },
+        {
+          "projectionID": "host:home/thread:thread-1/turn:turn-1/item:item-file-1/row:fileChange",
+          "sourceRef": "host:home/thread:thread-1/turn:turn-1/item:item-file-1",
+          "rowRole": "fileChange",
+          "displayOrderKey": "0000000000000002|0000000001|9999999997|9999999999|host:home%2Fthread:thread-1%2Fturn:turn-1%2Fitem:item-file-1%2Frow:fileChange"
         }
       ],
       "projectionIDs": [],
@@ -34,6 +40,7 @@
     }
   ],
   "projectionIDs": [
-    "host:home/thread:thread-1/turn:turn-1/item:item-1/row:userMessage"
+    "host:home/thread:thread-1/turn:turn-1/item:item-1/row:userMessage",
+    "host:home/thread:thread-1/turn:turn-1/item:item-file-1/row:fileChange"
   ]
 }

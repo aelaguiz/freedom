@@ -19,6 +19,10 @@ import {
   stableStringify,
   threadDetailDisplayOrderKey as displayOrderKey,
 } from "./dock-relay-projection-engine.mjs";
+import {
+  fileChangeDisplayBody,
+  normalizeFileChangePayload,
+} from "./dock-relay-thread-detail-file-change.mjs";
 
 const THREAD_DETAIL_UPDATE_METHOD = "thread/detail/update";
 
@@ -271,12 +275,34 @@ function makeProjectionRow({
   renderState = "settled",
   requestID = null,
   request = null,
+  fileChange = null,
   diagnostic = null,
   revision = 1,
   sourceWatermark = null,
 }) {
   const resolvedActivityMs = activityAtMs ?? eventTimeMs ?? Date.now();
   const resolvedEventMs = eventTimeMs ?? resolvedActivityMs;
+  const payload = {
+    turnID,
+    itemID,
+    itemType,
+    visibility,
+    renderKind,
+    title,
+    body,
+    eventTime: isoFromMs(resolvedEventMs),
+    activityTime: isoFromMs(resolvedActivityMs),
+    turnOrder,
+    itemOrder,
+    rowOrder,
+    renderState,
+    requestID,
+    request,
+    diagnostic,
+  };
+  if (fileChange) {
+    payload.fileChange = fileChange;
+  }
   return {
     schemaVersion: THREAD_DETAIL_SCHEMA_VERSION,
     identityVersion: THREAD_DETAIL_IDENTITY_VERSION,
@@ -296,24 +322,7 @@ function makeProjectionRow({
     }),
     revision,
     freshness: freshness(sourceWatermark),
-    payload: {
-      turnID,
-      itemID,
-      itemType,
-      visibility,
-      renderKind,
-      title,
-      body,
-      eventTime: isoFromMs(resolvedEventMs),
-      activityTime: isoFromMs(resolvedActivityMs),
-      turnOrder,
-      itemOrder,
-      rowOrder,
-      renderState,
-      requestID,
-      request,
-      diagnostic,
-    },
+    payload,
   };
 }
 
@@ -404,14 +413,18 @@ function rowSpecsForItem(item) {
       return rows;
     }
     case "fileChange":
+    {
+      const fileChange = normalizeFileChangePayload(item);
       return [{
         rowRole: "fileChange",
         renderKind: "request",
         visibility: "request",
         title: "File change",
-        body: "File changes are available on desktop.",
+        body: fileChangeDisplayBody(fileChange),
         rowOrder: 0,
+        fileChange,
       }];
+    }
     case "mcpToolCall":
     case "dynamicToolCall":
       return [{
@@ -528,6 +541,7 @@ function eventsFromItem(item, {
     itemOrder,
     rowOrder: spec.rowOrder,
     renderState,
+    fileChange: spec.fileChange || null,
   }));
 }
 
@@ -891,6 +905,12 @@ function eventFromRequest(message, nowMs = Date.now(), {
   const rowRole = hasStableItemIdentity ? itemBackedProjection.rowRole : "request";
   const visibility = hasStableItemIdentity ? itemBackedProjection.visibility : "request";
   const renderKind = hasStableItemIdentity ? itemBackedProjection.renderKind : "request";
+  const fileChange = message.method === "item/fileChange/requestApproval"
+    ? normalizeFileChangePayload(params.fileChange || params, {
+        approvalRequired: true,
+        unavailableReason: "missingDiff",
+      })
+    : null;
   return makeProjectionRow({
     sourceHostID,
     threadID,
@@ -901,7 +921,7 @@ function eventFromRequest(message, nowMs = Date.now(), {
     visibility,
     renderKind,
     title: requestTitle(message.method),
-    body: requestBody(message.method, params),
+    body: fileChange ? fileChangeDisplayBody(fileChange) : requestBody(message.method, params),
     eventTimeMs: requestedAtMs,
     activityAtMs: requestedAtMs,
     turnID: turnID.value,
@@ -914,6 +934,7 @@ function eventFromRequest(message, nowMs = Date.now(), {
       params: message.params || null,
       status: "pending",
     },
+    fileChange,
   });
 }
 

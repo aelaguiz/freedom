@@ -394,6 +394,32 @@ public extension AutomationID {
         }
     }
 
+    enum FileChange {
+        public static func card(eventID: String) -> AutomationID {
+            AutomationID("codexdock.session.file-change.\(safeSegment(eventID))")
+        }
+
+        public static func reviewButton(eventID: String) -> AutomationID {
+            AutomationID("codexdock.session.file-change.\(safeSegment(eventID)).review")
+        }
+
+        public static func list(eventID: String) -> AutomationID {
+            AutomationID("codexdock.session.file-change.\(safeSegment(eventID)).list")
+        }
+
+        public static func fileRow(eventID: String, fileID: String) -> AutomationID {
+            AutomationID("codexdock.session.file-change.\(safeSegment(eventID)).file.\(safeSegment(fileID))")
+        }
+
+        public static func diff(eventID: String, fileID: String) -> AutomationID {
+            AutomationID("codexdock.session.file-change.\(safeSegment(eventID)).file.\(safeSegment(fileID)).diff")
+        }
+
+        public static func acknowledgeButton(eventID: String, fileID: String) -> AutomationID {
+            AutomationID("codexdock.session.file-change.\(safeSegment(eventID)).file.\(safeSegment(fileID)).acknowledge")
+        }
+    }
+
     static func safeSegment(_ value: String) -> String {
         var escaped = ""
         for byte in value.utf8 {

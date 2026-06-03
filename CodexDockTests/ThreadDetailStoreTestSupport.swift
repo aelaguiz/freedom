@@ -512,7 +512,8 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
             revision: revision,
             renderState: event.isStreamingDelta ? .streaming : (event.isLive ? .live : .settled),
             requestID: event.request?.requestID.description,
-            request: event.request
+            request: event.request,
+            fileChange: event.fileChange
         )
     }
 
@@ -789,6 +790,7 @@ func makeProjectedDetailEvent(
     text: String,
     renderState: ThreadDetailRenderState = .settled,
     request: ThreadDetailEventRequestDTO? = nil,
+    fileChange: ThreadDetailFileChangeDTO? = nil,
     revision: Int = 1
 ) -> ThreadDetailEventDTO {
     let resolvedItemID = itemID ?? turnID.map { "\($0)-agent" }
@@ -830,7 +832,69 @@ func makeProjectedDetailEvent(
         revision: revision,
         renderState: renderState,
         requestID: requestID,
-        request: request
+        request: request,
+        fileChange: fileChange
+    )
+}
+
+func makeProjectedFileChangeEvent(
+    sourceHostID: String = "test-host",
+    threadID: String = "thread-1",
+    turnID: String = "turn-1",
+    itemID: String = "item-file-1",
+    requestID: String? = "approval-1",
+    approvalRequired: Bool = true
+) -> ThreadDetailEventDTO {
+    let request = requestID.map {
+        ThreadDetailEventRequestDTO(
+            requestID: .string($0),
+            method: "item/fileChange/requestApproval",
+            params: .object([
+                "threadId": .string(threadID),
+                "turnId": .string(turnID),
+                "itemId": .string(itemID),
+                "reason": .string("Approve file change"),
+            ]),
+            status: "pending"
+        )
+    }
+    return makeProjectedDetailEvent(
+        threadID: threadID,
+        sourceHostID: sourceHostID,
+        turnID: turnID,
+        itemID: itemID,
+        requestID: requestID,
+        kind: .request,
+        visibility: .request,
+        rowRole: "fileChange",
+        title: requestID == nil ? "File change" : "File change approval",
+        startedAt: 3_000,
+        text: approvalRequired ? "Review 1 file before approving, +2 -1" : "1 file changed, +2 -1",
+        renderState: requestID == nil ? .settled : .live,
+        request: request,
+        fileChange: ThreadDetailFileChangeDTO(
+            version: 1,
+            status: approvalRequired ? "pending" : "completed",
+            approvalRequired: approvalRequired,
+            summary: ThreadDetailFileChangeSummaryDTO(
+                fileCount: 1,
+                additions: 2,
+                deletions: 1,
+                truncated: false
+            ),
+            changes: [
+                ThreadDetailFileChangeEntryDTO(
+                    path: "CodexDock/AppServer/ThreadDetailDTO.swift",
+                    oldPath: nil,
+                    kind: "update",
+                    additions: 2,
+                    deletions: 1,
+                    diffAvailability: "available",
+                    diff: "@@ -1,3 +1,4 @@\n import Foundation\n-old line\n+new line\n+added line\n context\n",
+                    truncated: false
+                ),
+            ]
+        )
     )
 }
 

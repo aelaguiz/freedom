@@ -76,8 +76,11 @@ struct ThreadMessageListView: View {
     let rows: [ThreadEventRenderRow]
     let filter: ThreadDetailMessageFilter
     let hasUnfilteredEvents: Bool
+    let fileChangeViewedFileIDsByEventID: [String: Set<String>]
     let onRequestInputChange: (String, String) -> Void
     let onRequestAction: (String, ServerRequestCardAction) -> Void
+    let onFileChangeViewed: (String, String) -> Void
+    let onFileChangeApprovalRiskConfirmed: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -102,8 +105,11 @@ struct ThreadMessageListView: View {
                     ThreadMessageCard(
                         event: row.event,
                         requestCard: row.requestCard,
+                        fileChangeViewedFileIDs: fileChangeViewedFileIDsByEventID[row.event.id] ?? [],
                         onRequestInputChange: onRequestInputChange,
-                        onRequestAction: onRequestAction
+                        onRequestAction: onRequestAction,
+                        onFileChangeViewed: onFileChangeViewed,
+                        onFileChangeApprovalRiskConfirmed: onFileChangeApprovalRiskConfirmed
                     )
                 }
             }
@@ -166,8 +172,11 @@ struct DetailMessageView: View {
 private struct ThreadMessageCard: View {
     let event: ThreadEvent
     let requestCard: ServerRequestCard?
+    let fileChangeViewedFileIDs: Set<String>
     let onRequestInputChange: (String, String) -> Void
     let onRequestAction: (String, ServerRequestCardAction) -> Void
+    let onFileChangeViewed: (String, String) -> Void
+    let onFileChangeApprovalRiskConfirmed: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -190,13 +199,25 @@ private struct ThreadMessageCard: View {
                 .accessibilityValue(messageAutomationValue)
                 .codexAutomationID(AutomationID.Session.messageCard(projectionID: event.id))
 
-            Text(event.body)
-                .font(bodyFont)
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            if let fileChange = event.fileChange {
+                FileChangeReviewCard(
+                    event: event,
+                    fileChange: fileChange,
+                    viewedFileIDs: fileChangeViewedFileIDs,
+                    requestCard: requestCard,
+                    onFileViewed: onFileChangeViewed,
+                    onApprovalRiskConfirmed: onFileChangeApprovalRiskConfirmed,
+                    onRequestAction: onRequestAction
+                )
+            } else {
+                Text(event.body)
+                    .font(bodyFont)
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
-            if let requestCard {
+            if event.fileChange == nil, let requestCard {
                 requestControls(for: requestCard)
             }
         }

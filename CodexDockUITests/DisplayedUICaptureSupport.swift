@@ -101,6 +101,24 @@ struct DisplayedUIDetail: Codable {
             || containsMessageCard(projectionID: cardID)
     }
 
+    func requestStatus(cardID: String) -> String? {
+        guard let statuses = codexDockAutomationField("request-statuses", in: messageListValue) else {
+            return nil
+        }
+        for part in statuses.split(separator: "|") {
+            let pair = part.split(separator: "=", maxSplits: 1)
+            guard pair.count == 2 else {
+                continue
+            }
+            let rawKey = String(pair[0])
+            let key = rawKey.removingPercentEncoding ?? rawKey
+            if key == cardID {
+                return String(pair[1])
+            }
+        }
+        return nil
+    }
+
     func containsMessageCard(projectionID: String) -> Bool {
         let identifier = AutomationID.Session.messageCard(projectionID: projectionID).rawValue
         return messageCardIDs.contains(identifier)
@@ -311,6 +329,47 @@ extension XCUIApplication {
             }
         }
         return false
+    }
+
+    func completeFileChangeReviewFlow(
+        eventID: String,
+        fileID: String,
+        requestCardID: String,
+        timeout: TimeInterval
+    ) -> Bool {
+        let reviewButton = displayedUIElement(id: AutomationID.FileChange.reviewButton(eventID: eventID).rawValue)
+        guard reviewButton.waitForExistence(timeout: timeout),
+              reviewButton.isEnabled,
+              reviewButton.isHittable else {
+            return false
+        }
+        reviewButton.tap()
+
+        let list = displayedUIElement(id: AutomationID.FileChange.list(eventID: eventID).rawValue)
+        guard list.waitForExistence(timeout: timeout) else {
+            return false
+        }
+
+        let fileRow = displayedUIElement(id: AutomationID.FileChange.fileRow(eventID: eventID, fileID: fileID).rawValue)
+        guard fileRow.waitForExistence(timeout: timeout),
+              fileRow.isHittable else {
+            return false
+        }
+        fileRow.tap()
+
+        let diff = displayedUIElement(id: AutomationID.FileChange.diff(eventID: eventID, fileID: fileID).rawValue)
+        guard diff.waitForExistence(timeout: timeout) else {
+            return false
+        }
+
+        let approveButton = displayedUIElement(id: AutomationID.RequestCard.approveButton(cardID: requestCardID).rawValue)
+        guard approveButton.waitForExistence(timeout: timeout),
+              approveButton.isEnabled,
+              approveButton.isHittable else {
+            return false
+        }
+        approveButton.tap()
+        return true
     }
 
     private func requestCardBaseIdentifier(from identifier: String) -> String {

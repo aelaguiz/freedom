@@ -113,6 +113,7 @@ public final class ThreadDetailStore: ObservableObject {
     }
 
     @Published public private(set) var state: ThreadDetailStoreState
+    @Published private(set) var fileChangeViewedFileIDsByEventID: [String: Set<String>] = [:]
     public var requestCards: [ServerRequestCard] {
         requestCardPresentation.cards(from: events)
     }
@@ -162,6 +163,7 @@ public final class ThreadDetailStore: ObservableObject {
     private var didLoad = false
     private var isClosing = false
     private var requestCardPresentation = ThreadDetailRequestCardPresentation()
+    private var confirmedFileChangeApprovalRiskIDs: Set<String> = []
     private var latestDockRowActivityMarker: DockRowActivityMarker
     private var lastCompletedDockRowRefreshMarker: DockRowActivityMarker
 
@@ -413,6 +415,21 @@ public final class ThreadDetailStore: ObservableObject {
         publishCurrentRenderState()
     }
 
+    func markFileChangeFileViewed(eventID: String, fileID: String) {
+        guard events.contains(where: { $0.id == eventID && $0.fileChange != nil }) else {
+            return
+        }
+        var viewedFileIDs = fileChangeViewedFileIDsByEventID[eventID] ?? []
+        guard viewedFileIDs.insert(fileID).inserted else {
+            return
+        }
+        fileChangeViewedFileIDsByEventID[eventID] = viewedFileIDs
+    }
+
+    func confirmFileChangeApprovalRisk(cardID: String) {
+        confirmedFileChangeApprovalRiskIDs.insert(cardID)
+    }
+
     public func respond(to cardID: String, action: ServerRequestCardAction) async {
         guard let session else {
             setCardStatus(cardID: cardID, status: .failed("Thread is not connected."))
@@ -424,6 +441,12 @@ public final class ThreadDetailStore: ObservableObject {
         }
         guard let payload = card.responsePayload(for: action) else {
             setCardStatus(cardID: cardID, status: .failed("This request cannot be answered on phone."))
+            return
+        }
+        if action == .accept,
+           card.kind == .fileChangeApproval,
+           let blockedMessage = fileChangeApprovalBlockedMessage(cardID: cardID) {
+            setCardStatus(cardID: cardID, status: .failed(blockedMessage))
             return
         }
 
@@ -442,6 +465,9 @@ public final class ThreadDetailStore: ObservableObject {
         } catch {
             setCardStatus(cardID: cardID, status: .failed(message(from: error)))
             DockLog.threadDetail.error("request card response failed card_id=\(DockLog.publicID(cardID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+        }
+        if action == .accept && card.kind == .fileChangeApproval {
+            confirmedFileChangeApprovalRiskIDs.remove(cardID)
         }
     }
 
@@ -603,6 +629,7 @@ public final class ThreadDetailStore: ObservableObject {
         )
         events = nextEvents
         activeTurnID = projectionSnapshot.activeTurnID
+        pruneFileChangeReviewState(to: nextEvents)
         requestCardPresentation.prune(to: nextEvents)
         liveState = ThreadDetailLiveState(projectionSnapshot: projectionSnapshot)
         publishLoaded()
@@ -668,6 +695,48 @@ public final class ThreadDetailStore: ObservableObject {
             return
         }
         publishCurrentRenderState()
+    }
+
+    private func fileChangeApprovalBlockedMessage(cardID: String) -> String? {
+        guard let event = events.first(where: { $0.id == cardID }),
+              let fileChange = event.fileChange else {
+            return nil
+        }
+        let reviewState = FileChangeReviewState(
+            eventID: event.id,
+            fileChange: fileChange,
+            viewedFileIDs: fileChangeViewedFileIDsByEventID[event.id] ?? []
+        )
+        if reviewState.canApproveWithoutConfirmation
+            || confirmedFileChangeApprovalRiskIDs.contains(cardID) {
+            return nil
+        }
+        return reviewState.confirmationMessage
+    }
+
+    private func pruneFileChangeReviewState(to nextEvents: [ThreadEvent]) {
+        let allowedFileIDsByEventID = Dictionary(uniqueKeysWithValues: nextEvents.compactMap { event -> (String, Set<String>)? in
+            guard let fileChange = event.fileChange else {
+                return nil
+            }
+            let fileIDs = FileChangeReviewState(
+                eventID: event.id,
+                fileChange: fileChange,
+                viewedFileIDs: []
+            ).files.map(\.id)
+            return (event.id, Set(fileIDs))
+        })
+        fileChangeViewedFileIDsByEventID = Dictionary(
+            uniqueKeysWithValues: fileChangeViewedFileIDsByEventID.compactMap { eventID, viewedIDs in
+                guard let allowedIDs = allowedFileIDsByEventID[eventID] else {
+                    return nil
+                }
+                return (eventID, viewedIDs.intersection(allowedIDs))
+            }
+        )
+        confirmedFileChangeApprovalRiskIDs = confirmedFileChangeApprovalRiskIDs.filter {
+            allowedFileIDsByEventID[$0] != nil
+        }
     }
 
     private func publishCurrentRenderState() {

@@ -60,6 +60,84 @@ public struct ThreadDetailEventRequestDTO: Codable, Equatable, Sendable {
     }
 }
 
+public struct ThreadDetailFileChangeDTO: Codable, Equatable, Sendable {
+    public let version: Int
+    public let status: String
+    public let approvalRequired: Bool
+    public let summary: ThreadDetailFileChangeSummaryDTO
+    public let changes: [ThreadDetailFileChangeEntryDTO]
+    public let unavailableReason: String?
+
+    public init(
+        version: Int,
+        status: String,
+        approvalRequired: Bool,
+        summary: ThreadDetailFileChangeSummaryDTO,
+        changes: [ThreadDetailFileChangeEntryDTO],
+        unavailableReason: String? = nil
+    ) {
+        self.version = version
+        self.status = status
+        self.approvalRequired = approvalRequired
+        self.summary = summary
+        self.changes = changes
+        self.unavailableReason = unavailableReason
+    }
+}
+
+public struct ThreadDetailFileChangeSummaryDTO: Codable, Equatable, Sendable {
+    public let fileCount: Int
+    public let additions: Int
+    public let deletions: Int
+    public let truncated: Bool
+
+    public init(
+        fileCount: Int,
+        additions: Int,
+        deletions: Int,
+        truncated: Bool
+    ) {
+        self.fileCount = fileCount
+        self.additions = additions
+        self.deletions = deletions
+        self.truncated = truncated
+    }
+}
+
+public struct ThreadDetailFileChangeEntryDTO: Codable, Equatable, Sendable {
+    public let path: String
+    public let oldPath: String?
+    public let kind: String
+    public let additions: Int
+    public let deletions: Int
+    public let diffAvailability: String
+    public let diff: String?
+    public let truncated: Bool
+    public let unavailableReason: String?
+
+    public init(
+        path: String,
+        oldPath: String? = nil,
+        kind: String,
+        additions: Int,
+        deletions: Int,
+        diffAvailability: String,
+        diff: String? = nil,
+        truncated: Bool,
+        unavailableReason: String? = nil
+    ) {
+        self.path = path
+        self.oldPath = oldPath
+        self.kind = kind
+        self.additions = additions
+        self.deletions = deletions
+        self.diffAvailability = diffAvailability
+        self.diff = diff
+        self.truncated = truncated
+        self.unavailableReason = unavailableReason
+    }
+}
+
 public struct ThreadDetailEventPayloadDTO: Codable, Equatable, Sendable {
     public let itemType: String?
     public let visibility: ThreadEventVisibilityCategory
@@ -76,6 +154,7 @@ public struct ThreadDetailEventPayloadDTO: Codable, Equatable, Sendable {
     public let renderState: ThreadDetailRenderState
     public let requestID: String?
     public let request: ThreadDetailEventRequestDTO?
+    public let fileChange: ThreadDetailFileChangeDTO?
     public let diagnostic: JSONValue?
 
     public init(
@@ -94,6 +173,7 @@ public struct ThreadDetailEventPayloadDTO: Codable, Equatable, Sendable {
         renderState: ThreadDetailRenderState = .settled,
         requestID: String? = nil,
         request: ThreadDetailEventRequestDTO? = nil,
+        fileChange: ThreadDetailFileChangeDTO? = nil,
         diagnostic: JSONValue? = nil
     ) {
         self.itemType = itemType
@@ -111,6 +191,7 @@ public struct ThreadDetailEventPayloadDTO: Codable, Equatable, Sendable {
         self.renderState = renderState
         self.requestID = requestID
         self.request = request
+        self.fileChange = fileChange
         self.diagnostic = diagnostic
     }
 }
@@ -145,6 +226,7 @@ public struct ThreadDetailEventDTO: Codable, Equatable, Sendable {
     public var renderState: ThreadDetailRenderState { payload.renderState }
     public var requestID: String? { payload.requestID }
     public var request: ThreadDetailEventRequestDTO? { payload.request }
+    public var fileChange: ThreadDetailFileChangeDTO? { payload.fileChange }
     public var diagnostic: JSONValue? { payload.diagnostic }
 
     public init(
@@ -175,6 +257,7 @@ public struct ThreadDetailEventDTO: Codable, Equatable, Sendable {
         renderState: ThreadDetailRenderState = .settled,
         requestID: String? = nil,
         request: ThreadDetailEventRequestDTO? = nil,
+        fileChange: ThreadDetailFileChangeDTO? = nil,
         diagnostic: JSONValue? = nil
     ) {
         self.schemaVersion = schemaVersion
@@ -205,6 +288,7 @@ public struct ThreadDetailEventDTO: Codable, Equatable, Sendable {
             renderState: renderState,
             requestID: requestID,
             request: request,
+            fileChange: fileChange,
             diagnostic: diagnostic
         )
     }

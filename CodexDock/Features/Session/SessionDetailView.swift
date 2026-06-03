@@ -83,6 +83,7 @@ public struct SessionDetailView: View {
             rows: renderSnapshot.rows,
             filter: filter,
             hasUnfilteredEvents: renderSnapshot.hasUnfilteredEvents,
+            fileChangeViewedFileIDsByEventID: store.fileChangeViewedFileIDsByEventID,
             onRequestInputChange: { cardID, draft in
                 store.updateRequestCardInput(cardID: cardID, draft: draft)
             },
@@ -90,6 +91,12 @@ public struct SessionDetailView: View {
                 Task {
                     await store.respond(to: cardID, action: action)
                 }
+            },
+            onFileChangeViewed: { eventID, fileID in
+                store.markFileChangeFileViewed(eventID: eventID, fileID: fileID)
+            },
+            onFileChangeApprovalRiskConfirmed: { cardID in
+                store.confirmFileChangeApprovalRisk(cardID: cardID)
             }
         )
         ComposerView(

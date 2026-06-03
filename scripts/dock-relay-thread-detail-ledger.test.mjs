@@ -28,6 +28,34 @@ function historyThread() {
   };
 }
 
+function fileChangeItem() {
+  return {
+    id: "item-file-1",
+    type: "fileChange",
+    status: "completed",
+    changes: [{
+      path: "CodexDock/AppServer/ThreadDetailDTO.swift",
+      kind: {
+        type: "update",
+        move_path: null,
+      },
+      diff: "@@ -1,3 +1,4 @@\n import Foundation\n-old line\n+new line\n+added line\n context\n",
+    }],
+  };
+}
+
+function fileChangeThread() {
+  return {
+    id: "thread-1",
+    turns: [{
+      id: "turn-1",
+      startedAt: 1_800_000_000,
+      completedAt: 1_800_000_010,
+      items: [fileChangeItem()],
+    }],
+  };
+}
+
 test("thread detail ledger gives history and live item notifications the same user-message event id", () => {
   const historyEvent = eventsFromThread(historyThread(), { sourceHostID: "home" })
     .find((event) => event.payload.renderKind === "userMessage");
@@ -236,6 +264,140 @@ test("thread detail item-backed request uses the item row id and request id stay
   assert.equal(event.payload.body, "echo hi");
 });
 
+test("thread detail projects file-change items with structured diff payload", () => {
+  const event = eventsFromThread(fileChangeThread(), { sourceHostID: "home" })[0];
+
+  assert.equal(event.projectionID, "host:home/thread:thread-1/turn:turn-1/item:item-file-1/row:fileChange");
+  assert.equal(event.rowRole, "fileChange");
+  assert.equal(event.payload.renderKind, "request");
+  assert.equal(event.payload.body, "1 file changed, +2 -1");
+  assert.equal(event.payload.fileChange.version, 1);
+  assert.equal(event.payload.fileChange.status, "completed");
+  assert.equal(event.payload.fileChange.approvalRequired, false);
+  assert.deepEqual(event.payload.fileChange.summary, {
+    fileCount: 1,
+    additions: 2,
+    deletions: 1,
+    truncated: false,
+  });
+  assert.equal(event.payload.fileChange.changes[0].path, "CodexDock/AppServer/ThreadDetailDTO.swift");
+  assert.equal(event.payload.fileChange.changes[0].kind, "update");
+  assert.equal(event.payload.fileChange.changes[0].diffAvailability, "available");
+});
+
+test("thread detail file-change projection normalizes add delete move and limited diffs", () => {
+  const event = eventsFromThread({
+    id: "thread-1",
+    turns: [{
+      id: "turn-1",
+      startedAt: 1_800_000_000,
+      completedAt: 1_800_000_010,
+      items: [{
+        id: "item-file-2",
+        type: "fileChange",
+        status: "completed",
+        changes: [{
+          path: "CodexDock/NewModel.swift",
+          kind: "add",
+          content: "let one = 1\nlet two = 2\n",
+        }, {
+          path: "CodexDock/OldModel.swift",
+          kind: "delete",
+          content: "let old = 1\nlet stale = 2\n",
+        }, {
+          path: "CodexDock/RenamedModel.swift",
+          kind: {
+            type: "move",
+            move_path: "CodexDock/OriginalModel.swift",
+          },
+          diff: "@@ -1,1 +1,1 @@\n-oldName\n+newName\n",
+        }, {
+          path: "CodexDock/Generated/Large.swift",
+          kind: "update",
+          diffAvailability: "truncated",
+          diff: "@@ -1,1 +1,1 @@\n-oldGenerated\n+newGenerated\n",
+        }],
+      }],
+    }],
+  }, { sourceHostID: "home" })[0];
+
+  assert.equal(event.payload.body, "4 files changed, +4 -4");
+  assert.deepEqual(event.payload.fileChange.summary, {
+    fileCount: 4,
+    additions: 4,
+    deletions: 4,
+    truncated: true,
+  });
+  assert.deepEqual(
+    event.payload.fileChange.changes.map((change) => ({
+      path: change.path,
+      oldPath: change.oldPath,
+      kind: change.kind,
+      additions: change.additions,
+      deletions: change.deletions,
+      diffAvailability: change.diffAvailability,
+      truncated: change.truncated,
+    })),
+    [{
+      path: "CodexDock/NewModel.swift",
+      oldPath: null,
+      kind: "add",
+      additions: 2,
+      deletions: 0,
+      diffAvailability: "available",
+      truncated: false,
+    }, {
+      path: "CodexDock/OldModel.swift",
+      oldPath: null,
+      kind: "delete",
+      additions: 0,
+      deletions: 2,
+      diffAvailability: "available",
+      truncated: false,
+    }, {
+      path: "CodexDock/RenamedModel.swift",
+      oldPath: "CodexDock/OriginalModel.swift",
+      kind: "move",
+      additions: 1,
+      deletions: 1,
+      diffAvailability: "available",
+      truncated: false,
+    }, {
+      path: "CodexDock/Generated/Large.swift",
+      oldPath: null,
+      kind: "update",
+      additions: 1,
+      deletions: 1,
+      diffAvailability: "tooLarge",
+      truncated: true,
+    }]
+  );
+  assert.equal(event.payload.fileChange.changes[3].unavailableReason, "tooLarge");
+});
+
+test("thread detail file-change approval carries unavailable payload when no diff is attached", () => {
+  const event = eventFromRequest({
+    id: "request-file-1",
+    method: "item/fileChange/requestApproval",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-file-1",
+      reason: "Approve file change",
+    },
+  }, 1_800_000_005_000, { sourceHostID: "home" });
+
+  assert.equal(event.projectionID, "host:home/thread:thread-1/turn:turn-1/item:item-file-1/row:fileChange");
+  assert.equal(event.rowRole, "fileChange");
+  assert.equal(event.payload.request.requestID, "request-file-1");
+  assert.equal(event.payload.body, "Diff unavailable on phone.");
+  assert.equal(event.payload.fileChange.status, "pending");
+  assert.equal(event.payload.fileChange.approvalRequired, true);
+  assert.equal(event.payload.fileChange.summary.fileCount, 0);
+  assert.deepEqual(event.payload.fileChange.changes, []);
+  assert.equal(event.payload.fileChange.unavailableReason, "missingDiff");
+});
+
 test("thread detail unsupported request methods stay standalone request rows", () => {
   const event = eventFromRequest({
     id: "request-1",
@@ -285,4 +447,64 @@ test("thread detail ledger merges item-backed request state into the canonical i
   assert.equal(commandRows[0].projectionID, "host:home/thread:thread-1/turn:turn-1/item:item-command-1/row:command");
   assert.equal(commandRows[0].payload.request.requestID, "request-1");
   assert.equal(commandRows[0].payload.visibility, "request");
+});
+
+test("thread detail ledger preserves file-change payload when approval arrives after item", () => {
+  const ledger = new ThreadDetailLedger({ sourceHostID: "home", threadID: "thread-1" });
+  ledger.replaceFromThread(fileChangeThread());
+  const requestUpdate = ledger.applyRequest({
+    id: "request-file-1",
+    method: "item/fileChange/requestApproval",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-file-1",
+      reason: "Approve file change",
+    },
+  }, { nowMs: 1_800_000_005_000 });
+
+  const row = requestUpdate.rows[0];
+  assert.equal(row.projectionID, "host:home/thread:thread-1/turn:turn-1/item:item-file-1/row:fileChange");
+  assert.equal(row.payload.request.requestID, "request-file-1");
+  assert.equal(row.payload.fileChange.approvalRequired, true);
+  assert.equal(row.payload.fileChange.status, "pending");
+  assert.equal(row.payload.fileChange.summary.fileCount, 1);
+  assert.equal(row.payload.fileChange.changes[0].diffAvailability, "available");
+  assert.equal(row.payload.body, "Review 1 file before approving, +2 -1");
+});
+
+test("thread detail ledger preserves request state when file-change item arrives after approval", () => {
+  const ledger = new ThreadDetailLedger({ sourceHostID: "home", threadID: "thread-1" });
+  const requestUpdate = ledger.applyRequest({
+    id: "request-file-1",
+    method: "item/fileChange/requestApproval",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-file-1",
+      reason: "Approve file change",
+    },
+  }, { nowMs: 1_800_000_005_000 });
+  const itemUpdate = ledger.applyNotification({
+    method: "item/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-file-1",
+      item: {
+        ...fileChangeItem(),
+        id: undefined,
+      },
+    },
+  }, { nowMs: 1_800_000_006_000 });
+
+  assert.equal(requestUpdate.rows[0].projectionID, itemUpdate.rows[0].projectionID);
+  const fileChangeRows = ledger.snapshot().rows.filter((event) => event.rowRole === "fileChange");
+  assert.equal(fileChangeRows.length, 1);
+  assert.equal(fileChangeRows[0].payload.request.requestID, "request-file-1");
+  assert.equal(fileChangeRows[0].payload.visibility, "request");
+  assert.equal(fileChangeRows[0].payload.fileChange.approvalRequired, true);
+  assert.equal(fileChangeRows[0].payload.fileChange.summary.fileCount, 1);
+  assert.equal(fileChangeRows[0].payload.fileChange.changes[0].path, "CodexDock/AppServer/ThreadDetailDTO.swift");
+  assert.equal(fileChangeRows[0].payload.body, "Review 1 file before approving, +2 -1");
 });

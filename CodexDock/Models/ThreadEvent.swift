@@ -58,6 +58,7 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
     public let activityDate: Date?
     public let isStreamingDelta: Bool
     public let request: ThreadDetailEventRequestDTO?
+    public let fileChange: ThreadDetailFileChangeDTO?
 
     public init(
         id: String,
@@ -76,7 +77,8 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
         displayGroupDate: Date? = nil,
         activityDate: Date? = nil,
         isStreamingDelta: Bool = false,
-        request: ThreadDetailEventRequestDTO? = nil
+        request: ThreadDetailEventRequestDTO? = nil,
+        fileChange: ThreadDetailFileChangeDTO? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -95,6 +97,7 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
         self.activityDate = activityDate
         self.isStreamingDelta = isStreamingDelta
         self.request = request
+        self.fileChange = fileChange
     }
 
     public init(detailEvent dto: ThreadDetailEventDTO) {
@@ -116,7 +119,8 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
             displayGroupDate: activityDate,
             activityDate: activityDate,
             isStreamingDelta: dto.renderState == .streaming,
-            request: dto.request
+            request: dto.request,
+            fileChange: dto.fileChange
         )
     }
 
@@ -152,7 +156,8 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
             activityDate: ThreadMessageSemantics.activityDate(for: delta)
                 ?? ThreadMessageSemantics.activityDate(for: self),
             isStreamingDelta: isStreamingDelta,
-            request: request
+            request: request,
+            fileChange: fileChange
         )
     }
 }

@@ -168,6 +168,27 @@ test("controlled scenario contract accepts relay render-order proof fields", () 
   assertProofReport(report, { sourcePath: "controlled-scenario-render-order-sample" });
 });
 
+test("controlled scenario contract accepts file-change review target evidence", () => {
+  const report = sampleProofReports().find(
+    (candidate) => candidate.kind === "codex-dock-controlled-simulator-scenario-relay-report"
+  );
+  report.scenario = "file-change-review";
+  report.summary.scenario = "file-change-review";
+  report.scenarios = [{
+    id: "file-change-review",
+    ok: true,
+    target: {
+      sourceHostID: "sim-file-change-review-fixture",
+      threadID: "sim-file-change-review-thread",
+      requestID: "approval-file-change-1",
+      requestCardID: "host:sim-file-change-review-fixture/thread:sim-file-change-review-thread/turn:turn-file-change-1/item:item-file-change-1/row:fileChange",
+      fileID: "0:update::CodexDock/Features/Session/ThreadMessageListView.swift",
+    },
+  }];
+
+  assertProofReport(report, { sourcePath: "controlled-scenario-file-change-review-sample" });
+});
+
 test("simulator UI sync contract accepts transition coverage sections", () => {
   const report = sampleProofReports().find(
     (candidate) => candidate.kind === "codex-dock-simulator-ui-sync-proof"

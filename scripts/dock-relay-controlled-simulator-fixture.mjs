@@ -32,6 +32,7 @@ const SUPPORTED_SCENARIOS = new Set([
   "archive-toggle",
   "current-work-visible",
   "detail-reconnect",
+  "file-change-review",
   "detail-history-request",
   "detail-replay-pressure",
   "foreground-resume-all-surfaces",
@@ -79,7 +80,7 @@ const FORBIDDEN_SIMULATOR_DETAIL_SIDE_DOOR_ROUTES = new Set([
 function usage() {
   return [
     "Usage:",
-    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <archive-toggle|current-work-visible|detail-reconnect|detail-history-request|detail-replay-pressure|foreground-resume-all-surfaces|large-list-checkpoint|live-lease-expiry|multi-host-isolation|mutation-ack-projection-refresh-failure|rapid-mutations|resync-gap|root-catchup-window-contract|server-request|source-refresh|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
+    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <archive-toggle|current-work-visible|detail-reconnect|detail-history-request|detail-replay-pressure|file-change-review|foreground-resume-all-surfaces|large-list-checkpoint|live-lease-expiry|multi-host-isolation|mutation-ack-projection-refresh-failure|rapid-mutations|resync-gap|root-catchup-window-contract|server-request|source-refresh|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
     "",
     "Options:",
     "  --summary-out <path>                 Write Markdown summary.",
@@ -374,6 +375,16 @@ function projectionIDForCommandApprovalRequest({ sourceHostID, threadID, turnID,
     turnID,
     itemID,
     rowRole: "command",
+  });
+}
+
+function projectionIDForFileChangeRequest({ sourceHostID, threadID, turnID, itemID }) {
+  return projectionIDForThreadItem({
+    sourceHostID,
+    threadID,
+    turnID,
+    itemID,
+    rowRole: "fileChange",
   });
 }
 
@@ -5141,6 +5152,543 @@ async function runDetailHistoryRequestScenario(options) {
   }
 }
 
+async function runFileChangeReviewScenario(options) {
+  const routeEvents = [];
+  const simulatorRouteEvents = [];
+  const findings = [];
+  const transitions = [];
+  const samples = [];
+  const startedAtMs = Date.now();
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-sim-file-change-review-"));
+  const hostID = "sim-file-change-review-fixture";
+  const threadID = "sim-file-change-review-thread";
+  const requestID = "approval-file-change-1";
+  const turnID = "turn-file-change-1";
+  const itemID = "item-file-change-1";
+  const filePath = "CodexDock/Features/Session/ThreadMessageListView.swift";
+  const fileID = `0:update::${filePath}`;
+  const requestCardID = projectionIDForFileChangeRequest({
+    sourceHostID: hostID,
+    threadID,
+    turnID,
+    itemID,
+  });
+  const threadRow = fixtureThread(threadID, "Simulator file-change review fixture row", 100);
+  const fileChangeTurn = {
+    id: turnID,
+    startedAt: 1_700_000_001,
+    completedAt: 1_700_000_002,
+    items: [{
+      id: itemID,
+      type: "fileChange",
+      status: "completed",
+      changes: [{
+        path: filePath,
+        kind: {
+          type: "update",
+          move_path: null,
+        },
+        diff: "@@ -1,4 +1,5 @@\n import SwiftUI\n-old placeholder\n+FileChangeReviewCard(event: event)\n+Review changes\n context\n",
+      }],
+    }],
+  };
+  let detailWs = null;
+  let detailLoadedAtMs = null;
+  let upstreamRequestSentAtMs = null;
+  let upstreamResponseReceivedAtMs = null;
+  let resolutionSentAtMs = null;
+  let forwardedResponse = null;
+  let resolveDetailLoaded;
+  let resolveRequestSent;
+  let resolveForwardedResponse;
+  let resolveResolutionSent;
+  const detailLoadedPromise = new Promise((resolve) => {
+    resolveDetailLoaded = resolve;
+  });
+  const requestSentPromise = new Promise((resolve) => {
+    resolveRequestSent = resolve;
+  });
+  const forwardedResponsePromise = new Promise((resolve) => {
+    resolveForwardedResponse = resolve;
+  });
+  const resolutionSentPromise = new Promise((resolve) => {
+    resolveResolutionSent = resolve;
+  });
+
+  const sendFileChangeRequest = (ws) => {
+    if (upstreamRequestSentAtMs !== null) {
+      return;
+    }
+    upstreamRequestSentAtMs = Date.now();
+    const requestMessage = {
+      jsonrpc: "2.0",
+      id: requestID,
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: threadID,
+        turnId: turnID,
+        itemId: itemID,
+        reason: "Review 1 file before approving, +2 -1",
+      },
+    };
+    ws.send(JSON.stringify(requestMessage));
+    resolveRequestSent({
+      sentAtMs: upstreamRequestSentAtMs,
+      message: {
+        id: requestID,
+        method: requestMessage.method,
+        threadID,
+      },
+    });
+  };
+
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise((resolve) => historyServer.once("listening", resolve));
+  historyServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        recordClientRoute(routeEvents, "initialize", "relay initialized file-change-review fixture upstream", { threadID });
+        sendFixtureResult(ws, message.id, {
+          userAgent: "codex-sim-file-change-review-fixture",
+          codexHome: tempDir,
+          platformFamily: "unix",
+          platformOs: "macos",
+        });
+      } else if (message.method === "initialized") {
+        recordClientRoute(routeEvents, "initialized", "relay sent initialized notification to file-change-review fixture upstream", { threadID });
+      } else if (message.method === "thread/list") {
+        sendFixtureResult(ws, message.id, {
+          data: activeFixtureRows(message, [threadRow]),
+          nextCursor: null,
+          backwardsCursor: null,
+        });
+      } else if (message.method === "thread/loaded/list") {
+        sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
+      } else if (message.method === "thread/read") {
+        recordClientRoute(routeEvents, "thread/read", "relay read target file-change detail from fixture upstream", {
+          threadID: message.params?.threadId || threadID,
+          includeTurns: message.params?.includeTurns ?? null,
+        });
+        sendFixtureResult(ws, message.id, {
+          thread: {
+            ...threadRow,
+            id: message.params?.threadId || threadID,
+            turns: [],
+          },
+        });
+      } else if (message.method === "thread/turns/list") {
+        recordClientRoute(routeEvents, "thread/turns/list", "relay drained file-change historical turns from fixture upstream", {
+          threadID: message.params?.threadId || threadID,
+          itemsView: message.params?.itemsView ?? null,
+        });
+        sendFixtureResult(ws, message.id, {
+          data: [fileChangeTurn],
+          nextCursor: null,
+          backwardsCursor: null,
+        });
+      } else if (message.method === "thread/resume") {
+        recordClientRoute(routeEvents, "thread/resume", "relay resumed target file-change live detail from fixture upstream", {
+          threadID: message.params?.threadId || threadID,
+        });
+        sendFixtureResult(ws, message.id, {
+          thread: {
+            ...threadRow,
+            id: message.params?.threadId || threadID,
+            turns: [],
+          },
+        });
+        detailWs = ws;
+        detailLoadedAtMs = Date.now();
+        resolveDetailLoaded({ ws });
+      } else if (!message.method && String(message.id) === requestID) {
+        upstreamResponseReceivedAtMs = Date.now();
+        forwardedResponse = proofMessageSummary({
+          id: message.id,
+          result: message.result || null,
+        }, { requestID });
+        resolveForwardedResponse({
+          receivedAtMs: upstreamResponseReceivedAtMs,
+          message: forwardedResponse,
+        });
+        setTimeout(() => {
+          resolutionSentAtMs = Date.now();
+          const notification = {
+            jsonrpc: "2.0",
+            method: "serverRequest/resolved",
+            params: {
+              threadId: threadID,
+              requestId: requestID,
+            },
+          };
+          ws.send(JSON.stringify(notification));
+          resolveResolutionSent({
+            sentAtMs: resolutionSentAtMs,
+            message: proofMessageSummary(notification, { requestID }),
+          });
+        }, 10);
+      }
+    });
+  });
+
+  const relayConfig = {
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    hostId: hostID,
+    hostName: "Simulator File Change Review Fixture",
+    hostEndpoint: "127.0.0.1:0",
+    projectionWitnessEnabled: true,
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+    observabilityDir: false,
+    relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
+    relayStateAutoStart: false,
+    logger: {
+      debug() {},
+      info() {},
+      warn() {},
+      error() {},
+      fault() {},
+      fatalSync() {},
+    },
+  };
+  const relay = startServer(relayConfig);
+  await relay.listening;
+  const relayPort = relay.server.address().port;
+  const relayUrl = `ws://127.0.0.1:${relayPort}`;
+  const simulatorProxy = await startSimulatorAppRouteProxy({
+    targetUrl: relayUrl,
+    routeEvents: simulatorRouteEvents,
+    label: "file-change-review",
+  });
+  const fixtureOptions = {
+    ...options,
+    relayUrl,
+    codexHome: tempDir,
+    sqliteHome: tempDir,
+    detail: "none",
+  };
+  const simulatorProxyOptions = {
+    ...fixtureOptions,
+    relayUrl: simulatorProxy.url,
+  };
+  const streamProbe = new DockStreamProbe(fixtureOptions);
+
+  try {
+    await streamProbe.open();
+    const initialWait = await waitForStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => dockSnapshotThreadIndex(snapshot, threadID) === 0,
+    });
+    if (!initialWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_file_change_review_initial_row_missing",
+        "file-change-review fixture row did not appear in the fixture relay stream before simulator launch",
+        { threadID }
+      );
+    }
+    const initial = await waitForStableDockClientPathThread({
+      streamProbe,
+      options: simulatorProxyOptions,
+      routeEvents,
+      threadID,
+      timeoutMs: options.dockCollectionTimeoutMs,
+    });
+    if (!initial.ok) {
+      const detail = {
+        threadID,
+        freshDockRows: Array.isArray(initial.freshDock?.rows) ? initial.freshDock.rows.length : null,
+        freshDockFreshness: initial.freshDock?.freshness || null,
+        freshDockCollection: initial.freshDock?.collection || null,
+        comparison: initial.comparison || null,
+        attempts: initial.attempts || [],
+        streamSnapshot: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
+        routeCounts: summarizeClientPathEvents(routeEvents).routeCounts,
+      };
+      transitionFailure(
+        findings,
+        "scenario_file_change_review_app_path_initial_row_missing",
+        "file-change-review app-facing proxy path did not expose the target Dock row before simulator launch",
+        detail
+      );
+      throw new Error(`file-change-review app-facing proxy path did not expose the target Dock row before simulator launch: ${JSON.stringify(detail)}`);
+    }
+    findings.push(...scenarioComparisonFindings({ phase: "initial", comparison: initial.comparison }));
+    samples.push({
+      sampleIndex: 0,
+      startedAt: new Date(startedAtMs).toISOString(),
+      finishedAt: new Date().toISOString(),
+      freshDock: sanitizeDockSnapshotForReport(initial.freshDock),
+    });
+
+    writeJSON(options.readyOut, {
+      ready: true,
+      scenario: "file-change-review",
+      relayUrl,
+      simulatorRelayUrl: simulatorProxy.url,
+      hosts: simulatorProxy.endpoint,
+      target: {
+        sourceHostID: hostID,
+        threadID,
+        requestID,
+        requestCardID,
+        fileID,
+      },
+      uiConfig: {
+        openHostID: hostID,
+        openThreadID: threadID,
+        detailFilter: "all",
+        checkpointSweep: false,
+        detailCheckpointSweep: true,
+        fileChangeReviewEventID: requestCardID,
+        fileChangeReviewFileID: fileID,
+        fileChangeReviewRequestCardID: requestCardID,
+      },
+      at: new Date().toISOString(),
+    });
+    await waitForFile(options.uiReadyIn, options.waitTimeoutMs, "simulator UI file-change sampler readiness");
+
+    const detailWaitTimeoutMs = Math.min(options.dockCollectionTimeoutMs, options.waitTimeoutMs);
+    const projectionTransitionTimeoutMs = detailTransitionWitnessTimeoutMs(options, detailWaitTimeoutMs);
+    const detailSubscribeWait = await waitForRecordedRouteEvent({
+      events: simulatorRouteEvents,
+      route: "thread/detail/subscribe",
+      source: "simulatorAppProxy",
+      boundary: "simulatorAppToRelay",
+      afterMs: startedAtMs,
+      timeoutMs: detailWaitTimeoutMs,
+    });
+    if (!detailSubscribeWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_file_change_review_detail_subscribe_missing",
+        "simulator app did not open the controlled file-change detail session through thread/detail/subscribe",
+        { threadID, timeoutMs: detailWaitTimeoutMs }
+      );
+    }
+    const detailLoadedWait = await waitForAsyncEvent(detailLoadedPromise, detailWaitTimeoutMs);
+    if (detailLoadedWait.ok && detailWs) {
+      await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 1_500));
+      sendFileChangeRequest(detailWs);
+    }
+    const requestWait = await waitForAsyncEvent(requestSentPromise, detailWaitTimeoutMs);
+    const requestProjectionWitness = requestWait.ok
+      ? await waitForDetailProjectionWitness({
+        client: streamProbe.client,
+        sourceHostID: hostID,
+        threadID,
+        minProjectionCount: 1,
+        requestID,
+        timeoutMs: projectionTransitionTimeoutMs,
+      })
+      : null;
+    if (requestWait.ok && !requestProjectionIDFromWitness(requestProjectionWitness, requestID)) {
+      transitionFailure(
+        findings,
+        "scenario_file_change_review_projection_witness_missing",
+        "file-change approval did not produce a relay projection witness row for the file-change card",
+        { threadID, requestID, timeoutMs: projectionTransitionTimeoutMs }
+      );
+    }
+    const responseWait = await waitForAsyncEvent(forwardedResponsePromise, detailWaitTimeoutMs);
+    const resolutionWait = await waitForAsyncEvent(resolutionSentPromise, detailWaitTimeoutMs);
+    const resolutionProjectionWitness = resolutionWait.ok
+      ? await waitForDetailProjectionWitness({
+        client: streamProbe.client,
+        sourceHostID: hostID,
+        threadID,
+        minProjectionCount: requestProjectionWitness?.projectionIDs?.length || 1,
+        requestID,
+        requestStatus: "resolved",
+        timeoutMs: projectionTransitionTimeoutMs,
+      })
+      : null;
+    if (resolutionWait.ok && requestStatusFromWitness(resolutionProjectionWitness, requestID) !== "resolved") {
+      transitionFailure(
+        findings,
+        "scenario_file_change_review_resolution_projection_witness_missing",
+        "file-change approval resolution did not produce a resolved relay projection witness row",
+        { threadID, requestID, timeoutMs: projectionTransitionTimeoutMs }
+      );
+    }
+
+    if (!detailLoadedWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_file_change_review_detail_not_resumed",
+        "fixture did not observe the simulator app resume the file-change detail session",
+        { threadID, timeoutMs: detailWaitTimeoutMs }
+      );
+    }
+    if (!requestWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_file_change_review_request_not_sent",
+        "fixture did not emit a file-change approval request after the simulator opened detail",
+        { threadID, requestID, timeoutMs: detailWaitTimeoutMs }
+      );
+    }
+    if (!responseWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_file_change_review_response_not_forwarded",
+        "simulator app did not forward an approval response after reviewing the file-change diff",
+        { requestID, timeoutMs: detailWaitTimeoutMs }
+      );
+    }
+    if (responseWait.ok && responseWait.value?.message?.status !== "accept") {
+      transitionFailure(
+        findings,
+        "scenario_file_change_review_response_wrong_payload",
+        "simulator app sent the wrong file-change approval response payload",
+        { requestID, response: proofMessageSummary(responseWait.value?.message, { requestID }) }
+      );
+    }
+    if (!resolutionWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_file_change_review_resolution_not_sent",
+        "fixture did not send serverRequest/resolved after the file-change approval response",
+        { requestID, timeoutMs: detailWaitTimeoutMs }
+      );
+    }
+
+    transitions.push({
+      name: "file-change-review-visible",
+      kind: "file-change-review-visible",
+      iteration: 1,
+      route: "thread/detail/update",
+      wait: {
+        ok: requestWait.ok,
+        observedAt: upstreamRequestSentAtMs ? new Date(upstreamRequestSentAtMs).toISOString() : null,
+        observedAtMs: upstreamRequestSentAtMs,
+      },
+      lag: scenarioLagSummary({
+        transition: "file-change-review-visible",
+        startedAtMs: upstreamRequestSentAtMs || detailLoadedAtMs || startedAtMs,
+        acknowledgedAtMs: upstreamRequestSentAtMs || detailLoadedAtMs || startedAtMs,
+        observedAtMs: upstreamRequestSentAtMs,
+        maxStreamLagMs: options.maxStreamLagMs,
+      }),
+      request: requestWait.value?.message || null,
+      detailTruth: detailTruthFromWitness({
+        kind: "file-change-review-visible",
+        sourceHostID: hostID,
+        detailHostID: simulatorProxy.endpoint,
+        threadID,
+        witness: requestProjectionWitness,
+        requestID,
+        expectedStatus: "Pending",
+        requestVisible: true,
+      }),
+    });
+    transitions.push({
+      name: "file-change-review-approval",
+      kind: "file-change-review-approval",
+      iteration: 1,
+      route: "server/response",
+      wait: {
+        ok: responseWait.ok && resolutionWait.ok,
+        responseForwardedAt: upstreamResponseReceivedAtMs ? new Date(upstreamResponseReceivedAtMs).toISOString() : null,
+        resolutionSentAt: resolutionSentAtMs ? new Date(resolutionSentAtMs).toISOString() : null,
+      },
+      lag: scenarioLagSummary({
+        transition: "file-change-review-approval",
+        startedAtMs: upstreamResponseReceivedAtMs || upstreamRequestSentAtMs || detailLoadedAtMs || startedAtMs,
+        acknowledgedAtMs: upstreamResponseReceivedAtMs || upstreamRequestSentAtMs || detailLoadedAtMs || startedAtMs,
+        observedAtMs: resolutionSentAtMs,
+        maxStreamLagMs: options.maxStreamLagMs,
+      }),
+      forwardedResponse,
+      resolution: resolutionWait.value?.message || null,
+      detailTruth: detailTruthFromWitness({
+        kind: "file-change-review-approval",
+        sourceHostID: hostID,
+        detailHostID: simulatorProxy.endpoint,
+        threadID,
+        witness: resolutionProjectionWitness || requestProjectionWitness,
+        requestID,
+        expectedStatus: "Resolved",
+        requestVisible: true,
+      }),
+    });
+
+    const simulatorClientPathEvidence = summarizeClientPathEvents(simulatorRouteEvents);
+    findings.push(...requiredRouteFindings(
+      simulatorClientPathEvidence,
+      ["thread/detail/subscribe", "thread/detail/update"]
+    ));
+    findings.push(...forbiddenSimulatorDetailRouteFindings(simulatorClientPathEvidence));
+    const clientPathEvidence = summarizeClientPathEvents([
+      ...streamProbe.routeEvents,
+      ...routeEvents,
+      ...simulatorRouteEvents,
+    ]);
+    const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
+    const report = {
+      schemaVersion: 1,
+      kind: "codex-dock-controlled-simulator-scenario-relay-report",
+      mode: "scenario",
+      scenario: "file-change-review",
+      startedAt: new Date(startedAtMs).toISOString(),
+      endedAt: new Date().toISOString(),
+      relayUrl,
+      summary: {
+        ok: scenarioOK,
+        clientPathOK: scenarioOK,
+        scenario: "file-change-review",
+        scenarioOK,
+        scenarioCount: 1,
+        scenarioTransitionCount: transitions.length,
+        implementedScenarios: ["file-change-review"],
+        unimplementedRequiredScenarios: [],
+        failures: findings.length,
+        clientPathRouteCounts: clientPathEvidence.routeCounts,
+      },
+      samples,
+      scenarios: [{
+        id: "file-change-review",
+        ok: scenarioOK,
+        target: {
+          sourceHostID: hostID,
+          threadID,
+          requestID,
+          requestCardID,
+          fileID,
+        },
+        transitions,
+        findings,
+      }],
+      stream: {
+        notificationCount: streamProbe.notifications.length,
+        resyncCount: streamProbe.resyncs.length,
+        finalState: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
+      },
+      clientPathEvidence,
+      simulatorClientPathEvidence,
+      findings,
+      unsupportedFacts: [],
+    };
+
+    writeProofReport(options.jsonOut, report);
+    if (options.summaryOut) {
+      writeText(options.summaryOut, buildMarkdownSummary(report));
+    }
+    await waitForFile(options.stopIn, options.waitTimeoutMs, "simulator UI sampler completion");
+    return report;
+  } finally {
+    await streamProbe.close().catch(() => null);
+    await simulatorProxy.close().catch(() => null);
+    await relay.close().catch(() => null);
+    await closeWebSocketServer(historyServer).catch(() => null);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 async function runServerRequestScenario(options) {
   const routeEvents = [];
   const simulatorRouteEvents = [];
@@ -5659,6 +6207,8 @@ async function main() {
     report = await runDetailHistoryRequestScenario(options);
   } else if (options.scenario === "large-list-checkpoint" || options.scenario === "root-catchup-window-contract") {
     report = await runLargeListCheckpointScenario(options);
+  } else if (options.scenario === "file-change-review") {
+    report = await runFileChangeReviewScenario(options);
   } else if (options.scenario === "server-request") {
     report = await runServerRequestScenario(options);
   } else if (options.scenario === "live-lease-expiry") {

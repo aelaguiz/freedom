@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 
 import {
+  fileChangeDisplayBody,
+  rowFileChange,
+} from "./dock-relay-thread-detail-file-change.mjs";
+import {
   THREAD_DETAIL_DEFAULT_VIEW_PARAMS_KEY,
   THREAD_DETAIL_IDENTITY_VERSION,
   THREAD_DETAIL_ORDER,
@@ -22,6 +26,43 @@ import {
   rowRequest,
   rowRequestID,
 } from "./dock-relay-thread-detail-projection-adapter.mjs";
+
+function fileChangeHasChanges(fileChange) {
+  return Array.isArray(fileChange?.changes) && fileChange.changes.length > 0;
+}
+
+function mergeFileChangePayload(existing, incoming) {
+  if (!existing) {
+    return incoming || null;
+  }
+  if (!incoming) {
+    return existing;
+  }
+  const existingHasChanges = fileChangeHasChanges(existing);
+  const incomingHasChanges = fileChangeHasChanges(incoming);
+  if (existingHasChanges && !incomingHasChanges) {
+    const merged = {
+      ...existing,
+      status: incoming.status || existing.status,
+      approvalRequired: Boolean(existing.approvalRequired || incoming.approvalRequired),
+    };
+    if (existing.unavailableReason) {
+      merged.unavailableReason = existing.unavailableReason;
+    }
+    return merged;
+  }
+  if (!existingHasChanges && incomingHasChanges) {
+    return {
+      ...incoming,
+      status: existing.approvalRequired ? "pending" : (incoming.status || existing.status),
+      approvalRequired: Boolean(existing.approvalRequired || incoming.approvalRequired),
+    };
+  }
+  return {
+    ...incoming,
+    approvalRequired: Boolean(existing.approvalRequired || incoming.approvalRequired),
+  };
+}
 
 class ThreadDetailLedger {
   constructor({ sourceHostID, threadID, epoch = crypto.randomUUID(), seq = 0 } = {}) {
@@ -176,6 +217,17 @@ class ThreadDetailLedger {
           request: existingRequest,
           visibility: keepRequestVisible ? "request" : rowPayload(next).visibility,
           renderState: keepRequestVisible ? "live" : rowPayload(next).renderState,
+        },
+      };
+    }
+    const mergedFileChange = mergeFileChangePayload(rowFileChange(existing), rowFileChange(next));
+    if (mergedFileChange) {
+      next = {
+        ...next,
+        payload: {
+          ...rowPayload(next),
+          fileChange: mergedFileChange,
+          body: fileChangeDisplayBody(mergedFileChange),
         },
       };
     }
