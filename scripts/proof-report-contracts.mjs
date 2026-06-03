@@ -6,6 +6,12 @@ import Ajv from "ajv";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const PROOF_SCHEMA_DIR = path.join(REPO_ROOT, "contract", "proof");
+const PROOF_FIELD_NAME_SCHEMA_FILE = "proof-field-name.schema.json";
+const PROOF_ROUTE_NAME_SCHEMA_FILE = "proof-route-name.schema.json";
+const SHARED_SCHEMA_FILES = [
+  PROOF_FIELD_NAME_SCHEMA_FILE,
+  PROOF_ROUTE_NAME_SCHEMA_FILE,
+];
 
 const KIND_TO_SCHEMA_FILE = new Map([
   ["codex-dock-relay-sync-audit-report", "relay-sync-audit.schema.json"],
@@ -35,21 +41,25 @@ const PASSING_PROOF_KINDS_REQUIRE_ROUTES = new Set([
   "codex-dock-controlled-simulator-scenario-relay-report",
   "codex-dock-simulator-ui-sync-proof",
 ]);
-const FORBIDDEN_PROOF_KEYS = new Set([
-  "baseSeq",
-  "stateGeneration",
-  "cards",
-  "cardIDs",
-  "cardCount",
-  "renderOrderCardIDs",
-  "upsertCards",
-  "deleteCardIDs",
-  "expectedMessageProjectionIDs",
-  "visibleEventIDs",
-  "messageCardIDs",
-  "requestCardIDs",
-  "orderKey",
-]);
+
+function loadJSON(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function loadSchemaFile(schemaFile) {
+  return loadJSON(path.join(PROOF_SCHEMA_DIR, schemaFile));
+}
+
+function loadSchemaEnum(schemaFile) {
+  const schema = loadSchemaFile(schemaFile);
+  if (!Array.isArray(schema.enum)) {
+    throw new Error(`${schemaFile} must expose an enum allow-list`);
+  }
+  return new Set(schema.enum);
+}
+
+const PROOF_FIELD_NAMES = loadSchemaEnum(PROOF_FIELD_NAME_SCHEMA_FILE);
+const PROOF_ROUTE_NAMES = loadSchemaEnum(PROOF_ROUTE_NAME_SCHEMA_FILE);
 
 function proofStatusForReport(report) {
   if (PROOF_STATUS_VALUES.has(report?.status)) {
@@ -69,10 +79,12 @@ function finalizeProofReport(report) {
 
 function loadProofSchemas() {
   const ajv = new Ajv({ allErrors: true, strict: true });
+  for (const schemaFile of SHARED_SCHEMA_FILES) {
+    ajv.addSchema(loadSchemaFile(schemaFile));
+  }
   const validators = new Map();
   for (const [kind, schemaFile] of KIND_TO_SCHEMA_FILE.entries()) {
-    const schemaPath = path.join(PROOF_SCHEMA_DIR, schemaFile);
-    const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
+    const schema = loadSchemaFile(schemaFile);
     validators.set(kind, ajv.compile(schema));
   }
   return validators;
@@ -97,9 +109,13 @@ function collectStrings(value, strings = []) {
   return strings;
 }
 
-function collectForbiddenKeys(value, path = "$", hits = []) {
+function isAllowedProofObjectKey(key) {
+  return PROOF_FIELD_NAMES.has(key) || PROOF_ROUTE_NAMES.has(key);
+}
+
+function collectUnknownProofKeys(value, path = "$", hits = []) {
   if (Array.isArray(value)) {
-    value.forEach((item, index) => collectForbiddenKeys(item, `${path}[${index}]`, hits));
+    value.forEach((item, index) => collectUnknownProofKeys(item, `${path}[${index}]`, hits));
     return hits;
   }
   if (!value || typeof value !== "object") {
@@ -107,10 +123,10 @@ function collectForbiddenKeys(value, path = "$", hits = []) {
   }
   for (const [key, child] of Object.entries(value)) {
     const childPath = `${path}.${key}`;
-    if (FORBIDDEN_PROOF_KEYS.has(key)) {
+    if (!isAllowedProofObjectKey(key)) {
       hits.push(childPath);
     }
-    collectForbiddenKeys(child, childPath, hits);
+    collectUnknownProofKeys(child, childPath, hits);
   }
   return hits;
 }
@@ -158,9 +174,9 @@ function semanticProofErrors(report) {
       errors.push("scripted Dock stream scenario cannot satisfy live-update proof");
     }
   }
-  const forbiddenKeyHits = collectForbiddenKeys(report);
-  if (forbiddenKeyHits.length > 0) {
-    errors.push(`proof report contains legacy identity/stream keys: ${forbiddenKeyHits.slice(0, 20).join(", ")}`);
+  const unknownKeyHits = collectUnknownProofKeys(report);
+  if (unknownKeyHits.length > 0) {
+    errors.push(`proof report contains fields outside the proof allow-list: ${unknownKeyHits.slice(0, 20).join(", ")}`);
   }
   const routes = routeSetFromReport(report);
   if (status === "pass" && PASSING_PROOF_KINDS_REQUIRE_ROUTES.has(report?.kind) && routes.size === 0) {

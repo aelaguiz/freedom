@@ -49,6 +49,12 @@
   },
   "definitions": {
     "status": { "enum": ["pass", "fail", "blocked", "not_run"] },
+    "proofObjectPropertyName": {
+      "anyOf": [
+        { "$ref": "https://codex-dock.local/contract/proof/proof-field-name.schema.json" },
+        { "$ref": "https://codex-dock.local/contract/proof/proof-route-name.schema.json" }
+      ]
+    },
     "proofValue": {
       "anyOf": [
         { "type": "null" },
@@ -61,11 +67,7 @@
         },
         {
           "type": "object",
-          "propertyNames": {
-            "not": {
-              "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
-            }
-          },
+          "propertyNames": { "$ref": "#/definitions/proofObjectPropertyName" },
           "additionalProperties": { "$ref": "#/definitions/proofValue" }
         }
       ]

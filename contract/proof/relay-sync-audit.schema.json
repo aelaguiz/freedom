@@ -27,11 +27,7 @@
     "summary": {
       "type": "object",
       "required": ["ok", "clientPathOK"],
-      "propertyNames": {
-        "not": {
-          "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
-        }
-      },
+      "propertyNames": { "$ref": "#/definitions/proofObjectPropertyName" },
       "additionalProperties": { "$ref": "#/definitions/proofValue" },
       "properties": {
         "ok": { "type": "boolean" },
@@ -51,14 +47,16 @@
   },
   "definitions": {
     "status": { "enum": ["pass", "fail", "blocked", "not_run"] },
+    "proofObjectPropertyName": {
+      "anyOf": [
+        { "$ref": "https://codex-dock.local/contract/proof/proof-field-name.schema.json" },
+        { "$ref": "https://codex-dock.local/contract/proof/proof-route-name.schema.json" }
+      ]
+    },
     "clientPathEvidence": {
       "type": "object",
       "required": ["routes", "routeCounts"],
-      "propertyNames": {
-        "not": {
-          "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
-        }
-      },
+      "propertyNames": { "$ref": "#/definitions/proofObjectPropertyName" },
       "additionalProperties": { "$ref": "#/definitions/proofValue" },
       "properties": {
         "routes": {
@@ -67,6 +65,7 @@
         },
         "routeCounts": {
           "type": "object",
+          "propertyNames": { "$ref": "https://codex-dock.local/contract/proof/proof-route-name.schema.json" },
           "additionalProperties": { "type": "number" }
         }
       }
@@ -83,11 +82,7 @@
         },
         {
           "type": "object",
-          "propertyNames": {
-            "not": {
-              "enum": ["baseSeq", "stateGeneration", "cards", "cardIDs", "cardCount", "renderOrderCardIDs", "upsertCards", "deleteCardIDs", "expectedMessageProjectionIDs", "visibleEventIDs", "messageCardIDs", "requestCardIDs", "orderKey"]
-            }
-          },
+          "propertyNames": { "$ref": "#/definitions/proofObjectPropertyName" },
           "additionalProperties": { "$ref": "#/definitions/proofValue" }
         }
       ]

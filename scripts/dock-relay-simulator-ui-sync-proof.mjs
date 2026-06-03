@@ -11,6 +11,7 @@ import {
 import {
   assertProofReport,
   finalizeProofReport,
+  validateProofReport,
 } from "./proof-report-contracts.mjs";
 
 const DEFAULT_MAX_UI_LAG_MS = 2000;
@@ -802,22 +803,8 @@ function evaluateDetailTransitionSample(sample, transition) {
       { projectionIDs: nonCanonicalWitnessProjectionIDs }
     );
   }
-  const legacyExpectedProjectionIDs = Array.isArray(truth.expectedMessageProjectionIDs)
-    ? truth.expectedMessageProjectionIDs
-    : [];
-  if (legacyExpectedProjectionIDs.length > 0) {
-    addFailure(
-      failures,
-      sample,
-      "detail_legacy_expected_projection_ids_present",
-      "Simulator detail proof used legacy expected message projection IDs instead of the relay projection witness.",
-      {
-        legacyProjectionIDs: legacyExpectedProjectionIDs,
-      }
-    );
-  }
-  const expectedMessageProjectionIDs = witnessProjectionIDs.filter(isCanonicalProjectionID);
-  for (const projectionID of expectedMessageProjectionIDs) {
+  const witnessMessageProjectionIDs = witnessProjectionIDs.filter(isCanonicalProjectionID);
+  for (const projectionID of witnessMessageProjectionIDs) {
     const expectedMessageCard = messageCardIdentifier(projectionID);
     if (!detailHasMessageProjectionID(combinedDetail, projectionID)) {
       addFailure(
@@ -835,8 +822,8 @@ function evaluateDetailTransitionSample(sample, transition) {
     }
   }
 
-  if (expectedMessageProjectionIDs.length >= 2) {
-    const expectedMessageOrder = expectedMessageProjectionIDs;
+  if (witnessMessageProjectionIDs.length >= 2) {
+    const expectedMessageOrder = witnessMessageProjectionIDs;
     const actualMessageOrder = orderedCombinedMessageProjectionIDs(sample)
       .filter((projectionID) => expectedMessageOrder.includes(projectionID));
     const hasAllExpected = expectedMessageOrder.every((projectionID) => actualMessageOrder.includes(projectionID));
@@ -866,7 +853,7 @@ function evaluateDetailTransitionSample(sample, transition) {
     const hasRequestMessageCard = isCanonicalProjectionID(requestCardID)
       && detailHasMessageProjectionID(combinedDetail, requestCardID);
     const expectsExactRequestMessageCard = isCanonicalProjectionID(requestCardID)
-      && expectedMessageProjectionIDs.includes(requestCardID);
+      && witnessMessageProjectionIDs.includes(requestCardID);
     const actualEventCount = detailMessageEventCount(detail);
     const requestEventCountProven = false;
     if (!hasRequestMessageCard && expectsExactRequestMessageCard) {
@@ -1668,8 +1655,13 @@ async function main() {
   if (!options.relayReport || !options.uiSamples) {
     throw new Error("--relay-report and --ui-samples are required");
   }
+  const relayReport = readJSON(options.relayReport);
+  const relayReportErrors = validateProofReport(relayReport, { sourcePath: options.relayReport });
+  if (relayReportErrors.length > 0) {
+    throw new Error(`relay report contract failed before UI comparison:\n${relayReportErrors.join("\n")}`);
+  }
   const report = buildRenderedUIReport({
-    relayReport: readJSON(options.relayReport),
+    relayReport,
     uiSamples: readJSONL(options.uiSamples),
     maxUiLagMs: options.maxUiLagMs,
     proofRunID: proofRunIDForReportPath(options.jsonOut || options.summaryOut || options.uiSamples),
