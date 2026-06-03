@@ -1,7 +1,7 @@
 # Codex Dock Live Update Architecture Implementation Worklog
 
 Plan: `docs/CODEX_DOCK_LIVE_UPDATE_ARCHITECTURE_AND_TESTING_REFERENCE_2026-06-01.md`
-Status: active implementation evidence, not final completion
+Status: strict fresh-consult passed; implementation evidence complete
 Updated: 2026-06-03
 
 This worklog is execution evidence only. The plan above is the authoritative
@@ -128,16 +128,23 @@ Git keeps that history.
   changes.
 - The canonical plan now contains an authoritative
   `arch_skill:block:implementation_audit` with `Verdict (code): COMPLETE`.
+- First strict `$fresh-consult` through Cursor Agent `composer-2.5-fast` ran at
+  `/tmp/fresh-consult/live-update-strict-20260603T143852Z-vNMxzq` and returned
+  `VERDICT: fail` because Section 4 and `README.md` still had stale proof
+  wording.
+- `cc2bd0f Reconcile live update proof docs` fixed those documentation blockers.
+- Second strict `$fresh-consult` through Cursor Agent `composer-2.5-fast` ran at
+  `/tmp/fresh-consult/live-update-strict-rerun-20260603T144256Z-kowEyJ` and
+  returned `VERDICT: pass`, `BLOCKING: none`, `NON-BLOCKING: none`, and
+  `CONFIDENCE: high`.
 
 ## Current Remaining Gates
 
-These are still required before this goal can be called complete:
-
-- strict `$fresh-consult` through Cursor Agent `composer-2.5-fast` with no
-  pass-with-notes completion.
+None for the `iPhone 17` simulator-backed live-update cutover claim.
 
 ## Known Current Status
 
-The implementation and local simulator proof gates are complete. Completion of
-the active goal is still not proven until a strict `$fresh-consult` through
-Cursor Agent `composer-2.5-fast` returns a no-notes pass.
+The implementation, local simulator proof gates, documentation reconciliation,
+and strict `$fresh-consult` completion gate are complete for the `iPhone 17`
+simulator-backed live-update cutover claim. Physical-phone behavior is not
+claimed by this worklog or the implementation audit.
