@@ -21,7 +21,7 @@ struct ThreadDetailProjectionStreamConnector: ProjectionStreamConnecting {
     }
 }
 
-final class ThreadDetailProjectionStreamConnection: ProjectionStreamConnection, @unchecked Sendable {
+actor ThreadDetailProjectionStreamConnection: ProjectionStreamConnection {
     private let session: any ThreadDetailSession
     private let threadID: String
     private let updateStream: AsyncThrowingStream<ProjectionEnvelope<ThreadDetailEventDTO>, Error>
@@ -75,7 +75,7 @@ final class ThreadDetailProjectionStreamConnection: ProjectionStreamConnection, 
         return ProjectionEnvelope(snapshot: snapshot)
     }
 
-    func updates() -> AsyncThrowingStream<ProjectionEnvelope<ThreadDetailEventDTO>, Error> {
+    nonisolated func updates() -> AsyncThrowingStream<ProjectionEnvelope<ThreadDetailEventDTO>, Error> {
         updateStream
     }
 

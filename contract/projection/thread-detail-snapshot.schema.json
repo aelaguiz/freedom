@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://codex-dock.local/contract/projection/thread-detail-snapshot.schema.json",
   "title": "Codex Dock Projection Snapshot: Thread Detail",
-  "description": "Canonical Thread Detail projection snapshot emitted by thread/detail/read, thread/detail/subscribe, and thread/detail/resync.",
+  "description": "Canonical Thread Detail projection snapshot emitted by thread/detail/subscribe and thread/detail/resync. thread/detail/read is manual diagnostics only and is not production display or acceptance-proof truth.",
   "type": "object",
   "required": [
     "schemaVersion",

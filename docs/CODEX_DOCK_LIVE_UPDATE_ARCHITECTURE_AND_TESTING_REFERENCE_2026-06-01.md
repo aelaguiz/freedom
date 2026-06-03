@@ -1,8 +1,7 @@
 ---
 title: "Codex Dock - Client Communication, Catch-Up, And Live Projection Architecture"
 date: 2026-06-01
-status: active_architecture_plan_2026_06_02
-implementation_allowed: false
+status: active
 fallback_policy: forbidden
 owners: [Amir, Codex]
 reviewers: [Composer 2.5 Fast, arch-step]

@@ -29,7 +29,7 @@ struct ThreadCardProjectionStreamConnector: ProjectionStreamConnecting {
     }
 }
 
-private final class ThreadCardProjectionStreamConnection: ProjectionStreamConnection, @unchecked Sendable {
+private actor ThreadCardProjectionStreamConnection: ProjectionStreamConnection {
     private let connection: any ThreadCardStreamConnection
     private let updateStream: AsyncThrowingStream<ProjectionEnvelope<DockThreadCardDTO>, Error>
     private let updateContinuation: AsyncThrowingStream<ProjectionEnvelope<DockThreadCardDTO>, Error>.Continuation
@@ -65,7 +65,7 @@ private final class ThreadCardProjectionStreamConnection: ProjectionStreamConnec
         ProjectionEnvelope(try await connection.resync())
     }
 
-    func updates() -> AsyncThrowingStream<ProjectionEnvelope<DockThreadCardDTO>, Error> {
+    nonisolated func updates() -> AsyncThrowingStream<ProjectionEnvelope<DockThreadCardDTO>, Error> {
         updateStream
     }
 
@@ -105,7 +105,7 @@ public struct AppServerThreadCardStreamClient: ThreadCardStreamConnecting {
     }
 }
 
-public final class AppServerThreadCardStreamConnection: ThreadCardStreamConnection, @unchecked Sendable {
+public actor AppServerThreadCardStreamConnection: ThreadCardStreamConnection {
     private let client: AppServerClient
     private let view: ThreadCardStreamView
     private let host: DockHostConfiguration
@@ -190,7 +190,7 @@ public final class AppServerThreadCardStreamConnection: ThreadCardStreamConnecti
         )
     }
 
-    public func updates() -> AsyncThrowingStream<ThreadCardStreamUpdateDTO, Error> {
+    public nonisolated func updates() -> AsyncThrowingStream<ThreadCardStreamUpdateDTO, Error> {
         updateStream
     }
 
