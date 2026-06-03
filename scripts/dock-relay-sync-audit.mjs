@@ -603,8 +603,10 @@ function cardThreadID(card) {
 }
 
 function sanitizeCardForReport(card) {
+  const projectionID = cardID(card);
   return normalizeForComparison({
-    id: cardID(card),
+    id: projectionID,
+    projectionID,
     sourceHostID: card?.sourceHostID || null,
     threadID: cardThreadID(card),
     status: card?.status || null,

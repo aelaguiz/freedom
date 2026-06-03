@@ -105,6 +105,74 @@ test("proof contracts reject legacy expected message projection ids", () => {
   assert.match(errors.join("\n"), /expectedMessageProjectionIDs/u);
 });
 
+test("controlled scenario contract accepts relay render-order proof fields", () => {
+  const report = sampleProofReports().find(
+    (candidate) => candidate.kind === "codex-dock-controlled-simulator-scenario-relay-report"
+  );
+  const renderOrderProjectionIDs = ["host:host/thread:thread-a/row:threadCard"];
+  const snapshot = {
+    kind: "snapshot",
+    rowCount: 1,
+    renderOrderProjectionIDs,
+    rows: [{ projectionID: renderOrderProjectionIDs[0], threadID: "thread-a" }],
+  };
+  report.samples = [{
+    sampleIndex: 0,
+    freshDock: snapshot,
+  }];
+  report.scenarios = [{
+    id: "archive-toggle",
+    ok: true,
+    actuator: {
+      type: "controlled archive/unarchive through relay RPC",
+      routes: ["thread/archive", "thread/unarchive"],
+      clientExercised: true,
+    },
+    transitions: [{
+      name: "archive",
+      kind: "archive",
+      wait: { ok: true, snapshot },
+      freshDock: snapshot,
+      archiveStreamWait: { ok: true, snapshot },
+      freshArchive: snapshot,
+    }],
+  }];
+  report.stream = {
+    finalState: snapshot,
+    finalArchiveState: snapshot,
+  };
+  report.unsupportedFacts = [];
+
+  assertProofReport(report, { sourcePath: "controlled-scenario-render-order-sample" });
+});
+
+test("simulator UI sync contract accepts transition coverage sections", () => {
+  const report = sampleProofReports().find(
+    (candidate) => candidate.kind === "codex-dock-simulator-ui-sync-proof"
+  );
+  report.scenarioTransitionCoverage = {
+    checks: [{
+      transition: "archive",
+      observedLagMs: 100,
+      ok: true,
+      failures: [],
+    }],
+    failures: [],
+  };
+  report.detailTransitionCoverage = {
+    checks: [{
+      transition: "detail-open",
+      observedLagMs: 100,
+      ok: true,
+      messageOrderChecks: 1,
+      failures: [],
+    }],
+    failures: [],
+  };
+
+  assertProofReport(report, { sourcePath: "sim-ui-transition-coverage-sample" });
+});
+
 test("passing proof cannot use thread/detail/read as production route evidence", () => {
   const report = sampleProofReports().find(
     (candidate) => candidate.kind === "codex-dock-relay-sync-audit-report"

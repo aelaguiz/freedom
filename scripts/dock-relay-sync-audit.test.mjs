@@ -173,6 +173,7 @@ test("sync audit report sanitizer preserves relay projection display order", () 
 
   assert.equal(reportSnapshot.rows[0].displayOrderKey, displayOrderKey);
   assert.equal(reportSnapshot.rows[0].activityAtMs, 1_780_272_000_000);
+  assert.equal(reportSnapshot.rows[0].projectionID, projectionID);
   assert.deepEqual(reportSnapshot.renderOrderProjectionIDs, [projectionID]);
 });
 

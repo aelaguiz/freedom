@@ -51,6 +51,8 @@
       "type": "array",
       "items": { "$ref": "#/definitions/proofValue" }
     },
+    "scenarioTransitionCoverage": { "$ref": "#/definitions/proofValue" },
+    "detailTransitionCoverage": { "$ref": "#/definitions/proofValue" },
     "failures": {
       "type": "array",
       "items": { "$ref": "#/definitions/proofValue" }

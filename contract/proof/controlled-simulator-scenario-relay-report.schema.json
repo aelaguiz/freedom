@@ -42,7 +42,12 @@
       "items": { "$ref": "#/definitions/proofValue" }
     },
     "clientPathEvidence": { "$ref": "#/definitions/clientPathEvidence" },
+    "stream": { "$ref": "#/definitions/proofValue" },
     "findings": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/proofValue" }
+    },
+    "unsupportedFacts": {
       "type": "array",
       "items": { "$ref": "#/definitions/proofValue" }
     }
