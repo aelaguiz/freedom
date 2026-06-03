@@ -1557,6 +1557,114 @@ test("simulator UI proof scores detail sample that starts before transition but 
   );
 });
 
+test("simulator UI proof scores superseded detail transitions from retained visible rows", () => {
+  const base = detailHistoryRelayReport();
+  const projectionIDs = detailHistoryProjectionIDs();
+  const liveProjectionID = detailItemProjectionID({
+    host: "sim-detail-history-fixture",
+    thread: "sim-detail-history-request-thread",
+    turn: "turn-live",
+    item: "agent-live",
+    row: "agentMessage",
+  });
+  const burstProjectionID = detailItemProjectionID({
+    host: "sim-detail-history-fixture",
+    thread: "sim-detail-history-request-thread",
+    turn: "turn-burst",
+    item: "agent-burst",
+    row: "agentMessage",
+  });
+  const relay = {
+    ...base,
+    scenarios: [{
+      id: "detail-burst",
+      transitions: [
+        {
+          name: "detail-live",
+          route: "thread/detail/update",
+          wait: { observedAt: "2026-05-31T00:00:02.000Z" },
+          lag: {
+            relaySeenAt: "2026-05-31T00:00:02.000Z",
+            lag_change_to_relay_ms: 0,
+            maxStreamLagMs: 2_000,
+            ok: true,
+          },
+          detailTruth: {
+            logicalHostID: "sim-detail-history-fixture",
+            threadID: "sim-detail-history-request-thread",
+            projectionWitness: {
+              source: "retained-downstream-emitter-log",
+              sourceHostID: "sim-detail-history-fixture",
+              view: "thread.detail",
+              scope: "thread",
+              threadID: "sim-detail-history-request-thread",
+              viewParamsKey: "default-view",
+              epoch: "epoch-1",
+              lastSeq: 2,
+              projectionIDs: [liveProjectionID, projectionIDs.agent, projectionIDs.user],
+            },
+            relayMessageEventCount: 3,
+            requestVisible: false,
+          },
+        },
+        {
+          name: "detail-burst",
+          route: "thread/detail/update",
+          wait: { observedAt: "2026-05-31T00:00:02.080Z" },
+          lag: {
+            relaySeenAt: "2026-05-31T00:00:02.080Z",
+            lag_change_to_relay_ms: 80,
+            maxStreamLagMs: 2_000,
+            ok: true,
+          },
+          detailTruth: {
+            logicalHostID: "sim-detail-history-fixture",
+            threadID: "sim-detail-history-request-thread",
+            projectionWitness: {
+              source: "retained-downstream-emitter-log",
+              sourceHostID: "sim-detail-history-fixture",
+              view: "thread.detail",
+              scope: "thread",
+              threadID: "sim-detail-history-request-thread",
+              viewParamsKey: "default-view",
+              epoch: "epoch-1",
+              lastSeq: 3,
+              projectionIDs: [burstProjectionID, liveProjectionID, projectionIDs.agent, projectionIDs.user],
+            },
+            relayMessageEventCount: 4,
+            requestVisible: false,
+          },
+        },
+      ],
+    }],
+  };
+  const sample = detailHistoryUISample({ sampledAt: "2026-05-31T00:00:02.400Z" });
+  sample.detail.rootValue = "loaded; host=sim-detail-history-fixture; thread=sim-detail-history-request-thread; live=Live; events=4";
+  sample.detail.messageListCapturedAt = "2026-05-31T00:00:02.400Z";
+  sample.detail.messageListValue = messageListValue({
+    events: 4,
+    projections: [burstProjectionID, liveProjectionID, projectionIDs.agent, projectionIDs.user],
+  });
+  sample.detail.messageCards = [];
+  sample.detail.requestElements = [];
+  delete sample.detailSweep;
+
+  const report = buildRenderedUIReport({
+    relayReport: relay,
+    uiSamples: [
+      uiSample({ sampledAt: "2026-05-31T00:00:01.200Z" }),
+      sample,
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.deepEqual(
+    report.detailTransitionCoverage.checks.map((check) => [check.transition, check.uiSampleCount, check.observedLagMs]),
+    [["detail-live", 1, 400], ["detail-burst", 1, 320]],
+  );
+});
+
 test("simulator UI proof scores opened-thread history through a detail sweep", () => {
   const report = buildRenderedUIReport({
     relayReport: detailHistoryRelayReport(),

@@ -281,6 +281,54 @@ function scenarioTransitionTruths(relayReport) {
   return truths.sort((left, right) => left.atMs - right.atMs);
 }
 
+function detailTruthProjectionIDs(truth) {
+  return Array.isArray(truth?.projectionWitness?.projectionIDs)
+    ? truth.projectionWitness.projectionIDs.filter(isCanonicalProjectionID)
+    : [];
+}
+
+function detailTruthRequestKey(truth) {
+  if (!truth?.requestVisible && !truth?.requestCardID && !truth?.expectedStatus) {
+    return null;
+  }
+  return JSON.stringify({
+    requestVisible: Boolean(truth.requestVisible),
+    requestCardID: truth.requestCardID || truth.requestID || null,
+    expectedStatus: truth.expectedStatus || null,
+  });
+}
+
+function detailTruthSubsumes(candidate, current) {
+  if (!candidate || !current) {
+    return false;
+  }
+  const currentHost = current.detailHostID || current.logicalHostID || null;
+  const candidateHost = candidate.detailHostID || candidate.logicalHostID || null;
+  if (currentHost && candidateHost && currentHost !== candidateHost) {
+    return false;
+  }
+  if (current.threadID && candidate.threadID && current.threadID !== candidate.threadID) {
+    return false;
+  }
+  const currentProjectionIDs = detailTruthProjectionIDs(current);
+  const candidateProjectionIDs = new Set(detailTruthProjectionIDs(candidate));
+  if (!currentProjectionIDs.every((projectionID) => candidateProjectionIDs.has(projectionID))) {
+    return false;
+  }
+  const currentEventCount = Number(current.relayMessageEventCount);
+  const candidateEventCount = Number(candidate.relayMessageEventCount);
+  if (Number.isFinite(currentEventCount)
+    && Number.isFinite(candidateEventCount)
+    && candidateEventCount < currentEventCount) {
+    return false;
+  }
+  const currentRequestKey = detailTruthRequestKey(current);
+  if (currentRequestKey && detailTruthRequestKey(candidate) !== currentRequestKey) {
+    return false;
+  }
+  return true;
+}
+
 function detailTransitionTruths(relayReport) {
   const truths = [];
   for (const scenario of Array.isArray(relayReport?.scenarios) ? relayReport.scenarios : []) {
@@ -291,8 +339,9 @@ function detailTransitionTruths(relayReport) {
       if (atMs === null || !transition?.detailTruth) {
         continue;
       }
+      const currentTruth = transition.detailTruth;
       const nextTransition = transitions.slice(index + 1)
-        .filter((candidate) => candidate?.detailTruth)
+        .filter((candidate) => candidate?.detailTruth && !detailTruthSubsumes(candidate.detailTruth, currentTruth))
         .map((candidate) => scenarioTransitionTimeMS(candidate))
         .find((candidateMs) => candidateMs !== null && candidateMs >= atMs) ?? null;
       truths.push({

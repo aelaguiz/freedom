@@ -189,18 +189,9 @@ extension XCUIApplication {
     func firstVisibleDockRow(timeout: TimeInterval) -> XCUIElement? {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let rowIdentifiers = dockRowIdentifiers()
-            for identifier in rowIdentifiers.prefix(50) {
-                guard !identifier.contains(".action.") else {
-                    continue
-                }
-                let row = dockRowButton(id: identifier)
-                guard row.exists else {
-                    continue
-                }
-                guard isVisibleForTap(row.frame) else {
-                    continue
-                }
+            if let visibleRow = visibleDockRows().first,
+               let row = dockRowElement(id: visibleRow.identifier),
+               isVisibleForTap(row.frame) {
                 return row
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
@@ -212,8 +203,8 @@ extension XCUIApplication {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if let hostID {
-                let exact = dockRowButton(id: AutomationID.Dock.row(hostID: hostID, threadID: threadID).rawValue)
-                if exact.exists, isVisibleForTap(exact.frame) {
+                if let exact = dockRowElement(id: AutomationID.Dock.row(hostID: hostID, threadID: threadID).rawValue),
+                   isVisibleForTap(exact.frame) {
                     return exact
                 }
             }
@@ -222,8 +213,8 @@ extension XCUIApplication {
             if let row = rows.first(where: { candidate in
                 candidate.value.contains("thread=\(threadID);") || candidate.value.contains("thread=\(threadID)")
             }) {
-                let element = dockRowButton(id: row.identifier)
-                if element.exists, isVisibleForTap(element.frame) {
+                if let element = dockRowElement(id: row.identifier),
+                   isVisibleForTap(element.frame) {
                     return element
                 }
             }
@@ -416,7 +407,10 @@ extension XCUIApplication {
         }
         let dockRowsCapturedAt = codexDockISO8601Now()
         let dockSweep = includeDockSweep ? checkpointDockSweep(rootValue: rootValue) : nil
-        let detail = visibleDetail(includeRequestElements: includeDetailRequestElements)
+        let detail = visibleDetail(
+            includeRequestElements: includeDetailRequestElements,
+            includeMessageElements: false
+        )
         let detailSweep = includeDetailSweep ? checkpointDetailSweep() : nil
         let globalConnectivity = detail == nil ? globalConnectivitySnapshot() : nil
         // Dock host summaries are Dock-screen evidence only. Querying them from
@@ -633,7 +627,7 @@ extension XCUIApplication {
                 break
             }
             stepCount += 1
-            guard let detail = visibleDetail() else {
+            guard let detail = visibleDetail(includeRequestElements: true, includeMessageElements: true) else {
                 break
             }
             if expectedMessageRows == nil {
@@ -694,75 +688,83 @@ extension XCUIApplication {
     }
 
     private func visibleDockRows() -> [DisplayedUIDockRow] {
-        var rows: [DisplayedUIDockRow] = []
         guard !isDockEmptyStateVisible() else {
             return []
         }
-        let candidates = dockRowIdentifiers()
+        let rowElements = dockRowElementCandidates()
         guard !isDockEmptyStateVisible() else {
             return []
         }
-        for identifier in candidates.prefix(80) {
-            guard !identifier.contains(".action.") else {
+        var rowByIdentifier: [String: XCUIElement] = [:]
+        for element in rowElements {
+            let identifier = element.identifier
+            guard identifier.hasPrefix("codexdock.dock.row."),
+                  !identifier.contains(".action.") else {
                 continue
             }
-            let row = dockRowButton(id: identifier)
-            guard row.exists else {
-                continue
-            }
-            let frame = row.frame
+            let frame = element.frame
             guard isVisibleForTap(frame) else {
                 continue
             }
-            rows.append(
-                DisplayedUIDockRow(
-                    identifier: identifier,
-                    value: row.displayedUIStringValue,
-                    label: row.label,
-                    frame: DisplayedUIFrame(frame)
-                )
+            if let existing = rowByIdentifier[identifier],
+               existing.frame.width * existing.frame.height >= frame.width * frame.height {
+                continue
+            }
+            rowByIdentifier[identifier] = element
+        }
+
+        let rows = rowByIdentifier.map { identifier, row in
+            DisplayedUIDockRow(
+                identifier: identifier,
+                value: row.displayedUIStringValue,
+                label: row.label,
+                frame: DisplayedUIFrame(row.frame)
             )
         }
         return rows.sorted(by: displayedUITopToBottomOrder)
     }
 
-    private func dockRowIdentifiers() -> [String] {
-        var identifiers: [String] = []
-        var seen = Set<String>()
-        for rawLine in debugDescription.split(separator: "\n") {
-            let line = String(rawLine)
-            guard line.contains("Button"),
-                  let identifier = accessibilityIdentifier(inDebugDescriptionLine: line),
-                  identifier.hasPrefix("codexdock.dock.row."),
-                  seen.insert(identifier).inserted else {
-                continue
-            }
-            identifiers.append(identifier)
-        }
-        return identifiers
+    private func dockRowElement(id: String) -> XCUIElement? {
+        dockRowElement(id: id, candidates: nil)
     }
 
-    private func dockRowButton(id: String) -> XCUIElement {
+    private func dockRowElement(id: String, candidates: [XCUIElement]?) -> XCUIElement? {
         // Dock rows intentionally expose rich child text. The row button and
-        // child labels can share the same projection-backed ID, so proof code
-        // must resolve the row through the Button role instead of an any-element
-        // query that XCUITest treats as ambiguous.
-        buttons.matching(NSPredicate(format: "identifier == %@", id)).firstMatch
+        // child labels can share the same projection-backed ID, and XCUITest
+        // can report the row role as Button or PopUpButton across runs. Resolve
+        // exact-ID matches by visible size so proof code uses the row container.
+        let elements = candidates ?? dockRowElementCandidates(
+            predicate: NSPredicate(format: "identifier == %@", id),
+            allowAnyFallback: true
+        )
+        return elements
+            .filter { $0.identifier == id }
+            .filter { isVisibleForTap($0.frame) }
+            .max { left, right in
+                (left.frame.width * left.frame.height) < (right.frame.width * right.frame.height)
+            }
     }
 
-    private func accessibilityIdentifier(inDebugDescriptionLine line: String) -> String? {
-        for quote in ["'", "\""] {
-            let marker = "identifier: \(quote)"
-            guard let start = line.range(of: marker) else {
-                continue
-            }
-            let remainder = line[start.upperBound...]
-            guard let end = remainder.firstIndex(of: Character(quote)) else {
-                continue
-            }
-            return String(remainder[..<end])
+    private func dockRowElementCandidates() -> [XCUIElement] {
+        dockRowElementCandidates(
+            predicate: NSPredicate(format: "identifier BEGINSWITH %@", "codexdock.dock.row."),
+            allowAnyFallback: false
+        )
+    }
+
+    private func dockRowElementCandidates(
+        predicate: NSPredicate,
+        allowAnyFallback: Bool
+    ) -> [XCUIElement] {
+        let roleMatches =
+            buttons.matching(predicate).allElementsBoundByIndex
+            + descendants(matching: .popUpButton).matching(predicate).allElementsBoundByIndex
+        guard roleMatches.isEmpty, allowAnyFallback else {
+            return roleMatches
         }
-        return nil
+        return descendants(matching: .any)
+            .matching(predicate)
+            .allElementsBoundByIndex
     }
 
     private func globalConnectivitySnapshot() -> DisplayedUIElementSnapshot? {
@@ -786,7 +788,10 @@ extension XCUIApplication {
         }
     }
 
-    private func visibleDetail(includeRequestElements: Bool = true) -> DisplayedUIDetail? {
+    private func visibleDetail(
+        includeRequestElements: Bool = true,
+        includeMessageElements: Bool = false
+    ) -> DisplayedUIDetail? {
         let startedAt = codexDockISO8601Now()
         let root = displayedUIWaitForElement(identifierPrefix: "codexdock.session.root.", timeout: 0.1)
         guard let root, root.exists else {
@@ -800,8 +805,19 @@ extension XCUIApplication {
         let headerCapturedAt = codexDockISO8601Now()
         let messageListValue = optionalStringValue(id: AutomationID.Session.messageList.rawValue)
         let messageListCapturedAt = codexDockISO8601Now()
-        let messageCards = elementSnapshots(prefix: "codexdock.session.message.", in: root)
-        let messageCardsCapturedAt = codexDockISO8601Now()
+        let messageIDsFromList = messageCardIdentifiers(fromMessageListValue: messageListValue)
+        let messageCards: [DisplayedUIElementSnapshot]
+        let messageCardsCapturedAt: String
+        if includeMessageElements {
+            messageCards = elementSnapshots(prefix: "codexdock.session.message.", in: root)
+            messageCardsCapturedAt = codexDockISO8601Now()
+        } else {
+            // The detail list is the timing-critical live-update witness. It
+            // exposes ordered projection IDs directly, so normal samples must
+            // not broad-scan every child card before recording displayed state.
+            messageCards = []
+            messageCardsCapturedAt = messageListCapturedAt
+        }
         let requestElements = includeRequestElements
             ? elementSnapshots(prefix: "codexdock.session.request.", in: root)
             : []
@@ -817,7 +833,7 @@ extension XCUIApplication {
             messageListCapturedAt: messageListCapturedAt,
             messageListValue: messageListValue,
             messageCardsCapturedAt: messageCardsCapturedAt,
-            messageCardIDs: messageCards.map(\.identifier),
+            messageCardIDs: uniquePreservingOrder(messageIDsFromList + messageCards.map(\.identifier)),
             requestElementsCapturedAt: requestElementsCapturedAt,
             requestCardIDs: requestElements.map(\.identifier),
             messageCards: messageCards,
@@ -828,6 +844,24 @@ extension XCUIApplication {
     private func optionalStringValue(id: String) -> String {
         let target = displayedUIElement(id: id)
         return target.exists ? target.displayedUIStringValue : "not-visible"
+    }
+
+    private func messageCardIdentifiers(fromMessageListValue value: String) -> [String] {
+        guard let projections = codexDockAutomationField("projections", in: value), !projections.isEmpty else {
+            return []
+        }
+        return projections
+            .split(separator: "|")
+            .map { encoded -> String in
+                let raw = String(encoded).trimmingCharacters(in: .whitespacesAndNewlines)
+                let projectionID = raw.removingPercentEncoding ?? raw
+                return AutomationID.Session.messageCard(projectionID: projectionID).rawValue
+            }
+    }
+
+    private func uniquePreservingOrder(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter { seen.insert($0).inserted }
     }
 
     private func elementSnapshots(prefix: String) -> [DisplayedUIElementSnapshot] {
