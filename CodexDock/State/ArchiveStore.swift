@@ -309,10 +309,8 @@ public final class ArchiveStore: ObservableObject {
             let reconciler = streamReconcilers[host.id] ?? makeReconciler(for: host)
             if streamReconcilers[host.id] == nil {
                 streamReconcilers[host.id] = reconciler
-                await startReconcilerObservation(reconciler, host: host)
-                await dataEngine?.apply(await reconciler.snapshot(), host: host)
-                await publishSnapshot()
                 await reconciler.start()
+                await startReconcilerObservation(reconciler, host: host)
             } else {
                 await reconciler.manualRefresh()
             }

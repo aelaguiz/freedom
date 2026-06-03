@@ -82,7 +82,7 @@ final class ProjectionRuntimeTests: XCTestCase {
         XCTAssertEqual(reconnectedSnapshot.rows.map(\.body), ["Reconnected"])
     }
 
-    func testHeartbeatTimeoutUsesCanonicalResyncPath() async throws {
+    func testHeartbeatTimeoutMarksViewOfflineWithoutResyncingStaleConnection() async throws {
         let fixture = RuntimeFixture()
         let connection = fixture.connection(
             subscribe: fixture.snapshot(rows: []),
@@ -93,8 +93,12 @@ final class ProjectionRuntimeTests: XCTestCase {
         await reconciler.start()
         await reconciler.heartbeatTimedOut()
 
+        let snapshot = await reconciler.snapshot()
         let resyncReasons = await connection.resyncReasons()
-        XCTAssertEqual(resyncReasons, [.heartbeatTimeout])
+        let isClosed = await connection.isClosed()
+        XCTAssertEqual(snapshot.freshness, .offline("Projection stream heartbeat timed out."))
+        XCTAssertTrue(isClosed)
+        XCTAssertEqual(resyncReasons, [])
     }
 
     func testSequenceGapForcesOneCanonicalResync() async throws {

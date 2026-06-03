@@ -45,6 +45,7 @@ enum StreamReconcilerFreshnessState: Equatable, Sendable {
 struct StreamReconcilerSnapshot<Row: Equatable & Sendable>: Equatable, Sendable {
     let viewKey: ProjectionViewKey
     let freshness: StreamReconcilerFreshnessState
+    let revision: Int
     let rows: [Row]
     let epoch: String?
     let seq: Int64
@@ -89,6 +90,7 @@ actor StreamReconciler<Row: Equatable & Sendable> {
     private var reconnectTask: Task<Void, Never>?
     private var heartbeatToken: UUID?
     private var freshness: StreamReconcilerFreshnessState = .closed
+    private var revision = 0
     private var activeTurnID: String?
     private var complete: Bool?
     private var totalRows: Int?
@@ -145,13 +147,13 @@ actor StreamReconciler<Row: Equatable & Sendable> {
         guard freshness != .closed || connection == nil else {
             freshness = .connecting
             publish()
-            await openConnection()
+            await openConnection(recoveryReason: nil)
             return
         }
         await closeCurrentConnection()
         freshness = .connecting
         publish()
-        await openConnection()
+        await openConnection(recoveryReason: nil)
     }
 
     func manualRefresh() async {
@@ -181,7 +183,9 @@ actor StreamReconciler<Row: Equatable & Sendable> {
     }
 
     func heartbeatTimedOut() async {
-        await requestResync(reason: .heartbeatTimeout)
+        await closeCurrentConnection()
+        await markOffline("Projection stream heartbeat timed out.")
+        scheduleReconnectIfNeeded()
     }
 
     func staleDeadlineExceeded(_ message: String = "Projection stream is stale.") {
@@ -234,7 +238,7 @@ actor StreamReconciler<Row: Equatable & Sendable> {
         sinks.removeAll()
     }
 
-    private func openConnection() async {
+    private func openConnection(recoveryReason: StreamReconcilerRecoveryReason?) async {
         do {
             let opened = try await connector.connect()
             guard freshness != .closed else {
@@ -245,9 +249,10 @@ actor StreamReconciler<Row: Equatable & Sendable> {
             freshness = .subscribing
             publish()
             let subscribed = try await opened.subscribe()
-            try applySnapshot(subscribed, recoveryReason: nil)
+            try applySnapshot(subscribed, recoveryReason: recoveryReason)
             startUpdateTask(opened)
         } catch {
+            await closeCurrentConnection()
             await markFailed(error)
             scheduleReconnectIfNeeded()
         }
@@ -279,9 +284,11 @@ actor StreamReconciler<Row: Equatable & Sendable> {
             return
         }
         guard let connection else {
-            freshness = .offline("Projection stream is not connected.")
-            lastError = "Projection stream is not connected."
+            activeCatchupReason = reason
+            freshness = .connecting
+            lastError = message
             publish()
+            await openConnection(recoveryReason: reason)
             return
         }
         if isResyncing {
@@ -490,7 +497,7 @@ actor StreamReconciler<Row: Equatable & Sendable> {
             return
         }
         let message = error.localizedDescription
-        freshness = .failed(message)
+        freshness = error.isProjectionOfflineFailure ? .offline(message) : .failed(message)
         lastError = message
         publish()
     }
@@ -578,6 +585,7 @@ actor StreamReconciler<Row: Equatable & Sendable> {
     }
 
     private func publish() {
+        revision += 1
         let snapshot = currentSnapshot()
         for continuation in sinks.values {
             continuation.yield(snapshot)
@@ -593,6 +601,7 @@ actor StreamReconciler<Row: Equatable & Sendable> {
                 viewParamsKey: resolvedViewParamsKey ?? viewKey.viewParamsKey
             ),
             freshness: freshness,
+            revision: revision,
             rows: reducer.sortedRows(policy: policy),
             epoch: reducer.epoch,
             seq: reducer.seq,
@@ -604,5 +613,34 @@ actor StreamReconciler<Row: Equatable & Sendable> {
             bufferedEnvelopeCount: bufferedEnvelopes.count,
             lastError: lastError
         )
+    }
+}
+
+private extension Error {
+    var isProjectionOfflineFailure: Bool {
+        if let failure = self as? DockRequestFailure {
+            switch failure {
+            case .offline:
+                return true
+            case .error:
+                return false
+            }
+        }
+        guard let clientError = self as? AppServerClientError else {
+            return false
+        }
+        switch clientError {
+        case .disconnected, .notConnected, .transport:
+            return true
+        case .duplicateRequestID,
+             .malformedMessage,
+             .requestCancelled,
+             .requestTimedOut,
+             .responseDecoding,
+             .server,
+             .unexpectedServerRequest,
+             .unmatchedResponse:
+            return false
+        }
     }
 }

@@ -131,7 +131,7 @@ final class DockStoreTests: XCTestCase {
     @MainActor
     func testFailedSubscribeResyncDropsConnectionSoRefreshCanReconnect() async throws {
         let host = makeHost()
-        let badConnection = ManualThreadCardStreamConnection(
+        let badConnection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "bad-epoch",
@@ -142,7 +142,7 @@ final class DockStoreTests: XCTestCase {
                 schemaVersion: CodexDockConstants.Dock.streamSchemaVersion + 1
             )
         )
-        let goodConnection = ManualThreadCardStreamConnection(
+        let goodConnection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "good-epoch",
@@ -152,7 +152,7 @@ final class DockStoreTests: XCTestCase {
                 ]
             )
         )
-        let streamClient = SequencedManualThreadCardStreamClient(connections: [badConnection, goodConnection])
+        let streamClient = SequencedScriptedThreadCardTransportClient(connections: [badConnection, goodConnection])
         let store = DockStore(host: host, streamClient: streamClient)
 
         await store.load()

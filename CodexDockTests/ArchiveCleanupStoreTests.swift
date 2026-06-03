@@ -160,7 +160,7 @@ final class ArchiveCleanupStoreTests: XCTestCase {
             updatedAt: Int64(olderThan90Days.timeIntervalSince1970 - 1)
         )
         let provider = StaticDockCardStateProvider(
-            snapshot: dockSnapshot(
+            snapshot: try dockSnapshot(
                 registry: registry,
                 cards: [firstCard, secondCard],
                 now: { now }
@@ -585,9 +585,9 @@ final class ArchiveCleanupStoreTests: XCTestCase {
         registry: HostRegistry,
         cards: [DockThreadCardDTO],
         now: @escaping @Sendable () -> Date
-    ) -> DockSnapshot {
-        var table = ThreadCardTable()
-        table.reset(hosts: registry.hosts)
+    ) throws -> DockSnapshot {
+        var projectionState = ThreadCardProjectionState()
+        projectionState.reset(hosts: registry.hosts)
         guard let host = registry.hosts.first else {
             return DockRenderProjector(now: now).snapshot(
                 from: DockRenderInput(
@@ -600,16 +600,20 @@ final class ArchiveCleanupStoreTests: XCTestCase {
                 localMetadata: [:]
             )
         }
-        _ = table.applySnapshot(
-            dockStreamSnapshot(
-                host: host,
-                epoch: "cleanup-static",
-                seq: 1,
-                cards: cards
-            ),
+        let update = dockStreamSnapshot(
+            host: host,
+            epoch: "cleanup-static",
+            seq: 1,
+            cards: cards
+        )
+        try projectionState.apply(
+            threadCardReconcilerSnapshot(update),
             host: host
         )
-        return table.snapshot(hosts: registry.hosts, localMetadata: [:], now: now)
+        return DockRenderProjector(now: now).snapshot(
+            from: projectionState.renderInput(hosts: registry.hosts),
+            localMetadata: [:]
+        )
     }
 }
 

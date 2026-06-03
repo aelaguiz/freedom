@@ -11,16 +11,21 @@ import {
 
 const DEFAULT_REQUIRED_SCENARIOS = [
   "archive-toggle",
+  "current-work-visible",
   "detail-reconnect",
   "detail-history-request",
+  "detail-replay-pressure",
+  "foreground-resume-all-surfaces",
   "large-list-checkpoint",
   "thread-activity",
   "server-request",
   "source-refresh",
   "live-lease-expiry",
   "multi-host-isolation",
+  "mutation-ack-projection-refresh-failure",
   "spawn-edge",
   "resync-gap",
+  "root-catchup-window-contract",
   "rapid-mutations",
 ];
 
@@ -40,7 +45,22 @@ const SCENARIO_REQUIREMENTS = {
     minDetailSweepMessageCardChecks: 2,
     minDetailMessageOrderChecks: 1,
   },
+  "foreground-resume-all-surfaces": {
+    routes: ["thread/detail/subscribe", "thread/detail/resync"],
+    minRouteCounts: { "thread/detail/subscribe": 1, "thread/detail/resync": 1 },
+    minDetailTransitionChecks: 2,
+    minDetailSweeps: 1,
+    minDetailSweepMessageCardChecks: 2,
+    minDetailMessageOrderChecks: 1,
+  },
   "detail-history-request": {
+    routes: ["thread/detail/subscribe", "thread/detail/update"],
+    minDetailTransitionChecks: 3,
+    minDetailSweeps: 1,
+    minDetailSweepMessageCardChecks: 8,
+    minDetailMessageOrderChecks: 2,
+  },
+  "detail-replay-pressure": {
     routes: ["thread/detail/subscribe", "thread/detail/update"],
     minDetailTransitionChecks: 3,
     minDetailSweeps: 1,
@@ -53,7 +73,18 @@ const SCENARIO_REQUIREMENTS = {
     minCheckpointSweepRowChecks: 12,
     minDockSweepOrderChecks: 1,
   },
+  "root-catchup-window-contract": {
+    routes: ["dock/subscribe"],
+    minCheckpointSweeps: 1,
+    minCheckpointSweepRowChecks: 12,
+    minDockSweepOrderChecks: 1,
+  },
   "thread-activity": {
+    routes: ["dock/subscribe", "dock/update"],
+    minScenarioTransitionChecks: 2,
+    minCheckpointSweeps: 1,
+  },
+  "current-work-visible": {
     routes: ["dock/subscribe", "dock/update"],
     minScenarioTransitionChecks: 2,
     minCheckpointSweeps: 1,
@@ -91,6 +122,11 @@ const SCENARIO_REQUIREMENTS = {
   "rapid-mutations": {
     routes: ["dock/subscribe", "dock/update"],
     minScenarioTransitionChecks: 6,
+    minCheckpointSweeps: 1,
+  },
+  "mutation-ack-projection-refresh-failure": {
+    routes: ["dock/subscribe", "dock/update", "archive/subscribe", "archive/update", "thread/archive", "thread/unarchive"],
+    minScenarioTransitionChecks: 2,
     minCheckpointSweeps: 1,
   },
 };

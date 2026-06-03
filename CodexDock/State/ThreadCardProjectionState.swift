@@ -5,6 +5,7 @@ struct ThreadCardProjectionState: Sendable {
         var sourceHostID: String?
         var cards: [DockThreadCardDTO] = []
         var freshness: StreamReconcilerFreshnessState = .connecting
+        var revision = 0
         var complete: Bool?
         var totalRows: Int?
         var window: ProjectionWindow?
@@ -31,9 +32,13 @@ struct ThreadCardProjectionState: Sendable {
         host: DockHostConfiguration
     ) {
         var state = statesByHostID[host.id] ?? HostProjection()
+        guard snapshot.revision >= state.revision else {
+            return
+        }
         state.sourceHostID = snapshot.viewKey.sourceHostID ?? state.sourceHostID
         state.cards = snapshot.rows
         state.freshness = snapshot.freshness
+        state.revision = snapshot.revision
         state.complete = snapshot.complete ?? state.complete
         state.totalRows = snapshot.totalRows ?? state.totalRows
         state.window = snapshot.window ?? state.window

@@ -6,7 +6,7 @@ final class DockStoreStreamTests: XCTestCase {
     func testProjectionIDIsPrimaryCardIdentityForUpsertAndDelete() async throws {
         let host = makeHost()
         let projectionID = "host:\(host.id)/thread:thread-a/row:threadCard"
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -22,7 +22,7 @@ final class DockStoreStreamTests: XCTestCase {
                 ]
             )
         )
-        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ScriptedThreadCardTransportClient(connection: connection))
 
         await store.load()
         await connection.send(
@@ -87,7 +87,7 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testSequenceGapRequestsResyncAndKeepsHostRows() async throws {
         let host = makeHost()
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -107,7 +107,7 @@ final class DockStoreStreamTests: XCTestCase {
                 )
             ]
         )
-        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ScriptedThreadCardTransportClient(connection: connection))
 
         await store.load()
         await connection.send(
@@ -141,7 +141,7 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testSchemaMismatchRequestsResyncAndKeepsHostRows() async throws {
         let host = makeHost()
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -161,7 +161,7 @@ final class DockStoreStreamTests: XCTestCase {
                 )
             ]
         )
-        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ScriptedThreadCardTransportClient(connection: connection))
 
         await store.load()
         await connection.send(
@@ -194,7 +194,7 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testInvalidSchemaRequestsResync() async throws {
         let host = makeHost()
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -214,7 +214,7 @@ final class DockStoreStreamTests: XCTestCase {
                 )
             ]
         )
-        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ScriptedThreadCardTransportClient(connection: connection))
 
         await store.load()
         await connection.send(
@@ -246,7 +246,7 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testMalformedProjectionEnvelopeRequestsResync() async throws {
         let host = makeHost()
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -266,7 +266,7 @@ final class DockStoreStreamTests: XCTestCase {
                 )
             ]
         )
-        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ScriptedThreadCardTransportClient(connection: connection))
 
         await store.load()
         await connection.send(
@@ -307,7 +307,7 @@ final class DockStoreStreamTests: XCTestCase {
     func testDuplicateProjectionSourceIdentityRequestsResync() async throws {
         let host = makeHost()
         let originalSourceRef = "host:\(host.id)/thread:thread-a"
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -327,7 +327,7 @@ final class DockStoreStreamTests: XCTestCase {
                 )
             ]
         )
-        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ScriptedThreadCardTransportClient(connection: connection))
 
         await store.load()
         await connection.send(
@@ -367,7 +367,7 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testOutOfOrderSequenceRequestsResyncAndDoesNotReplaceRows() async throws {
         let host = makeHost()
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -387,7 +387,7 @@ final class DockStoreStreamTests: XCTestCase {
                 )
             ]
         )
-        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ScriptedThreadCardTransportClient(connection: connection))
 
         await store.load()
         await connection.send(
@@ -422,7 +422,7 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testNewEpochSnapshotCanReplacePreviousSequence() async throws {
         let host = makeHost()
-        let firstConnection = ManualThreadCardStreamConnection(
+        let firstConnection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -432,7 +432,7 @@ final class DockStoreStreamTests: XCTestCase {
                 ],
             )
         )
-        let secondConnection = ManualThreadCardStreamConnection(
+        let secondConnection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-2",
@@ -442,7 +442,7 @@ final class DockStoreStreamTests: XCTestCase {
                 ],
             )
         )
-        let streamClient = SequencedManualThreadCardStreamClient(connections: [firstConnection, secondConnection])
+        let streamClient = SequencedScriptedThreadCardTransportClient(connections: [firstConnection, secondConnection])
         let store = DockStore(
             host: host,
             streamClient: streamClient,
@@ -466,7 +466,7 @@ final class DockStoreStreamTests: XCTestCase {
         let amir = makeHost()
         let home = makeHost(url: "ws://100.66.11.7:4510")
         let registry = try HostRegistry(hosts: [amir, home])
-        let amirConnection = ManualThreadCardStreamConnection(
+        let amirConnection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: amir,
                 epoch: "amir-epoch",
@@ -486,7 +486,7 @@ final class DockStoreStreamTests: XCTestCase {
                 )
             ]
         )
-        let homeConnection = ManualThreadCardStreamConnection(
+        let homeConnection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: home,
                 epoch: "home-epoch",
@@ -496,7 +496,7 @@ final class DockStoreStreamTests: XCTestCase {
                 ]
             )
         )
-        let streamClient = SequencedManualThreadCardStreamClient(connections: [amirConnection, homeConnection])
+        let streamClient = SequencedScriptedThreadCardTransportClient(connections: [amirConnection, homeConnection])
         let store = DockStore(registry: registry, streamClient: streamClient)
 
         await store.load()
@@ -533,7 +533,7 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testStaleHeartbeatRetainsLastGoodRows() async throws {
         let host = makeHost()
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -543,7 +543,7 @@ final class DockStoreStreamTests: XCTestCase {
                 ]
             )
         )
-        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ScriptedThreadCardTransportClient(connection: connection))
 
         await store.load()
         await connection.send(
@@ -576,7 +576,7 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testMissingHeartbeatMarksConnectedHostStaleAndRetainsRows() async throws {
         let host = makeHost()
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -588,7 +588,7 @@ final class DockStoreStreamTests: XCTestCase {
         )
         let store = DockStore(
             host: host,
-            streamClient: ManualThreadCardStreamClient(connection: connection),
+            streamClient: ScriptedThreadCardTransportClient(connection: connection),
             streamReconnectDelay: .seconds(1),
             streamHeartbeatTimeout: .milliseconds(20)
         )
@@ -597,7 +597,7 @@ final class DockStoreStreamTests: XCTestCase {
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.hostStates.map(\.status) == [.degraded(rowCount: 1, message: "Offline: Relay stream heartbeat timed out")] }
+            where: { $0.hostStates.map(\.status) == [.degraded(rowCount: 1, message: "Offline: Projection stream heartbeat timed out.")] }
         ) else {
             return XCTFail("Expected missing heartbeat to retain rows and mark host stale, got \(store.state)")
         }
@@ -608,7 +608,7 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testStreamDropsNonHumanCardsFromSnapshotsAndDeltas() async throws {
         let host = makeHost()
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -620,7 +620,7 @@ final class DockStoreStreamTests: XCTestCase {
                 ]
             )
         )
-        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ScriptedThreadCardTransportClient(connection: connection))
 
         await store.load()
 
@@ -664,27 +664,26 @@ final class DockStoreStreamTests: XCTestCase {
 
     func testTerminalIncompleteWindowStaysLoadedAfterDroppingNonHumanCards() async throws {
         let host = makeHost()
-        var table = ThreadCardTable()
-        table.reset(hosts: [host])
-
-        let result = table.applySnapshot(
-            dockStreamSnapshot(
-                host: host,
-                epoch: "epoch-1",
-                seq: 1,
-                cards: [
-                    threadCardFixture(host: host, threadID: "human-final", title: "Human final", updatedAt: 1_000),
-                    threadCardFixture(host: host, threadID: "agent-final", title: "Agent final", updatedAt: 1_100, sourceKind: .automation, lane: .agent)
-                ],
-                complete: false,
-                totalRows: 2,
-                window: DockStreamWindowDTO(offset: 0, limit: 2, rowCount: 2)
-            ),
-            host: host
+        var projectionState = ThreadCardProjectionState()
+        projectionState.reset(hosts: [host])
+        let update = dockStreamSnapshot(
+            host: host,
+            epoch: "epoch-1",
+            seq: 1,
+            cards: [
+                threadCardFixture(host: host, threadID: "human-final", title: "Human final", updatedAt: 1_000),
+                threadCardFixture(host: host, threadID: "agent-final", title: "Agent final", updatedAt: 1_100, sourceKind: .automation, lane: .agent)
+            ],
+            complete: false,
+            totalRows: 2,
+            window: DockStreamWindowDTO(offset: 0, limit: 2, rowCount: 2)
         )
-        let snapshot = table.snapshot(hosts: [host], localMetadata: [:], now: Date.init)
+        try projectionState.apply(threadCardReconcilerSnapshot(update), host: host)
+        let snapshot = DockRenderProjector(now: Date.init).snapshot(
+            from: projectionState.renderInput(hosts: [host]),
+            localMetadata: [:]
+        )
 
-        XCTAssertEqual(result, .applied)
         XCTAssertEqual(snapshot.rows.map(\.threadID), ["human-final"])
         XCTAssertEqual(
             snapshot.hostStates.map(\.status),
@@ -696,7 +695,7 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testWindowedSnapshotIsLoadedWithWindowAnnotation() async throws {
         let host = makeHost()
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -709,7 +708,7 @@ final class DockStoreStreamTests: XCTestCase {
                 window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1, nextOffset: 1)
             )
         )
-        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ScriptedThreadCardTransportClient(connection: connection))
 
         await store.load()
 
@@ -717,24 +716,20 @@ final class DockStoreStreamTests: XCTestCase {
             from: store,
             where: {
                 $0.hostStates.map(\.status) == [
-                    .loaded(rowCount: 1, window: DockHostWindow(visibleRows: 1, totalRows: 3))
+                    .degraded(rowCount: 1, message: "Refreshing")
                 ]
             }
         ) else {
-            return XCTFail("Expected windowed snapshot to be loaded with a window annotation, got \(store.state)")
+            return XCTFail("Expected windowed snapshot to show catch-up progress, got \(store.state)")
         }
-        XCTAssertFalse(snapshot.isPartial)
+        XCTAssertTrue(snapshot.isPartial)
         XCTAssertEqual(snapshot.rows.map(\.threadID), ["thread-a"])
-        XCTAssertEqual(
-            snapshot.project(options: .init()).summary.text.contains("Showing 1 of 3"),
-            true
-        )
     }
 
     @MainActor
     func testWindowedSnapshotCompletesWithStreamedCatchupPages() async throws {
         let host = makeHost()
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -747,7 +742,7 @@ final class DockStoreStreamTests: XCTestCase {
                 window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1, nextOffset: 1)
             )
         )
-        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ScriptedThreadCardTransportClient(connection: connection))
 
         await store.load()
         await connection.send(
@@ -808,7 +803,7 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testSnapshotMissingWindowContractRequestsResync() async throws {
         let host = makeHost()
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -828,7 +823,7 @@ final class DockStoreStreamTests: XCTestCase {
                 )
             ]
         )
-        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ScriptedThreadCardTransportClient(connection: connection))
 
         await store.load()
         await connection.send(
@@ -863,7 +858,7 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testClosedStreamMarksHostOfflineAndRetainsRows() async throws {
         let host = makeHost()
-        let connection = ManualThreadCardStreamConnection(
+        let connection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -873,14 +868,14 @@ final class DockStoreStreamTests: XCTestCase {
                 ]
             )
         )
-        let store = DockStore(host: host, streamClient: ManualThreadCardStreamClient(connection: connection))
+        let store = DockStore(host: host, streamClient: ScriptedThreadCardTransportClient(connection: connection))
 
         await store.load()
         await connection.finish()
 
         guard let snapshot = await waitForLoadedSnapshot(
             from: store,
-            where: { $0.hostStates.map(\.status) == [.degraded(rowCount: 1, message: "Offline: Relay stream closed")] }
+            where: { $0.hostStates.map(\.status) == [.degraded(rowCount: 1, message: "Offline: Projection stream closed.")] }
         ) else {
             return XCTFail("Expected closed stream to retain rows and mark host offline, got \(store.state)")
         }
@@ -891,7 +886,7 @@ final class DockStoreStreamTests: XCTestCase {
     @MainActor
     func testClosedStreamReconnectsAndReplacesHostRows() async throws {
         let host = makeHost()
-        let firstConnection = ManualThreadCardStreamConnection(
+        let firstConnection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-1",
@@ -901,7 +896,7 @@ final class DockStoreStreamTests: XCTestCase {
                 ]
             )
         )
-        let secondConnection = ManualThreadCardStreamConnection(
+        let secondConnection = ScriptedThreadCardTransportConnection(
             subscribeSnapshot: dockStreamSnapshot(
                 host: host,
                 epoch: "epoch-2",
@@ -911,7 +906,7 @@ final class DockStoreStreamTests: XCTestCase {
                 ]
             )
         )
-        let streamClient = SequencedManualThreadCardStreamClient(connections: [firstConnection, secondConnection])
+        let streamClient = SequencedScriptedThreadCardTransportClient(connections: [firstConnection, secondConnection])
         let store = DockStore(
             host: host,
             streamClient: streamClient,

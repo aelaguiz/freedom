@@ -58,10 +58,10 @@ struct LoaderBackedThreadCardStreamClient: ThreadCardStreamConnecting {
     }
 }
 
-final class ManualThreadCardStreamClient: ThreadCardStreamConnecting, @unchecked Sendable {
-    let connection: ManualThreadCardStreamConnection
+final class ScriptedThreadCardTransportClient: ThreadCardStreamConnecting, @unchecked Sendable {
+    let connection: ScriptedThreadCardTransportConnection
 
-    init(connection: ManualThreadCardStreamConnection) {
+    init(connection: ScriptedThreadCardTransportConnection) {
         self.connection = connection
     }
 
@@ -70,11 +70,11 @@ final class ManualThreadCardStreamClient: ThreadCardStreamConnecting, @unchecked
     }
 }
 
-actor SequencedManualThreadCardStreamClient: ThreadCardStreamConnecting {
-    private var connections: [ManualThreadCardStreamConnection]
+actor SequencedScriptedThreadCardTransportClient: ThreadCardStreamConnecting {
+    private var connections: [ScriptedThreadCardTransportConnection]
     private var count = 0
 
-    init(connections: [ManualThreadCardStreamConnection]) {
+    init(connections: [ScriptedThreadCardTransportConnection]) {
         self.connections = connections
     }
 
@@ -91,7 +91,7 @@ actor SequencedManualThreadCardStreamClient: ThreadCardStreamConnecting {
     }
 }
 
-actor ManualThreadCardStreamConnection: ThreadCardStreamConnection {
+actor ScriptedThreadCardTransportConnection: ThreadCardStreamConnection {
     private var subscribeSnapshot: ThreadCardStreamUpdateDTO
     private var resyncSnapshots: [ThreadCardStreamUpdateDTO]
     private let updateStream: AsyncThrowingStream<ThreadCardStreamUpdateDTO, Error>
@@ -704,6 +704,7 @@ func threadCardReconcilerSnapshot(
             viewParamsKey: update.viewParamsKey
         ),
         freshness: freshness ?? threadCardFreshnessState(update.freshness),
+        revision: max(1, Int(update.seq)),
         rows: reducer.sortedRows(policy: policy),
         epoch: reducer.epoch,
         seq: reducer.seq,

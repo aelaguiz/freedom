@@ -416,32 +416,31 @@ final class DockStoreTestsProjection: XCTestCase {
         )
     }
 
-    func testThreadCardTableDoesNotAddPinnedRowsWhenRelayCardIsAbsent() {
+    func testThreadCardProjectionStateDoesNotAddPinnedRowsWhenRelayCardIsAbsent() {
         let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
         let key = LocalThreadMetadataKey(
             hostID: host.id,
             backendSessionID: "cached-session",
             threadID: "cached-thread"
         )
-        var table = ThreadCardTable()
-        table.reset(hosts: [host])
+        var projectionState = ThreadCardProjectionState()
+        projectionState.reset(hosts: [host])
 
-        let snapshot = table.snapshot(
-            hosts: [host],
+        let snapshot = DockRenderProjector(now: { Date(timeIntervalSince1970: 300) }).snapshot(
+            from: projectionState.renderInput(hosts: [host]),
             localMetadata: [
                 key: LocalThreadMetadata(
                     rail: .green,
                     isPinned: true,
                     pinnedAt: Date(timeIntervalSince1970: 250)
                 )
-            ],
-            now: { Date(timeIntervalSince1970: 300) }
+            ]
         )
 
         XCTAssertEqual(snapshot.rows, [])
     }
 
-    func testThreadCardTableProjectsLogicalHostRowsToConfiguredEndpointHost() {
+    func testThreadCardProjectionStateProjectsLogicalHostRowsToConfiguredEndpointHost() throws {
         let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
         let projectionID = "host:\(host.id)/thread:thread-a/row:threadCard"
         let card = DockThreadCardDTO(
@@ -492,14 +491,13 @@ final class DockStoreTestsProjection: XCTestCase {
             order: "displayOrderKeyAscending",
             rows: [card]
         )
-        var table = ThreadCardTable()
-        table.reset(hosts: [host])
-        XCTAssertEqual(table.applySnapshot(update, host: host), .applied)
+        var projectionState = ThreadCardProjectionState()
+        projectionState.reset(hosts: [host])
+        try projectionState.apply(threadCardReconcilerSnapshot(update), host: host)
 
-        let snapshot = table.snapshot(
-            hosts: [host],
-            localMetadata: [:],
-            now: { Date(timeIntervalSince1970: 1_780_099_300) }
+        let snapshot = DockRenderProjector(now: { Date(timeIntervalSince1970: 1_780_099_300) }).snapshot(
+            from: projectionState.renderInput(hosts: [host]),
+            localMetadata: [:]
         )
         let projection = snapshot.project(options: .init(lens: .host))
 
@@ -537,25 +535,24 @@ final class DockStoreTestsProjection: XCTestCase {
         XCTAssertTrue(row.automationValue.contains("relationship=forked"))
     }
 
-    func testThreadCardTableDropsPinnedPlaceholderWithoutCachedHumanDisplay() {
+    func testThreadCardProjectionStateDropsPinnedPlaceholderWithoutCachedHumanDisplay() {
         let host = makeProjectionHost(host: "amir-m5.fairy-salmon.ts.net")
         let key = LocalThreadMetadataKey(
             hostID: host.id,
             backendSessionID: "missing-session",
             threadID: "missing-thread"
         )
-        var table = ThreadCardTable()
-        table.reset(hosts: [host])
+        var projectionState = ThreadCardProjectionState()
+        projectionState.reset(hosts: [host])
 
-        let snapshot = table.snapshot(
-            hosts: [host],
+        let snapshot = DockRenderProjector(now: { Date(timeIntervalSince1970: 300) }).snapshot(
+            from: projectionState.renderInput(hosts: [host]),
             localMetadata: [
                 key: LocalThreadMetadata(
                     isPinned: true,
                     pinnedAt: Date(timeIntervalSince1970: 250)
                 )
-            ],
-            now: { Date(timeIntervalSince1970: 300) }
+            ]
         )
 
         XCTAssertEqual(snapshot.rows.map(\.threadID), [])

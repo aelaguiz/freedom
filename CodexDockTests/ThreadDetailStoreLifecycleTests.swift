@@ -422,10 +422,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
                 ])
             ),
             resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            readResults: [
-                .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-                .failure(FakeThreadDetailError.resumeFailed),
-            ]
+            detailResyncResults: [.failure(FakeThreadDetailError.resumeFailed)]
         )
         let store = ThreadDetailStore(
             host: host,

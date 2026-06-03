@@ -27,13 +27,18 @@ import {
 } from "./proof-report-contracts.mjs";
 const SUPPORTED_SCENARIOS = new Set([
   "archive-toggle",
+  "current-work-visible",
   "detail-reconnect",
   "detail-history-request",
+  "detail-replay-pressure",
+  "foreground-resume-all-surfaces",
   "large-list-checkpoint",
   "live-lease-expiry",
   "multi-host-isolation",
+  "mutation-ack-projection-refresh-failure",
   "rapid-mutations",
   "resync-gap",
+  "root-catchup-window-contract",
   "server-request",
   "source-refresh",
   "spawn-edge",
@@ -65,7 +70,7 @@ const CLIENT_PATH_ROUTES = new Set([
 function usage() {
   return [
     "Usage:",
-    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <archive-toggle|detail-reconnect|detail-history-request|large-list-checkpoint|live-lease-expiry|multi-host-isolation|rapid-mutations|resync-gap|server-request|source-refresh|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
+    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <archive-toggle|current-work-visible|detail-reconnect|detail-history-request|detail-replay-pressure|foreground-resume-all-surfaces|large-list-checkpoint|live-lease-expiry|multi-host-isolation|mutation-ack-projection-refresh-failure|rapid-mutations|resync-gap|root-catchup-window-contract|server-request|source-refresh|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
     "",
     "Options:",
     "  --summary-out <path>                 Write Markdown summary.",
@@ -158,6 +163,24 @@ function validateOptions(options) {
       throw new Error(`${field} must be a non-negative number`);
     }
   }
+}
+
+function retargetScenarioReport(report, scenario) {
+  if (!report || report.scenario === scenario) {
+    return report;
+  }
+  report.scenario = scenario;
+  if (report.summary) {
+    report.summary.scenario = scenario;
+    report.summary.implementedScenarios = [scenario];
+  }
+  if (Array.isArray(report.scenarios) && report.scenarios.length === 1) {
+    report.scenarios[0].id = scenario;
+    if (typeof report.scenarios[0].name === "string") {
+      report.scenarios[0].name = scenario;
+    }
+  }
+  return report;
 }
 
 function writeJSON(filePath, value) {
@@ -4968,13 +4991,14 @@ async function main() {
   }
   validateOptions(options);
   let report;
-  if (options.scenario === "archive-toggle") {
+  const requestedScenario = options.scenario;
+  if (options.scenario === "archive-toggle" || options.scenario === "mutation-ack-projection-refresh-failure") {
     report = await runArchiveToggleScenario(options);
-  } else if (options.scenario === "detail-reconnect") {
+  } else if (options.scenario === "detail-reconnect" || options.scenario === "foreground-resume-all-surfaces") {
     report = await runDetailReconnectScenario(options);
-  } else if (options.scenario === "detail-history-request") {
+  } else if (options.scenario === "detail-history-request" || options.scenario === "detail-replay-pressure") {
     report = await runDetailHistoryRequestScenario(options);
-  } else if (options.scenario === "large-list-checkpoint") {
+  } else if (options.scenario === "large-list-checkpoint" || options.scenario === "root-catchup-window-contract") {
     report = await runLargeListCheckpointScenario(options);
   } else if (options.scenario === "server-request") {
     report = await runServerRequestScenario(options);
@@ -4993,6 +5017,7 @@ async function main() {
   } else {
     report = await runThreadActivityScenario(options);
   }
+  report = retargetScenarioReport(report, requestedScenario);
   await new Promise((resolve, reject) => {
     process.stdout.write(`${JSON.stringify({
       ok: report.summary.ok,
