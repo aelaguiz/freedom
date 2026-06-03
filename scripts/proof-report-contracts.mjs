@@ -36,6 +36,12 @@ const CLIENT_CARD_ROUTES = new Set([
 const MANUAL_DIAGNOSTIC_ONLY_ROUTES = new Set([
   "thread/detail/read",
 ]);
+const FORBIDDEN_SIMULATOR_DOWNSTREAM_ROUTES = new Set([
+  "thread/read",
+  "thread/turns/list",
+  "thread/resume",
+  "thread/detail/read",
+]);
 const PASSING_PROOF_KINDS_REQUIRE_ROUTES = new Set([
   "codex-dock-relay-sync-audit-report",
   "codex-dock-controlled-simulator-scenario-relay-report",
@@ -154,6 +160,21 @@ function routeSetFromReport(report) {
   return routes;
 }
 
+function simulatorDownstreamSideDoorRoutes(report) {
+  const events = [
+    ...(Array.isArray(report?.simulatorClientPathEvidence?.events)
+      ? report.simulatorClientPathEvidence.events
+      : []),
+    ...(Array.isArray(report?.relayReport?.simulatorClientPathEvidence?.events)
+      ? report.relayReport.simulatorClientPathEvidence.events
+      : []),
+  ];
+  return events
+    .filter((event) => event?.boundary === "simulatorAppToRelay")
+    .map((event) => event.route)
+    .filter((route) => FORBIDDEN_SIMULATOR_DOWNSTREAM_ROUTES.has(route));
+}
+
 function semanticProofErrors(report) {
   const errors = [];
   const status = proofStatusForReport(report);
@@ -190,6 +211,12 @@ function semanticProofErrors(report) {
     const hasClientCardRoute = [...routes].some((route) => CLIENT_CARD_ROUTES.has(route));
     if (!hasClientCardRoute) {
       errors.push("passing proof must include relay-owned Dock, Archive, or Thread Detail client routes");
+    }
+  }
+  if (status === "pass") {
+    const sideDoorRoutes = simulatorDownstreamSideDoorRoutes(report);
+    if (sideDoorRoutes.length > 0) {
+      errors.push(`simulator app downstream side-door routes cannot satisfy live-update proof: ${[...new Set(sideDoorRoutes)].join(", ")}`);
     }
   }
   if (

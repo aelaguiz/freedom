@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { WebSocketServer } from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 
 import { startServer } from "./dock-relay.mjs";
 import { RELAY_STATE_STREAM_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
@@ -65,6 +65,12 @@ const CLIENT_PATH_ROUTES = new Set([
   "thread/detail/subscribe",
   "thread/detail/resync",
   "thread/detail/update",
+]);
+const FORBIDDEN_SIMULATOR_DETAIL_SIDE_DOOR_ROUTES = new Set([
+  "thread/read",
+  "thread/turns/list",
+  "thread/resume",
+  "thread/detail/read",
 ]);
 
 function usage() {
@@ -645,6 +651,102 @@ function recordClientRoute(events, route, purpose, details = {}) {
   });
 }
 
+function recordProxyRoute(events, data, direction, label) {
+  let message;
+  try {
+    message = JSON.parse(data.toString());
+  } catch {
+    return;
+  }
+  if (!message?.method) {
+    return;
+  }
+  recordClientRoute(events, message.method, "simulator app relay proxy observed JSON-RPC route", {
+    source: "simulatorAppProxy",
+    boundary: direction,
+    label,
+    hasResponseID: message.id !== undefined,
+  });
+}
+
+async function startSimulatorAppRouteProxy({ targetUrl, routeEvents, label }) {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  const pairs = new Set();
+  await new Promise((resolve) => server.once("listening", resolve));
+  server.on("connection", (clientWs) => {
+    const upstreamWs = new WebSocket(targetUrl);
+    const pending = [];
+    const pair = { clientWs, upstreamWs };
+    pairs.add(pair);
+    const sendToUpstream = (data, isBinary) => {
+      if (upstreamWs.readyState === WebSocket.OPEN) {
+        upstreamWs.send(data, { binary: isBinary });
+      } else if (upstreamWs.readyState === WebSocket.CONNECTING) {
+        pending.push({ data, isBinary });
+      } else if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.close(1011, "relay proxy upstream closed");
+      }
+    };
+    const closeBoth = () => {
+      pairs.delete(pair);
+      try {
+        if (clientWs.readyState === WebSocket.OPEN || clientWs.readyState === WebSocket.CONNECTING) {
+          clientWs.close();
+        }
+      } catch {
+        // Proxy shutdown should not mask the scenario result.
+      }
+      try {
+        if (upstreamWs.readyState === WebSocket.OPEN || upstreamWs.readyState === WebSocket.CONNECTING) {
+          upstreamWs.close();
+        }
+      } catch {
+        // Proxy shutdown should not mask the scenario result.
+      }
+    };
+    upstreamWs.on("open", () => {
+      while (pending.length > 0 && upstreamWs.readyState === WebSocket.OPEN) {
+        const item = pending.shift();
+        upstreamWs.send(item.data, { binary: item.isBinary });
+      }
+    });
+    clientWs.on("message", (data, isBinary) => {
+      recordProxyRoute(routeEvents, data, "simulatorAppToRelay", label);
+      sendToUpstream(data, isBinary);
+    });
+    upstreamWs.on("message", (data, isBinary) => {
+      recordProxyRoute(routeEvents, data, "relayToSimulatorApp", label);
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(data, { binary: isBinary });
+      }
+    });
+    clientWs.on("close", closeBoth);
+    upstreamWs.on("close", closeBoth);
+    clientWs.on("error", closeBoth);
+    upstreamWs.on("error", closeBoth);
+  });
+  const port = server.address().port;
+  return {
+    endpoint: `127.0.0.1:${port}`,
+    url: `ws://127.0.0.1:${port}`,
+    close: async () => {
+      for (const { clientWs, upstreamWs } of pairs) {
+        try {
+          clientWs.terminate();
+        } catch {
+          // Proxy shutdown should not mask the scenario result.
+        }
+        try {
+          upstreamWs.terminate();
+        } catch {
+          // Proxy shutdown should not mask the scenario result.
+        }
+      }
+      await closeWebSocketServer(server);
+    },
+  };
+}
+
 function requiredRouteFindings(clientPathEvidence, routes) {
   const findings = [];
   for (const route of routes) {
@@ -656,6 +758,31 @@ function requiredRouteFindings(clientPathEvidence, routes) {
         { route }
       );
     }
+  }
+  return findings;
+}
+
+function forbiddenSimulatorDetailRouteFindings(simulatorClientPathEvidence) {
+  const findings = [];
+  const events = Array.isArray(simulatorClientPathEvidence?.events)
+    ? simulatorClientPathEvidence.events
+    : [];
+  for (const event of events) {
+    if (event.source !== "simulatorAppProxy" || event.boundary !== "simulatorAppToRelay") {
+      continue;
+    }
+    if (!FORBIDDEN_SIMULATOR_DETAIL_SIDE_DOOR_ROUTES.has(event.route)) {
+      continue;
+    }
+    transitionFailure(
+      findings,
+      "controlled_simulator_forbidden_detail_side_door_route",
+      "simulator app sent a forbidden raw detail route instead of the thread/detail projection route",
+      {
+        route: event.route,
+        at: event.at || null,
+      }
+    );
   }
   return findings;
 }
@@ -3671,6 +3798,7 @@ async function runSpawnEdgeScenario(options) {
 
 async function runDetailReconnectScenario(options) {
   const routeEvents = [];
+  const simulatorRouteEvents = [];
   const findings = [];
   const transitions = [];
   const samples = [];
@@ -3735,7 +3863,7 @@ async function runDetailReconnectScenario(options) {
         sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
       } else if (message.method === "thread/read") {
         readCallCount += 1;
-        recordClientRoute(routeEvents, "thread/read", "simulator app read target thread detail", {
+        recordClientRoute(routeEvents, "thread/read", "relay read target thread detail from fixture upstream", {
           threadID: message.params?.threadId || threadID,
           includeTurns: message.params?.includeTurns ?? null,
           call: readCallCount,
@@ -3749,7 +3877,7 @@ async function runDetailReconnectScenario(options) {
         });
       } else if (message.method === "thread/turns/list") {
         turnsListCallCount += 1;
-        recordClientRoute(routeEvents, "thread/turns/list", "simulator app drained historical thread turns", {
+        recordClientRoute(routeEvents, "thread/turns/list", "relay drained historical thread turns from fixture upstream", {
           threadID: message.params?.threadId || threadID,
           itemsView: message.params?.itemsView ?? null,
           call: turnsListCallCount,
@@ -3761,7 +3889,7 @@ async function runDetailReconnectScenario(options) {
         });
       } else if (message.method === "thread/resume") {
         resumeCallCount += 1;
-        recordClientRoute(routeEvents, "thread/resume", "simulator app resumed target thread live detail", {
+        recordClientRoute(routeEvents, "thread/resume", "relay resumed target thread live detail from fixture upstream", {
           threadID: message.params?.threadId || threadID,
           excludeTurns: message.params?.excludeTurns ?? null,
           call: resumeCallCount,
@@ -3812,6 +3940,11 @@ async function runDetailReconnectScenario(options) {
   await relay.listening;
   const relayPort = relay.server.address().port;
   const relayUrl = `ws://127.0.0.1:${relayPort}`;
+  const simulatorProxy = await startSimulatorAppRouteProxy({
+    targetUrl: relayUrl,
+    routeEvents: simulatorRouteEvents,
+    label: "detail-reconnect",
+  });
   const fixtureOptions = {
     ...options,
     relayUrl,
@@ -3849,7 +3982,8 @@ async function runDetailReconnectScenario(options) {
       ready: true,
       scenario: "detail-reconnect",
       relayUrl,
-      hosts: `127.0.0.1:${relayPort}`,
+      simulatorRelayUrl: simulatorProxy.url,
+      hosts: simulatorProxy.endpoint,
       target: {
         sourceHostID: hostID,
         threadID,
@@ -3913,7 +4047,7 @@ async function runDetailReconnectScenario(options) {
         detailTruth: detailTruthFromWitness({
           kind: "detail-reconnect-initial",
           sourceHostID: hostID,
-          detailHostID: `127.0.0.1:${relayPort}`,
+          detailHostID: simulatorProxy.endpoint,
           threadID,
           witness: initialProjectionWitness,
         }),
@@ -3980,13 +4114,23 @@ async function runDetailReconnectScenario(options) {
       detailTruth: detailTruthFromWitness({
         kind: "detail-reconnect-rehydrated",
         sourceHostID: hostID,
-        detailHostID: `127.0.0.1:${relayPort}`,
+        detailHostID: simulatorProxy.endpoint,
         threadID,
         witness: rehydratedProjectionWitness || initialProjectionWitness,
       }),
     });
 
-    const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
+    const simulatorClientPathEvidence = summarizeClientPathEvents(simulatorRouteEvents);
+    findings.push(...requiredRouteFindings(
+      simulatorClientPathEvidence,
+      ["thread/detail/subscribe", "thread/detail/resync"]
+    ));
+    findings.push(...forbiddenSimulatorDetailRouteFindings(simulatorClientPathEvidence));
+    const clientPathEvidence = summarizeClientPathEvents([
+      ...streamProbe.routeEvents,
+      ...routeEvents,
+      ...simulatorRouteEvents,
+    ]);
 
     const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
     const report = {
@@ -4028,6 +4172,7 @@ async function runDetailReconnectScenario(options) {
         finalState: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
       },
       clientPathEvidence,
+      simulatorClientPathEvidence,
       findings,
       unsupportedFacts: [],
     };
@@ -4040,6 +4185,7 @@ async function runDetailReconnectScenario(options) {
     return report;
   } finally {
     await streamProbe.close().catch(() => null);
+    await simulatorProxy.close().catch(() => null);
     await relay.close().catch(() => null);
     await closeWebSocketServer(historyServer).catch(() => null);
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -5046,6 +5192,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
 export {
   buildMarkdownSummary,
+  forbiddenSimulatorDetailRouteFindings,
   parseArgs,
+  startSimulatorAppRouteProxy,
   validateOptions,
 };

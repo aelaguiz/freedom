@@ -42,6 +42,7 @@
       "items": { "$ref": "#/definitions/proofValue" }
     },
     "clientPathEvidence": { "$ref": "#/definitions/clientPathEvidence" },
+    "simulatorClientPathEvidence": { "$ref": "#/definitions/clientPathEvidence" },
     "stream": { "$ref": "#/definitions/proofValue" },
     "findings": {
       "type": "array",

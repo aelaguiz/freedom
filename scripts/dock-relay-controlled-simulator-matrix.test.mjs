@@ -324,6 +324,33 @@ test("controlled simulator matrix requires the detail reconnect projection route
   assert.match(report.findings.map((finding) => finding.code).join(","), /matrix_required_route_count_too_low/u);
 });
 
+test("controlled simulator matrix does not accept UI-embedded route counts as relay route proof", () => {
+  const reportEntry = entry({
+    scenario: "detail-reconnect",
+    routes: {},
+    ui: {
+      scenarioChecks: 0,
+      detailChecks: 2,
+      detailSweeps: 1,
+      detailSweepMessageCardChecks: 2,
+      detailMessageOrderChecks: 1,
+    },
+  });
+  reportEntry.uiReport.relayReport.routeCounts = {
+    "thread/detail/subscribe": 1,
+    "thread/detail/resync": 1,
+  };
+  const report = buildMatrixReport({
+    entries: [reportEntry],
+    requiredScenarios: ["detail-reconnect"],
+    minPasses: 1,
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, false);
+  assert.match(report.findings.map((finding) => finding.code).join(","), /matrix_required_route_missing/u);
+});
+
 test("controlled simulator matrix fails lagged UI transitions", () => {
   const report = buildMatrixReport({
     entries: [

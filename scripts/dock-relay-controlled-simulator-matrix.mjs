@@ -231,10 +231,7 @@ function readReportDir(reportDir) {
 }
 
 function routeCountsFor(entry) {
-  return entry.relayReport?.clientPathEvidence?.routeCounts
-    || entry.relayReport?.summary?.clientPathRouteCounts
-    || entry.uiReport?.relayReport?.routeCounts
-    || {};
+  return entry.relayReport?.clientPathEvidence?.routeCounts || {};
 }
 
 function scenarioFor(entry) {

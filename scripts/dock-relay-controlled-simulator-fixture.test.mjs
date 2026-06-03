@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import WebSocket, { WebSocketServer } from "ws";
 
 import {
   buildMarkdownSummary,
+  forbiddenSimulatorDetailRouteFindings,
   parseArgs,
+  startSimulatorAppRouteProxy,
   validateOptions,
 } from "./dock-relay-controlled-simulator-fixture.mjs";
+import {
+  summarizeClientPathEvents,
+} from "./dock-relay-sync-audit.mjs";
 
 test("controlled simulator fixture parses thread-activity options", () => {
   const options = parseArgs([
@@ -332,4 +338,102 @@ test("controlled simulator fixture summary says the simulator must share the tem
 
   assert.match(summary, /same temporary relay/u);
   assert.match(summary, /Scenario: thread-activity/u);
+});
+
+test("controlled simulator proxy records simulator-app downstream detail routes", async () => {
+  const routeEvents = [];
+  const upstreamServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise((resolve) => upstreamServer.once("listening", resolve));
+  upstreamServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const request = JSON.parse(data.toString());
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { ok: true } }));
+      ws.send(JSON.stringify({
+        jsonrpc: "2.0",
+        method: "thread/detail/update",
+        params: { kind: "heartbeat", seq: 1 },
+      }));
+    });
+  });
+  const proxy = await startSimulatorAppRouteProxy({
+    targetUrl: `ws://127.0.0.1:${upstreamServer.address().port}`,
+    routeEvents,
+    label: "unit-test",
+  });
+  const client = new WebSocket(proxy.url);
+  try {
+    await new Promise((resolve) => client.once("open", resolve));
+    client.send(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "thread/detail/subscribe",
+      params: { threadId: "thread-1" },
+    }));
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("proxy did not observe detail update")), 1_000);
+      const poll = () => {
+        if (routeEvents.some((event) => event.route === "thread/detail/update")) {
+          clearTimeout(timer);
+          resolve();
+        } else {
+          setTimeout(poll, 10);
+        }
+      };
+      poll();
+    });
+  } finally {
+    try {
+      client.terminate();
+    } catch {
+      // Test cleanup should not mask assertion results.
+    }
+    await proxy.close();
+    await new Promise((resolve) => upstreamServer.close(resolve));
+  }
+
+  const evidence = summarizeClientPathEvents(routeEvents);
+  assert.equal(evidence.routeCounts["thread/detail/subscribe"], 1);
+  assert.equal(evidence.routeCounts["thread/detail/update"], 1);
+  assert.ok(routeEvents.some((event) => (
+    event.route === "thread/detail/subscribe"
+    && event.source === "simulatorAppProxy"
+    && event.boundary === "simulatorAppToRelay"
+  )));
+  assert.ok(routeEvents.some((event) => (
+    event.route === "thread/detail/update"
+    && event.source === "simulatorAppProxy"
+    && event.boundary === "relayToSimulatorApp"
+  )));
+});
+
+test("controlled simulator forbidden detail side doors only fail at simulator-app downstream boundary", () => {
+  const findings = forbiddenSimulatorDetailRouteFindings({
+    events: [
+      {
+        route: "thread/read",
+        source: "simulatorAppProxy",
+        boundary: "simulatorAppToRelay",
+        at: "2026-06-03T00:00:00.000Z",
+      },
+      {
+        route: "thread/resume",
+        source: "fixtureUpstream",
+        boundary: "relayToFixtureUpstream",
+      },
+      {
+        route: "thread/detail/read",
+        source: "simulatorAppProxy",
+        boundary: "relayToSimulatorApp",
+      },
+      {
+        route: "thread/detail/subscribe",
+        source: "simulatorAppProxy",
+        boundary: "simulatorAppToRelay",
+      },
+    ],
+  });
+
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].code, "controlled_simulator_forbidden_detail_side_door_route");
+  assert.equal(findings[0].route, "thread/read");
 });

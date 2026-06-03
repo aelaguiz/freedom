@@ -188,3 +188,59 @@ test("passing proof cannot use thread/detail/read as production route evidence",
   assert.match(errors.join("\n"), /manual diagnostic routes cannot satisfy live-update proof/u);
   assert.match(errors.join("\n"), /must include relay-owned Dock, Archive, or Thread Detail client routes/u);
 });
+
+test("passing controlled simulator proof rejects simulator-app downstream raw detail routes", () => {
+  const report = sampleProofReports().find(
+    (candidate) => candidate.kind === "codex-dock-controlled-simulator-scenario-relay-report"
+  );
+  report.clientPathEvidence = {
+    routes: ["dock/subscribe", "thread/detail/subscribe"],
+    routeCounts: { "dock/subscribe": 1, "thread/detail/subscribe": 1 },
+  };
+  report.summary.clientPathRouteCounts = report.clientPathEvidence.routeCounts;
+  report.simulatorClientPathEvidence = {
+    routes: ["thread/read", "thread/detail/subscribe"],
+    routeCounts: { "thread/detail/subscribe": 1 },
+    events: [
+      {
+        route: "thread/read",
+        source: "simulatorAppProxy",
+        boundary: "simulatorAppToRelay",
+      },
+      {
+        route: "thread/resume",
+        source: "fixtureUpstream",
+        boundary: "relayToFixtureUpstream",
+      },
+    ],
+  };
+
+  const errors = validateProofReport(report, { sourcePath: "controlled-simulator-sample" });
+
+  assert.match(errors.join("\n"), /simulator app downstream side-door routes cannot satisfy live-update proof/u);
+  assert.match(errors.join("\n"), /thread\/read/u);
+  assert.doesNotMatch(errors.join("\n"), /thread\/resume/u);
+});
+
+test("controlled simulator proof schema accepts simulator-only client path evidence", () => {
+  const report = sampleProofReports().find(
+    (candidate) => candidate.kind === "codex-dock-controlled-simulator-scenario-relay-report"
+  );
+  report.simulatorClientPathEvidence = {
+    routes: ["thread/detail/subscribe", "thread/detail/resync"],
+    routeCounts: {
+      "thread/detail/subscribe": 1,
+      "thread/detail/resync": 1,
+    },
+    events: [
+      {
+        route: "thread/detail/subscribe",
+        source: "simulatorAppProxy",
+        boundary: "simulatorAppToRelay",
+        hasResponseID: true,
+      },
+    ],
+  };
+
+  assertProofReport(report, { sourcePath: "controlled-simulator-sample" });
+});
