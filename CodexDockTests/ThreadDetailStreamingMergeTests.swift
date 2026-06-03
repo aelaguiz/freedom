@@ -7,8 +7,8 @@ final class ThreadDetailStreamingMergeTests: XCTestCase {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: [])))
+            detailSubscribeResult: .success(.thread("thread-1")),
+            detailResyncResult: .success(.thread("thread-1"))
         )
         let store = ThreadDetailStore(
             host: host,

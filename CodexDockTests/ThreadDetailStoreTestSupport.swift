@@ -9,6 +9,39 @@ struct FakeThreadDetailSessionFactory: ThreadDetailSessionMaking {
     }
 }
 
+struct ThreadDetailProjectionSeed: Equatable, Sendable {
+    let threadID: String
+    let turns: [JSONValue]
+    let activeTurnID: String?
+    let sourceHostID: String?
+
+    init(
+        threadID: String = "thread-1",
+        turns: [JSONValue] = [],
+        activeTurnID: String? = nil,
+        sourceHostID: String? = nil
+    ) {
+        self.threadID = threadID
+        self.turns = turns
+        self.activeTurnID = activeTurnID
+        self.sourceHostID = sourceHostID
+    }
+
+    static func thread(
+        _ threadID: String = "thread-1",
+        turns: [JSONValue] = [],
+        activeTurnID: String? = nil,
+        sourceHostID: String? = nil
+    ) -> ThreadDetailProjectionSeed {
+        ThreadDetailProjectionSeed(
+            threadID: threadID,
+            turns: turns,
+            activeTurnID: activeTurnID,
+            sourceHostID: sourceHostID
+        )
+    }
+}
+
 final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
     let connectionStates: AsyncStream<AppServerConnectionState>
     let notifications: AsyncStream<JSONRPCNotification>
@@ -17,17 +50,12 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
     private let connectionStateContinuation: AsyncStream<AppServerConnectionState>.Continuation
     private let notificationContinuation: AsyncStream<JSONRPCNotification>.Continuation
     private let serverRequestContinuation: AsyncStream<JSONRPCRequest>.Continuation
-    private var readResults: [Result<ThreadReadResponseDTO, any Error>]
-    private var turnsListResults: [Result<ThreadTurnsListResponseDTO, any Error>]
-    private var resumeResults: [Result<ThreadResumeResponseDTO, any Error>]
-    private var detailSubscribeResults: [Result<ThreadDetailSnapshotDTO, any Error>]?
-    private var detailResyncResults: [Result<ThreadDetailSnapshotDTO, any Error>]?
+    private var detailSubscribeResults: [Result<ThreadDetailProjectionSeed, any Error>]
+    private var detailResyncResults: [Result<ThreadDetailProjectionSeed, any Error>]
+    private var projectionTurnsResults: [Result<[JSONValue], any Error>]
     private let turnStartResult: Result<TurnStartResponseDTO, any Error>
     private let turnSteerResult: Result<TurnSteerResponseDTO, any Error>
-    private let resumeDelay: Duration?
-    private var readParams: [ThreadReadParams] = []
-    private var turnsListParams: [ThreadTurnsListParams] = []
-    private var resumeParams: [ThreadResumeParams] = []
+    private let projectionDelay: Duration?
     private var detailSubscribeParams: [ThreadDetailParams] = []
     private var detailResyncParams: [ThreadDetailParams] = []
     private var turnStartParams: [TurnStartParams] = []
@@ -41,11 +69,9 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
     private var detailSeq: Int64 = 0
 
     init(
-        readResult: Result<ThreadReadResponseDTO, any Error>,
-        turnsListResult: Result<ThreadTurnsListResponseDTO, any Error> = .success(
-            ThreadTurnsListResponseDTO(data: [])
-        ),
-        resumeResult: Result<ThreadResumeResponseDTO, any Error>,
+        detailSubscribeResult: Result<ThreadDetailProjectionSeed, any Error> = .success(.thread()),
+        projectionTurnsResult: Result<[JSONValue], any Error> = .success([]),
+        detailResyncResult: Result<ThreadDetailProjectionSeed, any Error> = .success(.thread()),
         turnStartResult: Result<TurnStartResponseDTO, any Error> = .success(
             TurnStartResponseDTO(
                 turn: .object([
@@ -57,12 +83,10 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         turnSteerResult: Result<TurnSteerResponseDTO, any Error> = .success(
             TurnSteerResponseDTO(turnId: "turn-started")
         ),
-        resumeDelay: Duration? = nil,
-        readResults: [Result<ThreadReadResponseDTO, any Error>]? = nil,
-        turnsListResults: [Result<ThreadTurnsListResponseDTO, any Error>]? = nil,
-        resumeResults: [Result<ThreadResumeResponseDTO, any Error>]? = nil,
-        detailSubscribeResults: [Result<ThreadDetailSnapshotDTO, any Error>]? = nil,
-        detailResyncResults: [Result<ThreadDetailSnapshotDTO, any Error>]? = nil,
+        projectionDelay: Duration? = nil,
+        detailSubscribeResults: [Result<ThreadDetailProjectionSeed, any Error>]? = nil,
+        projectionTurnsResults: [Result<[JSONValue], any Error>]? = nil,
+        detailResyncResults: [Result<ThreadDetailProjectionSeed, any Error>]? = nil,
         detailSourceHostID: String = "test-host"
     ) {
         let connectionStates = AsyncStream.makeStream(of: AppServerConnectionState.self)
@@ -74,15 +98,13 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         self.notificationContinuation = notifications.continuation
         self.serverRequests = serverRequests.stream
         self.serverRequestContinuation = serverRequests.continuation
-        self.readResults = readResults ?? [readResult]
-        self.turnsListResults = turnsListResults ?? [turnsListResult]
-        self.resumeResults = resumeResults ?? [resumeResult]
-        self.detailSubscribeResults = detailSubscribeResults
-        self.detailResyncResults = detailResyncResults
+        self.detailSubscribeResults = detailSubscribeResults ?? [detailSubscribeResult]
+        self.detailResyncResults = detailResyncResults ?? [detailResyncResult]
+        self.projectionTurnsResults = projectionTurnsResults ?? [projectionTurnsResult]
         self.detailSourceHostID = detailSourceHostID
         self.turnStartResult = turnStartResult
         self.turnSteerResult = turnSteerResult
-        self.resumeDelay = resumeDelay
+        self.projectionDelay = projectionDelay
     }
 
     func connectAndInitialize(
@@ -99,52 +121,19 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         )
     }
 
-    func threadRead(
-        params: ThreadReadParams,
-        timeout: Duration
-    ) async throws -> ThreadReadResponseDTO {
-        readParams.append(params)
-        let result = readResults.count > 1 ? readResults.removeFirst() : readResults[0]
-        return try result.get()
-    }
-
-    func threadTurnsList(
-        params: ThreadTurnsListParams,
-        timeout: Duration
-    ) async throws -> ThreadTurnsListResponseDTO {
-        turnsListParams.append(params)
-        let result = turnsListResults.count > 1 ? turnsListResults.removeFirst() : turnsListResults[0]
-        return try result.get()
-    }
-
-    func threadResume(
-        params: ThreadResumeParams,
-        timeout: Duration
-    ) async throws -> ThreadResumeResponseDTO {
-        resumeParams.append(params)
-        if let resumeDelay {
-            try await Task.sleep(for: resumeDelay)
-        }
-        let result = resumeResults.count > 1 ? resumeResults.removeFirst() : resumeResults[0]
-        return try result.get()
-    }
-
     func threadDetailSubscribe(
         params: ThreadDetailParams,
         timeout: Duration
     ) async throws -> ThreadDetailSnapshotDTO {
         detailSubscribeParams.append(params)
-        if var results = detailSubscribeResults {
-            let result = results.count > 1 ? results.removeFirst() : results[0]
-            detailSubscribeResults = results
-            return try result.get()
+        if let projectionDelay {
+            try await Task.sleep(for: projectionDelay)
         }
-        if let resumeDelay {
-            try await Task.sleep(for: resumeDelay)
-        }
-        let resumeResult = resumeResults.count > 1 ? resumeResults.removeFirst() : resumeResults[0]
-        _ = try resumeResult.get()
-        return try makeNextDetailSnapshot(threadID: params.threadId, preservingLiveEvents: true)
+        return try makeNextDetailSnapshot(
+            seed: nextProjectionSeed(from: &detailSubscribeResults),
+            requestedThreadID: params.threadId,
+            preservingLiveEvents: true
+        )
     }
 
     func threadDetailResync(
@@ -152,15 +141,14 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         timeout: Duration
     ) async throws -> ThreadDetailSnapshotDTO {
         detailResyncParams.append(params)
-        if var results = detailResyncResults {
-            let result = results.count > 1 ? results.removeFirst() : results[0]
-            detailResyncResults = results
-            return try result.get()
+        if let projectionDelay {
+            try await Task.sleep(for: projectionDelay)
         }
-        if let resumeDelay {
-            try await Task.sleep(for: resumeDelay)
-        }
-        return try makeNextDetailSnapshot(threadID: params.threadId, preservingLiveEvents: true)
+        return try makeNextDetailSnapshot(
+            seed: nextProjectionSeed(from: &detailResyncResults),
+            requestedThreadID: params.threadId,
+            preservingLiveEvents: true
+        )
     }
 
     func turnStart(
@@ -230,18 +218,6 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         connectionStateContinuation.finish()
     }
 
-    func readParamsSnapshot() -> [ThreadReadParams] {
-        readParams
-    }
-
-    func turnsListParamsSnapshot() -> [ThreadTurnsListParams] {
-        turnsListParams
-    }
-
-    func resumeParamsSnapshot() -> [ThreadResumeParams] {
-        resumeParams
-    }
-
     func detailSubscribeParamsSnapshot() -> [ThreadDetailParams] {
         detailSubscribeParams
     }
@@ -263,19 +239,20 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
     }
 
     private func makeNextDetailSnapshot(
-        threadID: String,
+        seed: ThreadDetailProjectionSeed,
+        requestedThreadID: String,
         preservingLiveEvents: Bool
     ) throws -> ThreadDetailSnapshotDTO {
+        let sourceHostID = seed.sourceHostID ?? detailSourceHostID
+        let turns = seed.turns.isEmpty ? try nextProjectionTurns() : seed.turns
         let preservedEvents = preservingLiveEvents
             ? detailEventsByID.values.filter { $0.isLive || $0.request != nil }
             : []
-        let readResult = readResults.count > 1 ? readResults.removeFirst() : readResults[0]
-        let read = try readResult.get()
-        let turns = try drainNextTurnsPageSet()
         var snapshot = Self.detailSnapshot(
-            thread: read.thread.replacingTurns(turns),
-            threadID: read.thread.id ?? threadID,
-            sourceHostID: detailSourceHostID,
+            threadID: seed.threadID,
+            turns: turns,
+            activeTurnID: seed.activeTurnID,
+            sourceHostID: sourceHostID,
             epoch: detailEpoch,
             seq: nextDetailSeq()
         )
@@ -286,8 +263,8 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
             .map { offset, event in
                 Self.detailEventDTO(
                     from: event,
-                    threadID: read.thread.id ?? threadID,
-                    sourceHostID: detailSourceHostID,
+                    threadID: seed.threadID,
+                    sourceHostID: sourceHostID,
                     index: snapshot.events.count + offset,
                     revision: detailRevisionsByID[event.id] ?? 1
                 )
@@ -304,6 +281,12 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
                 rows: snapshot.events + preservedDTOs
             )
         }
+        if snapshot.threadID != requestedThreadID {
+            detailEventsByID.removeAll()
+            detailRevisionsByID.removeAll()
+            detailActiveTurnID = nil
+            return snapshot
+        }
         detailEventsByID = Dictionary(uniqueKeysWithValues: snapshot.events.map {
             (ThreadEvent(detailEvent: $0).id, ThreadEvent(detailEvent: $0))
         })
@@ -314,20 +297,18 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         return snapshot
     }
 
-    private func drainNextTurnsPageSet() throws -> [JSONValue] {
-        var turns: [JSONValue] = []
-        var seenCursors = Set<String>()
-        while true {
-            let result = turnsListResults.count > 1 ? turnsListResults.removeFirst() : turnsListResults[0]
-            let response = try result.get()
-            turns.append(contentsOf: response.data)
-            guard let cursor = response.nextCursor, !cursor.isEmpty else {
-                return turns
-            }
-            guard seenCursors.insert(cursor).inserted else {
-                throw ThreadDetailStoreError.repeatedTurnsCursor(cursor)
-            }
-        }
+    private func nextProjectionSeed(
+        from results: inout [Result<ThreadDetailProjectionSeed, any Error>]
+    ) throws -> ThreadDetailProjectionSeed {
+        let result = results.count > 1 ? results.removeFirst() : results[0]
+        return try result.get()
+    }
+
+    private func nextProjectionTurns() throws -> [JSONValue] {
+        let result = projectionTurnsResults.count > 1
+            ? projectionTurnsResults.removeFirst()
+            : projectionTurnsResults[0]
+        return try result.get()
     }
 
     private func applyDetail(notification: JSONRPCNotification) -> ThreadDetailUpdateDTO? {
@@ -476,12 +457,14 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
     }
 
     private static func detailSnapshot(
-        thread: ThreadDTO,
         threadID: String,
+        turns: [JSONValue],
+        activeTurnID: String?,
         sourceHostID: String,
         epoch: String,
         seq: Int64
     ) -> ThreadDetailSnapshotDTO {
+        let thread = ThreadDTO(id: threadID, turns: turns)
         let events = LegacyThreadEventFixtureNormalizer.events(from: thread).enumerated().map { index, event in
             detailEventDTO(from: event, threadID: threadID, sourceHostID: sourceHostID, index: index)
         }
@@ -491,7 +474,7 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
             epoch: epoch,
             seq: seq,
             viewParamsKey: "default-view",
-            activeTurnID: thread.turns?
+            activeTurnID: activeTurnID ?? thread.turns?
                 .compactMap { turn -> String? in
                     guard turn.objectValue?["status"]?.stringValue == "inProgress" else {
                         return nil
@@ -743,13 +726,13 @@ final class FakeLiveVoiceCaptureSession: @unchecked Sendable, LiveVoiceCaptureSe
 }
 
 enum FakeThreadDetailError: Error, LocalizedError, Sendable {
-    case resumeFailed
+    case projectionFailed
     case turnFailed
 
     var errorDescription: String? {
         switch self {
-        case .resumeFailed:
-            return "resume failed"
+        case .projectionFailed:
+            return "projection failed"
         case .turnFailed:
             return "turn failed"
         }

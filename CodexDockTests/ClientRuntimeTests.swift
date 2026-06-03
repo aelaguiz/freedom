@@ -146,8 +146,8 @@ final class ClientRuntimeTests: XCTestCase {
         let host = runtime.registry.hosts[0]
         let row = makeDetailRow(hostID: host.id, threadID: "thread-a")
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-a", turns: []))),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-a", turns: [])))
+            detailSubscribeResult: .success(.thread("thread-a")),
+            detailResyncResult: .success(.thread("thread-a"))
         )
         let store = runtime.makeThreadDetailStore(
             host: host,

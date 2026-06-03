@@ -78,12 +78,8 @@ final class ClientCommandEngineTests: XCTestCase {
 
     private func makeThreadSession() -> FakeThreadDetailSession {
         FakeThreadDetailSession(
-            readResult: .success(
-                ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-a", turns: []))
-            ),
-            resumeResult: .success(
-                ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-a", turns: []))
-            )
+            detailSubscribeResult: .success(.thread("thread-a")),
+            detailResyncResult: .success(.thread("thread-a"))
         )
     }
 }

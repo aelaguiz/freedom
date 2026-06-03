@@ -8,13 +8,13 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let lifecycle = AppLifecycleCoordinator()
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResult: .success(
-                ThreadTurnsListResponseDTO(data: [
+            detailSubscribeResult: .success(.thread("thread-1")),
+            projectionTurnsResult: .success(
+                [
                     makeDetailTurn(id: "turn-old", startedAt: 1_000, text: "Stored turn"),
-                ])
+                ]
             ),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: [])))
+            detailResyncResult: .success(.thread("thread-1"))
         )
         let store = ThreadDetailStore(
             host: host,
@@ -59,9 +59,6 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         XCTAssertEqual(store.requestCards[0].status, .pending)
         XCTAssertEqual(session.detailSubscribeParamsSnapshot().count, 1)
         XCTAssertEqual(session.detailResyncParamsSnapshot().count, 0)
-        XCTAssertEqual(session.readParamsSnapshot(), [])
-        XCTAssertEqual(session.turnsListParamsSnapshot(), [])
-        XCTAssertEqual(session.resumeParamsSnapshot(), [])
     }
 
     @MainActor
@@ -69,24 +66,24 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResult: .success(ThreadTurnsListResponseDTO(data: [])),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResults: [
+            detailSubscribeResult: .success(.thread("thread-1")),
+            projectionTurnsResult: .success([]),
+            detailResyncResult: .success(.thread("thread-1")),
+            projectionTurnsResults: [
                 .success(
-                    ThreadTurnsListResponseDTO(data: [
+                    [
                         makeDetailTurn(id: "turn-initial", startedAt: 1_000, text: "Initial turn"),
-                    ])
+                    ]
                 ),
                 .success(
-                    ThreadTurnsListResponseDTO(data: [
+                    [
                         makeDetailTurn(id: "turn-rehydrated", startedAt: 2_000, text: "Rehydrated turn"),
-                    ])
+                    ]
                 ),
             ],
-            resumeResults: [
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            detailResyncResults: [
+                .success(.thread("thread-1")),
+                .success(.thread("thread-1")),
             ]
         )
         let store = ThreadDetailStore(
@@ -121,9 +118,6 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         XCTAssertEqual(session.detailResyncParamsSnapshot(), [
             ThreadDetailParams(threadId: "thread-1"),
         ])
-        XCTAssertEqual(session.readParamsSnapshot(), [])
-        XCTAssertEqual(session.turnsListParamsSnapshot(), [])
-        XCTAssertEqual(session.resumeParamsSnapshot(), [])
     }
 
     @MainActor
@@ -131,25 +125,25 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResult: .success(ThreadTurnsListResponseDTO(data: [])),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            resumeDelay: .milliseconds(100),
-            turnsListResults: [
+            detailSubscribeResult: .success(.thread("thread-1")),
+            projectionTurnsResult: .success([]),
+            detailResyncResult: .success(.thread("thread-1")),
+            projectionDelay: .milliseconds(100),
+            projectionTurnsResults: [
                 .success(
-                    ThreadTurnsListResponseDTO(data: [
+                    [
                         makeDetailTurn(id: "turn-initial", startedAt: 1_000, text: "Initial stale turn"),
-                    ])
+                    ]
                 ),
                 .success(
-                    ThreadTurnsListResponseDTO(data: [
+                    [
                         makeDetailTurn(id: "turn-rehydrated", startedAt: 2_000, text: "Canonical rehydrated turn"),
-                    ])
+                    ]
                 ),
             ],
-            resumeResults: [
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            detailResyncResults: [
+                .success(.thread("thread-1")),
+                .success(.thread("thread-1")),
             ]
         )
         let store = ThreadDetailStore(
@@ -200,16 +194,16 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResult: .success(ThreadTurnsListResponseDTO(data: [])),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResults: [
-                .success(ThreadTurnsListResponseDTO(data: [])),
-                .success(ThreadTurnsListResponseDTO(data: [])),
+            detailSubscribeResult: .success(.thread("thread-1")),
+            projectionTurnsResult: .success([]),
+            detailResyncResult: .success(.thread("thread-1")),
+            projectionTurnsResults: [
+                .success([]),
+                .success([]),
             ],
-            resumeResults: [
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            detailResyncResults: [
+                .success(.thread("thread-1")),
+                .success(.thread("thread-1")),
             ]
         )
         let store = ThreadDetailStore(
@@ -258,24 +252,24 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let lifecycle = AppLifecycleCoordinator()
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResult: .success(ThreadTurnsListResponseDTO(data: [])),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResults: [
+            detailSubscribeResult: .success(.thread("thread-1")),
+            projectionTurnsResult: .success([]),
+            detailResyncResult: .success(.thread("thread-1")),
+            projectionTurnsResults: [
                 .success(
-                    ThreadTurnsListResponseDTO(data: [
+                    [
                         makeDetailTurn(id: "turn-initial", startedAt: 1_000, text: "Initial turn"),
-                    ])
+                    ]
                 ),
                 .success(
-                    ThreadTurnsListResponseDTO(data: [
+                    [
                         makeDetailTurn(id: "turn-resumed", startedAt: 2_000, text: "Foreground resumed turn"),
-                    ])
+                    ]
                 ),
             ],
-            resumeResults: [
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            detailResyncResults: [
+                .success(.thread("thread-1")),
+                .success(.thread("thread-1")),
             ]
         )
         let store = ThreadDetailStore(
@@ -310,9 +304,6 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         XCTAssertEqual(session.detailResyncParamsSnapshot(), [
             ThreadDetailParams(threadId: "thread-1"),
         ])
-        XCTAssertEqual(session.readParamsSnapshot(), [])
-        XCTAssertEqual(session.turnsListParamsSnapshot(), [])
-        XCTAssertEqual(session.resumeParamsSnapshot(), [])
     }
 
     @MainActor
@@ -321,22 +312,22 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let lifecycle = AppLifecycleCoordinator()
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResult: .success(ThreadTurnsListResponseDTO(data: [])),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            readResults: [
-                .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-                .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            detailSubscribeResult: .success(.thread("thread-1")),
+            projectionTurnsResult: .success([]),
+            detailResyncResult: .success(.thread("thread-1")),
+            detailSubscribeResults: [
+                .success(.thread("thread-1")),
+                .success(.thread("thread-1")),
             ],
-            turnsListResults: [
-                .success(ThreadTurnsListResponseDTO(data: [])),
-                .success(ThreadTurnsListResponseDTO(data: [
+            projectionTurnsResults: [
+                .success([]),
+                .success([
                     makeDetailTurn(id: "turn-resumed", text: "Rehydrated after socket returned"),
-                ])),
+                ]),
             ],
-            resumeResults: [
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            detailResyncResults: [
+                .success(.thread("thread-1")),
+                .success(.thread("thread-1")),
             ]
         )
         let store = ThreadDetailStore(
@@ -385,16 +376,16 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let turn = makeDetailTurn(id: "turn-same", startedAt: 1_000, text: "Same turn")
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResult: .success(ThreadTurnsListResponseDTO(data: [])),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResults: [
-                .success(ThreadTurnsListResponseDTO(data: [turn])),
-                .success(ThreadTurnsListResponseDTO(data: [turn])),
+            detailSubscribeResult: .success(.thread("thread-1")),
+            projectionTurnsResult: .success([]),
+            detailResyncResult: .success(.thread("thread-1")),
+            projectionTurnsResults: [
+                .success([turn]),
+                .success([turn]),
             ],
-            resumeResults: [
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            detailResyncResults: [
+                .success(.thread("thread-1")),
+                .success(.thread("thread-1")),
             ]
         )
         let store = ThreadDetailStore(
@@ -421,14 +412,14 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResult: .success(
-                ThreadTurnsListResponseDTO(data: [
+            detailSubscribeResult: .success(.thread("thread-1")),
+            projectionTurnsResult: .success(
+                [
                     makeDetailTurn(id: "turn-initial", text: "Initial turn"),
-                ])
+                ]
             ),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            detailResyncResults: [.failure(FakeThreadDetailError.resumeFailed)]
+            detailResyncResult: .success(.thread("thread-1")),
+            detailResyncResults: [.failure(FakeThreadDetailError.projectionFailed)]
         )
         let store = ThreadDetailStore(
             host: host,
@@ -445,7 +436,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
                   case let .stale(message) = snapshot.liveState else {
                 return false
             }
-            return message.contains("resume failed")
+            return message.contains("projection failed")
                 && snapshot.events.map(\.body) == ["Initial turn"]
         }
     }
@@ -455,8 +446,8 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: [])))
+            detailSubscribeResult: .success(.thread("thread-1")),
+            detailResyncResult: .success(.thread("thread-1"))
         )
         let store = ThreadDetailStore(
             host: host,
@@ -488,7 +479,6 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         XCTAssertEqual(snapshot.liveState, .closed)
         XCTAssertEqual(session.detailSubscribeParamsSnapshot().count, 1)
         XCTAssertEqual(session.detailResyncParamsSnapshot().count, 0)
-        XCTAssertEqual(session.readParamsSnapshot(), [])
     }
 
     @MainActor
@@ -496,17 +486,17 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            turnsListResult: .success(ThreadTurnsListResponseDTO(data: [])),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            detailSubscribeResult: .success(.thread("thread-1")),
+            projectionTurnsResult: .success([]),
+            detailResyncResult: .success(.thread("thread-1")),
             turnStartResult: .failure(FakeThreadDetailError.turnFailed),
-            turnsListResults: [
-                .success(ThreadTurnsListResponseDTO(data: [])),
-                .success(ThreadTurnsListResponseDTO(data: [])),
+            projectionTurnsResults: [
+                .success([]),
+                .success([]),
             ],
-            resumeResults: [
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-                .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
+            detailResyncResults: [
+                .success(.thread("thread-1")),
+                .success(.thread("thread-1")),
             ]
         )
         let store = ThreadDetailStore(
@@ -544,8 +534,8 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let lifecycle = AppLifecycleCoordinator()
         let realtime = FakeRealtimeTranscriptionService()
         let session = FakeThreadDetailSession(
-            readResult: .success(ThreadReadResponseDTO(thread: ThreadDTO(id: "thread-1", turns: []))),
-            resumeResult: .success(ThreadResumeResponseDTO(thread: ThreadDTO(id: "thread-1", turns: [])))
+            detailSubscribeResult: .success(.thread("thread-1")),
+            detailResyncResult: .success(.thread("thread-1"))
         )
         let store = ThreadDetailStore(
             host: host,
