@@ -321,6 +321,25 @@ extension XCUIApplication {
         return false
     }
 
+    func scrollDetailMessagesIntoEvidencePosition(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let detail = visibleDetail() {
+                let expectedMessageRows = detailMessageCount(detail.messageListValue)
+                if expectedMessageRows == 0 || !detail.messageCardIDs.isEmpty {
+                    return true
+                }
+            }
+            dragDetailPageUp()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        guard let detail = visibleDetail() else {
+            return false
+        }
+        let expectedMessageRows = detailMessageCount(detail.messageListValue)
+        return expectedMessageRows == 0 || !detail.messageCardIDs.isEmpty
+    }
+
     func captureDisplayedUISample(
         index: Int,
         includeDockSweep: Bool = false,
@@ -467,6 +486,17 @@ extension XCUIApplication {
         }
         let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.82))
         let end = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.28))
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    private func dragDetailPageUp() {
+        let root = displayedUIWaitForElement(identifierPrefix: "codexdock.session.root.", timeout: 0.1)
+        guard let root, root.exists else {
+            dragDockListUp()
+            return
+        }
+        let start = root.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.82))
+        let end = root.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22))
         start.press(forDuration: 0.05, thenDragTo: end)
     }
 

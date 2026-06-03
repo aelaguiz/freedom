@@ -61,6 +61,7 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
                     "Displayed sync proof could not switch the real detail filter to \(detailFilter)."
                 )
             }
+            _ = app.scrollDetailMessagesIntoEvidencePosition(timeout: 5)
 
             try DisplayedUIArtifactWriter.markReady(to: config.readyPath)
 

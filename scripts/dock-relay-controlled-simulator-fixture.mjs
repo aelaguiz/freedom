@@ -575,6 +575,36 @@ async function freshComparison({ streamProbe, options, routeEvents }) {
   return { freshDock, comparison, attempts };
 }
 
+async function waitForStableDockClientPathThread({
+  streamProbe,
+  options,
+  routeEvents,
+  threadID,
+  timeoutMs,
+}) {
+  const deadlineMs = Date.now() + timeoutMs;
+  let lastComparison = null;
+  while (Date.now() < deadlineMs) {
+    lastComparison = await freshComparison({ streamProbe, options, routeEvents });
+    if (dockSnapshotHasThread(lastComparison.freshDock, threadID)) {
+      return {
+        ok: true,
+        observedAt: new Date().toISOString(),
+        observedAtMs: Date.now(),
+        ...lastComparison,
+      };
+    }
+    await sleep(500);
+  }
+  return {
+    ok: false,
+    observedAt: null,
+    observedAtMs: null,
+    timeoutMs,
+    ...(lastComparison || { freshDock: null, comparison: null, attempts: [] }),
+  };
+}
+
 async function waitForArchiveStreamCondition({ streamProbe, timeoutMs, predicate }) {
   const deadlineMs = Date.now() + timeoutMs;
   while (true) {
@@ -634,6 +664,60 @@ function waitForAsyncEvent(promise, timeoutMs) {
       value,
     };
   });
+}
+
+function routeEventObservedAtMS(event) {
+  const parsed = Date.parse(event?.at || 0);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function waitForRecordedRouteEvent({
+  events,
+  route,
+  source = null,
+  boundary = null,
+  afterMs = 0,
+  timeoutMs,
+}) {
+  const deadline = Date.now() + timeoutMs;
+  let lastMatchingEvent = null;
+  while (Date.now() < deadline) {
+    lastMatchingEvent = (Array.isArray(events) ? events : []).find((event) => {
+      if (event?.route !== route) {
+        return false;
+      }
+      if (source !== null && event.source !== source) {
+        return false;
+      }
+      if (boundary !== null && event.boundary !== boundary) {
+        return false;
+      }
+      return (routeEventObservedAtMS(event) ?? 0) >= afterMs;
+    }) || lastMatchingEvent;
+    if (lastMatchingEvent) {
+      const observedAtMs = routeEventObservedAtMS(lastMatchingEvent) ?? Date.now();
+      return {
+        ok: true,
+        route,
+        source,
+        boundary,
+        observedAt: new Date(observedAtMs).toISOString(),
+        observedAtMs,
+        event: lastMatchingEvent,
+      };
+    }
+    await sleep(100);
+  }
+  return {
+    ok: false,
+    route,
+    source,
+    boundary,
+    observedAt: null,
+    observedAtMs: null,
+    timeoutMs,
+    event: null,
+  };
 }
 
 function recordClientRoute(events, route, purpose, details = {}) {
@@ -3829,14 +3913,6 @@ async function runDetailReconnectScenario(options) {
   let rehydratedAtMs = null;
   let initialProjectionWitness = null;
   let rehydratedProjectionWitness = null;
-  let resolveDetailLoaded;
-  let resolveRehydrated;
-  const detailLoadedPromise = new Promise((resolve) => {
-    resolveDetailLoaded = resolve;
-  });
-  const rehydratedPromise = new Promise((resolve) => {
-    resolveRehydrated = resolve;
-  });
 
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise((resolve) => historyServer.once("listening", resolve));
@@ -3904,10 +3980,6 @@ async function runDetailReconnectScenario(options) {
         if (resumeCallCount === 1) {
           initialDetailWs = ws;
           detailLoadedAtMs = Date.now();
-          resolveDetailLoaded({ observedAtMs: detailLoadedAtMs, readCallCount, turnsListCallCount, resumeCallCount });
-        } else if (resumeCallCount >= 3 && !rehydratedAtMs) {
-          rehydratedAtMs = Date.now();
-          resolveRehydrated({ observedAtMs: rehydratedAtMs, readCallCount, turnsListCallCount, resumeCallCount });
         }
       }
     });
@@ -3952,6 +4024,10 @@ async function runDetailReconnectScenario(options) {
     sqliteHome: tempDir,
     detail: "none",
   };
+  const simulatorProxyOptions = {
+    ...fixtureOptions,
+    relayUrl: simulatorProxy.url,
+  };
   const streamProbe = new DockStreamProbe(fixtureOptions);
 
   try {
@@ -3969,7 +4045,25 @@ async function runDetailReconnectScenario(options) {
         { threadID }
       );
     }
-    const initial = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+    const initial = await waitForStableDockClientPathThread({
+      streamProbe,
+      options: simulatorProxyOptions,
+      routeEvents,
+      threadID,
+      timeoutMs: options.dockCollectionTimeoutMs,
+    });
+    if (!initial.ok) {
+      transitionFailure(
+        findings,
+        "scenario_detail_reconnect_app_path_initial_row_missing",
+        "detail-reconnect fixture app-facing proxy path did not expose the target Dock row before simulator launch",
+        {
+          threadID,
+          freshDockRows: Array.isArray(initial.freshDock?.rows) ? initial.freshDock.rows.length : null,
+        }
+      );
+      throw new Error("detail-reconnect app-facing proxy path did not expose the target Dock row before simulator launch");
+    }
     findings.push(...scenarioComparisonFindings({ phase: "detail-reconnect-initial", comparison: initial.comparison }));
     samples.push({
       sampleIndex: 0,
@@ -4000,18 +4094,24 @@ async function runDetailReconnectScenario(options) {
     uiReadyAtMs = Date.now();
 
     const detailWaitTimeoutMs = Math.min(options.dockCollectionTimeoutMs, options.waitTimeoutMs);
-    const detailLoadedWait = await waitForAsyncEvent(detailLoadedPromise, detailWaitTimeoutMs);
-    if (!detailLoadedWait.ok) {
+    const detailSubscribeWait = await waitForRecordedRouteEvent({
+      events: simulatorRouteEvents,
+      route: "thread/detail/subscribe",
+      source: "simulatorAppProxy",
+      boundary: "simulatorAppToRelay",
+      afterMs: startedAtMs,
+      timeoutMs: detailWaitTimeoutMs,
+    });
+    if (!detailSubscribeWait.ok) {
       transitionFailure(
         findings,
         "scenario_detail_reconnect_not_opened",
-        "simulator app did not open and resume the controlled detail session before reconnect",
+        "simulator app did not open the controlled detail session through thread/detail/subscribe before reconnect",
         { threadID, timeoutMs: detailWaitTimeoutMs }
       );
     }
 
-    if (detailLoadedWait.ok) {
-      const initialProofAtMs = uiReadyAtMs || detailLoadedAtMs || Date.now();
+    if (detailSubscribeWait.ok) {
       initialProjectionWitness = await waitForDetailProjectionWitness({
         client: streamProbe.client,
         sourceHostID: hostID,
@@ -4019,6 +4119,7 @@ async function runDetailReconnectScenario(options) {
         minProjectionCount: expectedInitialEventIDs.length,
         timeoutMs: detailWaitTimeoutMs,
       });
+      const initialProofAtMs = detailSubscribeWait.observedAtMs || Date.now();
       if (initialProjectionWitness?.byteEquivalentToDownstream !== true) {
         transitionFailure(
           findings,
@@ -4031,7 +4132,7 @@ async function runDetailReconnectScenario(options) {
         name: "detail-reconnect-initial",
         kind: "detail-reconnect-initial",
         iteration: 1,
-        route: "projection/witness/read",
+        route: "thread/detail/subscribe",
         wait: {
           ok: true,
           observedAt: new Date(initialProofAtMs).toISOString(),
@@ -4039,32 +4140,53 @@ async function runDetailReconnectScenario(options) {
         },
         lag: scenarioLagSummary({
           transition: "detail-reconnect-initial",
-          startedAtMs: initialProofAtMs,
-          acknowledgedAtMs: initialProofAtMs,
+          startedAtMs: detailSubscribeWait.observedAtMs || uiReadyAtMs || startedAtMs,
+          acknowledgedAtMs: detailSubscribeWait.observedAtMs || uiReadyAtMs || startedAtMs,
           observedAtMs: initialProofAtMs,
           maxStreamLagMs: options.maxStreamLagMs,
         }),
+        routeCountsAtTransition: { readCallCount, turnsListCallCount, resumeCallCount },
         detailTruth: detailTruthFromWitness({
           kind: "detail-reconnect-initial",
           sourceHostID: hostID,
           detailHostID: simulatorProxy.endpoint,
           threadID,
-          witness: initialProjectionWitness,
+          witness: initialProjectionWitness
+            ? { ...initialProjectionWitness, projectionIDs: [] }
+            : initialProjectionWitness,
         }),
       });
 
-      await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 1_500));
+      await sleep(Math.max(options.scenarioHoldMs, 500));
       historicalTurns = [initialTurn, recoveredTurn];
       recoveryStartedAtMs = Date.now();
       initialDetailWs?.terminate();
     }
 
-    const rehydratedWait = await waitForAsyncEvent(rehydratedPromise, detailWaitTimeoutMs);
-    if (!rehydratedWait.ok) {
+    const rehydratedRouteWait = recoveryStartedAtMs === null
+      ? {
+        ok: false,
+        route: "thread/detail/resync",
+        source: "simulatorAppProxy",
+        boundary: "simulatorAppToRelay",
+        observedAt: null,
+        observedAtMs: null,
+        timeoutMs: detailWaitTimeoutMs,
+        event: null,
+      }
+      : await waitForRecordedRouteEvent({
+        events: simulatorRouteEvents,
+        route: "thread/detail/resync",
+        source: "simulatorAppProxy",
+        boundary: "simulatorAppToRelay",
+        afterMs: recoveryStartedAtMs,
+        timeoutMs: detailWaitTimeoutMs,
+      });
+    if (!rehydratedRouteWait.ok) {
       transitionFailure(
         findings,
         "scenario_detail_reconnect_rehydrate_missing",
-        "simulator app did not reconnect and rehydrate the open detail after relay upstream recovery",
+        "simulator app did not request canonical thread/detail/resync after relay upstream recovery",
         {
           threadID,
           timeoutMs: detailWaitTimeoutMs,
@@ -4075,7 +4197,7 @@ async function runDetailReconnectScenario(options) {
       );
     }
 
-    if (rehydratedWait.ok) {
+    if (rehydratedRouteWait.ok) {
       rehydratedProjectionWitness = await waitForDetailProjectionWitness({
         client: streamProbe.client,
         sourceHostID: hostID,
@@ -4083,6 +4205,7 @@ async function runDetailReconnectScenario(options) {
         minProjectionCount: expectedRecoveredEventIDs.length,
         timeoutMs: detailWaitTimeoutMs,
       });
+      rehydratedAtMs = Date.now();
       if (rehydratedProjectionWitness?.byteEquivalentToDownstream !== true) {
         transitionFailure(
           findings,
@@ -4099,7 +4222,7 @@ async function runDetailReconnectScenario(options) {
       iteration: 1,
       route: "thread/detail/resync",
       wait: {
-        ok: rehydratedWait.ok,
+        ok: rehydratedRouteWait.ok && rehydratedProjectionWitness?.byteEquivalentToDownstream === true,
         observedAt: rehydratedAtMs ? new Date(rehydratedAtMs).toISOString() : null,
         observedAtMs: rehydratedAtMs,
       },
@@ -5196,4 +5319,5 @@ export {
   parseArgs,
   startSimulatorAppRouteProxy,
   validateOptions,
+  waitForRecordedRouteEvent,
 };

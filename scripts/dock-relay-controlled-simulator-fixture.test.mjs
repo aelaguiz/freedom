@@ -8,6 +8,7 @@ import {
   parseArgs,
   startSimulatorAppRouteProxy,
   validateOptions,
+  waitForRecordedRouteEvent,
 } from "./dock-relay-controlled-simulator-fixture.mjs";
 import {
   summarizeClientPathEvents,
@@ -436,4 +437,35 @@ test("controlled simulator forbidden detail side doors only fail at simulator-ap
   assert.equal(findings.length, 1);
   assert.equal(findings[0].code, "controlled_simulator_forbidden_detail_side_door_route");
   assert.equal(findings[0].route, "thread/read");
+});
+
+test("controlled simulator route waiter requires the simulator-app downstream boundary", async () => {
+  const events = [
+    {
+      route: "thread/detail/resync",
+      source: "fixtureUpstream",
+      boundary: "relayToFixtureUpstream",
+      at: "2026-06-03T00:00:00.000Z",
+    },
+    {
+      route: "thread/detail/resync",
+      source: "simulatorAppProxy",
+      boundary: "simulatorAppToRelay",
+      at: "2026-06-03T00:00:01.000Z",
+    },
+  ];
+
+  const wait = await waitForRecordedRouteEvent({
+    events,
+    route: "thread/detail/resync",
+    source: "simulatorAppProxy",
+    boundary: "simulatorAppToRelay",
+    afterMs: Date.parse("2026-06-03T00:00:00.500Z"),
+    timeoutMs: 50,
+  });
+
+  assert.equal(wait.ok, true);
+  assert.equal(wait.observedAt, "2026-06-03T00:00:01.000Z");
+  assert.equal(wait.event.source, "simulatorAppProxy");
+  assert.equal(wait.event.boundary, "simulatorAppToRelay");
 });
