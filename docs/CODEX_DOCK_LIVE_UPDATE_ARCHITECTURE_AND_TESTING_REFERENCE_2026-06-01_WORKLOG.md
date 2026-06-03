@@ -61,6 +61,12 @@ Git keeps that history.
 - `README.md` documents `rtk make sim-ui-dump SIM='iPhone 17'` as the canonical
   structured current-screen dump and `rtk make sim-ui-controlled-matrix-proof
   SIM='iPhone 17'` as the over-time simulator proof.
+- `CodexDock/Features/Dock/DockView.swift` exposes the rendered Dock row order
+  in the Dock root `rowValues=` automation payload.
+- `CodexDockUITests/DisplayedUICaptureSupport.swift` uses that `rowValues=`
+  payload as the single Dock row dump/proof path. If the payload is missing,
+  strict proof fails instead of using accessibility-tree scrolling as a second
+  row oracle.
 
 ## Verification Run So Far
 
@@ -95,22 +101,43 @@ Git keeps that history.
   tests.
 - `rtk git diff --check` passed on 2026-06-03 after the documentation truth
   update.
+- `rtk node --test scripts/dock-relay-simulator-ui-sync-proof.test.mjs scripts/proof-report-contracts.test.mjs`
+  passed on 2026-06-03 with 54 tests.
+- `SIM_UI_SYNC_SCENARIO=large-list-checkpoint SIM_UI_SYNC_CHECKPOINT_SWEEP=1 MAX_UI_LAG_MS=2000 SIM_UI_SYNC_DIR=/tmp/codex-client/large-list-checkpoint-$(date -u +%Y%m%dT%H%M%SZ) rtk make sim-ui-controlled-scenario-sync-proof SIM='iPhone 17'`
+  passed on 2026-06-03 with 18 checkpoint row checks, 1 Dock sweep order check,
+  and 0 failures.
+- `SIM_UI_CONTROLLED_MATRIX_PASSES=2 SIM_UI_SYNC_CHECKPOINT_SWEEP=1 MAX_UI_LAG_MS=2000 rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'`
+  passed on 2026-06-03:
+  `/tmp/codex-client/sim-ui-controlled-matrix-run-20260603T140848Z/controlled-simulator-matrix.md`
+  reported `OK: true`, 34 reports, 17/17 required scenarios passing, max
+  observed UI lag 469 ms, and findings `None`.
+- `rtk npm run contract:check` passed again on 2026-06-03.
+- `rtk npm run test:relay` passed again on 2026-06-03 with 172 tests.
+- `rtk swift test` passed on 2026-06-03 with 350 tests, 5 opt-in real-host
+  tests skipped by environment.
+- `rtk make app-test SIM='iPhone 17'` exited 0 on 2026-06-03.
+- `rtk make sim-ui-dump SIM='iPhone 17'` first failed closed on 2026-06-03
+  because `com.aelaguiz.CodexDockApp` was not running and dump mode must not
+  launch the app.
+- `rtk make app SIM='iPhone 17'` exited 0 on 2026-06-03.
+- `rtk make sim-ui-dump SIM='iPhone 17'` passed after launch on 2026-06-03:
+  `/tmp/codex-client/sim-ui-dump-20260603T143234Z/sim-ui-dump.md` reported
+  `status: pass`, app `runningForeground -> runningForeground`, screen
+  `dock -> dock`, 54 visible elements, and 253 Dock rows.
+- `rtk git diff --check` passed on 2026-06-03 after the final UI dump proof
+  changes.
+- The canonical plan now contains an authoritative
+  `arch_skill:block:implementation_audit` with `Verdict (code): COMPLETE`.
 
 ## Current Remaining Gates
 
 These are still required before this goal can be called complete:
 
-- `SIM_UI_CONTROLLED_MATRIX_PASSES=2 SIM_UI_SYNC_CHECKPOINT_SWEEP=1 MAX_UI_LAG_MS=2000 rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'`
-- `rtk make sim-ui-dump SIM='iPhone 17'`
-- `rtk make app-test SIM='iPhone 17'`
-- authoritative `arch_skill:block:implementation_audit` in the plan with
-  current repo evidence.
 - strict `$fresh-consult` through Cursor Agent `composer-2.5-fast` with no
   pass-with-notes completion.
 
 ## Known Current Status
 
-The implementation has moved substantially toward the no-side-door target, but
-completion is not yet proven. The remaining work is to finish any audit cleanup,
-run the full proof gates, write the authoritative implementation audit block in
-the plan, and satisfy a strict fresh consult.
+The implementation and local simulator proof gates are complete. Completion of
+the active goal is still not proven until a strict `$fresh-consult` through
+Cursor Agent `composer-2.5-fast` returns a no-notes pass.

@@ -407,12 +407,11 @@ extension XCUIApplication {
         let dockRows: [DisplayedUIDockRow]
         if let rootRows = dockRowsFromRootValue(rootValue) {
             dockRows = rootRows
-        } else if !dockRoot.exists || dockRootRowCount(rootValue) == 0 || isDockEmptyStateVisible() {
-            dockRows = []
         } else {
-            // Thread Detail proof must not broad-scan Dock rows; detail update
-            // timing is measured from the accessibility state captured here.
-            dockRows = visibleDockRows()
+            // Dock proof is deliberately single-path: rendered rows come from
+            // the Dock root payload. If that payload is missing, leave the row
+            // dump empty so strict proof fails instead of using a second oracle.
+            dockRows = []
         }
         let dockRowsCapturedAt = codexDockISO8601Now()
         let dockSweep = includeDockSweep ? checkpointDockSweep(rootValue: rootValue) : nil
@@ -496,14 +495,24 @@ extension XCUIApplication {
     private func checkpointDockSweep(rootValue: String) -> DisplayedUIDockSweep {
         let startedAt = codexDockISO8601Now()
         let expectedRootRows = dockRootRowCount(rootValue)
-        var rows: [DisplayedUIDockRow] = []
-        var seen = Set<String>()
-        var lastVisibleIdentifier: String?
-        var stableTailCount = 0
-        var stepCount = 0
         let maxSteps = 30
-        let deadline = Date().addingTimeInterval(20)
-        var stopReason = "maxSteps"
+
+        // Dock checkpoint proof uses the same rendered row payload as normal
+        // sampling. Do not add a second row-discovery path here; missing payload
+        // is a proof failure, not a reason to reconstruct UI truth another way.
+        if let rootRows = dockRowsFromRootValue(rootValue) {
+            let reason = expectedRootRows.map { rootRows.count >= $0 ? "expectedRowsReached" : "rootRowsIncomplete" }
+                ?? "expectedRowsReached"
+            return DisplayedUIDockSweep(
+                startedAt: startedAt,
+                finishedAt: codexDockISO8601Now(),
+                stepCount: 0,
+                maxSteps: maxSteps,
+                stopReason: reason,
+                expectedRootRows: expectedRootRows,
+                rows: rootRows
+            )
+        }
 
         if rootValue == "not-visible" || expectedRootRows == 0 || isDockEmptyStateVisible() {
             return DisplayedUIDockSweep(
@@ -517,48 +526,14 @@ extension XCUIApplication {
             )
         }
 
-        for _ in 0..<maxSteps {
-            if Date() >= deadline {
-                stopReason = "timeBudget"
-                break
-            }
-            stepCount += 1
-            let visibleRows = visibleDockRows()
-            for row in visibleRows where seen.insert(row.identifier).inserted {
-                rows.append(row)
-            }
-            if let expectedRootRows, rows.count >= expectedRootRows {
-                stopReason = "expectedRowsReached"
-                break
-            }
-
-            let currentLast = visibleRows.last?.identifier
-            if currentLast == nil {
-                stopReason = "noVisibleRows"
-                break
-            }
-            if currentLast == lastVisibleIdentifier {
-                stableTailCount += 1
-                if stableTailCount >= 2 {
-                    stopReason = "stableTail"
-                    break
-                }
-            } else {
-                stableTailCount = 0
-            }
-            lastVisibleIdentifier = currentLast
-            dragDockListUp()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-        }
-
         return DisplayedUIDockSweep(
             startedAt: startedAt,
             finishedAt: codexDockISO8601Now(),
-            stepCount: stepCount,
+            stepCount: 0,
             maxSteps: maxSteps,
-            stopReason: stopReason,
+            stopReason: "rootRowsMissing",
             expectedRootRows: expectedRootRows,
-            rows: rows
+            rows: []
         )
     }
 

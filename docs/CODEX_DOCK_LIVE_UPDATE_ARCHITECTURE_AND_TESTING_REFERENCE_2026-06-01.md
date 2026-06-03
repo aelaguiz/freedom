@@ -48,6 +48,79 @@ Non-negotiables:
 - No screenshots or recordings as primary proof; proof must dump structured
   visible UI state and compare it to the relay projection state over time.
 
+<!-- arch_skill:block:implementation_audit:start -->
+# Implementation Audit (authoritative)
+Date: 2026-06-03
+Verdict (code): COMPLETE
+Manual QA: n/a (non-blocking)
+
+## Code blockers (why code is not done)
+- None.
+
+## Reopened phases (false-complete fixes)
+- None.
+
+## Missing items (code gaps; evidence-anchored; no tables)
+- None.
+
+## Completion evidence
+- Shared contract and side-door gates:
+  - `rtk npm run contract:check` passed on 2026-06-03: projection contract
+    fixtures and generated Dock DTO were current; 5 proof schemas and 5
+    canonical samples validated.
+  - `rtk npm run test:relay` passed on 2026-06-03 with 172 tests.
+  - `rtk swift test` passed on 2026-06-03 with 350 tests, 5 opt-in real-host
+    tests skipped by environment.
+  - Side-door sweep found no live `ThreadCardStreamLifecycle`,
+    `ThreadCardTable`, `ThreadDetailLiveEventBuffer`,
+    `ManualThreadCardStreamClient`, `LegacyThreadEventFixtureNormalizer`,
+    `ThreadEventNormalizerTests`, or typed Swift `threadDetailRead` production
+    path in `CodexDock/**`, `CodexDockTests/**`, or `CodexDockUITests/**`.
+  - Remaining `thread/detail/read` references are rejection tests, proof
+    contract rejection, sync-audit non-client-route accounting, or controlled
+    fixture forbidden-route accounting. Remaining `projection/witness/read`
+    references are proof-only route code/tests/scripts.
+- Structured UI dump and no alternate Dock proof oracle:
+  - [CodexDock/Features/Dock/DockView.swift](/Users/aelaguiz/workspace/codex-client/CodexDock/Features/Dock/DockView.swift)
+    exposes rendered Dock row payloads through `rowValues=` for structured UI
+    dump/proof state.
+  - [CodexDockUITests/DisplayedUICaptureSupport.swift](/Users/aelaguiz/workspace/codex-client/CodexDockUITests/DisplayedUICaptureSupport.swift)
+    now treats the Dock root `rowValues` payload as the single Dock proof path.
+    If that payload is missing, normal samples expose zero Dock rows and
+    checkpoint sweep returns `rootRowsMissing`; strict proof fails instead of
+    reconstructing row truth from accessibility-tree scrolling.
+  - `rtk node --test scripts/dock-relay-simulator-ui-sync-proof.test.mjs scripts/proof-report-contracts.test.mjs`
+    passed on 2026-06-03 with 54 tests.
+- Real simulator proof:
+  - `SIM_UI_CONTROLLED_MATRIX_PASSES=2 SIM_UI_SYNC_CHECKPOINT_SWEEP=1 MAX_UI_LAG_MS=2000 rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'`
+    passed on 2026-06-03.
+  - Matrix report:
+    `/tmp/codex-client/sim-ui-controlled-matrix-run-20260603T140848Z/controlled-simulator-matrix.md`.
+  - Matrix result: `OK: true`, 34 reports, 17 required scenarios, 17 passing
+    scenarios, 0 missing, 0 failed, max observed UI lag 469 ms against a
+    2000 ms budget, findings: none.
+  - `large-list-checkpoint` passed 2/2 with checkpoint Dock order coverage,
+    proving the large-list row dump/order gate that previously failed.
+- Simulator smoke and current-screen dump:
+  - `rtk make app-test SIM='iPhone 17'` exited 0 on 2026-06-03.
+  - The first `rtk make sim-ui-dump SIM='iPhone 17'` correctly failed closed
+    because `com.aelaguiz.CodexDockApp` was not running and dump mode must not
+    launch the app.
+  - After `rtk make app SIM='iPhone 17'` exited 0, `rtk make sim-ui-dump
+    SIM='iPhone 17'` passed on 2026-06-03.
+  - Passing dump report:
+    `/tmp/codex-client/sim-ui-dump-20260603T143234Z/sim-ui-dump.md`.
+  - Dump result: `status: pass`, app `runningForeground -> runningForeground`,
+    screen `dock -> dock`, 54 visible elements, 253 Dock rows.
+  - `rtk git diff --check` passed on 2026-06-03 after the final UI dump proof
+    changes.
+
+## Non-blocking follow-ups (manual QA / screenshots / human verification)
+- Physical-phone validation is required before claiming actual physical iPhone
+  behavior. This audit claims code completeness and simulator proof on
+  `iPhone 17`; it does not claim a physical-device pass.
+<!-- arch_skill:block:implementation_audit:end -->
+
 <!-- arch_skill:block:planning_passes:start -->
 <!--
 arch_skill:planning_passes
