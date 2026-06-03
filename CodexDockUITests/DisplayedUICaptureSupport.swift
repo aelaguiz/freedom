@@ -352,7 +352,11 @@ extension XCUIApplication {
         let dockRowsCapturedAt = codexDockISO8601Now()
         let dockSweep = includeDockSweep ? checkpointDockSweep(rootValue: rootValue) : nil
         let detail = visibleDetail()
-        let detailSweep = includeDetailSweep ? checkpointDetailSweep() : nil
+        let detailNeedsSweep = detail.map { visibleDetail in
+            let expectedMessageRows = detailMessageCount(visibleDetail.messageListValue) ?? 0
+            return expectedMessageRows > visibleDetail.messageCardIDs.count
+        } ?? false
+        let detailSweep = (includeDetailSweep || detailNeedsSweep) ? checkpointDetailSweep() : nil
         // Dock host summaries are Dock-screen evidence only. Querying them from
         // Thread Detail forces a broad accessibility scan and can drop the UI
         // test connection before the real detail sample is written.
@@ -565,6 +569,11 @@ extension XCUIApplication {
 
             let currentLast = (detail.messageCardIDs + detail.requestCardIDs).last
             if currentLast == nil {
+                if let expectedMessageRows, messageCardIDs.count < expectedMessageRows {
+                    dragDetailPageUp()
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+                    continue
+                }
                 break
             }
             if currentLast == lastVisibleIdentifier {
@@ -576,7 +585,7 @@ extension XCUIApplication {
                 stableTailCount = 0
             }
             lastVisibleIdentifier = currentLast
-            dragDockListUp()
+            dragDetailPageUp()
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }
 

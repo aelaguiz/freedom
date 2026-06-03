@@ -389,6 +389,10 @@ function fixtureThreadWithStatus(id, preview, updatedAt, status) {
   };
 }
 
+function activeFixtureRows(message, rows) {
+  return message.params?.archived === true ? [] : rows;
+}
+
 function fixtureMessageThreadID(message) {
   return message?.params?.threadId || message?.params?.threadID;
 }
@@ -1017,7 +1021,7 @@ async function createControlledMultiHostFixture({ options, tempDir, host, getRow
         });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
-          data: getRows(),
+          data: activeFixtureRows(message, getRows()),
           nextCursor: null,
           backwardsCursor: null,
         });
@@ -1540,7 +1544,7 @@ async function runLargeListCheckpointScenario(options) {
         });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
-          data: sourceRows,
+          data: activeFixtureRows(message, sourceRows),
           nextCursor: null,
           backwardsCursor: null,
         });
@@ -1761,7 +1765,7 @@ async function runThreadActivityScenario(options) {
         });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
-          data: sourceRows,
+          data: activeFixtureRows(message, sourceRows),
           nextCursor: null,
           backwardsCursor: null,
         });
@@ -2101,7 +2105,7 @@ async function runRapidMutationsScenario(options) {
         });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
-          data: sourceRows,
+          data: activeFixtureRows(message, sourceRows),
           nextCursor: null,
           backwardsCursor: null,
         });
@@ -2381,7 +2385,7 @@ async function runSourceRefreshScenario(options) {
           return;
         }
         sendFixtureResult(ws, message.id, {
-          data: sourceRows,
+          data: activeFixtureRows(message, sourceRows),
           nextCursor: null,
           backwardsCursor: null,
         });
@@ -2722,7 +2726,7 @@ async function runLiveLeaseExpiryScenario(options) {
         });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
-          data: [storedThreadRow],
+          data: activeFixtureRows(message, [storedThreadRow]),
           nextCursor: null,
           backwardsCursor: null,
         });
@@ -3299,7 +3303,7 @@ async function runResyncGapScenario(options) {
         });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
-          data: sourceRows,
+          data: activeFixtureRows(message, sourceRows),
           nextCursor: null,
           backwardsCursor: null,
         });
@@ -3643,7 +3647,10 @@ async function runSpawnEdgeScenario(options) {
         });
       } else if (message.method === "thread/list") {
         const sourceKinds = message.params?.sourceKinds;
-        const rows = sourceRows.filter((row) => threadMatchesSourceKinds(row, sourceKinds));
+        const rows = activeFixtureRows(
+          message,
+          sourceRows.filter((row) => threadMatchesSourceKinds(row, sourceKinds)),
+        );
         sendFixtureResult(ws, message.id, {
           data: rows,
           nextCursor: null,
@@ -3931,7 +3938,7 @@ async function runDetailReconnectScenario(options) {
         recordClientRoute(routeEvents, "initialized", "simulator app sent initialized notification", { threadID });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
-          data: [threadRow],
+          data: activeFixtureRows(message, [threadRow]),
           nextCursor: null,
           backwardsCursor: null,
         });
@@ -4053,16 +4060,23 @@ async function runDetailReconnectScenario(options) {
       timeoutMs: options.dockCollectionTimeoutMs,
     });
     if (!initial.ok) {
+      const detail = {
+        threadID,
+        freshDockRows: Array.isArray(initial.freshDock?.rows) ? initial.freshDock.rows.length : null,
+        freshDockFreshness: initial.freshDock?.freshness || null,
+        freshDockCollection: initial.freshDock?.collection || null,
+        comparison: initial.comparison || null,
+        attempts: initial.attempts || [],
+        streamSnapshot: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
+        routeCounts: summarizeClientPathEvents(routeEvents).routeCounts,
+      };
       transitionFailure(
         findings,
         "scenario_detail_reconnect_app_path_initial_row_missing",
         "detail-reconnect fixture app-facing proxy path did not expose the target Dock row before simulator launch",
-        {
-          threadID,
-          freshDockRows: Array.isArray(initial.freshDock?.rows) ? initial.freshDock.rows.length : null,
-        }
+        detail
       );
-      throw new Error("detail-reconnect app-facing proxy path did not expose the target Dock row before simulator launch");
+      throw new Error(`detail-reconnect app-facing proxy path did not expose the target Dock row before simulator launch: ${JSON.stringify(detail)}`);
     }
     findings.push(...scenarioComparisonFindings({ phase: "detail-reconnect-initial", comparison: initial.comparison }));
     samples.push({
@@ -4151,9 +4165,7 @@ async function runDetailReconnectScenario(options) {
           sourceHostID: hostID,
           detailHostID: simulatorProxy.endpoint,
           threadID,
-          witness: initialProjectionWitness
-            ? { ...initialProjectionWitness, projectionIDs: [] }
-            : initialProjectionWitness,
+          witness: initialProjectionWitness,
         }),
       });
 
@@ -4384,7 +4396,7 @@ async function runDetailHistoryRequestScenario(options) {
         recordClientRoute(routeEvents, "initialized", "simulator app sent initialized notification", { threadID });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
-          data: [threadRow],
+          data: activeFixtureRows(message, [threadRow]),
           nextCursor: null,
           backwardsCursor: null,
         });
@@ -4901,7 +4913,7 @@ async function runServerRequestScenario(options) {
         recordClientRoute(routeEvents, "initialized", "simulator app sent initialized notification", { threadID });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
-          data: [threadRow],
+          data: activeFixtureRows(message, [threadRow]),
           nextCursor: null,
           backwardsCursor: null,
         });

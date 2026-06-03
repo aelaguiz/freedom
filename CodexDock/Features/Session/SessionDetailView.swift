@@ -79,6 +79,19 @@ public struct SessionDetailView: View {
                 automationID: AutomationID.Session.state(.stale)
             )
         }
+        ThreadMessageListView(
+            rows: renderSnapshot.rows,
+            filter: filter,
+            hasUnfilteredEvents: renderSnapshot.hasUnfilteredEvents,
+            onRequestInputChange: { cardID, draft in
+                store.updateRequestCardInput(cardID: cardID, draft: draft)
+            },
+            onRequestAction: { cardID, action in
+                Task {
+                    await store.respond(to: cardID, action: action)
+                }
+            }
+        )
         ComposerView(
             screenStore: screenStore,
             onUpdateDraft: { draft in
@@ -95,19 +108,6 @@ public struct SessionDetailView: View {
             },
             onToggleTapVoiceCapture: {
                 await store.toggleTapVoiceCapture()
-            }
-        )
-        ThreadMessageListView(
-            rows: renderSnapshot.rows,
-            filter: filter,
-            hasUnfilteredEvents: renderSnapshot.hasUnfilteredEvents,
-            onRequestInputChange: { cardID, draft in
-                store.updateRequestCardInput(cardID: cardID, draft: draft)
-            },
-            onRequestAction: { cardID, action in
-                Task {
-                    await store.respond(to: cardID, action: action)
-                }
             }
         )
     }

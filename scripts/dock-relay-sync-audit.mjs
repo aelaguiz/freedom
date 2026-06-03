@@ -1200,6 +1200,7 @@ async function collectDockClientPathSnapshot(options, routeEvents = null) {
   const notifications = [];
   const resyncs = [];
   let lastUpdate = null;
+  let lastAppliedAtMs = null;
   let wake = null;
   const wakeWaiter = () => {
     if (wake) {
@@ -1223,6 +1224,7 @@ async function collectDockClientPathSnapshot(options, routeEvents = null) {
   });
   const apply = (payload, source, receivedAt = new Date().toISOString()) => {
     lastUpdate = payload;
+    lastAppliedAtMs = Date.now();
     const appliedFindings = applyDockPayload(state, payload, receivedAt)
       .map((finding) => ({ ...finding, source }));
     findings.push(...appliedFindings);
@@ -1288,6 +1290,58 @@ async function collectDockClientPathSnapshot(options, routeEvents = null) {
         break;
       }
       await waitForUpdate(Math.min(remainingMs, 1_000));
+    }
+
+    // A fresh client can receive a complete-but-stale snapshot before the
+    // relay's subscribe-triggered reconciliation publishes the visible rows.
+    // Stay on the same production stream through the strict lag budget instead
+    // of treating that pre-refresh snapshot as final proof truth.
+    while (isDockStreamStateComplete(state, lastUpdate)
+      && state.freshness?.status
+      && state.freshness.status !== "fresh") {
+      const remainingMs = deadline - Date.now();
+      const settleBudgetMs = Math.min(
+        remainingMs,
+        Math.max(0, Number(options.maxStreamLagMs || 0)),
+      );
+      if (settleBudgetMs <= 0) {
+        break;
+      }
+      const beforeWaitAppliedAtMs = lastAppliedAtMs;
+      const sawUpdate = await waitForUpdate(settleBudgetMs);
+      if (!sawUpdate || beforeWaitAppliedAtMs === lastAppliedAtMs) {
+        break;
+      }
+      while (!isDockStreamStateComplete(state, lastUpdate)) {
+        if (state.needsResync) {
+          const reason = "collector_stream_contract";
+          recordRoute(routeEvents, "dock/resync", "resync complete Dock client-path collector", { reason });
+          const resynced = await client.request("dock/resync", {});
+          apply(resynced, "resync");
+          state.needsResync = false;
+          resyncs.push({
+            reason,
+            at: new Date().toISOString(),
+            seq: resynced?.seq ?? null,
+            rowCount: Array.isArray(resynced?.rows) ? resynced.rows.length : null,
+          });
+          continue;
+        }
+        const remainingAfterUpdateMs = deadline - Date.now();
+        if (remainingAfterUpdateMs <= 0) {
+          findings.push({
+            code: "dock_client_path_collection_timeout",
+            severity: "error",
+            message: "complete Dock client-path collection timed out before the stream reached complete state",
+            timeoutMs: options.dockCollectionTimeoutMs,
+            visibleRows: state.cardsByID.size,
+            totalRows: state.totalRows,
+            window: state.window,
+          });
+          break;
+        }
+        await waitForUpdate(Math.min(remainingAfterUpdateMs, 1_000));
+      }
     }
 
     const collected = snapshotFromStreamState(state);
