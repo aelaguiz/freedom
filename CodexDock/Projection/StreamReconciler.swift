@@ -456,10 +456,12 @@ actor StreamReconciler<Row: Equatable & Sendable> {
     }
 
     private func isCatchupComplete(_ envelope: ProjectionEnvelope<Row>) -> Bool {
-        if let complete = envelope.complete {
-            return complete
+        // Catch-up pagination is driven by nextOffset. A stale partial snapshot
+        // with no next page must not strand the view in catchingUp forever.
+        if envelope.window?.nextOffset != nil {
+            return false
         }
-        return envelope.window?.nextOffset == nil
+        return true
     }
 
     private func closeCurrentConnection() async {

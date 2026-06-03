@@ -126,6 +126,47 @@ final class ProjectionRuntimeTests: XCTestCase {
         XCTAssertEqual(snapshot.rows.map(\.body), ["Resynced"])
     }
 
+    func testStalePartialResyncDoesNotTrapLaterRecoveryUpdateInCatchup() async throws {
+        let fixture = RuntimeFixture()
+        let connection = fixture.connection(
+            subscribe: fixture.snapshot(seq: 3, rows: [
+                fixture.row("cached", body: "Cached", order: "001"),
+            ]),
+            resyncs: [
+                fixture.snapshot(
+                    seq: 4,
+                    rows: [fixture.row("cached", body: "Cached", order: "001")],
+                    complete: false,
+                    totalRows: 1,
+                    window: fixture.window(offset: 0, rowCount: 1),
+                    freshnessStatus: "stale",
+                    freshnessError: "controlled source refresh failure"
+                ),
+                fixture.snapshot(seq: 6, rows: [
+                    fixture.row("recovered", body: "Recovered", order: "001"),
+                ]),
+            ]
+        )
+        let reconciler = fixture.reconciler(connection: connection)
+
+        await reconciler.start()
+        await reconciler.manualRefresh()
+
+        let staleSnapshot = await reconciler.snapshot()
+        XCTAssertEqual(staleSnapshot.freshness, .stale("controlled source refresh failure"))
+        XCTAssertEqual(staleSnapshot.rows.map(\.body), ["Cached"])
+
+        await reconciler.receive(fixture.update(seq: 6, rows: [
+            fixture.row("recovered", body: "Recovered", order: "001"),
+        ]))
+
+        let snapshot = await reconciler.snapshot()
+        let resyncReasons = await connection.resyncReasons()
+        XCTAssertEqual(resyncReasons, [.manualRefresh, .sequenceGap])
+        XCTAssertEqual(snapshot.freshness, .live)
+        XCTAssertEqual(snapshot.rows.map(\.body), ["Recovered"])
+    }
+
     func testRelayResyncRequiredForcesCanonicalResync() async throws {
         let fixture = RuntimeFixture()
         let connection = fixture.connection(
@@ -315,7 +356,9 @@ private final class RuntimeFixture {
         rows: [ThreadDetailEventDTO],
         complete: Bool = true,
         totalRows: Int? = nil,
-        window: ProjectionWindow? = nil
+        window: ProjectionWindow? = nil,
+        freshnessStatus: String? = nil,
+        freshnessError: String? = nil
     ) -> ProjectionEnvelope<ThreadDetailEventDTO> {
         ProjectionEnvelope(
             kind: .snapshot,
@@ -336,7 +379,9 @@ private final class RuntimeFixture {
             complete: complete,
             totalRows: totalRows ?? rows.count,
             window: window ?? ProjectionWindow(offset: 0, limit: rows.count, rowCount: rows.count, nextOffset: nil),
-            reason: nil
+            reason: nil,
+            freshnessStatus: freshnessStatus,
+            freshnessError: freshnessError
         )
     }
 
