@@ -55,6 +55,13 @@ function sortedJSONString(value) {
   return JSON.stringify(sortJSON(value));
 }
 
+function comparableProjectionFreshness(freshness) {
+  return {
+    status: freshness?.status || null,
+    lastError: freshness?.lastError || null,
+  };
+}
+
 function projectionCacheContractFingerprint() {
   return sortedJSONString({
     projectionSchemaVersion: PROJECTION_SCHEMA_VERSION,
@@ -600,6 +607,8 @@ class RelayStateStore {
     const at = new Date(atMs).toISOString();
     return this.transaction(() => {
       this.upsertHost(host, at);
+      const previousFreshness = this.freshnessForHost(host.id, { archived: false });
+      const previousTotalRows = this.listDockCards({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
       const previousRows = Array.isArray(previousCards)
         ? previousCards
         : this.listDockCards({ hostID: host.id }).cards;
@@ -665,19 +674,30 @@ class RelayStateStore {
         }, at);
       }
 
-      const seq = this.recordChange({
-        view: DOCK_VIEW,
-        hostID: host.id,
-        changeType: "dock-reconcile",
-        payload: {
-          upsertCount: rows.length,
-          deleteCount: projectionIDs.length,
-          complete,
-        },
-        at,
-      });
-      this.pruneChanges();
-      return { seq, rows, projectionIDs };
+      const nextFreshness = this.freshnessForHost(host.id, { archived: false });
+      const nextTotalRows = this.listDockCards({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
+      const changed = rows.length > 0
+        || projectionIDs.length > 0
+        || Number(previousTotalRows || 0) !== Number(nextTotalRows || 0)
+        || sortedJSONString(comparableProjectionFreshness(previousFreshness))
+          !== sortedJSONString(comparableProjectionFreshness(nextFreshness));
+      const seq = changed
+        ? this.recordChange({
+            view: DOCK_VIEW,
+            hostID: host.id,
+            changeType: "dock-reconcile",
+            payload: {
+              upsertCount: rows.length,
+              deleteCount: projectionIDs.length,
+              complete,
+            },
+            at,
+          })
+        : this.currentSeqForView(DOCK_VIEW);
+      if (changed) {
+        this.pruneChanges();
+      }
+      return { seq, rows, projectionIDs, changed };
     });
   }
 
@@ -685,6 +705,8 @@ class RelayStateStore {
     const at = nowISOString();
     return this.transaction(() => {
       this.upsertHost(host, at);
+      const previousFreshness = this.freshnessForHost(host.id, { archived: true });
+      const previousTotalRows = this.listArchiveCards({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
       const previousRows = Array.isArray(previousCards)
         ? previousCards
         : this.listArchiveCards({ hostID: host.id }).cards;
@@ -736,19 +758,30 @@ class RelayStateStore {
         error,
       }, at);
 
-      const seq = this.recordChange({
-        view: ARCHIVE_VIEW,
-        hostID: host.id,
-        changeType: "archive-reconcile",
-        payload: {
-          upsertCount: rows.length,
-          deleteCount: projectionIDs.length,
-          complete,
-        },
-        at,
-      });
-      this.pruneChanges();
-      return { seq, rows, projectionIDs };
+      const nextFreshness = this.freshnessForHost(host.id, { archived: true });
+      const nextTotalRows = this.listArchiveCards({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
+      const changed = rows.length > 0
+        || projectionIDs.length > 0
+        || Number(previousTotalRows || 0) !== Number(nextTotalRows || 0)
+        || sortedJSONString(comparableProjectionFreshness(previousFreshness))
+          !== sortedJSONString(comparableProjectionFreshness(nextFreshness));
+      const seq = changed
+        ? this.recordChange({
+            view: ARCHIVE_VIEW,
+            hostID: host.id,
+            changeType: "archive-reconcile",
+            payload: {
+              upsertCount: rows.length,
+              deleteCount: projectionIDs.length,
+              complete,
+            },
+            at,
+          })
+        : this.currentSeqForView(ARCHIVE_VIEW);
+      if (changed) {
+        this.pruneChanges();
+      }
+      return { seq, rows, projectionIDs, changed };
     });
   }
 

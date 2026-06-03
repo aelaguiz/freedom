@@ -165,3 +165,26 @@ test("archive mutations reconcile and publish dock and archive views", async () 
   assert.deepEqual(result.dock, { seq: 2 });
   assert.deepEqual(result.archive, { seq: 3 });
 });
+
+test("RelayStateEngine treats a fresh empty dock view as complete instead of reconciling forever", () => {
+  const engine = new RelayStateEngine(
+    { hostId: "home", logger: null },
+    {
+      store: {
+        currentSeq() {
+          return 1;
+        },
+        currentSeqForView() {
+          return 1;
+        },
+        freshnessForHost(_hostID, { archived }) {
+          assert.equal(archived, false);
+          return { status: "fresh", lastError: null };
+        },
+        close() {},
+      },
+    },
+  );
+
+  assert.equal(engine.shouldReconcileAfterResponse({ archived: false }), false);
+});

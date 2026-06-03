@@ -226,20 +226,17 @@ class RelayStateEngine {
     this.liveLeaseExpiryTimer.unref?.();
   }
 
-  shouldReconcileAfterResponse() {
+  shouldReconcileAfterResponse({ archived = false } = {}) {
     const host = publicHostFromConfig(this.config);
-    const counts = this.store.stateCounts();
-    const freshness = this.store.freshnessForHost(host.id, { archived: false });
-    const totalRows = this.store.listDockCards({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
-    return Number(totalRows || 0) === 0
-      || Number(counts.incomplete || 0) > 0
-      || freshness.status !== "fresh";
+    const freshness = this.store.freshnessForHost(host.id, { archived });
+    return freshness.status !== "fresh";
   }
 
-  scheduleReconciliationAfterResponse(reason, { force = false } = {}) {
-    if (!force && !this.shouldReconcileAfterResponse()) {
+  scheduleReconciliationAfterResponse(reason, { force = false, archived = false } = {}) {
+    if (!force && !this.shouldReconcileAfterResponse({ archived })) {
       this.logger?.debug?.("state.reconcile_skipped", {
         reason,
+        archived,
         freshness: "fresh",
       });
       return;
@@ -341,16 +338,18 @@ class RelayStateEngine {
       const deltaCarriesEveryRow = complete
         && truthComplete
         && Number(result.rows?.length || 0) === Number(totalRows || 0);
-      await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
-        view: DOCK_VIEW,
-        seq: result.seq,
-        sourceHostID: host.id,
-        freshness,
-        rows: result.rows,
-        projectionIDs: result.projectionIDs,
-        totalRows,
-        complete: deltaCarriesEveryRow ? true : undefined,
-      }));
+      if (result.changed) {
+        await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
+          view: DOCK_VIEW,
+          seq: result.seq,
+          sourceHostID: host.id,
+          freshness,
+          rows: result.rows,
+          projectionIDs: result.projectionIDs,
+          totalRows,
+          complete: deltaCarriesEveryRow ? true : undefined,
+        }));
+      }
       if (complete) {
         this.logger?.info?.("state.reconcile_succeeded", {
           reason,
@@ -463,16 +462,18 @@ class RelayStateEngine {
       const totalRows = this.store.listArchiveCards({ hostID: host.id }).totalRows;
       const truthComplete = freshness.status === "fresh"
         && this.store.cardTruthCompleteForHost(host.id, { archived: true });
-      await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
-        view: ARCHIVE_VIEW,
-        seq: result.seq,
-        sourceHostID: host.id,
-        freshness,
-        rows: result.rows,
-        projectionIDs: result.projectionIDs,
-        totalRows,
-        complete: complete && truthComplete ? true : false,
-      }));
+      if (result.changed) {
+        await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
+          view: ARCHIVE_VIEW,
+          seq: result.seq,
+          sourceHostID: host.id,
+          freshness,
+          rows: result.rows,
+          projectionIDs: result.projectionIDs,
+          totalRows,
+          complete: complete && truthComplete ? true : false,
+        }));
+      }
       this.logger?.info?.("state.archive_reconcile_succeeded", {
         reason,
         hostId: host.id,
@@ -828,6 +829,14 @@ class RelayStateEngine {
   }
 
   scheduleArchiveReconciliationAfterResponse(reason) {
+    if (!this.shouldReconcileAfterResponse({ archived: true })) {
+      this.logger?.debug?.("state.archive_reconcile_skipped", {
+        reason,
+        archived: true,
+        freshness: "fresh",
+      });
+      return;
+    }
     const timer = setImmediate(() => {
       this.reconcileArchive({ reason }).catch((error) => {
         this.logger?.warn?.("state.archive_reconcile_failed", { reason, error });

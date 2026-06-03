@@ -82,3 +82,77 @@ test("relay state store clears derived cache when projection contract fingerprin
     store.close();
   }
 });
+
+test("relay state store does not create projection changes for repeated fresh empty dock reconciles", () => {
+  const store = new RelayStateStore({
+    hostId: "home",
+    relayStateDatabasePath: ":memory:",
+  });
+  const host = { id: "home", displayName: "Home", endpoint: null };
+  try {
+    const first = store.applyDockReconciliation({
+      host,
+      cards: [],
+      scopes: [{
+        name: "active:interactiveDefault",
+        archived: false,
+        sourceScope: "interactiveDefault",
+        complete: true,
+        error: null,
+      }],
+      complete: true,
+    });
+    assert.equal(first.changed, true);
+    assert.equal(store.freshnessForHost("home", { archived: false }).status, "fresh");
+
+    const second = store.applyDockReconciliation({
+      host,
+      cards: [],
+      scopes: [{
+        name: "active:interactiveDefault",
+        archived: false,
+        sourceScope: "interactiveDefault",
+        complete: true,
+        error: null,
+      }],
+      complete: true,
+    });
+
+    assert.equal(second.changed, false);
+    assert.equal(second.seq, first.seq);
+    assert.equal(store.currentSeqForView("dock"), first.seq);
+  } finally {
+    store.close();
+  }
+});
+
+test("relay state store does not create projection changes for repeated fresh empty archive reconciles", () => {
+  const store = new RelayStateStore({
+    hostId: "home",
+    relayStateDatabasePath: ":memory:",
+  });
+  const host = { id: "home", displayName: "Home", endpoint: null };
+  try {
+    const first = store.applyArchiveReconciliation({
+      host,
+      cards: [],
+      complete: true,
+      error: null,
+    });
+    assert.equal(first.changed, true);
+    assert.equal(store.freshnessForHost("home", { archived: true }).status, "fresh");
+
+    const second = store.applyArchiveReconciliation({
+      host,
+      cards: [],
+      complete: true,
+      error: null,
+    });
+
+    assert.equal(second.changed, false);
+    assert.equal(second.seq, first.seq);
+    assert.equal(store.currentSeqForView("archive"), first.seq);
+  } finally {
+    store.close();
+  }
+});
