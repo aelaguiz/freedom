@@ -18,30 +18,15 @@ final class ThreadDetailStreamingMergeTests: XCTestCase {
         )
 
         await store.load()
-        await session.emitNotification(
-            JSONRPCNotification(
-                method: "item/agentMessage/delta",
-                params: .object([
-                    "threadId": .string("thread-1"),
-                    "turnId": .string("turn-live"),
-                    "itemId": .string("agent-live"),
-                    "delta": .string("Partial answer"),
-                ])
-            )
+        await session.emitProjectedAgentDelta(
+            turnID: "turn-live",
+            itemID: "agent-live",
+            text: "Partial answer"
         )
-        await session.emitNotification(
-            JSONRPCNotification(
-                method: "item/completed",
-                params: .object([
-                    "threadId": .string("thread-1"),
-                    "turnId": .string("turn-live"),
-                    "item": .object([
-                        "id": .string("agent-live"),
-                        "type": .string("agentMessage"),
-                        "text": .string("Partial answer with the full ending."),
-                    ]),
-                ])
-            )
+        await session.emitProjectedAgentCompleted(
+            turnID: "turn-live",
+            itemID: "agent-live",
+            text: "Partial answer with the full ending."
         )
 
         try await waitForDetailStore {

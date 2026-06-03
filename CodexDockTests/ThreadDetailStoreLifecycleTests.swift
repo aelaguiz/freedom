@@ -9,9 +9,9 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let lifecycle = AppLifecycleCoordinator()
         let session = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1")),
-            projectionTurnsResult: .success(
+            projectionRowsResult: .success(
                 [
-                    makeDetailTurn(id: "turn-old", startedAt: 1_000, text: "Stored turn"),
+                    makeProjectedDetailEvent(turnID: "turn-old", startedAt: 1_000, text: "Stored turn"),
                 ]
             ),
             detailResyncResult: .success(.thread("thread-1"))
@@ -67,17 +67,17 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1")),
-            projectionTurnsResult: .success([]),
+            projectionRowsResult: .success([]),
             detailResyncResult: .success(.thread("thread-1")),
-            projectionTurnsResults: [
+            projectionRowsResults: [
                 .success(
                     [
-                        makeDetailTurn(id: "turn-initial", startedAt: 1_000, text: "Initial turn"),
+                        makeProjectedDetailEvent(turnID: "turn-initial", startedAt: 1_000, text: "Initial turn"),
                     ]
                 ),
                 .success(
                     [
-                        makeDetailTurn(id: "turn-rehydrated", startedAt: 2_000, text: "Rehydrated turn"),
+                        makeProjectedDetailEvent(turnID: "turn-rehydrated", startedAt: 2_000, text: "Rehydrated turn"),
                     ]
                 ),
             ],
@@ -126,18 +126,18 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1")),
-            projectionTurnsResult: .success([]),
+            projectionRowsResult: .success([]),
             detailResyncResult: .success(.thread("thread-1")),
             projectionDelay: .milliseconds(100),
-            projectionTurnsResults: [
+            projectionRowsResults: [
                 .success(
                     [
-                        makeDetailTurn(id: "turn-initial", startedAt: 1_000, text: "Initial stale turn"),
+                        makeProjectedDetailEvent(turnID: "turn-initial", startedAt: 1_000, text: "Initial stale turn"),
                     ]
                 ),
                 .success(
                     [
-                        makeDetailTurn(id: "turn-rehydrated", startedAt: 2_000, text: "Canonical rehydrated turn"),
+                        makeProjectedDetailEvent(turnID: "turn-rehydrated", startedAt: 2_000, text: "Canonical rehydrated turn"),
                     ]
                 ),
             ],
@@ -160,16 +160,10 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             session.detailResyncParamsSnapshot().count == 1
         }
 
-        await session.emitNotification(
-            JSONRPCNotification(
-                method: "item/agentMessage/delta",
-                params: .object([
-                    "threadId": .string("thread-1"),
-                    "turnId": .string("turn-live"),
-                    "itemId": .string("agent-live"),
-                    "delta": .string("Buffered during recovery"),
-                ])
-            )
+        await session.emitProjectedAgentDelta(
+            turnID: "turn-live",
+            itemID: "agent-live",
+            text: "Buffered during recovery"
         )
         try await Task.sleep(for: .milliseconds(20))
         guard case let .loaded(reconnectingSnapshot) = store.state else {
@@ -195,9 +189,9 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1")),
-            projectionTurnsResult: .success([]),
+            projectionRowsResult: .success([]),
             detailResyncResult: .success(.thread("thread-1")),
-            projectionTurnsResults: [
+            projectionRowsResults: [
                 .success([]),
                 .success([]),
             ],
@@ -247,23 +241,23 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
     }
 
     @MainActor
-    func testForegroundResumeRunsCompactReadTurnsResumeBeforeReturningLive() async throws {
+    func testForegroundResumeRunsProjectionResyncBeforeReturningLive() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let lifecycle = AppLifecycleCoordinator()
         let session = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1")),
-            projectionTurnsResult: .success([]),
+            projectionRowsResult: .success([]),
             detailResyncResult: .success(.thread("thread-1")),
-            projectionTurnsResults: [
+            projectionRowsResults: [
                 .success(
                     [
-                        makeDetailTurn(id: "turn-initial", startedAt: 1_000, text: "Initial turn"),
+                        makeProjectedDetailEvent(turnID: "turn-initial", startedAt: 1_000, text: "Initial turn"),
                     ]
                 ),
                 .success(
                     [
-                        makeDetailTurn(id: "turn-resumed", startedAt: 2_000, text: "Foreground resumed turn"),
+                        makeProjectedDetailEvent(turnID: "turn-resumed", startedAt: 2_000, text: "Foreground resumed turn"),
                     ]
                 ),
             ],
@@ -313,16 +307,16 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let lifecycle = AppLifecycleCoordinator()
         let session = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1")),
-            projectionTurnsResult: .success([]),
+            projectionRowsResult: .success([]),
             detailResyncResult: .success(.thread("thread-1")),
             detailSubscribeResults: [
                 .success(.thread("thread-1")),
                 .success(.thread("thread-1")),
             ],
-            projectionTurnsResults: [
+            projectionRowsResults: [
                 .success([]),
                 .success([
-                    makeDetailTurn(id: "turn-resumed", text: "Rehydrated after socket returned"),
+                    makeProjectedDetailEvent(turnID: "turn-resumed", text: "Rehydrated after socket returned"),
                 ]),
             ],
             detailResyncResults: [
@@ -374,12 +368,12 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
     func testReconnectRehydrateDoesNotDuplicateExistingEvents() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
-        let turn = makeDetailTurn(id: "turn-same", startedAt: 1_000, text: "Same turn")
+        let turn = makeProjectedDetailEvent(turnID: "turn-same", startedAt: 1_000, text: "Same turn")
         let session = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1")),
-            projectionTurnsResult: .success([]),
+            projectionRowsResult: .success([]),
             detailResyncResult: .success(.thread("thread-1")),
-            projectionTurnsResults: [
+            projectionRowsResults: [
                 .success([turn]),
                 .success([turn]),
             ],
@@ -413,9 +407,9 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1")),
-            projectionTurnsResult: .success(
+            projectionRowsResult: .success(
                 [
-                    makeDetailTurn(id: "turn-initial", text: "Initial turn"),
+                    makeProjectedDetailEvent(turnID: "turn-initial", text: "Initial turn"),
                 ]
             ),
             detailResyncResult: .success(.thread("thread-1")),
@@ -456,12 +450,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         )
 
         await store.load()
-        await session.emitNotification(
-            JSONRPCNotification(
-                method: "thread/closed",
-                params: .object(["threadId": .string("thread-1")])
-            )
-        )
+        await session.emitProjectedThreadClosed(threadID: "thread-1")
         try await waitForDetailStore {
             guard case let .loaded(snapshot) = store.state else {
                 return false
@@ -487,10 +476,10 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1")),
-            projectionTurnsResult: .success([]),
+            projectionRowsResult: .success([]),
             detailResyncResult: .success(.thread("thread-1")),
             turnStartResult: .failure(FakeThreadDetailError.turnFailed),
-            projectionTurnsResults: [
+            projectionRowsResults: [
                 .success([]),
                 .success([]),
             ],

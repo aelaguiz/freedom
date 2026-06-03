@@ -11,31 +11,31 @@ struct FakeThreadDetailSessionFactory: ThreadDetailSessionMaking {
 
 struct ThreadDetailProjectionSeed: Equatable, Sendable {
     let threadID: String
-    let turns: [JSONValue]
+    let rows: [ThreadDetailEventDTO]
     let activeTurnID: String?
     let sourceHostID: String?
 
     init(
         threadID: String = "thread-1",
-        turns: [JSONValue] = [],
+        rows: [ThreadDetailEventDTO] = [],
         activeTurnID: String? = nil,
         sourceHostID: String? = nil
     ) {
         self.threadID = threadID
-        self.turns = turns
+        self.rows = rows
         self.activeTurnID = activeTurnID
         self.sourceHostID = sourceHostID
     }
 
     static func thread(
         _ threadID: String = "thread-1",
-        turns: [JSONValue] = [],
+        rows: [ThreadDetailEventDTO] = [],
         activeTurnID: String? = nil,
         sourceHostID: String? = nil
     ) -> ThreadDetailProjectionSeed {
         ThreadDetailProjectionSeed(
             threadID: threadID,
-            turns: turns,
+            rows: rows,
             activeTurnID: activeTurnID,
             sourceHostID: sourceHostID
         )
@@ -52,7 +52,7 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
     private let serverRequestContinuation: AsyncStream<JSONRPCRequest>.Continuation
     private var detailSubscribeResults: [Result<ThreadDetailProjectionSeed, any Error>]
     private var detailResyncResults: [Result<ThreadDetailProjectionSeed, any Error>]
-    private var projectionTurnsResults: [Result<[JSONValue], any Error>]
+    private var projectionRowsResults: [Result<[ThreadDetailEventDTO], any Error>]
     private let turnStartResult: Result<TurnStartResponseDTO, any Error>
     private let turnSteerResult: Result<TurnSteerResponseDTO, any Error>
     private let projectionDelay: Duration?
@@ -70,7 +70,7 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
 
     init(
         detailSubscribeResult: Result<ThreadDetailProjectionSeed, any Error> = .success(.thread()),
-        projectionTurnsResult: Result<[JSONValue], any Error> = .success([]),
+        projectionRowsResult: Result<[ThreadDetailEventDTO], any Error> = .success([]),
         detailResyncResult: Result<ThreadDetailProjectionSeed, any Error> = .success(.thread()),
         turnStartResult: Result<TurnStartResponseDTO, any Error> = .success(
             TurnStartResponseDTO(
@@ -85,7 +85,7 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         ),
         projectionDelay: Duration? = nil,
         detailSubscribeResults: [Result<ThreadDetailProjectionSeed, any Error>]? = nil,
-        projectionTurnsResults: [Result<[JSONValue], any Error>]? = nil,
+        projectionRowsResults: [Result<[ThreadDetailEventDTO], any Error>]? = nil,
         detailResyncResults: [Result<ThreadDetailProjectionSeed, any Error>]? = nil,
         detailSourceHostID: String = "test-host"
     ) {
@@ -100,7 +100,7 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         self.serverRequestContinuation = serverRequests.continuation
         self.detailSubscribeResults = detailSubscribeResults ?? [detailSubscribeResult]
         self.detailResyncResults = detailResyncResults ?? [detailResyncResult]
-        self.projectionTurnsResults = projectionTurnsResults ?? [projectionTurnsResult]
+        self.projectionRowsResults = projectionRowsResults ?? [projectionRowsResult]
         self.detailSourceHostID = detailSourceHostID
         self.turnStartResult = turnStartResult
         self.turnSteerResult = turnSteerResult
@@ -183,13 +183,68 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
     }
 
     func emitNotification(_ notification: JSONRPCNotification) async {
-        guard let update = applyDetail(notification: notification) else {
+        guard notification.method == AppServerMethods.threadDetailUpdate else {
             return
         }
-        notificationContinuation.yield(
-            JSONRPCNotification(
-                method: AppServerMethods.threadDetailUpdate,
-                params: try? JSONValue.encoded(update)
+        notificationContinuation.yield(notification)
+    }
+
+    func emitProjectionUpdate(_ update: ThreadDetailUpdateDTO) async {
+        notificationContinuation.yield(projectedNotification(update))
+    }
+
+    func emitProjectedRow(_ row: ThreadDetailEventDTO) async {
+        await emitProjectionUpdate(upsertDetailRow(row))
+    }
+
+    func emitProjectedAgentDelta(
+        threadID: String = "thread-1",
+        turnID: String,
+        itemID: String,
+        text: String
+    ) async {
+        let row = makeProjectedDetailEvent(
+            threadID: threadID,
+            sourceHostID: detailSourceHostID,
+            turnID: turnID,
+            itemID: itemID,
+            activityDate: Date(timeIntervalSince1970: 3_000 + TimeInterval(detailSeq)),
+            text: text,
+            renderState: .streaming
+        )
+        await emitProjectionUpdate(upsertDetailRow(row))
+    }
+
+    func emitProjectedAgentCompleted(
+        threadID: String = "thread-1",
+        turnID: String,
+        itemID: String,
+        text: String
+    ) async {
+        let row = makeProjectedDetailEvent(
+            threadID: threadID,
+            sourceHostID: detailSourceHostID,
+            turnID: turnID,
+            itemID: itemID,
+            activityDate: Date(timeIntervalSince1970: 3_000 + TimeInterval(detailSeq)),
+            text: text,
+            renderState: .settled
+        )
+        await emitProjectionUpdate(upsertDetailRow(row))
+    }
+
+    func emitProjectedThreadClosed(threadID: String = "thread-1") async {
+        await emitProjectionUpdate(
+            ThreadDetailUpdateDTO(
+                kind: .heartbeat,
+                sourceHostID: detailSourceHostID,
+                threadID: threadID,
+                epoch: detailEpoch,
+                seq: detailSeq,
+                viewParamsKey: "default-view",
+                order: "displayOrderKeyAscending",
+                activeTurnID: detailActiveTurnID,
+                liveState: "closed"
             )
         )
     }
@@ -198,12 +253,7 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         guard let update = applyDetail(request: request) else {
             return
         }
-        notificationContinuation.yield(
-            JSONRPCNotification(
-                method: AppServerMethods.threadDetailUpdate,
-                params: try? JSONValue.encoded(update)
-            )
-        )
+        await emitProjectionUpdate(update)
     }
 
     func finishNotifications() async {
@@ -244,13 +294,13 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         preservingLiveEvents: Bool
     ) throws -> ThreadDetailSnapshotDTO {
         let sourceHostID = seed.sourceHostID ?? detailSourceHostID
-        let turns = seed.turns.isEmpty ? try nextProjectionTurns() : seed.turns
+        let rows = seed.rows.isEmpty ? try nextProjectionRows() : seed.rows
         let preservedEvents = preservingLiveEvents
             ? detailEventsByID.values.filter { $0.isLive || $0.request != nil }
             : []
         var snapshot = Self.detailSnapshot(
             threadID: seed.threadID,
-            turns: turns,
+            rows: rows,
             activeTurnID: seed.activeTurnID,
             sourceHostID: sourceHostID,
             epoch: detailEpoch,
@@ -304,107 +354,50 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         return try result.get()
     }
 
-    private func nextProjectionTurns() throws -> [JSONValue] {
-        let result = projectionTurnsResults.count > 1
-            ? projectionTurnsResults.removeFirst()
-            : projectionTurnsResults[0]
+    private func nextProjectionRows() throws -> [ThreadDetailEventDTO] {
+        let result = projectionRowsResults.count > 1
+            ? projectionRowsResults.removeFirst()
+            : projectionRowsResults[0]
         return try result.get()
     }
 
-    private func applyDetail(notification: JSONRPCNotification) -> ThreadDetailUpdateDTO? {
-        if let eventThreadID = LegacyThreadEventFixtureNormalizer.threadId(from: notification),
-           eventThreadID != detailThreadID() {
-            return nil
-        }
-        if notification.method == "serverRequest/resolved",
-           let requestID = notification.params?.objectValue?["requestId"] {
-            let requestIDText = requestID.stringValue ?? requestID.numberValue.map { String(Int64($0)) }
-            let projectionID = requestIDText.flatMap { requestProjectionID(requestID: $0, threadID: detailThreadID()) }
-            if let projectionID, let event = detailEventsByID[projectionID], let request = event.request {
-                let revision = (detailRevisionsByID[projectionID] ?? 1) + 1
-                let next = ThreadEvent(
-                    id: event.id,
-                    kind: event.kind,
-                    visibilityCategory: event.visibilityCategory,
-                    title: event.title,
-                    body: event.body,
-                    date: event.date,
-                    isLive: event.isLive,
-                    turnID: event.turnID,
-                    itemID: event.itemID,
-                    turnSequence: event.turnSequence,
-                    itemSequence: event.itemSequence,
-                    eventSequence: event.eventSequence,
-                    displayOrderKey: event.displayOrderKey,
-                    displayGroupDate: event.displayGroupDate,
-                    activityDate: event.activityDate,
-                    isStreamingDelta: event.isStreamingDelta,
-                    request: ThreadDetailEventRequestDTO(
-                        requestID: request.requestID,
-                        method: request.method,
-                        params: request.params,
-                        status: "resolved"
-                    )
-                )
-                detailEventsByID[projectionID] = next
-                detailRevisionsByID[projectionID] = revision
-                return ThreadDetailUpdateDTO(
-                    kind: .upsert,
-                    sourceHostID: detailSourceHostID,
-                    threadID: detailThreadID(),
-                    epoch: detailEpoch,
-                    seq: nextDetailSeq(),
-                    viewParamsKey: "default-view",
-                    order: "displayOrderKeyAscending",
-                    rows: [
-                        Self.detailEventDTO(
-                            from: next,
-                            threadID: detailThreadID(),
-                            sourceHostID: detailSourceHostID,
-                            index: detailEventsByID.count,
-                            revision: revision
-                        ),
-                    ],
-                    activeTurnID: detailActiveTurnID
-                )
-            }
-            return ThreadDetailUpdateDTO(
-                kind: .heartbeat,
-                sourceHostID: detailSourceHostID,
-                threadID: detailThreadID(),
-                epoch: detailEpoch,
-                seq: nextDetailSeq(),
-                viewParamsKey: "default-view",
-                order: "displayOrderKeyAscending",
-                activeTurnID: detailActiveTurnID
-            )
-        }
-
-        if notification.method == "turn/started" {
-            detailActiveTurnID = notification.params?.objectValue?["turn"]?.objectValue?["id"]?.stringValue
-        }
-        if notification.method == "turn/completed",
-           detailActiveTurnID == notification.params?.objectValue?["turn"]?.objectValue?["id"]?.stringValue {
-            detailActiveTurnID = nil
-        }
-        guard let event = LegacyThreadEventFixtureNormalizer.event(from: notification) else {
-            return nil
-        }
-        return upsertDetailEvent(event)
-    }
-
     private func applyDetail(request: JSONRPCRequest) -> ThreadDetailUpdateDTO? {
-        let event = LegacyThreadEventFixtureNormalizer.event(from: request)
-        return upsertDetailEvent(event)
-    }
-
-    private func upsertDetailEvent(_ event: ThreadEvent) -> ThreadDetailUpdateDTO {
-        let projected = ThreadEvent(detailEvent: Self.detailEventDTO(
-            from: event,
+        let params = request.params?.objectValue ?? [:]
+        if let requestThreadID = params["threadId"]?.stringValue,
+           requestThreadID != detailThreadID() {
+            return nil
+        }
+        let requestDate = params["startedAtMs"]?.numberValue.map { Date(timeIntervalSince1970: $0 / 1_000) }
+            ?? Date(timeIntervalSince1970: 3_000)
+        let body = commandText(params["command"])
+            ?? params["reason"]?.stringValue
+            ?? params["message"]?.stringValue
+            ?? request.method
+        let row = makeProjectedDetailEvent(
             threadID: detailThreadID(),
             sourceHostID: detailSourceHostID,
-            index: detailEventsByID.count
-        ))
+            turnID: params["turnId"]?.stringValue,
+            itemID: params["itemId"]?.stringValue,
+            requestID: request.id.description,
+            kind: .request,
+            visibility: .request,
+            rowRole: "request",
+            title: requestTitle(for: request.method),
+            activityDate: requestDate,
+            text: body,
+            renderState: .live,
+            request: ThreadDetailEventRequestDTO(
+                requestID: request.id,
+                method: request.method,
+                params: request.params,
+                status: "pending"
+            )
+        )
+        return upsertDetailRow(row)
+    }
+
+    private func upsertDetailRow(_ row: ThreadDetailEventDTO) -> ThreadDetailUpdateDTO {
+        let projected = ThreadEvent(detailEvent: row)
         var next = projected
         if let existing = detailEventsByID[projected.id],
            existing.isStreamingDelta,
@@ -415,8 +408,15 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         let revision = detailEventsByID[projected.id] == nil
             ? 1
             : (detailRevisionsByID[projected.id] ?? 1) + 1
-        detailEventsByID[projected.id] = next
-        detailRevisionsByID[projected.id] = revision
+        let nextRow = Self.detailEventDTO(
+            from: next,
+            threadID: detailThreadID(),
+            sourceHostID: detailSourceHostID,
+            index: detailEventsByID.count,
+            revision: revision
+        )
+        detailEventsByID[nextRow.projectionID] = ThreadEvent(detailEvent: nextRow)
+        detailRevisionsByID[nextRow.projectionID] = revision
         return ThreadDetailUpdateDTO(
             kind: .upsert,
             sourceHostID: detailSourceHostID,
@@ -426,16 +426,9 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
             viewParamsKey: "default-view",
             order: "displayOrderKeyAscending",
             rows: [
-                Self.detailEventDTO(
-                    from: next,
-                    threadID: detailThreadID(),
-                    sourceHostID: detailSourceHostID,
-                    index: detailEventsByID.count,
-                    revision: revision
-                ),
+                nextRow,
             ],
-            activeTurnID: detailActiveTurnID,
-            liveState: event.title == "Thread closed" ? "closed" : nil
+            activeTurnID: detailActiveTurnID
         )
     }
 
@@ -450,23 +443,29 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         return detailSeq
     }
 
-    private func requestProjectionID(requestID: String, threadID: String) -> String? {
-        detailEventsByID.values.first { event in
-            event.request?.requestID.description == requestID
-        }?.id ?? "host:\(detailSourceHostID)/thread:\(threadID)/request:\(requestID)/row:request"
+    private func projectedNotification(_ update: ThreadDetailUpdateDTO) -> JSONRPCNotification {
+        JSONRPCNotification(
+            method: AppServerMethods.threadDetailUpdate,
+            params: try! JSONValue.encoded(update)
+        )
     }
 
     private static func detailSnapshot(
         threadID: String,
-        turns: [JSONValue],
+        rows: [ThreadDetailEventDTO],
         activeTurnID: String?,
         sourceHostID: String,
         epoch: String,
         seq: Int64
     ) -> ThreadDetailSnapshotDTO {
-        let thread = ThreadDTO(id: threadID, turns: turns)
-        let events = LegacyThreadEventFixtureNormalizer.events(from: thread).enumerated().map { index, event in
-            detailEventDTO(from: event, threadID: threadID, sourceHostID: sourceHostID, index: index)
+        let projectedRows = rows.enumerated().map { index, row in
+            detailEventDTO(
+                from: ThreadEvent(detailEvent: row),
+                threadID: threadID,
+                sourceHostID: sourceHostID,
+                index: index,
+                revision: row.revision
+            )
         }
         return ThreadDetailSnapshotDTO(
             sourceHostID: sourceHostID,
@@ -474,16 +473,9 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
             epoch: epoch,
             seq: seq,
             viewParamsKey: "default-view",
-            activeTurnID: activeTurnID ?? thread.turns?
-                .compactMap { turn -> String? in
-                    guard turn.objectValue?["status"]?.stringValue == "inProgress" else {
-                        return nil
-                    }
-                    return turn.objectValue?["id"]?.stringValue
-                }
-                .first,
+            activeTurnID: activeTurnID,
             order: "displayOrderKeyAscending",
-            rows: events
+            rows: projectedRows
         )
     }
 
@@ -782,34 +774,175 @@ func makeDetailRow(
     )
 }
 
-func makeDetailThread(_ id: String, text: String) -> ThreadDTO {
-    ThreadDTO(
-        id: id,
-        turns: [
-            makeDetailTurn(id: "turn-1", text: text),
-        ]
+func makeProjectedDetailEvent(
+    threadID: String = "thread-1",
+    sourceHostID: String = "test-host",
+    turnID: String? = "turn-1",
+    itemID: String? = nil,
+    requestID: String? = nil,
+    kind: ThreadEventKind = .agentMessage,
+    visibility: ThreadEventVisibilityCategory = .message,
+    rowRole: String? = nil,
+    title: String? = nil,
+    startedAt: Int64? = nil,
+    activityDate: Date? = nil,
+    text: String,
+    renderState: ThreadDetailRenderState = .settled,
+    request: ThreadDetailEventRequestDTO? = nil,
+    revision: Int = 1
+) -> ThreadDetailEventDTO {
+    let resolvedItemID = itemID ?? turnID.map { "\($0)-agent" }
+    let resolvedRowRole = rowRole ?? rowRoleForProjectedEvent(kind: kind, visibility: visibility)
+    let projectionID = projectionIDForProjectedDetailEvent(
+        sourceHostID: sourceHostID,
+        threadID: threadID,
+        turnID: turnID,
+        itemID: resolvedItemID,
+        requestID: requestID,
+        rowRole: resolvedRowRole
+    )
+    let eventDate = activityDate ?? startedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+    return ThreadDetailEventDTO(
+        sourceHostID: sourceHostID,
+        threadID: threadID,
+        projectionID: projectionID,
+        sourceRef: sourceRefForProjectedDetailEvent(
+            projectionID: projectionID,
+            rowRole: resolvedRowRole
+        ),
+        itemType: kind.rawValue,
+        rowRole: resolvedRowRole,
+        visibility: visibility,
+        renderKind: kind,
+        displayOrderKey: displayOrderKeyForProjectedDetailEvent(
+            activityDate: eventDate,
+            projectionID: projectionID
+        ),
+        title: title ?? titleForProjectedEvent(kind: kind, visibility: visibility),
+        body: text,
+        eventTime: eventDate.map(projectedEventISOString),
+        activityTime: eventDate.map(projectedEventISOString),
+        turnID: turnID,
+        itemID: resolvedItemID,
+        turnOrder: nil,
+        itemOrder: nil,
+        rowOrder: nil,
+        revision: revision,
+        renderState: renderState,
+        requestID: requestID,
+        request: request
     )
 }
 
-func makeDetailTurn(
-    id: String,
-    startedAt: Int64? = nil,
-    text: String
-) -> JSONValue {
-    var fields: [String: JSONValue] = [
-        "id": .string(id),
-        "items": .array([
-            .object([
-                "id": .string("\(id)-agent"),
-                "type": .string("agentMessage"),
-                "text": .string(text),
-            ]),
-        ]),
-    ]
-    if let startedAt {
-        fields["startedAt"] = .integer(startedAt)
+private func rowRoleForProjectedEvent(
+    kind: ThreadEventKind,
+    visibility: ThreadEventVisibilityCategory
+) -> String {
+    switch kind {
+    case .userMessage:
+        return "userMessage"
+    case .agentMessage:
+        return visibility == .thinking ? "reasoning" : "agentMessage"
+    case .command:
+        return "command"
+    case .output:
+        return "commandOutput"
+    case .request:
+        return "request"
+    case .system:
+        return "system"
+    case .unknown:
+        return "unknown"
     }
-    return .object(fields)
+}
+
+private func titleForProjectedEvent(
+    kind: ThreadEventKind,
+    visibility: ThreadEventVisibilityCategory
+) -> String {
+    switch kind {
+    case .agentMessage where visibility == .thinking:
+        return "Reasoning update"
+    case .agentMessage:
+        return "Agent message"
+    case .userMessage:
+        return "User message"
+    case .command:
+        return "Command"
+    case .output:
+        return "Command output"
+    case .request:
+        return "Request"
+    case .system:
+        return "System"
+    case .unknown:
+        return "Unknown"
+    }
+}
+
+private func requestTitle(for method: String) -> String {
+    switch method {
+    case "item/commandExecution/requestApproval":
+        return "Command approval"
+    case "apply_patch/approval":
+        return "Patch approval"
+    default:
+        return "Request"
+    }
+}
+
+private func commandText(_ value: JSONValue?) -> String? {
+    switch value {
+    case .string(let text):
+        return text
+    case .array(let parts):
+        let joined = parts.compactMap(\.stringValue).joined(separator: " ")
+        return joined.isEmpty ? nil : joined
+    case .object(let object):
+        return commandText(object["cmd"]) ?? commandText(object["command"])
+    case .null, .bool, .integer, .double, .none:
+        return nil
+    }
+}
+
+private func projectionIDForProjectedDetailEvent(
+    sourceHostID: String,
+    threadID: String,
+    turnID: String?,
+    itemID: String?,
+    requestID: String?,
+    rowRole: String
+) -> String {
+    if rowRole == "request", let requestID {
+        return "host:\(sourceHostID)/thread:\(threadID)/request:\(requestID)/row:request"
+    }
+    if let turnID, let itemID {
+        return "host:\(sourceHostID)/thread:\(threadID)/turn:\(turnID)/item:\(itemID)/row:\(rowRole)"
+    }
+    return "host:\(sourceHostID)/thread:\(threadID)/diagnostic:\(UUID().uuidString)/row:\(rowRole)"
+}
+
+private func sourceRefForProjectedDetailEvent(
+    projectionID: String,
+    rowRole: String
+) -> String {
+    if let suffixRange = projectionID.range(of: "/row:\(rowRole)", options: .backwards) {
+        return String(projectionID[..<suffixRange.lowerBound])
+    }
+    return projectionID
+}
+
+private func displayOrderKeyForProjectedDetailEvent(
+    activityDate: Date?,
+    projectionID: String
+) -> String {
+    let timestamp = Int64(activityDate?.timeIntervalSince1970 ?? 0)
+    let inverted = 9_999_999_999_999_999 - timestamp
+    return String(format: "%016lld|%@", inverted, projectionID)
+}
+
+private func projectedEventISOString(from date: Date) -> String {
+    ISO8601DateFormatter().string(from: date)
 }
 
 @MainActor
