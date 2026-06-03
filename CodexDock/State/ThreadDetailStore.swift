@@ -133,7 +133,6 @@ public final class ThreadDetailStore: ObservableObject {
     private let hostIdentityResolver: DockHostIdentityResolver
     private var header: ThreadDetailHeader
     private let factory: any ThreadDetailSessionMaking
-    private let dataEngine: ThreadDetailDataEngine
     private let commandEngine: ClientCommandEngine
     let transcriptionEngine: TranscriptionEngine
     let voiceCaptureEngine: VoiceCaptureEngine
@@ -142,14 +141,12 @@ public final class ThreadDetailStore: ObservableObject {
     private let lifecycleCoordinator: AppLifecycleCoordinator?
     private weak var connectivityReporter: (any AppConnectivityReporting)?
     private let connectivityEventSink: ConnectivityEventSink?
-    private let dockRowSettleRefreshDelay: Duration
     private let now: @Sendable () -> Date
 
     private var session: (any ThreadDetailSession)?
+    private var reconciler: StreamReconciler<ThreadDetailEventDTO>?
+    private var reconcilerTask: Task<Void, Never>?
     private var connectionTask: Task<Void, Never>?
-    private var notificationTask: Task<Void, Never>?
-    private var recoveryTask: Task<Void, Never>?
-    private var dockRowSettleRefreshTask: Task<Void, Never>?
     private var lifecycleTask: Task<Void, Never>?
     var transcriptionTask: Task<Void, Never>?
     var voiceCaptureTask: Task<Void, Never>?
@@ -164,11 +161,9 @@ public final class ThreadDetailStore: ObservableObject {
     private var activeTurnID: String?
     private var didLoad = false
     private var isClosing = false
-    private var liveEventBuffer = ThreadDetailLiveEventBuffer()
     private var requestCardPresentation = ThreadDetailRequestCardPresentation()
     private var latestDockRowActivityMarker: DockRowActivityMarker
     private var lastCompletedDockRowRefreshMarker: DockRowActivityMarker
-    private var pendingDockRowRefreshMarker: DockRowActivityMarker?
 
     public init(
         host: DockHostConfiguration,
@@ -180,7 +175,7 @@ public final class ThreadDetailStore: ObservableObject {
         connectivityReporter: (any AppConnectivityReporting)? = nil,
         connectivityEventSink: ConnectivityEventSink? = nil,
         hostIdentityResolver: DockHostIdentityResolver? = nil,
-        dockRowSettleRefreshDelay: Duration = CodexDockConstants.Dock.threadDetailCanonicalHistorySettleDelay,
+        dockRowSettleRefreshDelay _: Duration = CodexDockConstants.Dock.threadDetailCanonicalHistorySettleDelay,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.host = host
@@ -189,7 +184,6 @@ public final class ThreadDetailStore: ObservableObject {
         self.header = ThreadDetailHeader(host: host, row: row)
         self.screenStore = ThreadDetailScreenStore(header: self.header)
         self.factory = factory
-        self.dataEngine = ThreadDetailDataEngine()
         self.commandEngine = ClientCommandEngine()
         self.transcriptionEngine = TranscriptionEngine()
         self.voiceCaptureEngine = VoiceCaptureEngine()
@@ -201,7 +195,6 @@ public final class ThreadDetailStore: ObservableObject {
         self.lifecycleCoordinator = lifecycleCoordinator
         self.connectivityReporter = connectivityReporter
         self.connectivityEventSink = connectivityEventSink
-        self.dockRowSettleRefreshDelay = dockRowSettleRefreshDelay
         self.now = now
         self.state = .idle(ThreadDetailHeader(host: host, row: row))
         let dockActivityMarker = DockRowActivityMarker(row: row)
@@ -212,21 +205,24 @@ public final class ThreadDetailStore: ObservableObject {
     }
 
     deinit {
+        reconcilerTask?.cancel()
         connectionTask?.cancel()
-        notificationTask?.cancel()
-        recoveryTask?.cancel()
-        dockRowSettleRefreshTask?.cancel()
         lifecycleTask?.cancel()
         transcriptionTask?.cancel()
         voiceCaptureTask?.cancel()
         voiceTranscriptPublishTask?.cancel()
         let session = session
+        let reconciler = reconciler
         let activeTranscriptionSession = activeTranscriptionSession
         let activeVoiceCaptureSession = activeVoiceCaptureSession
         Task {
             await activeVoiceCaptureSession?.cancel()
             await activeTranscriptionSession?.cancel()
-            await session?.disconnect()
+            if let reconciler {
+                await reconciler.close()
+            } else {
+                await session?.disconnect()
+            }
         }
     }
 
@@ -261,30 +257,34 @@ public final class ThreadDetailStore: ObservableObject {
 
         let session = factory.makeSession(for: host, foregroundWorkGate: lifecycleCoordinator)
         self.session = session
-
+        let reconciler = StreamReconciler(
+            viewKey: ProjectionViewKey(
+                sourceHostID: row.sourceHostID,
+                view: ThreadDetailProjectionContract.view,
+                scope: "thread",
+                viewParamsKey: nil
+            ),
+            policy: .threadDetail(threadID: row.threadID),
+            connector: ThreadDetailProjectionStreamConnector(
+                session: session,
+                threadID: row.threadID
+            )
+        )
+        self.reconciler = reconciler
+        await reconciler.start()
+        let projectionSnapshot = await reconciler.snapshot()
         do {
-            _ = try await session.connectAndInitialize(
-                params: .codexDock(version: "0.1.0"),
-                timeout: CodexDockConstants.AppServer.connectInitializeTimeout
-            )
-            latestConnectionState = .connected
-            liveEventBuffer.begin()
-            startObservation(session: session)
-
-            let detailSnapshot = try await session.threadDetailSubscribe(
-                params: ThreadDetailParams(threadId: row.threadID),
-                timeout: CodexDockConstants.AppServer.defaultRequestTimeout
-            )
-            try await replaceEvents(from: detailSnapshot, liveState: .live)
-            await replayBufferedLiveEvents()
-            startDockRowRefreshIfNeeded()
-            DockLog.threadDetail.notice("thread detail load finished live host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) events=\(self.events.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+            try applyProjectionSnapshot(projectionSnapshot, failEmptyFailure: true)
+            await startReconcilerObservation(reconciler)
+            startObservation(session: session, reconciler: reconciler)
+            if case .live = projectionSnapshot.freshness {
+                DockLog.threadDetail.notice("thread detail load finished live host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) events=\(self.events.count, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
+            }
         } catch {
-            liveEventBuffer.discard()
             let message = message(from: error)
             state = .error(header, message)
             screenStore.setError(header: header, message: message)
-            await session.disconnect()
+            await reconciler.close()
             DockLog.threadDetail.error("thread detail load failed host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
         }
     }
@@ -306,24 +306,19 @@ public final class ThreadDetailStore: ObservableObject {
             return
         }
 
-        // Dock activity can lead canonical turns by a moment. Re-read now, then
-        // do one coalesced settled re-read through the same history path.
-        scheduleDockRowSettleRefresh(for: latestDockRowActivityMarker)
-        queueDockRowRefresh(for: latestDockRowActivityMarker)
+        lastCompletedDockRowRefreshMarker = latestDockRowActivityMarker
+        Task { [weak self] in
+            await self?.reconciler?.manualRefresh()
+        }
     }
 
     public func close() {
         DockLog.threadDetail.notice("thread detail close requested host_id=\(self.host.id, privacy: .public) thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public)")
         isClosing = true
+        reconcilerTask?.cancel()
+        reconcilerTask = nil
         connectionTask?.cancel()
         connectionTask = nil
-        notificationTask?.cancel()
-        notificationTask = nil
-        recoveryTask?.cancel()
-        recoveryTask = nil
-        dockRowSettleRefreshTask?.cancel()
-        dockRowSettleRefreshTask = nil
-        liveEventBuffer.discard()
         lifecycleTask?.cancel()
         lifecycleTask = nil
         transcriptionTask?.cancel()
@@ -344,12 +339,13 @@ public final class ThreadDetailStore: ObservableObject {
         activeDictationSegment = nil
         composer.voice = ComposerVoiceState()
 
-        let session = session
-        self.session = nil
+        let reconciler = reconciler
+        self.reconciler = nil
+        session = nil
         Task {
             await activeVoiceCaptureSession?.cancel()
             await activeTranscriptionSession?.cancel()
-            await session?.disconnect()
+            await reconciler?.close()
         }
     }
 
@@ -395,9 +391,9 @@ public final class ThreadDetailStore: ObservableObject {
                 session: session
             )
             activeTurnID = nextTurnID ?? activeTurnID
-            await dataEngine.setActiveTurnID(activeTurnID)
             composer.draft = ""
             composer.isSending = false
+            await reconciler?.commandCompletedInvalidation()
             DockLog.threadDetail.notice("send draft finished thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) active_turn_id=\(DockLog.publicID(self.activeTurnID), privacy: .public)")
         } catch {
             composer.isSending = false
@@ -441,6 +437,7 @@ public final class ThreadDetailStore: ObservableObject {
                 session: session
             )
             setCardStatus(cardID: cardID, status: .resolved)
+            await reconciler?.commandCompletedInvalidation()
             DockLog.threadDetail.notice("request card response finished card_id=\(DockLog.publicID(cardID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
         } catch {
             setCardStatus(cardID: cardID, status: .failed(message(from: error)))
@@ -448,22 +445,35 @@ public final class ThreadDetailStore: ObservableObject {
         }
     }
 
-    private func startObservation(session: any ThreadDetailSession) {
-        connectionTask?.cancel()
-        notificationTask?.cancel()
-
-        connectionTask = Task { [weak self] in
-            for await state in session.connectionStates {
-                self?.handle(connectionState: state)
+    private func startReconcilerObservation(_ reconciler: StreamReconciler<ThreadDetailEventDTO>) async {
+        reconcilerTask?.cancel()
+        let snapshots = await reconciler.snapshots()
+        reconcilerTask = Task { [weak self] in
+            for await snapshot in snapshots {
+                await self?.handle(reconcilerSnapshot: snapshot)
             }
         }
+    }
 
-        notificationTask = Task { [weak self] in
-            for await notification in session.notifications {
-                await self?.handle(notification: notification)
+    private func handle(reconcilerSnapshot snapshot: StreamReconcilerSnapshot<ThreadDetailEventDTO>) async {
+        do {
+            try applyProjectionSnapshot(snapshot, failEmptyFailure: false)
+        } catch {
+            let message = message(from: error)
+            liveState = .stale(message)
+            publishLoaded()
+        }
+    }
+
+    private func startObservation(
+        session: any ThreadDetailSession,
+        reconciler: StreamReconciler<ThreadDetailEventDTO>
+    ) {
+        connectionTask?.cancel()
+        connectionTask = Task { [weak self] in
+            for await state in session.connectionStates {
+                await self?.handle(connectionState: state, reconciler: reconciler)
             }
-            DockLog.threadDetail.warning("thread notification stream ended")
-            self?.markLiveSessionStale("Live update stream ended.")
         }
     }
 
@@ -497,9 +507,6 @@ public final class ThreadDetailStore: ObservableObject {
             return
         }
 
-        recoveryTask?.cancel()
-        recoveryTask = nil
-
         if composer.voice.phase.isBusy {
             DockLog.voice.notice("voice capture stopping reason=backgrounded thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public)")
             let activeTranscriptionSession = activeTranscriptionSession
@@ -512,9 +519,8 @@ public final class ThreadDetailStore: ObservableObject {
             return
         }
 
-        liveState = .stale("Backgrounded")
+        await reconciler?.staleDeadlineExceeded("Backgrounded")
         DockLog.threadDetail.notice("thread detail marked stale reason=backgrounded thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public)")
-        publishLoaded()
     }
 
     private func handleForegroundResuming(_ snapshot: AppLifecycleSnapshot) async {
@@ -525,36 +531,39 @@ public final class ThreadDetailStore: ObservableObject {
 
         guard !isClosing,
               case .loaded = state,
-              liveState != .closed,
-              let session else {
+              liveState != .closed else {
             return
         }
 
-        recoveryTask?.cancel()
-        recoveryTask = nil
         if latestConnectionState == .connected {
-            await rehydrateAfterReconnect(session: session, reason: "Resuming")
+            await reconciler?.foregroundResumed()
         } else if latestConnectionState.shouldWaitForForegroundRehydrate {
-            markLiveSessionReconnecting("Resuming")
+            await reconciler?.staleDeadlineExceeded("Resuming")
         } else {
-            markLiveSessionStale(message(from: latestConnectionState))
+            await reconciler?.transportDisconnected(message(from: latestConnectionState))
         }
     }
 
-    private func handle(connectionState: AppServerConnectionState) {
+    private func handle(
+        connectionState: AppServerConnectionState,
+        reconciler: StreamReconciler<ThreadDetailEventDTO>
+    ) async {
+        let previousConnectionState = latestConnectionState
         latestConnectionState = connectionState
         DockLog.threadDetail.debug("thread detail connection state=\(connectionState.logDescription, privacy: .public) thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public)")
         switch connectionState {
         case .reconnecting(_, let reason):
-            markLiveSessionReconnecting(reason)
+            await reconciler.transportReconnecting(reason)
         case .connected:
-            startRehydrateAfterReconnectIfNeeded()
+            if previousConnectionState.shouldTriggerProjectionCatchupAfterConnected {
+                await reconciler.transportReconnected()
+            }
         case .offline(let reason):
-            markLiveSessionStale(reason)
+            await reconciler.transportDisconnected(reason)
         case .error(let message):
-            markLiveSessionStale(message)
+            await reconciler.transportDisconnected(message)
         case .closed(let reason):
-            markLiveSessionStale(reason)
+            await reconciler.transportDisconnected(reason)
         case .idle, .connecting:
             return
         }
@@ -579,233 +588,23 @@ public final class ThreadDetailStore: ObservableObject {
         }
     }
 
-    private func startRehydrateAfterReconnectIfNeeded() {
-        guard !isClosing,
-              recoveryTask == nil,
-              case .loaded = state,
-              case let .reconnecting(reason) = liveState,
-              let session else {
-            return
+    private func applyProjectionSnapshot(
+        _ projectionSnapshot: StreamReconcilerSnapshot<ThreadDetailEventDTO>,
+        failEmptyFailure: Bool
+    ) throws {
+        if failEmptyFailure,
+           projectionSnapshot.rows.isEmpty,
+           case .failed(let message) = projectionSnapshot.freshness {
+            throw ThreadDetailStoreError.invalidProjectionEnvelope(message)
         }
 
-        recoveryTask = Task { [weak self] in
-            await self?.rehydrateAfterReconnect(session: session, reason: reason)
-        }
-    }
-
-    private func rehydrateAfterReconnect(
-        session: any ThreadDetailSession,
-        reason: String
-    ) async {
-        guard !isClosing, case .loaded = state else {
-            recoveryTask = nil
-            return
-        }
-
-        liveState = .reconnecting(reason)
-        liveEventBuffer.begin()
-        DockLog.threadDetail.notice("thread detail rehydrate started thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) reason=\(DockLog.redacted(reason), privacy: .public)")
-        publishLoaded()
-
-        do {
-            let detailSnapshot = try await session.threadDetailResync(
-                params: ThreadDetailParams(threadId: row.threadID),
-                timeout: CodexDockConstants.AppServer.defaultRequestTimeout
-            )
-            try await replaceEvents(from: detailSnapshot, liveState: .live)
-            await replayBufferedLiveEvents()
-            DockLog.threadDetail.notice("thread detail rehydrate finished thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) events=\(self.events.count, privacy: .public)")
-        } catch {
-            liveEventBuffer.discard()
-            liveState = .stale(message(from: error))
-            publishLoaded()
-            DockLog.threadDetail.warning("thread detail rehydrate failed thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-        }
-
-        recoveryTask = nil
-    }
-
-    private func queueDockRowRefresh(for marker: DockRowActivityMarker, force: Bool = false) {
-        if !force, !marker.isNewer(than: lastCompletedDockRowRefreshMarker) {
-            return
-        }
-        if let pending = pendingDockRowRefreshMarker,
-           pending.isNewer(than: marker) || pending == marker {
-            return
-        }
-
-        pendingDockRowRefreshMarker = marker
-        DockLog.threadDetail.notice("thread detail dock row advanced thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public)")
-        startDockRowRefreshIfNeeded()
-    }
-
-    private func scheduleDockRowSettleRefresh(for marker: DockRowActivityMarker) {
-        dockRowSettleRefreshTask?.cancel()
-        let delay = dockRowSettleRefreshDelay
-        dockRowSettleRefreshTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: delay)
-            } catch {
-                return
-            }
-            self?.queueDockRowSettleRefreshIfCurrent(marker)
-        }
-    }
-
-    private func queueDockRowSettleRefreshIfCurrent(_ marker: DockRowActivityMarker) {
-        guard !isClosing, marker == latestDockRowActivityMarker else {
-            return
-        }
-        DockLog.threadDetail.notice("thread detail dock row settle refresh queued thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public)")
-        queueDockRowRefresh(for: marker, force: true)
-    }
-
-    private func startDockRowRefreshIfNeeded() {
-        guard !isClosing,
-              recoveryTask == nil,
-              let marker = pendingDockRowRefreshMarker,
-              case .loaded = state,
-              liveState != .closed,
-              let session else {
-            return
-        }
-
-        pendingDockRowRefreshMarker = nil
-        recoveryTask = Task { [weak self] in
-            await self?.rehydrateAfterDockRowAdvance(session: session, marker: marker)
-        }
-    }
-
-    private func rehydrateAfterDockRowAdvance(
-        session: any ThreadDetailSession,
-        marker: DockRowActivityMarker
-    ) async {
-        guard !isClosing, case .loaded = state else {
-            recoveryTask = nil
-            return
-        }
-
-        liveEventBuffer.begin()
-        DockLog.threadDetail.notice("thread detail dock row refresh started thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public)")
-
-        do {
-            let detailSnapshot = try await session.threadDetailResync(
-                params: ThreadDetailParams(threadId: row.threadID),
-                timeout: CodexDockConstants.AppServer.defaultRequestTimeout
-            )
-            try await replaceEvents(from: detailSnapshot, liveState: .live)
-            await replayBufferedLiveEvents()
-            DockLog.threadDetail.notice("thread detail dock row refresh finished thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) events=\(self.events.count, privacy: .public)")
-        } catch {
-            liveEventBuffer.discard()
-            liveState = .stale(message(from: error))
-            publishLoaded()
-            DockLog.threadDetail.warning("thread detail dock row refresh failed thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-        }
-
-        recoveryTask = nil
-        if case .loaded = state, liveState == .live {
-            lastCompletedDockRowRefreshMarker = marker
-        }
-        startDockRowRefreshIfNeeded()
-    }
-
-    private func markLiveSessionReconnecting(_ message: String) {
-        guard !isClosing, case .loaded = state else {
-            return
-        }
-        switch liveState {
-        case .closed:
-            return
-        case .connecting, .reconnecting, .live, .stale:
-            liveState = .reconnecting(message)
-            DockLog.threadDetail.notice("thread detail reconnecting thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) reason=\(DockLog.redacted(message), privacy: .public)")
-            publishLoaded()
-        }
-    }
-
-    private func replaceEvents(
-        from detailSnapshot: ThreadDetailSnapshotDTO,
-        liveState: ThreadDetailLiveState
-    ) async throws {
-        let snapshot = try await dataEngine.replace(
-            from: detailSnapshot,
-            expectedThreadID: row.threadID,
-            expectedSourceHostID: row.sourceHostID
+        let nextEvents = ThreadEventDisplayOrder.newestFirst(
+            projectionSnapshot.rows.map(ThreadEvent.init(detailEvent:))
         )
-        applyDataSnapshot(snapshot)
-        requestCardPresentation.prune(to: snapshot.events)
-        self.liveState = liveState
-        publishLoaded()
-    }
-
-    private func replayBufferedLiveEvents() async {
-        while let bufferedEvents = liveEventBuffer.takeBatch() {
-            for event in bufferedEvents {
-                switch event {
-                case .notification(let notification):
-                    await apply(notification: notification)
-                }
-            }
-        }
-        liveEventBuffer.finishReplay()
-    }
-
-    private func handle(notification: JSONRPCNotification) async {
-        if liveEventBuffer.isBuffering {
-            liveEventBuffer.append(notification: notification)
-            DockLog.threadDetail.debug("thread notification buffered during canonical load method=\(notification.method, privacy: .public) thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public)")
-            return
-        }
-        await apply(notification: notification)
-    }
-
-    private func apply(notification: JSONRPCNotification) async {
-        guard notification.method == AppServerMethods.threadDetailUpdate else {
-            return
-        }
-
-        do {
-            let update = try notification.params?.decoded(as: ThreadDetailUpdateDTO.self)
-            guard let update else {
-                return
-            }
-            if update.kind == .resyncRequired {
-                if let session {
-                    await rehydrateAfterReconnect(session: session, reason: update.reason ?? "Detail resync required")
-                } else {
-                    markLiveSessionStale(update.reason ?? "Detail resync required.")
-                }
-                return
-            }
-            let dataSnapshot = try await dataEngine.apply(
-                update: update,
-                expectedThreadID: row.threadID
-            )
-            applyDataSnapshot(dataSnapshot)
-            requestCardPresentation.prune(to: dataSnapshot.events)
-            liveState = update.liveState == "closed" ? .closed : .live
-            DockLog.threadDetail.debug("thread detail update handled thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) live_state=\(self.liveState.logDescription, privacy: .public)")
-            publishLoaded()
-        } catch {
-            liveState = .stale(message(from: error))
-            DockLog.threadDetail.warning("thread detail update failed thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
-            publishLoaded()
-        }
-    }
-
-    private func markLiveSessionStale(_ message: String) {
-        guard !isClosing, case .loaded = state else {
-            return
-        }
-        switch liveState {
-        case .closed, .stale:
-            return
-        case .connecting, .reconnecting, .live:
-            break
-        }
-        liveState = .stale(message)
-        DockLog.threadDetail.warning("thread detail marked stale thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) reason=\(DockLog.redacted(message), privacy: .public)")
+        events = nextEvents
+        activeTurnID = projectionSnapshot.activeTurnID
+        requestCardPresentation.prune(to: nextEvents)
+        liveState = ThreadDetailLiveState(projectionSnapshot: projectionSnapshot)
         publishLoaded()
     }
 
@@ -822,11 +621,6 @@ public final class ThreadDetailStore: ObservableObject {
         state = .loaded(snapshot)
         screenStore.publish(snapshot: snapshot, requestCardPresentation: requestCardPresentation)
         publishConnectivity(liveState: liveState)
-    }
-
-    private func applyDataSnapshot(_ snapshot: ThreadDetailDataSnapshot) {
-        events = snapshot.events
-        activeTurnID = snapshot.activeTurnID
     }
 
     private func publishConnectivity(liveState: ThreadDetailLiveState) {
@@ -887,6 +681,9 @@ public final class ThreadDetailStore: ObservableObject {
         if let message = ThreadDetailHumanOnlyRejection.message(for: error) {
             return message
         }
+        if let message = ThreadDetailHumanOnlyRejection.message(forErrorDescription: error.localizedDescription) {
+            return message
+        }
         if let localizedError = error as? LocalizedError,
            let description = localizedError.errorDescription {
             return description
@@ -924,9 +721,33 @@ private extension AppServerConnectionState {
             return false
         }
     }
+
+    var shouldTriggerProjectionCatchupAfterConnected: Bool {
+        switch self {
+        case .reconnecting, .offline, .error, .closed:
+            return true
+        case .idle, .connecting, .connected:
+            return false
+        }
+    }
 }
 
 private extension ThreadDetailLiveState {
+    init(projectionSnapshot: StreamReconcilerSnapshot<ThreadDetailEventDTO>) {
+        switch projectionSnapshot.freshness {
+        case .connecting, .subscribing:
+            self = .connecting
+        case .live:
+            self = .live
+        case .catchingUp(let reason):
+            self = .reconnecting(projectionSnapshot.lastError ?? reason.rawValue)
+        case .stale(let message), .offline(let message), .failed(let message):
+            self = .stale(message)
+        case .closed:
+            self = .closed
+        }
+    }
+
     var logDescription: String {
         switch self {
         case .connecting:

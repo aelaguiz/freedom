@@ -12,4 +12,10 @@ enum ThreadDetailHumanOnlyRejection {
         }
         return unavailableMessage
     }
+
+    static func message(forErrorDescription description: String) -> String? {
+        description.contains("thread rejected by human-only filter")
+            ? unavailableMessage
+            : nil
+    }
 }

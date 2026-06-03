@@ -30,6 +30,7 @@ struct ProjectionEnvelope<Row: Equatable & Sendable>: Equatable, Sendable {
     let projectionEngineVersion: Int
     let sourceHostID: String
     let view: String
+    let threadID: String?
     let scope: String?
     let viewParamsKey: String?
     let order: String?
@@ -42,6 +43,51 @@ struct ProjectionEnvelope<Row: Equatable & Sendable>: Equatable, Sendable {
     let totalRows: Int?
     let window: ProjectionWindow?
     let reason: String?
+    let activeTurnID: String?
+
+    init(
+        kind: ProjectionUpdateKind,
+        schemaVersion: Int,
+        identityVersion: Int,
+        projectionEngineVersion: Int,
+        sourceHostID: String,
+        view: String,
+        threadID: String? = nil,
+        scope: String?,
+        viewParamsKey: String?,
+        order: String?,
+        epoch: String,
+        seq: Int64,
+        generation: Int,
+        rows: [Row],
+        projectionIDs: [String],
+        complete: Bool?,
+        totalRows: Int?,
+        window: ProjectionWindow?,
+        reason: String?,
+        activeTurnID: String? = nil
+    ) {
+        self.kind = kind
+        self.schemaVersion = schemaVersion
+        self.identityVersion = identityVersion
+        self.projectionEngineVersion = projectionEngineVersion
+        self.sourceHostID = sourceHostID
+        self.view = view
+        self.threadID = threadID
+        self.scope = scope
+        self.viewParamsKey = viewParamsKey
+        self.order = order
+        self.epoch = epoch
+        self.seq = seq
+        self.generation = generation
+        self.rows = rows
+        self.projectionIDs = projectionIDs
+        self.complete = complete
+        self.totalRows = totalRows
+        self.window = window
+        self.reason = reason
+        self.activeTurnID = activeTurnID
+    }
 }
 
 struct ProjectionReducerPolicy<Row: Equatable & Sendable>: Sendable {
@@ -250,6 +296,10 @@ struct ProjectionReducer<Row: Equatable & Sendable>: Equatable, Sendable {
            envelope.scope != expectedScope {
             throw ProjectionReducerError.streamContract("Projection envelope scope does not match the expected stream contract.")
         }
+        if let requiredThreadID = policy.requiredThreadID,
+           envelope.threadID != requiredThreadID {
+            throw ProjectionReducerError.streamContract("Projection envelope threadID does not match the expected stream contract.")
+        }
     }
 
     private func validateOpenStream(_ envelope: ProjectionEnvelope<Row>) throws {
@@ -353,6 +403,7 @@ extension ProjectionEnvelope where Row == DockThreadCardDTO {
             projectionEngineVersion: update.projectionEngineVersion,
             sourceHostID: update.sourceHostID,
             view: update.view.rawValue,
+            threadID: nil,
             scope: update.scope,
             viewParamsKey: update.viewParamsKey,
             order: update.order,
@@ -378,6 +429,7 @@ extension ProjectionEnvelope where Row == ThreadDetailEventDTO {
             projectionEngineVersion: snapshot.projectionEngineVersion,
             sourceHostID: snapshot.sourceHostID,
             view: snapshot.view,
+            threadID: snapshot.threadID,
             scope: snapshot.scope,
             viewParamsKey: snapshot.viewParamsKey,
             order: snapshot.order,
@@ -389,7 +441,8 @@ extension ProjectionEnvelope where Row == ThreadDetailEventDTO {
             complete: snapshot.complete,
             totalRows: snapshot.rows.count,
             window: ProjectionWindow(offset: 0, limit: snapshot.rows.count, rowCount: snapshot.rows.count, nextOffset: nil),
-            reason: nil
+            reason: nil,
+            activeTurnID: snapshot.activeTurnID
         )
     }
 
@@ -401,6 +454,7 @@ extension ProjectionEnvelope where Row == ThreadDetailEventDTO {
             projectionEngineVersion: update.projectionEngineVersion,
             sourceHostID: update.sourceHostID,
             view: update.view,
+            threadID: update.threadID,
             scope: "thread",
             viewParamsKey: update.viewParamsKey,
             order: update.order,
@@ -412,7 +466,8 @@ extension ProjectionEnvelope where Row == ThreadDetailEventDTO {
             complete: nil,
             totalRows: nil,
             window: nil,
-            reason: update.reason
+            reason: update.reason,
+            activeTurnID: update.activeTurnID
         )
     }
 }
