@@ -357,7 +357,7 @@ function detailTruthFromWitness({
     detailHostID,
     threadID,
     projectionWitness,
-    expectedMessageEventCount: projectionWitness.projectionIDs.length,
+    relayMessageEventCount: projectionWitness.projectionIDs.length,
     ...(requestID ? { requestID } : {}),
     ...(requestCardID ? { requestCardID } : {}),
     ...(expectedStatus ? { expectedStatus } : {}),
@@ -1541,17 +1541,17 @@ function multiHostIsolationFindings({ label, snapshot, host, expectedThreadIDs, 
         }
       );
     }
-    const expectedProjectionID = cardThreadID(card)
+    const relayScopedProjectionID = cardThreadID(card)
       ? projectionIDForThreadCard({ sourceHostID: host.id, threadID: cardThreadID(card) })
       : null;
-    if (expectedProjectionID && cardID(card) !== expectedProjectionID) {
+    if (relayScopedProjectionID && cardID(card) !== relayScopedProjectionID) {
       transitionFailure(
         findings,
         "scenario_multi_host_wrong_card_id_scope",
         "Dock card projectionID is not scoped by the relay source host id",
         {
           label,
-          expectedProjectionID,
+          relayScopedProjectionID,
           cardID: cardID(card),
           threadID: cardThreadID(card),
         }
@@ -1559,8 +1559,8 @@ function multiHostIsolationFindings({ label, snapshot, host, expectedThreadIDs, 
     }
   }
   for (const threadID of expectedThreadIDs) {
-    const expectedProjectionID = projectionIDForThreadCard({ sourceHostID: host.id, threadID });
-    if (!projectionIDs.has(expectedProjectionID)) {
+    const relayScopedProjectionID = projectionIDForThreadCard({ sourceHostID: host.id, threadID });
+    if (!projectionIDs.has(relayScopedProjectionID)) {
       transitionFailure(
         findings,
         "scenario_multi_host_expected_thread_missing",
@@ -1569,7 +1569,7 @@ function multiHostIsolationFindings({ label, snapshot, host, expectedThreadIDs, 
           label,
           hostID: host.id,
           threadID,
-          expectedProjectionID,
+          relayScopedProjectionID,
         }
       );
     }
@@ -4043,7 +4043,7 @@ async function runDetailReconnectScenario(options) {
     ws.on("message", (data) => {
       const message = JSON.parse(data.toString());
       if (message.method === "initialize") {
-        recordClientRoute(routeEvents, "initialize", "simulator app initialized detail-reconnect fixture", { threadID });
+        recordClientRoute(routeEvents, "initialize", "relay initialized detail-reconnect fixture upstream", { threadID });
         sendFixtureResult(ws, message.id, {
           userAgent: `codex-sim-${scenarioName}-fixture`,
           codexHome: tempDir,
@@ -4051,7 +4051,7 @@ async function runDetailReconnectScenario(options) {
           platformOs: "macos",
         });
       } else if (message.method === "initialized") {
-        recordClientRoute(routeEvents, "initialized", "simulator app sent initialized notification", { threadID });
+        recordClientRoute(routeEvents, "initialized", "relay sent initialized notification to detail-reconnect fixture upstream", { threadID });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
           data: activeFixtureRows(message, [threadRow]),
@@ -4258,7 +4258,7 @@ async function runDetailReconnectScenario(options) {
           findings,
           "scenario_detail_reconnect_initial_projection_witness_missing",
           "detail-reconnect initial state did not produce byte-equivalent relay projection witness rows",
-          { threadID, expectedProjectionCount: expectedInitialEventIDs.length }
+          { threadID, minimumRelayProjectionCount: expectedInitialEventIDs.length }
         );
       }
 
@@ -4316,7 +4316,7 @@ async function runDetailReconnectScenario(options) {
           findings,
           "scenario_detail_reconnect_rehydrated_projection_witness_missing",
           "detail-reconnect rehydrated state did not produce byte-equivalent relay projection witness rows",
-          { threadID, expectedProjectionCount: expectedRecoveredEventIDs.length }
+          { threadID, minimumRelayProjectionCount: expectedRecoveredEventIDs.length }
         );
       }
     }
@@ -4489,7 +4489,7 @@ async function runDetailHistoryRequestScenario(options) {
     ws.on("message", (data) => {
       const message = JSON.parse(data.toString());
       if (message.method === "initialize") {
-        recordClientRoute(routeEvents, "initialize", "simulator app initialized detail-history fixture", { threadID });
+        recordClientRoute(routeEvents, "initialize", "relay initialized detail-history fixture upstream", { threadID });
         sendFixtureResult(ws, message.id, {
           userAgent: `codex-sim-${scenarioName}-fixture`,
           codexHome: tempDir,
@@ -4497,7 +4497,7 @@ async function runDetailHistoryRequestScenario(options) {
           platformOs: "macos",
         });
       } else if (message.method === "initialized") {
-        recordClientRoute(routeEvents, "initialized", "simulator app sent initialized notification", { threadID });
+        recordClientRoute(routeEvents, "initialized", "relay sent initialized notification to detail-history fixture upstream", { threadID });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
           data: activeFixtureRows(message, [threadRow]),
@@ -4507,7 +4507,7 @@ async function runDetailHistoryRequestScenario(options) {
       } else if (message.method === "thread/loaded/list") {
         sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
       } else if (message.method === "thread/read") {
-        recordClientRoute(routeEvents, "thread/read", "simulator app read target thread detail", {
+        recordClientRoute(routeEvents, "thread/read", "relay read target thread detail from fixture upstream", {
           threadID: message.params?.threadId || threadID,
           includeTurns: message.params?.includeTurns ?? null,
         });
@@ -4521,7 +4521,7 @@ async function runDetailHistoryRequestScenario(options) {
       } else if (message.method === "thread/turns/list") {
         turnsListCallCount += 1;
         const cursor = message.params?.cursor || null;
-        recordClientRoute(routeEvents, "thread/turns/list", "simulator app drained paged historical thread turns", {
+        recordClientRoute(routeEvents, "thread/turns/list", "relay drained paged historical thread turns from fixture upstream", {
           threadID: message.params?.threadId || threadID,
           cursor,
           call: turnsListCallCount,
@@ -4549,7 +4549,7 @@ async function runDetailHistoryRequestScenario(options) {
       } else if (message.method === "thread/resume") {
         detailWs = ws;
         detailLoadedAtMs = Date.now();
-        recordClientRoute(routeEvents, "thread/resume", "simulator app resumed target thread live detail", {
+        recordClientRoute(routeEvents, "thread/resume", "relay resumed target thread live detail from fixture upstream", {
           threadID: message.params?.threadId || threadID,
           excludeTurns: message.params?.excludeTurns ?? null,
         });
@@ -4742,7 +4742,7 @@ async function runDetailHistoryRequestScenario(options) {
       transitionFailure(
         findings,
         "scenario_detail_history_turn_pagination_missing",
-        "simulator app did not exercise the paged thread/turns/list detail path",
+        "relay upstream adapter did not exercise the paged thread/turns/list detail path",
         { threadID, turnsListCallCount }
       );
     }
@@ -4766,7 +4766,7 @@ async function runDetailHistoryRequestScenario(options) {
         findings,
         "scenario_detail_history_initial_projection_witness_missing",
         "detail-history initial state did not produce byte-equivalent relay projection witness rows",
-        { threadID, expectedProjectionCount: 1 }
+        { threadID, minimumRelayProjectionCount: 1 }
       );
     }
     const initialProjectionCount = initialProjectionWitness?.projectionIDs?.length || 0;
@@ -4803,7 +4803,7 @@ async function runDetailHistoryRequestScenario(options) {
           "detail-history live update did not produce a byte-equivalent relay projection witness row",
           {
             threadID,
-            expectedProjectionCount: initialProjectionCount + 1,
+            minimumRelayProjectionCount: initialProjectionCount + 1,
             timeoutMs: projectionTransitionTimeoutMs,
           }
         );
@@ -4838,7 +4838,7 @@ async function runDetailHistoryRequestScenario(options) {
             "detail-replay-pressure burst did not produce byte-equivalent relay projection witness rows",
             {
               threadID,
-              expectedProjectionCount: (liveProjectionWitness?.projectionIDs?.length || initialProjectionCount) + 3,
+              minimumRelayProjectionCount: (liveProjectionWitness?.projectionIDs?.length || initialProjectionCount) + 3,
               timeoutMs: projectionTransitionTimeoutMs,
             }
           );
@@ -5211,7 +5211,7 @@ async function runServerRequestScenario(options) {
     ws.on("message", (data) => {
       const message = JSON.parse(data.toString());
       if (message.method === "initialize") {
-        recordClientRoute(routeEvents, "initialize", "simulator app initialized server-request fixture", { threadID });
+        recordClientRoute(routeEvents, "initialize", "relay initialized server-request fixture upstream", { threadID });
         sendFixtureResult(ws, message.id, {
           userAgent: "codex-sim-server-request-fixture",
           codexHome: tempDir,
@@ -5219,7 +5219,7 @@ async function runServerRequestScenario(options) {
           platformOs: "macos",
         });
       } else if (message.method === "initialized") {
-        recordClientRoute(routeEvents, "initialized", "simulator app sent initialized notification", { threadID });
+        recordClientRoute(routeEvents, "initialized", "relay sent initialized notification to server-request fixture upstream", { threadID });
       } else if (message.method === "thread/list") {
         sendFixtureResult(ws, message.id, {
           data: activeFixtureRows(message, [threadRow]),
@@ -5229,7 +5229,7 @@ async function runServerRequestScenario(options) {
       } else if (message.method === "thread/loaded/list") {
         sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
       } else if (message.method === "thread/read") {
-        recordClientRoute(routeEvents, "thread/read", "simulator app read target thread detail", {
+        recordClientRoute(routeEvents, "thread/read", "relay read target thread detail from fixture upstream", {
           threadID: message.params?.threadId || threadID,
         });
         sendFixtureResult(ws, message.id, {
@@ -5240,7 +5240,7 @@ async function runServerRequestScenario(options) {
           },
         });
       } else if (message.method === "thread/turns/list") {
-        recordClientRoute(routeEvents, "thread/turns/list", "simulator app drained historical thread turns", {
+        recordClientRoute(routeEvents, "thread/turns/list", "relay drained historical thread turns from fixture upstream", {
           threadID: message.params?.threadId || threadID,
           itemsView: message.params?.itemsView ?? null,
         });
@@ -5250,7 +5250,7 @@ async function runServerRequestScenario(options) {
           backwardsCursor: null,
         });
       } else if (message.method === "thread/resume") {
-        recordClientRoute(routeEvents, "thread/resume", "simulator app resumed target thread live detail", {
+        recordClientRoute(routeEvents, "thread/resume", "relay resumed target thread live detail from fixture upstream", {
           threadID: message.params?.threadId || threadID,
         });
         sendFixtureResult(ws, message.id, {

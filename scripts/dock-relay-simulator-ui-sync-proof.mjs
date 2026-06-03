@@ -898,36 +898,36 @@ function evaluateDetailTransitionSample(sample, transition) {
       : detailValueObservedAtMS(sample, "header"));
   }
 
-  const expectedEventCount = Number(truth.expectedMessageEventCount);
-  if (Number.isFinite(expectedEventCount)) {
+  const relayMessageEventCount = Number(truth.relayMessageEventCount);
+  if (Number.isFinite(relayMessageEventCount)) {
     const actualEventCount = detailMessageEventCount(detail);
     const elementProjectionIDs = messageProjectionIDsFromElements(
       Array.isArray(combinedDetail.messageCards) ? combinedDetail.messageCards : []
     );
     const observedProjectionIDs = mergeUniqueValues(messageListProjectionIDs, elementProjectionIDs);
     const observedProjectionCount = observedProjectionIDs.length;
-    if (actualEventCount !== expectedEventCount && observedProjectionCount < expectedEventCount) {
+    if (actualEventCount !== relayMessageEventCount && observedProjectionCount < relayMessageEventCount) {
       addFailure(
         failures,
         sample,
         "detail_ui_message_event_count_mismatch",
         "Simulator detail UI rendered the wrong number of opened-thread events.",
         {
-          expectedEventCount,
+          relayMessageEventCount,
           actualEventCount,
         }
       );
     } else {
-      const countEvidenceProjectionIDs = witnessMessageProjectionIDs.length >= expectedEventCount
-        ? witnessMessageProjectionIDs.slice(0, expectedEventCount)
-        : observedProjectionIDs.slice(0, expectedEventCount);
+      const countEvidenceProjectionIDs = witnessMessageProjectionIDs.length >= relayMessageEventCount
+        ? witnessMessageProjectionIDs.slice(0, relayMessageEventCount)
+        : observedProjectionIDs.slice(0, relayMessageEventCount);
       const countEvidenceObservedAtMs = detailMessageProjectionSetObservedAtMS(
         sample,
         countEvidenceProjectionIDs,
         messageListProjectionIDs,
         messageListObservedAtMs,
       );
-      addEvidenceTime(actualEventCount === expectedEventCount
+      addEvidenceTime(actualEventCount === relayMessageEventCount
         ? detailValueObservedAtMS(sample, "messageList")
         : (countEvidenceObservedAtMs ?? detailCollectionObservedAtMS(sample, "message")));
     }
@@ -944,7 +944,7 @@ function evaluateDetailTransitionSample(sample, transition) {
     );
   }
   for (const projectionID of witnessMessageProjectionIDs) {
-    const expectedMessageCard = messageCardIdentifier(projectionID);
+    const relayMessageCardID = messageCardIdentifier(projectionID);
     const hasMessageListProjection = messageListProjectionIDs.includes(projectionID);
     const hasElementProjection = detailHasMessageProjectionID(combinedDetail, projectionID);
     if (!hasMessageListProjection && !hasElementProjection) {
@@ -955,7 +955,7 @@ function evaluateDetailTransitionSample(sample, transition) {
         "Simulator detail UI did not display an expected opened-thread event row.",
         {
           projectionID,
-          expectedMessageCard,
+          relayMessageCardID,
         }
       );
     } else {
@@ -969,14 +969,14 @@ function evaluateDetailTransitionSample(sample, transition) {
   }
 
   if (witnessMessageProjectionIDs.length >= 2) {
-    const expectedMessageOrder = witnessMessageProjectionIDs;
+    const relayMessageOrder = witnessMessageProjectionIDs;
     const actualMessageOrderSource = messageListProjectionIDs.length
       ? messageListProjectionIDs
       : orderedCombinedMessageProjectionIDs(sample);
     const actualMessageOrder = actualMessageOrderSource
-      .filter((projectionID) => expectedMessageOrder.includes(projectionID));
-    const hasAllExpected = expectedMessageOrder.every((projectionID) => actualMessageOrder.includes(projectionID));
-    if (hasAllExpected && !orderedSubsequence(actualMessageOrder, expectedMessageOrder)) {
+      .filter((projectionID) => relayMessageOrder.includes(projectionID));
+    const hasAllRelayRows = relayMessageOrder.every((projectionID) => actualMessageOrder.includes(projectionID));
+    if (hasAllRelayRows && !orderedSubsequence(actualMessageOrder, relayMessageOrder)) {
       messageOrderChecks = 1;
       addFailure(
         failures,
@@ -984,17 +984,17 @@ function evaluateDetailTransitionSample(sample, transition) {
         "detail_ui_message_order_mismatch",
         "Simulator detail UI displayed opened-thread events in a different visual order than relay detail truth.",
         {
-          expectedMessageOrder,
+          relayMessageOrder,
           actualMessageOrder,
         }
       );
-    } else if (hasAllExpected) {
+    } else if (hasAllRelayRows) {
       messageOrderChecks = 1;
       addEvidenceTime(messageListProjectionIDs.length
         ? messageListObservedAtMs
         : (detailMessageProjectionSetObservedAtMS(
           sample,
-          expectedMessageOrder,
+          relayMessageOrder,
           messageListProjectionIDs,
           messageListObservedAtMs,
         ) ?? detailCollectionObservedAtMS(sample, "message")));
@@ -1004,7 +1004,7 @@ function evaluateDetailTransitionSample(sample, transition) {
   if (truth.requestVisible) {
     const requestCardID = truth.requestCardID;
     const expectedRequestCard = requestCardIdentifier(requestCardID);
-    const expectedMessageCard = messageCardIdentifier(requestCardID);
+    const relayMessageCardID = messageCardIdentifier(requestCardID);
     const messageListStatusInfo = detailMessageListRequestStatusInfo(sample, detail, requestCardID);
     const messageCardStatusInfo = detailMessageCardRequestStatusInfo(sample, combinedDetail, requestCardID);
     const hasRequestCard = Boolean(messageListStatusInfo.status || messageCardStatusInfo.status)
@@ -1026,7 +1026,7 @@ function evaluateDetailTransitionSample(sample, transition) {
         "Simulator detail UI did not display the server request event row.",
         {
           requestCardID,
-          expectedMessageCard,
+          relayMessageCardID,
         }
       );
     } else if (!hasRequestMessageCard && !requestEventCountProven) {
@@ -1037,8 +1037,8 @@ function evaluateDetailTransitionSample(sample, transition) {
         "Simulator detail UI did not prove the server request row by exact canonical projection id.",
         {
           requestCardID,
-          expectedMessageCard,
-          expectedEventCount: Number.isFinite(expectedEventCount) ? expectedEventCount : null,
+          relayMessageCardID,
+          relayMessageEventCount: Number.isFinite(relayMessageEventCount) ? relayMessageEventCount : null,
           actualEventCount,
         }
       );

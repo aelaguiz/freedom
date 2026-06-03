@@ -61,7 +61,7 @@
       "properties": {
         "routes": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": { "$ref": "https://codex-dock.local/contract/proof/proof-route-name.schema.json" }
         },
         "routeCounts": {
           "type": "object",

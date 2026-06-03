@@ -499,7 +499,7 @@ function detailHistoryRelayReport() {
               projectionIDs.user,
             ],
           },
-          expectedMessageEventCount: 3,
+          relayMessageEventCount: 3,
           requestID: "approval-history-1",
           requestCardID: projectionIDs.request,
           expectedStatus: "Resolved",
@@ -1436,7 +1436,7 @@ test("simulator UI proof scores request status from message rows before slow req
 test("simulator UI proof accepts later row evidence when a non-atomic sample has a stale list count", () => {
   const relay = serverRequestRelayReport();
   for (const transition of relay.scenarios[0].transitions) {
-    transition.detailTruth.expectedMessageEventCount = 1;
+    transition.detailTruth.relayMessageEventCount = 1;
   }
   const pendingSample = detailRequestUISample({
     sampledAt: "2026-05-31T00:00:02.050Z",

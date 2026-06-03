@@ -779,26 +779,14 @@ private extension ServerRequestCardAction {
 
 public enum ThreadDetailStoreError: Error, Equatable, LocalizedError, Sendable {
     case threadMismatch(expected: String, actual: String)
-    case repeatedTurnsCursor(String)
     case invalidProjectionEnvelope(String)
-    case projectionEpochMismatch(expected: String, actual: String)
-    case projectionSequenceGap(expected: Int64, actual: Int64)
-    case projectionResyncRequired(String)
 
     public var errorDescription: String? {
         switch self {
         case let .threadMismatch(expected, actual):
             return "App-server returned thread \(actual), expected \(expected)."
-        case let .repeatedTurnsCursor(cursor):
-            return "App-server returned repeated thread turns cursor \(cursor)."
         case let .invalidProjectionEnvelope(message):
             return message
-        case let .projectionEpochMismatch(expected, actual):
-            return "Thread Detail projection epoch changed from \(expected) to \(actual)."
-        case let .projectionSequenceGap(expected, actual):
-            return "Thread Detail projection sequence gap: expected \(expected), got \(actual)."
-        case let .projectionResyncRequired(reason):
-            return reason
         }
     }
 }

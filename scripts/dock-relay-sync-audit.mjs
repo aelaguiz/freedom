@@ -485,23 +485,25 @@ function recordRoute(events, route, purpose, details = {}) {
 }
 
 function summarizeClientPathEvents(events = []) {
-  const routeCounts = {};
-  const nonClientPathRoutes = {};
-  for (const event of events) {
-    if (event.countedAsClientPath) {
-      routeCounts[event.route] = (routeCounts[event.route] || 0) + 1;
-    } else {
-      nonClientPathRoutes[event.route] = (nonClientPathRoutes[event.route] || 0) + 1;
+    const routeCounts = {};
+    const nonClientPathRouteCounts = new Map();
+    for (const event of events) {
+        if (event.countedAsClientPath) {
+            routeCounts[event.route] = (routeCounts[event.route] || 0) + 1;
+        } else {
+            nonClientPathRouteCounts.set(event.route, (nonClientPathRouteCounts.get(event.route) || 0) + 1);
+        }
     }
-  }
-  return {
-    routes: Object.keys(routeCounts).sort(),
-    routeCounts,
-    nonClientPathRoutes,
-    eventCount: events.length,
-    events,
-    note: "Only countedAsClientPath=true events are proof that the relay routes used by the client were exercised. Oracle reads diagnose drift but do not count as client-path proof.",
-  };
+    return {
+        routes: Object.keys(routeCounts).sort(),
+        routeCounts,
+        nonClientPathRoutes: [...nonClientPathRouteCounts.entries()]
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([route, count]) => ({ route, count })),
+        eventCount: events.length,
+        events,
+        note: "Only countedAsClientPath=true events are proof that the relay routes used by the client were exercised. Oracle reads diagnose drift but do not count as client-path proof.",
+    };
 }
 
 function cardID(card) {
@@ -3902,24 +3904,24 @@ function multiHostIsolationFindings({ label, snapshot, host, expectedThreadIDs, 
         threadID: cardThreadID(card),
       });
     }
-    const expectedProjectionID = cardThreadID(card)
+    const relayScopedProjectionID = cardThreadID(card)
       ? projectionIDForThreadCard({ sourceHostID: host.id, threadID: cardThreadID(card) })
       : null;
-    if (expectedProjectionID && card?.projectionID !== expectedProjectionID) {
+    if (relayScopedProjectionID && card?.projectionID !== relayScopedProjectionID) {
       findings.push({
         code: "scenario_multi_host_wrong_projection_id",
         severity: "error",
         message: "Dock card projectionID is not scoped by the relay sourceHostID and threadID",
         label,
-        expectedProjectionID,
+        relayScopedProjectionID,
         cardID: cardID(card),
         threadID: cardThreadID(card),
       });
     }
   }
   for (const threadID of expectedThreadIDs) {
-    const expectedProjectionID = projectionIDForThreadCard({ sourceHostID: host.id, threadID });
-    if (!projectionIDs.has(expectedProjectionID)) {
+    const relayScopedProjectionID = projectionIDForThreadCard({ sourceHostID: host.id, threadID });
+    if (!projectionIDs.has(relayScopedProjectionID)) {
       findings.push({
         code: "scenario_multi_host_expected_thread_missing",
         severity: "error",
@@ -3927,7 +3929,7 @@ function multiHostIsolationFindings({ label, snapshot, host, expectedThreadIDs, 
         label,
         hostID: host.id,
         threadID,
-        expectedProjectionID,
+        relayScopedProjectionID,
       });
     }
   }

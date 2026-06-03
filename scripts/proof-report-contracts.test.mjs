@@ -185,7 +185,7 @@ test("passing proof cannot use thread/detail/read as route evidence", () => {
 
   const errors = validateProofReport(report, { sourcePath: "relay-sync-audit-sample" });
 
-  assert.match(errors.join("\n"), /forbidden routes cannot satisfy live-update proof/u);
+  assert.match(errors.join("\n"), /property name must be valid/u);
   assert.match(errors.join("\n"), /must include relay-owned Dock, Archive, or Thread Detail client routes/u);
 });
 
@@ -199,7 +199,7 @@ test("passing controlled simulator proof rejects simulator-app downstream raw de
   };
   report.summary.clientPathRouteCounts = report.clientPathEvidence.routeCounts;
   report.simulatorClientPathEvidence = {
-    routes: ["thread/read", "thread/detail/subscribe"],
+    routes: ["thread/detail/subscribe"],
     routeCounts: { "thread/detail/subscribe": 1 },
     events: [
       {
@@ -217,7 +217,7 @@ test("passing controlled simulator proof rejects simulator-app downstream raw de
 
   const errors = validateProofReport(report, { sourcePath: "controlled-simulator-sample" });
 
-  assert.match(errors.join("\n"), /simulator app downstream side-door routes cannot satisfy live-update proof/u);
+  assert.match(errors.join("\n"), /simulator app downstream routes outside the proof route allow-list cannot satisfy live-update proof/u);
   assert.match(errors.join("\n"), /thread\/read/u);
   assert.doesNotMatch(errors.join("\n"), /thread\/resume/u);
 });

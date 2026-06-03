@@ -336,5 +336,5 @@ test("sync audit rejects thread detail read as client path proof", () => {
 
   assert.equal(evidence.routeCounts["thread/detail/read"], undefined);
   assert.equal(evidence.routeCounts["thread/detail/subscribe"], 1);
-  assert.equal(evidence.nonClientPathRoutes["thread/detail/read"], 1);
+  assert.deepEqual(evidence.nonClientPathRoutes, [{ route: "thread/detail/read", count: 1 }]);
 });

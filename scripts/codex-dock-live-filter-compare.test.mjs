@@ -99,7 +99,7 @@ test("live filter compare accepts bounded convergence instead of exact nearest-s
 
   assert.equal(report.status, "pass");
   assert.equal(report.summary.ok, true);
-  assert.equal(report.runEvaluations[0].expectedEvents, 11);
+  assert.equal(report.runEvaluations[0].relayEvents, 11);
 });
 
 test("live filter compare allows UI to be ahead of settled relay history", () => {
@@ -163,7 +163,7 @@ test("live filter compare scores Thread Detail UI at message list capture time",
 
   assert.equal(report.status, "pass");
   assert.equal(report.summary.ok, true);
-  assert.equal(report.runEvaluations[0].expectedEvents, 11);
+  assert.equal(report.runEvaluations[0].relayEvents, 11);
 });
 
 test("live filter compare does not use unfinished projection witness samples as settled truth", () => {
@@ -188,7 +188,7 @@ test("live filter compare does not use unfinished projection witness samples as 
 
   assert.equal(report.status, "pass");
   assert.equal(report.summary.ok, true);
-  assert.equal(report.runEvaluations[0].expectedEvents, 11);
+  assert.equal(report.runEvaluations[0].relayEvents, 11);
 });
 
 test("live filter compare treats visible projection id changes as UI movement when counts are capped", () => {
@@ -220,7 +220,7 @@ test("live filter compare treats visible projection id changes as UI movement wh
 
   assert.equal(report.status, "pass");
   assert.equal(report.summary.uiMoving, true);
-  assert.equal(report.runEvaluations[0].expectedProjectionIDHead, "host:host/thread:thread-a/turn:turn-b/item:item-b/row:agentMessage");
+  assert.equal(report.runEvaluations[0].relayProjectionIDHead, "host:host/thread:thread-a/turn:turn-b/item:item-b/row:agentMessage");
 });
 
 test("live filter compare does not blame UI when only unsampled relay filters moved", () => {

@@ -33,15 +33,6 @@ const CLIENT_CARD_ROUTES = new Set([
   "thread/detail/resync",
   "thread/detail/update",
 ]);
-const FORBIDDEN_PROOF_ROUTES = new Set([
-  "thread/detail/read",
-]);
-const FORBIDDEN_SIMULATOR_DOWNSTREAM_ROUTES = new Set([
-  "thread/read",
-  "thread/turns/list",
-  "thread/resume",
-  "thread/detail/read",
-]);
 const PASSING_PROOF_KINDS_REQUIRE_ROUTES = new Set([
   "codex-dock-relay-sync-audit-report",
   "codex-dock-controlled-simulator-scenario-relay-report",
@@ -160,7 +151,11 @@ function routeSetFromReport(report) {
   return routes;
 }
 
-function simulatorDownstreamSideDoorRoutes(report) {
+function isSimulatorAppRouteAllowed(route) {
+  return PROOF_ROUTE_NAMES.has(route) && route !== "projection/witness/read";
+}
+
+function simulatorDownstreamRoutesOutsideContract(report) {
   const events = [
     ...(Array.isArray(report?.simulatorClientPathEvidence?.events)
       ? report.simulatorClientPathEvidence.events
@@ -172,7 +167,7 @@ function simulatorDownstreamSideDoorRoutes(report) {
   return events
     .filter((event) => event?.boundary === "simulatorAppToRelay")
     .map((event) => event.route)
-    .filter((route) => FORBIDDEN_SIMULATOR_DOWNSTREAM_ROUTES.has(route));
+    .filter((route) => !isSimulatorAppRouteAllowed(route));
 }
 
 function semanticProofErrors(report) {
@@ -204,19 +199,15 @@ function semanticProofErrors(report) {
     errors.push("passing live-update proof must include relay-owned client route evidence");
   }
   if (status === "pass" && routes.size > 0) {
-    const forbiddenProofRoutes = [...routes].filter((route) => FORBIDDEN_PROOF_ROUTES.has(route));
-    if (forbiddenProofRoutes.length > 0) {
-      errors.push(`forbidden routes cannot satisfy live-update proof: ${forbiddenProofRoutes.join(", ")}`);
-    }
     const hasClientCardRoute = [...routes].some((route) => CLIENT_CARD_ROUTES.has(route));
     if (!hasClientCardRoute) {
       errors.push("passing proof must include relay-owned Dock, Archive, or Thread Detail client routes");
     }
   }
   if (status === "pass") {
-    const sideDoorRoutes = simulatorDownstreamSideDoorRoutes(report);
-    if (sideDoorRoutes.length > 0) {
-      errors.push(`simulator app downstream side-door routes cannot satisfy live-update proof: ${[...new Set(sideDoorRoutes)].join(", ")}`);
+    const routesOutsideContract = simulatorDownstreamRoutesOutsideContract(report);
+    if (routesOutsideContract.length > 0) {
+      errors.push(`simulator app downstream routes outside the proof route allow-list cannot satisfy live-update proof: ${[...new Set(routesOutsideContract)].join(", ")}`);
     }
   }
   if (
