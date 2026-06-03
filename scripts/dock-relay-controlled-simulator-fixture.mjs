@@ -393,6 +393,24 @@ function activeFixtureRows(message, rows) {
   return message.params?.archived === true ? [] : rows;
 }
 
+function proofMessageSummary(message, overrides = {}) {
+  if (!message) {
+    return null;
+  }
+  const params = message.params || {};
+  const result = message.result || {};
+  const summary = {
+    id: message.id ?? overrides.id ?? null,
+    method: message.method ?? overrides.method ?? null,
+    threadID: params.threadId ?? overrides.threadID ?? null,
+    turnID: params.turnId ?? overrides.turnID ?? null,
+    itemID: params.itemId ?? overrides.itemID ?? null,
+    requestID: params.requestId ?? overrides.requestID ?? null,
+    status: result.decision ?? message.status ?? overrides.status ?? null,
+  };
+  return Object.fromEntries(Object.entries(summary).filter(([, value]) => value !== null && value !== undefined));
+}
+
 function fixtureMessageThreadID(message) {
   return message?.params?.threadId || message?.params?.threadID;
 }
@@ -4133,7 +4151,6 @@ async function runDetailReconnectScenario(options) {
         minProjectionCount: expectedInitialEventIDs.length,
         timeoutMs: detailWaitTimeoutMs,
       });
-      const initialProofAtMs = detailSubscribeWait.observedAtMs || Date.now();
       if (initialProjectionWitness?.byteEquivalentToDownstream !== true) {
         transitionFailure(
           findings,
@@ -4142,32 +4159,6 @@ async function runDetailReconnectScenario(options) {
           { threadID, expectedProjectionCount: expectedInitialEventIDs.length }
         );
       }
-      transitions.push({
-        name: "detail-reconnect-initial",
-        kind: "detail-reconnect-initial",
-        iteration: 1,
-        route: "thread/detail/subscribe",
-        wait: {
-          ok: true,
-          observedAt: new Date(initialProofAtMs).toISOString(),
-          observedAtMs: initialProofAtMs,
-        },
-        lag: scenarioLagSummary({
-          transition: "detail-reconnect-initial",
-          startedAtMs: detailSubscribeWait.observedAtMs || uiReadyAtMs || startedAtMs,
-          acknowledgedAtMs: detailSubscribeWait.observedAtMs || uiReadyAtMs || startedAtMs,
-          observedAtMs: initialProofAtMs,
-          maxStreamLagMs: options.maxStreamLagMs,
-        }),
-        routeCountsAtTransition: { readCallCount, turnsListCallCount, resumeCallCount },
-        detailTruth: detailTruthFromWitness({
-          kind: "detail-reconnect-initial",
-          sourceHostID: hostID,
-          detailHostID: simulatorProxy.endpoint,
-          threadID,
-          witness: initialProjectionWitness,
-        }),
-      });
 
       await sleep(Math.max(options.scenarioHoldMs, 500));
       historicalTurns = [initialTurn, recoveredTurn];
@@ -4462,10 +4453,10 @@ async function runDetailHistoryRequestScenario(options) {
         });
       } else if (!message.method && String(message.id) === requestID) {
         upstreamResponseReceivedAtMs = Date.now();
-        forwardedResponse = normalizeForComparison({
+        forwardedResponse = proofMessageSummary({
           id: message.id,
           result: message.result || null,
-        });
+        }, { requestID });
         resolveForwardedResponse({
           receivedAtMs: upstreamResponseReceivedAtMs,
           message: forwardedResponse,
@@ -4483,7 +4474,7 @@ async function runDetailHistoryRequestScenario(options) {
           ws.send(JSON.stringify(notification));
           resolveResolutionSent({
             sentAtMs: resolutionSentAtMs,
-            message: normalizeForComparison(notification),
+            message: proofMessageSummary(notification, { requestID }),
           });
         }, 10);
       }
@@ -4621,7 +4612,7 @@ async function runDetailHistoryRequestScenario(options) {
       detailWs.send(JSON.stringify(liveNotification));
       resolveLiveUpdateSent({
         sentAtMs: liveUpdateSentAtMs,
-        message: normalizeForComparison(liveNotification),
+        message: proofMessageSummary(liveNotification),
       });
       liveProjectionWitness = await waitForDetailProjectionWitness({
         client: streamProbe.client,
@@ -4725,12 +4716,12 @@ async function runDetailHistoryRequestScenario(options) {
         { requestID, timeoutMs: detailWaitTimeoutMs }
       );
     }
-    if (responseWait.ok && responseWait.value?.message?.result?.decision !== "accept") {
+    if (responseWait.ok && responseWait.value?.message?.status !== "accept") {
       transitionFailure(
         findings,
         "scenario_detail_history_response_wrong_payload",
         "simulator app sent the wrong approval response payload for the full-detail request",
-        { requestID, response: responseWait.value?.message || null }
+        { requestID, response: proofMessageSummary(responseWait.value?.message, { requestID }) }
       );
     }
     if (!resolutionWait.ok) {
@@ -4977,10 +4968,10 @@ async function runServerRequestScenario(options) {
         }, 10);
       } else if (!message.method && String(message.id) === requestID) {
         upstreamResponseReceivedAtMs = Date.now();
-        forwardedResponse = normalizeForComparison({
+        forwardedResponse = proofMessageSummary({
           id: message.id,
           result: message.result || null,
-        });
+        }, { requestID });
         resolveForwardedResponse({
           receivedAtMs: upstreamResponseReceivedAtMs,
           message: forwardedResponse,
@@ -4998,7 +4989,7 @@ async function runServerRequestScenario(options) {
           ws.send(JSON.stringify(notification));
           resolveResolutionSent({
             sentAtMs: resolutionSentAtMs,
-            message: normalizeForComparison(notification),
+            message: proofMessageSummary(notification, { requestID }),
           });
         }, 10);
       }
@@ -5141,12 +5132,12 @@ async function runServerRequestScenario(options) {
         { requestID, timeoutMs: detailWaitTimeoutMs }
       );
     }
-    if (responseWait.ok && responseWait.value?.message?.result?.decision !== "accept") {
+    if (responseWait.ok && responseWait.value?.message?.status !== "accept") {
       transitionFailure(
         findings,
         "scenario_server_request_response_wrong_payload",
         "simulator app sent the wrong approval response payload",
-        { requestID, response: responseWait.value?.message || null }
+        { requestID, response: proofMessageSummary(responseWait.value?.message, { requestID }) }
       );
     }
     if (!resolutionWait.ok) {

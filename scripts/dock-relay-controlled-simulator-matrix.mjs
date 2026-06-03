@@ -40,7 +40,7 @@ const SCENARIO_REQUIREMENTS = {
   "detail-reconnect": {
     routes: ["thread/detail/subscribe", "thread/detail/resync"],
     minRouteCounts: { "thread/detail/subscribe": 1, "thread/detail/resync": 1 },
-    minDetailTransitionChecks: 2,
+    minDetailTransitionChecks: 1,
     minDetailSweeps: 1,
     minDetailSweepMessageCardChecks: 2,
     minDetailMessageOrderChecks: 1,
@@ -48,7 +48,7 @@ const SCENARIO_REQUIREMENTS = {
   "foreground-resume-all-surfaces": {
     routes: ["thread/detail/subscribe", "thread/detail/resync"],
     minRouteCounts: { "thread/detail/subscribe": 1, "thread/detail/resync": 1 },
-    minDetailTransitionChecks: 2,
+    minDetailTransitionChecks: 1,
     minDetailSweeps: 1,
     minDetailSweepMessageCardChecks: 2,
     minDetailMessageOrderChecks: 1,

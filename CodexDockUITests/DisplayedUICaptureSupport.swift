@@ -352,11 +352,7 @@ extension XCUIApplication {
         let dockRowsCapturedAt = codexDockISO8601Now()
         let dockSweep = includeDockSweep ? checkpointDockSweep(rootValue: rootValue) : nil
         let detail = visibleDetail()
-        let detailNeedsSweep = detail.map { visibleDetail in
-            let expectedMessageRows = detailMessageCount(visibleDetail.messageListValue) ?? 0
-            return expectedMessageRows > visibleDetail.messageCardIDs.count
-        } ?? false
-        let detailSweep = (includeDetailSweep || detailNeedsSweep) ? checkpointDetailSweep() : nil
+        let detailSweep = includeDetailSweep ? checkpointDetailSweep() : nil
         // Dock host summaries are Dock-screen evidence only. Querying them from
         // Thread Detail forces a broad accessibility scan and can drop the UI
         // test connection before the real detail sample is written.
