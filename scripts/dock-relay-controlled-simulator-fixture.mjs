@@ -324,12 +324,21 @@ async function waitForDetailProjectionWitness({
     }
     await sleep(100);
   }
-  return lastWitness;
+  return null;
+}
+
+function detailTransitionWitnessTimeoutMs(options, fallbackTimeoutMs) {
+  const lagBudget = Number(options.maxStreamLagMs || DEFAULT_MAX_STREAM_LAG_MS);
+  if (!Number.isFinite(lagBudget) || lagBudget <= 0) {
+    return fallbackTimeoutMs;
+  }
+  return Math.min(fallbackTimeoutMs, Math.max(lagBudget + 500, 2_000));
 }
 
 function detailTruthFromWitness({
   kind,
   logicalHostID,
+  sourceHostID,
   detailHostID,
   threadID,
   witness,
@@ -341,7 +350,7 @@ function detailTruthFromWitness({
   const requestCardID = requestProjectionIDFromWitness(witness, requestID);
   return {
     kind,
-    sourceHostID: projectionWitness.sourceHostID || logicalHostID || null,
+    sourceHostID: projectionWitness.sourceHostID || sourceHostID || logicalHostID || null,
     detailHostID,
     threadID,
     projectionWitness,
@@ -4320,6 +4329,7 @@ async function runDetailReconnectScenario(options) {
 
 async function runDetailHistoryRequestScenario(options) {
   const routeEvents = [];
+  const simulatorRouteEvents = [];
   const findings = [];
   const transitions = [];
   const samples = [];
@@ -4508,12 +4518,21 @@ async function runDetailHistoryRequestScenario(options) {
   await relay.listening;
   const relayPort = relay.server.address().port;
   const relayUrl = `ws://127.0.0.1:${relayPort}`;
+  const simulatorProxy = await startSimulatorAppRouteProxy({
+    targetUrl: relayUrl,
+    routeEvents: simulatorRouteEvents,
+    label: "detail-history-request",
+  });
   const fixtureOptions = {
     ...options,
     relayUrl,
     codexHome: tempDir,
     sqliteHome: tempDir,
     detail: "none",
+  };
+  const simulatorProxyOptions = {
+    ...fixtureOptions,
+    relayUrl: simulatorProxy.url,
   };
   const streamProbe = new DockStreamProbe(fixtureOptions);
 
@@ -4532,7 +4551,32 @@ async function runDetailHistoryRequestScenario(options) {
         { threadID }
       );
     }
-    const initial = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+    const initial = await waitForStableDockClientPathThread({
+      streamProbe,
+      options: simulatorProxyOptions,
+      routeEvents,
+      threadID,
+      timeoutMs: options.dockCollectionTimeoutMs,
+    });
+    if (!initial.ok) {
+      const detail = {
+        threadID,
+        freshDockRows: Array.isArray(initial.freshDock?.rows) ? initial.freshDock.rows.length : null,
+        freshDockFreshness: initial.freshDock?.freshness || null,
+        freshDockCollection: initial.freshDock?.collection || null,
+        comparison: initial.comparison || null,
+        attempts: initial.attempts || [],
+        streamSnapshot: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
+        routeCounts: summarizeClientPathEvents(routeEvents).routeCounts,
+      };
+      transitionFailure(
+        findings,
+        "scenario_detail_history_app_path_initial_row_missing",
+        "detail-history fixture app-facing proxy path did not expose the target Dock row before simulator launch",
+        detail
+      );
+      throw new Error(`detail-history app-facing proxy path did not expose the target Dock row before simulator launch: ${JSON.stringify(detail)}`);
+    }
     findings.push(...scenarioComparisonFindings({ phase: "detail-history-initial", comparison: initial.comparison }));
     samples.push({
       sampleIndex: 0,
@@ -4545,7 +4589,8 @@ async function runDetailHistoryRequestScenario(options) {
       ready: true,
       scenario: "detail-history-request",
       relayUrl,
-      hosts: `127.0.0.1:${relayPort}`,
+      simulatorRelayUrl: simulatorProxy.url,
+      hosts: simulatorProxy.endpoint,
       target: {
         sourceHostID: hostID,
         threadID,
@@ -4563,6 +4608,23 @@ async function runDetailHistoryRequestScenario(options) {
     await waitForFile(options.uiReadyIn, options.waitTimeoutMs, "simulator UI full detail sampler readiness");
 
     const detailWaitTimeoutMs = Math.min(options.dockCollectionTimeoutMs, options.waitTimeoutMs);
+    const projectionTransitionTimeoutMs = detailTransitionWitnessTimeoutMs(options, detailWaitTimeoutMs);
+    const detailSubscribeWait = await waitForRecordedRouteEvent({
+      events: simulatorRouteEvents,
+      route: "thread/detail/subscribe",
+      source: "simulatorAppProxy",
+      boundary: "simulatorAppToRelay",
+      afterMs: startedAtMs,
+      timeoutMs: detailWaitTimeoutMs,
+    });
+    if (!detailSubscribeWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_detail_history_detail_subscribe_missing",
+        "simulator app did not open the controlled detail session through thread/detail/subscribe",
+        { threadID, timeoutMs: detailWaitTimeoutMs }
+      );
+    }
     const detailLoadedWait = await waitForAsyncEvent(detailLoadedPromise, detailWaitTimeoutMs);
     if (!detailLoadedWait.ok) {
       transitionFailure(
@@ -4585,7 +4647,7 @@ async function runDetailHistoryRequestScenario(options) {
     let liveProjectionWitness = null;
     let requestProjectionWitness = null;
     let resolutionProjectionWitness = null;
-    if (detailLoadedWait.ok) {
+    if (detailLoadedWait.ok && detailSubscribeWait.ok) {
       initialProjectionWitness = await waitForDetailProjectionWitness({
         client: streamProbe.client,
         sourceHostID: hostID,
@@ -4593,6 +4655,14 @@ async function runDetailHistoryRequestScenario(options) {
         minProjectionCount: 1,
         timeoutMs: detailWaitTimeoutMs,
       });
+    }
+    if (detailLoadedWait.ok && detailSubscribeWait.ok && initialProjectionWitness?.byteEquivalentToDownstream !== true) {
+      transitionFailure(
+        findings,
+        "scenario_detail_history_initial_projection_witness_missing",
+        "detail-history initial state did not produce byte-equivalent relay projection witness rows",
+        { threadID, expectedProjectionCount: 1 }
+      );
     }
     const initialProjectionCount = initialProjectionWitness?.projectionIDs?.length || 0;
 
@@ -4619,8 +4689,20 @@ async function runDetailHistoryRequestScenario(options) {
         sourceHostID: hostID,
         threadID,
         minProjectionCount: initialProjectionCount + 1,
-        timeoutMs: detailWaitTimeoutMs,
+        timeoutMs: projectionTransitionTimeoutMs,
       });
+      if (liveProjectionWitness?.byteEquivalentToDownstream !== true) {
+        transitionFailure(
+          findings,
+          "scenario_detail_history_live_projection_witness_missing",
+          "detail-history live update did not produce a byte-equivalent relay projection witness row",
+          {
+            threadID,
+            expectedProjectionCount: initialProjectionCount + 1,
+            timeoutMs: projectionTransitionTimeoutMs,
+          }
+        );
+      }
 
       await sleep(options.scenarioHoldMs);
       upstreamRequestSentAtMs = Date.now();
@@ -4651,8 +4733,16 @@ async function runDetailHistoryRequestScenario(options) {
         threadID,
         minProjectionCount: (liveProjectionWitness?.projectionIDs?.length || initialProjectionCount) + 1,
         requestID,
-        timeoutMs: detailWaitTimeoutMs,
+        timeoutMs: projectionTransitionTimeoutMs,
       });
+      if (!requestProjectionIDFromWitness(requestProjectionWitness, requestID)) {
+        transitionFailure(
+          findings,
+          "scenario_detail_history_request_projection_witness_missing",
+          "detail-history request did not produce a relay projection witness row for the request card",
+          { threadID, requestID, timeoutMs: projectionTransitionTimeoutMs }
+        );
+      }
     }
 
     const liveWait = await waitForAsyncEvent(liveUpdateSentPromise, detailWaitTimeoutMs);
@@ -4667,8 +4757,16 @@ async function runDetailHistoryRequestScenario(options) {
         minProjectionCount: requestProjectionWitness?.projectionIDs?.length || liveProjectionWitness?.projectionIDs?.length || initialProjectionCount,
         requestID,
         requestStatus: "resolved",
-        timeoutMs: detailWaitTimeoutMs,
+        timeoutMs: projectionTransitionTimeoutMs,
       });
+      if (requestStatusFromWitness(resolutionProjectionWitness, requestID) !== "resolved") {
+        transitionFailure(
+          findings,
+          "scenario_detail_history_resolution_projection_witness_missing",
+          "detail-history request resolution did not produce a resolved relay projection witness row",
+          { threadID, requestID, timeoutMs: projectionTransitionTimeoutMs }
+        );
+      }
     }
     const liveLag = scenarioLagSummary({
       transition: "detail-history-live-update",
@@ -4748,9 +4846,9 @@ async function runDetailHistoryRequestScenario(options) {
       detailTruth: detailTruthFromWitness({
         kind: "detail-history-live-update",
         sourceHostID: hostID,
-        detailHostID: `127.0.0.1:${relayPort}`,
+        detailHostID: simulatorProxy.endpoint,
         threadID,
-        witness: liveProjectionWitness || initialProjectionWitness,
+        witness: liveProjectionWitness,
       }),
     });
     transitions.push({
@@ -4768,9 +4866,9 @@ async function runDetailHistoryRequestScenario(options) {
       detailTruth: detailTruthFromWitness({
         kind: "detail-history-request-visible",
         sourceHostID: hostID,
-        detailHostID: `127.0.0.1:${relayPort}`,
+        detailHostID: simulatorProxy.endpoint,
         threadID,
-        witness: requestProjectionWitness || liveProjectionWitness || initialProjectionWitness,
+        witness: requestProjectionWitness,
         requestID,
         expectedStatus: "Pending",
         requestVisible: true,
@@ -4792,16 +4890,26 @@ async function runDetailHistoryRequestScenario(options) {
       detailTruth: detailTruthFromWitness({
         kind: "detail-history-request-resolution",
         sourceHostID: hostID,
-        detailHostID: `127.0.0.1:${relayPort}`,
+        detailHostID: simulatorProxy.endpoint,
         threadID,
-        witness: resolutionProjectionWitness || requestProjectionWitness || liveProjectionWitness || initialProjectionWitness,
+        witness: resolutionProjectionWitness,
         requestID,
         expectedStatus: "Resolved",
         requestVisible: true,
       }),
     });
 
-    const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
+    const simulatorClientPathEvidence = summarizeClientPathEvents(simulatorRouteEvents);
+    findings.push(...requiredRouteFindings(
+      simulatorClientPathEvidence,
+      ["thread/detail/subscribe", "thread/detail/update"]
+    ));
+    findings.push(...forbiddenSimulatorDetailRouteFindings(simulatorClientPathEvidence));
+    const clientPathEvidence = summarizeClientPathEvents([
+      ...streamProbe.routeEvents,
+      ...routeEvents,
+      ...simulatorRouteEvents,
+    ]);
     const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
     const report = {
       schemaVersion: 1,
@@ -4841,6 +4949,7 @@ async function runDetailHistoryRequestScenario(options) {
         finalState: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
       },
       clientPathEvidence,
+      simulatorClientPathEvidence,
       findings,
       unsupportedFacts: [],
     };
@@ -4853,6 +4962,7 @@ async function runDetailHistoryRequestScenario(options) {
     return report;
   } finally {
     await streamProbe.close().catch(() => null);
+    await simulatorProxy.close().catch(() => null);
     await relay.close().catch(() => null);
     await closeWebSocketServer(historyServer).catch(() => null);
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -4861,6 +4971,7 @@ async function runDetailHistoryRequestScenario(options) {
 
 async function runServerRequestScenario(options) {
   const routeEvents = [];
+  const simulatorRouteEvents = [];
   const findings = [];
   const transitions = [];
   const samples = [];
@@ -5023,12 +5134,21 @@ async function runServerRequestScenario(options) {
   await relay.listening;
   const relayPort = relay.server.address().port;
   const relayUrl = `ws://127.0.0.1:${relayPort}`;
+  const simulatorProxy = await startSimulatorAppRouteProxy({
+    targetUrl: relayUrl,
+    routeEvents: simulatorRouteEvents,
+    label: "server-request",
+  });
   const fixtureOptions = {
     ...options,
     relayUrl,
     codexHome: tempDir,
     sqliteHome: tempDir,
     detail: "none",
+  };
+  const simulatorProxyOptions = {
+    ...fixtureOptions,
+    relayUrl: simulatorProxy.url,
   };
   const streamProbe = new DockStreamProbe(fixtureOptions);
 
@@ -5047,7 +5167,32 @@ async function runServerRequestScenario(options) {
         { threadID }
       );
     }
-    const initial = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+    const initial = await waitForStableDockClientPathThread({
+      streamProbe,
+      options: simulatorProxyOptions,
+      routeEvents,
+      threadID,
+      timeoutMs: options.dockCollectionTimeoutMs,
+    });
+    if (!initial.ok) {
+      const detail = {
+        threadID,
+        freshDockRows: Array.isArray(initial.freshDock?.rows) ? initial.freshDock.rows.length : null,
+        freshDockFreshness: initial.freshDock?.freshness || null,
+        freshDockCollection: initial.freshDock?.collection || null,
+        comparison: initial.comparison || null,
+        attempts: initial.attempts || [],
+        streamSnapshot: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
+        routeCounts: summarizeClientPathEvents(routeEvents).routeCounts,
+      };
+      transitionFailure(
+        findings,
+        "scenario_server_request_app_path_initial_row_missing",
+        "server-request fixture app-facing proxy path did not expose the target Dock row before simulator launch",
+        detail
+      );
+      throw new Error(`server-request app-facing proxy path did not expose the target Dock row before simulator launch: ${JSON.stringify(detail)}`);
+    }
     findings.push(...scenarioComparisonFindings({ phase: "initial", comparison: initial.comparison }));
     const initialFinishedAt = new Date().toISOString();
     samples.push({
@@ -5061,7 +5206,8 @@ async function runServerRequestScenario(options) {
       ready: true,
       scenario: "server-request",
       relayUrl,
-      hosts: `127.0.0.1:${relayPort}`,
+      simulatorRelayUrl: simulatorProxy.url,
+      hosts: simulatorProxy.endpoint,
       target: {
         sourceHostID: hostID,
         threadID,
@@ -5077,6 +5223,23 @@ async function runServerRequestScenario(options) {
     await waitForFile(options.uiReadyIn, options.waitTimeoutMs, "simulator UI detail sampler readiness");
 
     const detailWaitTimeoutMs = Math.min(options.dockCollectionTimeoutMs, options.waitTimeoutMs);
+    const projectionTransitionTimeoutMs = detailTransitionWitnessTimeoutMs(options, detailWaitTimeoutMs);
+    const detailSubscribeWait = await waitForRecordedRouteEvent({
+      events: simulatorRouteEvents,
+      route: "thread/detail/subscribe",
+      source: "simulatorAppProxy",
+      boundary: "simulatorAppToRelay",
+      afterMs: startedAtMs,
+      timeoutMs: detailWaitTimeoutMs,
+    });
+    if (!detailSubscribeWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_server_request_detail_subscribe_missing",
+        "simulator app did not open the controlled detail session through thread/detail/subscribe",
+        { threadID, timeoutMs: detailWaitTimeoutMs }
+      );
+    }
     const requestWait = await waitForAsyncEvent(requestSentPromise, detailWaitTimeoutMs);
     const requestProjectionWitness = requestWait.ok
       ? await waitForDetailProjectionWitness({
@@ -5085,9 +5248,17 @@ async function runServerRequestScenario(options) {
         threadID,
         minProjectionCount: 1,
         requestID,
-        timeoutMs: detailWaitTimeoutMs,
+        timeoutMs: projectionTransitionTimeoutMs,
       })
       : null;
+    if (requestWait.ok && !requestProjectionIDFromWitness(requestProjectionWitness, requestID)) {
+      transitionFailure(
+        findings,
+        "scenario_server_request_projection_witness_missing",
+        "server request did not produce a relay projection witness row for the request card",
+        { threadID, requestID, timeoutMs: projectionTransitionTimeoutMs }
+      );
+    }
     const responseWait = await waitForAsyncEvent(forwardedResponsePromise, detailWaitTimeoutMs);
     const resolutionWait = await waitForAsyncEvent(resolutionSentPromise, detailWaitTimeoutMs);
     const resolutionProjectionWitness = resolutionWait.ok
@@ -5098,9 +5269,17 @@ async function runServerRequestScenario(options) {
         minProjectionCount: requestProjectionWitness?.projectionIDs?.length || 1,
         requestID,
         requestStatus: "resolved",
-        timeoutMs: detailWaitTimeoutMs,
+        timeoutMs: projectionTransitionTimeoutMs,
       })
       : null;
+    if (resolutionWait.ok && requestStatusFromWitness(resolutionProjectionWitness, requestID) !== "resolved") {
+      transitionFailure(
+        findings,
+        "scenario_server_request_resolution_projection_witness_missing",
+        "server request resolution did not produce a resolved relay projection witness row",
+        { threadID, requestID, timeoutMs: projectionTransitionTimeoutMs }
+      );
+    }
     const requestLag = scenarioLagSummary({
       transition: "server-request-visible",
       startedAtMs: upstreamRequestSentAtMs || startedAtMs,
@@ -5164,7 +5343,7 @@ async function runServerRequestScenario(options) {
       detailTruth: detailTruthFromWitness({
         kind: "server-request-visible",
         sourceHostID: hostID,
-        detailHostID: `127.0.0.1:${relayPort}`,
+        detailHostID: simulatorProxy.endpoint,
         threadID,
         witness: requestProjectionWitness,
         requestID,
@@ -5188,7 +5367,7 @@ async function runServerRequestScenario(options) {
       detailTruth: detailTruthFromWitness({
         kind: "server-request-resolution",
         sourceHostID: hostID,
-        detailHostID: `127.0.0.1:${relayPort}`,
+        detailHostID: simulatorProxy.endpoint,
         threadID,
         witness: resolutionProjectionWitness || requestProjectionWitness,
         requestID,
@@ -5197,7 +5376,17 @@ async function runServerRequestScenario(options) {
       }),
     });
 
-    const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
+    const simulatorClientPathEvidence = summarizeClientPathEvents(simulatorRouteEvents);
+    findings.push(...requiredRouteFindings(
+      simulatorClientPathEvidence,
+      ["thread/detail/subscribe", "thread/detail/update"]
+    ));
+    findings.push(...forbiddenSimulatorDetailRouteFindings(simulatorClientPathEvidence));
+    const clientPathEvidence = summarizeClientPathEvents([
+      ...streamProbe.routeEvents,
+      ...routeEvents,
+      ...simulatorRouteEvents,
+    ]);
     const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
     const report = {
       schemaVersion: 1,
@@ -5237,6 +5426,7 @@ async function runServerRequestScenario(options) {
         finalState: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
       },
       clientPathEvidence,
+      simulatorClientPathEvidence,
       findings,
       unsupportedFacts: [],
     };
@@ -5249,6 +5439,7 @@ async function runServerRequestScenario(options) {
     return report;
   } finally {
     await streamProbe.close().catch(() => null);
+    await simulatorProxy.close().catch(() => null);
     await relay.close().catch(() => null);
     await closeWebSocketServer(historyServer).catch(() => null);
     fs.rmSync(tempDir, { recursive: true, force: true });

@@ -78,8 +78,11 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
                        detail.containsRequestCard(cardID: cardID) == true,
                        app.tapRequestAction(cardID: cardID, action: action, timeout: 0.2) {
                         didTapRequestAction = true
-                    } else if let requestCardIdentifier = detail.requestCardIDs.first,
-                              app.tapRequestAction(requestCardIdentifier: requestCardIdentifier, action: action, timeout: 0.2) {
+                    } else if app.tapFirstRequestAction(
+                        requestElementIdentifiers: detail.requestCardIDs,
+                        action: action,
+                        timeout: 0.2
+                    ) {
                         didTapRequestAction = true
                     }
                 }

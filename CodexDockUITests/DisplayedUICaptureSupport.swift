@@ -142,7 +142,14 @@ struct DisplayedUIFrame: Codable {
 @MainActor
 extension XCUIApplication {
     func displayedUIElement(id: String) -> XCUIElement {
-        descendants(matching: .any)[id]
+        if id.count > 128 {
+            // XCUITest direct string lookup rejects long projection-backed
+            // identifiers. Predicate lookup supports the same exact match.
+            return descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier == %@", id))
+                .firstMatch
+        }
+        return descendants(matching: .any)[id]
     }
 
     func displayedUIWaitForFirstIdentifier(_ identifiers: [String], timeout: TimeInterval) -> String? {
@@ -244,10 +251,10 @@ extension XCUIApplication {
         }
 
         let button = displayedUIElement(id: identifier)
-        guard button.waitForExistence(timeout: timeout), button.isEnabled, isVisibleForTap(button.frame) else {
+        guard button.waitForExistence(timeout: timeout), button.isEnabled, button.isHittable else {
             return false
         }
-        button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        button.tap()
         return true
     }
 
@@ -264,12 +271,46 @@ extension XCUIApplication {
             return false
         }
 
-        let button = displayedUIElement(id: "\(requestCardIdentifier)\(suffix)")
-        guard button.waitForExistence(timeout: timeout), button.isEnabled, isVisibleForTap(button.frame) else {
+        let baseIdentifier = requestCardBaseIdentifier(from: requestCardIdentifier)
+        let button = displayedUIElement(id: "\(baseIdentifier)\(suffix)")
+        guard button.waitForExistence(timeout: timeout), button.isEnabled, button.isHittable else {
             return false
         }
-        button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        button.tap()
         return true
+    }
+
+    func tapFirstRequestAction(requestElementIdentifiers: [String], action: String, timeout: TimeInterval) -> Bool {
+        let actionSuffix: String
+        switch action {
+        case "approve":
+            actionSuffix = ".approve"
+        case "decline":
+            actionSuffix = ".decline"
+        case "send":
+            actionSuffix = ".send"
+        default:
+            return false
+        }
+
+        let actionElements = requestElementIdentifiers.filter { $0.hasSuffix(actionSuffix) }
+        for identifier in actionElements + requestElementIdentifiers {
+            if tapRequestAction(requestCardIdentifier: identifier, action: action, timeout: timeout) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func requestCardBaseIdentifier(from identifier: String) -> String {
+        // Request proof captures every visible request subelement. Normalize a
+        // status/button/input id back to the card id before choosing an action.
+        for suffix in [".status", ".approve", ".decline", ".send", ".input", ".unsupported"] {
+            if identifier.hasSuffix(suffix) {
+                return String(identifier.dropLast(suffix.count))
+            }
+        }
+        return identifier
     }
 
     func selectMessageFilter(_ filter: String, timeout: TimeInterval) -> Bool {
