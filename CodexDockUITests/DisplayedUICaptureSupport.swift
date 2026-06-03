@@ -398,7 +398,9 @@ extension XCUIApplication {
         let sampledAt = codexDockISO8601Now()
         let dockRoot = displayedUIElement(id: AutomationID.Dock.root.rawValue)
         let rootValue = dockRoot.exists ? dockRoot.displayedUIStringValue : "not-visible"
-        let dockRows = visibleDockRows()
+        let dockRows = dockRootRowCount(rootValue) == 0 || isDockEmptyStateVisible()
+            ? []
+            : visibleDockRows()
         let dockRowsCapturedAt = codexDockISO8601Now()
         let dockSweep = includeDockSweep ? checkpointDockSweep(rootValue: rootValue) : nil
         let detail = visibleDetail(includeRequestElements: includeDetailRequestElements)
@@ -485,6 +487,18 @@ extension XCUIApplication {
         let deadline = Date().addingTimeInterval(20)
         var stopReason = "maxSteps"
 
+        if expectedRootRows == 0 || isDockEmptyStateVisible() {
+            return DisplayedUIDockSweep(
+                startedAt: startedAt,
+                finishedAt: codexDockISO8601Now(),
+                stepCount: 0,
+                maxSteps: maxSteps,
+                stopReason: "expectedRowsReached",
+                expectedRootRows: expectedRootRows,
+                rows: []
+            )
+        }
+
         for _ in 0..<maxSteps {
             if Date() >= deadline {
                 stopReason = "timeBudget"
@@ -528,6 +542,10 @@ extension XCUIApplication {
             expectedRootRows: expectedRootRows,
             rows: rows
         )
+    }
+
+    private func isDockEmptyStateVisible() -> Bool {
+        displayedUIElement(id: AutomationID.Dock.state(.empty).rawValue).exists
     }
 
     private func dragDockListUp() {
@@ -683,8 +701,9 @@ extension XCUIApplication {
     }
 
     private func dockRowElements() -> [XCUIElement] {
-        let predicate = NSPredicate(format: "identifier BEGINSWITH %@", "codexdock.dock.row.")
-        return buttons.matching(predicate).allElementsBoundByIndex
+        descendants(matching: .any).allElementsBoundByIndex.filter { element in
+            element.elementType == .button && element.identifier.hasPrefix("codexdock.dock.row.")
+        }
     }
 
     private func globalConnectivitySnapshot() -> DisplayedUIElementSnapshot? {

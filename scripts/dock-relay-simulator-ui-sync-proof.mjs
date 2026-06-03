@@ -183,6 +183,48 @@ function scenarioTransitionTimeMS(transition) {
   return dateMS(transition?.lag?.relaySeenAt || transition?.wait?.observedAt);
 }
 
+function dockVisibleTruthKey(freshDock) {
+  const rows = Array.isArray(freshDock?.rows) ? freshDock.rows : [];
+  const rowsByProjectionID = new Map();
+  for (const row of rows) {
+    const projectionID = relayProjectionID(row);
+    if (projectionID) {
+      rowsByProjectionID.set(projectionID, row);
+    }
+  }
+  const renderOrder = Array.isArray(freshDock?.renderOrderProjectionIDs) && freshDock.renderOrderProjectionIDs.length
+    ? freshDock.renderOrderProjectionIDs.filter(Boolean)
+    : rows.map(relayProjectionID).filter(Boolean);
+  const orderedRows = renderOrder.map((projectionID) => {
+    const row = rowsByProjectionID.get(projectionID) || {};
+    return {
+      projectionID,
+      status: row.status || null,
+      origin: relayOrigin(row),
+    };
+  });
+  const renderedProjectionIDs = new Set(renderOrder);
+  const extraRows = rows
+    .map((row) => {
+      const projectionID = relayProjectionID(row);
+      if (!projectionID || renderedProjectionIDs.has(projectionID)) {
+        return null;
+      }
+      return {
+        projectionID,
+        status: row.status || null,
+        origin: relayOrigin(row),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.projectionID.localeCompare(right.projectionID));
+  return JSON.stringify({
+    rowCount: Number(freshDock?.rowCount ?? freshDock?.totalRows ?? rows.length),
+    orderedRows,
+    extraRows,
+  });
+}
+
 function scenarioTransitionTruths(relayReport) {
   const truths = [];
   for (const scenario of Array.isArray(relayReport?.scenarios) ? relayReport.scenarios : []) {
@@ -193,7 +235,12 @@ function scenarioTransitionTruths(relayReport) {
       if (atMs === null || !transition?.freshDock) {
         continue;
       }
+      const truthKey = dockVisibleTruthKey(transition.freshDock);
+      // Scenario proof is about user-visible Dock states. Internal transitions
+      // that keep the same visible truth must not create an impossible
+      // zero-width UI observation window.
       const nextTransition = transitions.slice(index + 1)
+        .filter((candidate) => candidate?.freshDock && dockVisibleTruthKey(candidate.freshDock) !== truthKey)
         .map((candidate) => scenarioTransitionTimeMS(candidate))
         .find((candidateMs) => candidateMs !== null && candidateMs >= atMs) ?? null;
       const at = new Date(atMs).toISOString();

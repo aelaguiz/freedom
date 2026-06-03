@@ -1140,6 +1140,39 @@ test("simulator UI proof scores scenario archive and unarchive transition window
   );
 });
 
+test("simulator UI proof keeps same-visible-state internal transitions observable", () => {
+  const relay = scenarioRelayReport();
+  relay.scenarios[0].transitions.push({
+    name: "projection-refresh-after-mutation-ack",
+    route: "dock/resync",
+    wait: { observedAt: "2026-05-31T00:00:05.003Z" },
+    lag: {
+      relaySeenAt: "2026-05-31T00:00:05.003Z",
+      lag_change_to_relay_ms: 3,
+      maxStreamLagMs: 2_000,
+      ok: true,
+    },
+    freshDock: relay.samples[0].freshDock,
+  });
+
+  const report = buildRenderedUIReport({
+    relayReport: relay,
+    uiSamples: [
+      emptyUISample({ sampledAt: "2026-05-31T00:00:02.400Z" }),
+      uiSample({ sampledAt: "2026-05-31T00:00:05.400Z" }),
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.equal(report.summary.scenarioTransitionCount, 3);
+  assert.equal(report.summary.scenarioTransitionFailures, 0);
+  assert.deepEqual(
+    report.scenarioTransitionCoverage.checks.map((check) => [check.transition, check.uiSampleCount, check.observedLagMs]),
+    [["archive", 1, 400], ["unarchive", 1, 400], ["projection-refresh-after-mutation-ack", 1, 397]],
+  );
+});
+
 test("simulator UI proof fails when no UI sample observes a scenario transition", () => {
   const report = buildRenderedUIReport({
     relayReport: scenarioRelayReport(),
