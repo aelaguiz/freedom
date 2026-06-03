@@ -369,20 +369,27 @@ async function readThreadDetailLedger(config, params = {}) {
   if (!params.threadId) {
     throw new Error("thread/detail requires threadId");
   }
+  const thread = await readThreadDetailThread(config, params);
+  return createThreadDetailLedgerFromThread(thread, {
+    sourceHostID: config.hostId,
+    threadID: params.threadId,
+  });
+}
+
+async function readThreadDetailThread(config, params = {}) {
+  if (!params.threadId) {
+    throw new Error("thread/detail requires threadId");
+  }
   const readResponse = await aggregateThreadRead(config, {
     threadId: params.threadId,
     includeTurns: false,
   });
   const turns = await readAllThreadDetailTurns(config, params.threadId);
-  const thread = {
+  return {
     ...(readResponse?.thread || {}),
     id: params.threadId,
     turns,
   };
-  return createThreadDetailLedgerFromThread(thread, {
-    sourceHostID: config.hostId,
-    threadID: params.threadId,
-  });
 }
 
 function cloneProjectionEnvelope(envelope) {
@@ -571,16 +578,31 @@ async function subscribeThreadDetail(config, params = {}, session, downstreamWs)
 }
 
 async function resyncThreadDetail(config, params = {}, session) {
-  const ledger = await readThreadDetailLedger(config, params);
+  const thread = await readThreadDetailThread(config, params);
   const detail = session.detailSubscription;
-  if (detail?.threadId === params.threadId) {
-    detail.ledger = ledger;
+  let ledger;
+  if (detail?.threadId === params.threadId && detail.ledger) {
+    // Active detail resync must be monotonic. Raw history can lag behind the
+    // live session, so merge it into the current ledger instead of replacing
+    // visible live rows with an older snapshot.
+    ledger = detail.ledger;
+    ledger.mergeFromThread(thread, "thread/detail/resync");
     detail.buffering = false;
     detail.pendingMessages = [];
     for (const pending of session.pendingServerRequests?.values?.() || []) {
       if (pending.threadId === params.threadId && pending.message) {
         ledger.applyRequest(pending.message);
       }
+    }
+  } else {
+    ledger = createThreadDetailLedgerFromThread(thread, {
+      sourceHostID: config.hostId,
+      threadID: params.threadId,
+    });
+    if (detail?.threadId === params.threadId) {
+      detail.ledger = ledger;
+      detail.buffering = false;
+      detail.pendingMessages = [];
     }
   }
   const snapshot = ledger.snapshot("thread/detail/resync");

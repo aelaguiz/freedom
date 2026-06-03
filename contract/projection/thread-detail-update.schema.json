@@ -12,6 +12,7 @@
     "sourceHostID",
     "view",
     "threadID",
+    "scope",
     "epoch",
     "seq",
     "generation",
@@ -48,6 +49,9 @@
     "threadID": {
       "type": "string",
       "minLength": 1
+    },
+    "scope": {
+      "const": "thread"
     },
     "epoch": {
       "type": "string",

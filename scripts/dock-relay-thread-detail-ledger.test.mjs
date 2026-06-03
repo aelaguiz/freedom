@@ -102,6 +102,34 @@ test("thread detail ledger upserts live user message and canonical history into 
   assert.equal(userRows[0].payload.body, "hello");
 });
 
+test("thread detail resync merge preserves live rows while history lags", () => {
+  const ledger = new ThreadDetailLedger({ sourceHostID: "home", threadID: "thread-1" });
+  ledger.replaceFromThread(historyThread());
+
+  const update = ledger.applyNotification({
+    method: "item/agentMessage/delta",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-live",
+      itemId: "agent-live",
+      delta: "new live work",
+    },
+  }, { nowMs: 1_800_000_020_000 });
+  assert.equal(update.scope, "thread");
+
+  ledger.mergeFromThread(historyThread());
+
+  const snapshot = ledger.snapshot();
+  assert.deepEqual(
+    snapshot.rows.map((row) => row.projectionID),
+    [
+      "host:home/thread:thread-1/turn:turn-live/item:agent-live/row:agentMessage",
+      "host:home/thread:thread-1/turn:turn-1/item:item-agent-1/row:agentMessage",
+      "host:home/thread:thread-1/turn:turn-1/item:item-user-1/row:userMessage",
+    ]
+  );
+});
+
 test("thread detail ledger rows carry the full projection envelope", () => {
   const ledger = new ThreadDetailLedger({ sourceHostID: "home", threadID: "thread-1" });
   ledger.replaceFromThread(historyThread());

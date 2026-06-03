@@ -54,6 +54,23 @@ class ThreadDetailLedger {
     return this.snapshot(source);
   }
 
+  mergeFromThread(thread, source = "thread/detail/resync") {
+    const threadID = thread?.id || this.threadID;
+    this.threadID = threadID;
+    const canonicalActiveTurnID = activeTurnIDFromThread(thread);
+    if (canonicalActiveTurnID || this.activeTurnID === null) {
+      this.activeTurnID = canonicalActiveTurnID;
+    }
+    for (const row of eventsFromThread(thread, {
+      sourceHostID: this.sourceHostID,
+      threadID,
+    })) {
+      this.upsertRow(row);
+    }
+    this.seq += 1;
+    return this.snapshot(source);
+  }
+
   snapshot(source = "thread/detail") {
     return makeSnapshot({
       sourceHostID: this.sourceHostID,
@@ -197,6 +214,7 @@ class ThreadDetailLedger {
       sourceHostID: this.sourceHostID,
       view: THREAD_DETAIL_VIEW,
       threadID: this.threadID,
+      scope: "thread",
       epoch: this.epoch,
       seq: this.seq,
       generation: this.generation,

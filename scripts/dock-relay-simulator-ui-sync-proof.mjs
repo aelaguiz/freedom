@@ -601,6 +601,35 @@ function detailCollectionObservedAtMS(sample, collectionName) {
   return fallbackMs;
 }
 
+function detailSampleWindowMS(sample) {
+  const detail = sample?.detail || {};
+  const sweep = sample?.detailSweep || {};
+  const startTimes = [
+    dateMS(detail.startedAt),
+    dateMS(sample?.sampledAt),
+    sampleTimeMS(sample),
+  ].filter((value) => Number.isFinite(value));
+  const endTimes = [
+    dateMS(detail.finishedAt),
+    dateMS(detail.rootCapturedAt),
+    dateMS(detail.headerCapturedAt),
+    dateMS(detail.messageListCapturedAt),
+    dateMS(detail.messageCardsCapturedAt),
+    dateMS(detail.requestElementsCapturedAt),
+    dateMS(sweep.finishedAt),
+    dateMS(sample?.finishedAt),
+  ].filter((value) => Number.isFinite(value));
+  const startMs = startTimes.length > 0 ? Math.min(...startTimes) : sampleTimeMS(sample);
+  const endMs = endTimes.length > 0 ? Math.max(...endTimes) : startMs;
+  return { startMs, endMs };
+}
+
+function detailSampleCanCoverTransition(sample, transition) {
+  const window = detailSampleWindowMS(sample);
+  return window.endMs >= transition.atMs
+    && (transition.untilMs === null || window.startMs < transition.untilMs);
+}
+
 function detailIdentifierObservedAtMS(sample, identifier) {
   const detail = sample?.detail || {};
   const sweep = sample?.detailSweep || {};
@@ -1363,12 +1392,8 @@ function evaluateDetailTransitionCoverage({ uiSamples, transitions, maxUiLagMs }
       });
     }
     const candidates = uiSamples
-      .filter((sample) => {
-        const sampledAtMs = sampleTimeMS(sample);
-        return sampledAtMs >= transition.atMs
-          && (transition.untilMs === null || sampledAtMs < transition.untilMs);
-      })
-      .sort((left, right) => sampleTimeMS(left) - sampleTimeMS(right));
+      .filter((sample) => detailSampleCanCoverTransition(sample, transition))
+      .sort((left, right) => detailSampleWindowMS(left).startMs - detailSampleWindowMS(right).startMs);
     const evaluations = candidates.map((sample) => ({
       sample,
       evaluation: evaluateDetailTransitionSample(sample, transition),

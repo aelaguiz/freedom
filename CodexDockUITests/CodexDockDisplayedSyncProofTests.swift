@@ -40,9 +40,10 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
         }
 
         if let openThreadID = config.openThreadID {
+            let firstSampleStartedAt = Date()
             try record(app.captureDisplayedUISample(index: sampleIndex))
             sampleIndex += 1
-            RunLoop.current.run(until: Date().addingTimeInterval(TimeInterval(config.sampleMS) / 1000.0))
+            waitUntilNextSample(startedAt: firstSampleStartedAt, sampleMS: config.sampleMS)
             try record(app.captureDisplayedUISample(index: sampleIndex))
             sampleIndex += 1
 
@@ -68,6 +69,7 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
             let deadline = Date().addingTimeInterval(TimeInterval(config.durationMS) / 1000.0)
             var didTapRequestAction = false
             repeat {
+                let sampleStartedAt = Date()
                 let sample = app.captureDisplayedUISample(index: sampleIndex)
                 try record(sample)
                 sampleIndex += 1
@@ -86,7 +88,7 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
                         didTapRequestAction = true
                     }
                 }
-                RunLoop.current.run(until: Date().addingTimeInterval(TimeInterval(config.sampleMS) / 1000.0))
+                waitUntilNextSample(startedAt: sampleStartedAt, sampleMS: config.sampleMS)
             } while Date() < deadline
 
             if config.detailCheckpointSweep == true {
@@ -99,6 +101,7 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
             let deadline = Date().addingTimeInterval(TimeInterval(config.durationMS) / 1000.0)
             let dockLenses = config.resolvedDockLenses
             repeat {
+                let sampleStartedAt = Date()
                 let lens = dockLenses[sampleIndex % dockLenses.count]
                 XCTAssertTrue(
                     selectDockLens(lens, app: app, root: root),
@@ -106,7 +109,7 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
                 )
                 try record(app.captureDisplayedUISample(index: sampleIndex))
                 sampleIndex += 1
-                RunLoop.current.run(until: Date().addingTimeInterval(TimeInterval(config.sampleMS) / 1000.0))
+                waitUntilNextSample(startedAt: sampleStartedAt, sampleMS: config.sampleMS)
             } while Date() < deadline
 
             if config.checkpointSweep == true {
@@ -160,6 +163,14 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
             matching: { $0.contains("lens=\(lens.rawValue)") },
             timeout: 5
         )
+    }
+
+    private func waitUntilNextSample(startedAt: Date, sampleMS: Int) {
+        let target = startedAt.addingTimeInterval(TimeInterval(sampleMS) / 1000.0)
+        guard target > Date() else {
+            return
+        }
+        RunLoop.current.run(until: target)
     }
 }
 

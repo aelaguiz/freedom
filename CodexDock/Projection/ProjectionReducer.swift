@@ -472,7 +472,7 @@ extension ProjectionEnvelope where Row == ThreadDetailEventDTO {
             sourceHostID: update.sourceHostID,
             view: update.view,
             threadID: update.threadID,
-            scope: "thread",
+            scope: update.scope,
             viewParamsKey: update.viewParamsKey,
             order: update.order,
             epoch: update.epoch,

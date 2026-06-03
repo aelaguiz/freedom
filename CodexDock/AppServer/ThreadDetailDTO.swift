@@ -280,6 +280,7 @@ public struct ThreadDetailUpdateDTO: Codable, Equatable, Sendable {
     public let sourceHostID: String
     public let view: String
     public let threadID: String
+    public let scope: String
     public let epoch: String
     public let seq: Int64
     public let generation: Int
@@ -300,6 +301,7 @@ public struct ThreadDetailUpdateDTO: Codable, Equatable, Sendable {
         sourceHostID: String,
         view: String = "thread.detail",
         threadID: String,
+        scope: String = "thread",
         epoch: String = "test",
         seq: Int64 = 0,
         generation: Int = 1,
@@ -319,6 +321,7 @@ public struct ThreadDetailUpdateDTO: Codable, Equatable, Sendable {
         self.sourceHostID = sourceHostID
         self.view = view
         self.threadID = threadID
+        self.scope = scope
         self.epoch = epoch
         self.seq = seq
         self.generation = generation

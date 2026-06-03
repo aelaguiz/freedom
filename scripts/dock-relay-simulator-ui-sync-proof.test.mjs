@@ -1312,6 +1312,28 @@ test("simulator UI proof scores detail lag from captured evidence time", () => {
   );
 });
 
+test("simulator UI proof scores detail sample that starts before transition but captures after it", () => {
+  const report = buildRenderedUIReport({
+    relayReport: serverRequestRelayReport(),
+    uiSamples: [
+      uiSample({ sampledAt: "2026-05-31T00:00:01.200Z" }),
+      detailRequestUISample({
+        sampledAt: "2026-05-31T00:00:01.950Z",
+        capturedAt: "2026-05-31T00:00:02.250Z",
+        status: "Pending",
+      }),
+      detailRequestUISample({ sampledAt: "2026-05-31T00:00:03.250Z", status: "Resolved" }),
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.deepEqual(
+    report.detailTransitionCoverage.checks.map((check) => [check.transition, check.observedLagMs]),
+    [["server-request-visible", 250], ["server-request-resolution", 250]],
+  );
+});
+
 test("simulator UI proof scores opened-thread history through a detail sweep", () => {
   const report = buildRenderedUIReport({
     relayReport: detailHistoryRelayReport(),
