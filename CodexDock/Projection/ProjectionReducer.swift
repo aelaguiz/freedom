@@ -44,6 +44,9 @@ struct ProjectionEnvelope<Row: Equatable & Sendable>: Equatable, Sendable {
     let window: ProjectionWindow?
     let reason: String?
     let activeTurnID: String?
+    let liveState: String?
+    let freshnessStatus: String?
+    let freshnessError: String?
 
     init(
         kind: ProjectionUpdateKind,
@@ -65,7 +68,10 @@ struct ProjectionEnvelope<Row: Equatable & Sendable>: Equatable, Sendable {
         totalRows: Int?,
         window: ProjectionWindow?,
         reason: String?,
-        activeTurnID: String? = nil
+        activeTurnID: String? = nil,
+        liveState: String? = nil,
+        freshnessStatus: String? = nil,
+        freshnessError: String? = nil
     ) {
         self.kind = kind
         self.schemaVersion = schemaVersion
@@ -87,6 +93,9 @@ struct ProjectionEnvelope<Row: Equatable & Sendable>: Equatable, Sendable {
         self.window = window
         self.reason = reason
         self.activeTurnID = activeTurnID
+        self.liveState = liveState
+        self.freshnessStatus = freshnessStatus
+        self.freshnessError = freshnessError
     }
 }
 
@@ -298,7 +307,9 @@ struct ProjectionReducer<Row: Equatable & Sendable>: Equatable, Sendable {
         }
         if let requiredThreadID = policy.requiredThreadID,
            envelope.threadID != requiredThreadID {
-            throw ProjectionReducerError.streamContract("Projection envelope threadID does not match the expected stream contract.")
+            throw ProjectionReducerError.streamContract(
+                "Projection envelope threadID \(envelope.threadID ?? "<missing>") does not match expected \(requiredThreadID)."
+            )
         }
     }
 
@@ -415,7 +426,10 @@ extension ProjectionEnvelope where Row == DockThreadCardDTO {
             complete: update.complete,
             totalRows: update.totalRows,
             window: update.window.map(ProjectionWindow.init),
-            reason: update.reason
+            reason: update.reason,
+            liveState: nil,
+            freshnessStatus: update.freshness.status.rawValue,
+            freshnessError: update.freshness.lastError
         )
     }
 }
@@ -442,7 +456,10 @@ extension ProjectionEnvelope where Row == ThreadDetailEventDTO {
             totalRows: snapshot.rows.count,
             window: ProjectionWindow(offset: 0, limit: snapshot.rows.count, rowCount: snapshot.rows.count, nextOffset: nil),
             reason: nil,
-            activeTurnID: snapshot.activeTurnID
+            activeTurnID: snapshot.activeTurnID,
+            liveState: nil,
+            freshnessStatus: snapshot.freshness?.state,
+            freshnessError: nil
         )
     }
 
@@ -467,7 +484,10 @@ extension ProjectionEnvelope where Row == ThreadDetailEventDTO {
             totalRows: nil,
             window: nil,
             reason: update.reason,
-            activeTurnID: update.activeTurnID
+            activeTurnID: update.activeTurnID,
+            liveState: update.liveState,
+            freshnessStatus: update.freshness?.state,
+            freshnessError: nil
         )
     }
 }

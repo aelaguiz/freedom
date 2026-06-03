@@ -50,6 +50,9 @@ struct StreamReconcilerSnapshot<Row: Equatable & Sendable>: Equatable, Sendable 
     let seq: Int64
     let generation: Int
     let activeTurnID: String?
+    let complete: Bool?
+    let totalRows: Int?
+    let window: ProjectionWindow?
     let bufferedEnvelopeCount: Int
     let lastError: String?
 }
@@ -74,14 +77,22 @@ actor StreamReconciler<Row: Equatable & Sendable> {
     private let policy: ProjectionReducerPolicy<Row>
     private let connector: any ProjectionStreamConnecting<Row>
     private let maxBufferedEnvelopeCount: Int
+    private let heartbeatTimeout: Duration?
+    private let reconnectDelay: Duration?
 
     private var reducer = ProjectionReducer<Row>()
     private var resolvedSourceHostID: String?
     private var resolvedViewParamsKey: String?
     private var connection: (any ProjectionStreamConnection<Row>)?
     private var updateTask: Task<Void, Never>?
+    private var heartbeatTask: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
+    private var heartbeatToken: UUID?
     private var freshness: StreamReconcilerFreshnessState = .closed
     private var activeTurnID: String?
+    private var complete: Bool?
+    private var totalRows: Int?
+    private var window: ProjectionWindow?
     private var activeCatchupReason: StreamReconcilerRecoveryReason?
     private var isResyncing = false
     private var pendingRecoveryReason: StreamReconcilerRecoveryReason?
@@ -93,16 +104,22 @@ actor StreamReconciler<Row: Equatable & Sendable> {
         viewKey: ProjectionViewKey,
         policy: ProjectionReducerPolicy<Row>,
         connector: any ProjectionStreamConnecting<Row>,
-        maxBufferedEnvelopeCount: Int = 128
+        maxBufferedEnvelopeCount: Int = 128,
+        heartbeatTimeout: Duration? = nil,
+        reconnectDelay: Duration? = nil
     ) {
         self.viewKey = viewKey
         self.policy = policy
         self.connector = connector
         self.maxBufferedEnvelopeCount = max(1, maxBufferedEnvelopeCount)
+        self.heartbeatTimeout = heartbeatTimeout
+        self.reconnectDelay = reconnectDelay
     }
 
     deinit {
         updateTask?.cancel()
+        heartbeatTask?.cancel()
+        reconnectTask?.cancel()
         for continuation in sinks.values {
             continuation.finish()
         }
@@ -123,6 +140,8 @@ actor StreamReconciler<Row: Equatable & Sendable> {
     }
 
     func start() async {
+        reconnectTask?.cancel()
+        reconnectTask = nil
         guard freshness != .closed || connection == nil else {
             freshness = .connecting
             publish()
@@ -200,6 +219,11 @@ actor StreamReconciler<Row: Equatable & Sendable> {
         isResyncing = false
         pendingRecoveryReason = nil
         bufferedEnvelopes.removeAll()
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        heartbeatToken = nil
+        reconnectTask?.cancel()
+        reconnectTask = nil
         updateTask?.cancel()
         updateTask = nil
         await closeCurrentConnection()
@@ -225,6 +249,7 @@ actor StreamReconciler<Row: Equatable & Sendable> {
             startUpdateTask(opened)
         } catch {
             await markFailed(error)
+            scheduleReconnectIfNeeded()
         }
     }
 
@@ -236,12 +261,12 @@ actor StreamReconciler<Row: Equatable & Sendable> {
                     await self.receive(envelope)
                 }
                 if !Task.isCancelled {
-                    await self.markOffline("Projection stream closed.")
+                    await self.handleConnectionLoss("Projection stream closed.")
                 }
             } catch is CancellationError {
                 return
             } catch {
-                await self.markFailed(error)
+                await self.handleConnectionFailure(error)
             }
         }
     }
@@ -309,9 +334,11 @@ actor StreamReconciler<Row: Equatable & Sendable> {
 
         do {
             try reducer.apply(envelope, policy: policy)
+            updateProjectionMetadata(from: envelope)
             activeTurnID = envelope.activeTurnID
-            freshness = .live
-            lastError = nil
+            freshness = freshnessState(after: envelope)
+            lastError = lastError(after: freshness)
+            scheduleHeartbeatIfNeeded()
             publish()
         } catch {
             await handleReducerError(error)
@@ -328,27 +355,31 @@ actor StreamReconciler<Row: Equatable & Sendable> {
         try reducer.apply(envelope, policy: policy)
         resolvedSourceHostID = envelope.sourceHostID
         resolvedViewParamsKey = envelope.viewParamsKey
+        updateProjectionMetadata(from: envelope)
         activeTurnID = envelope.activeTurnID
         if isCatchupComplete(envelope) {
             activeCatchupReason = nil
-            freshness = .live
+            freshness = freshnessState(after: envelope)
         } else {
             let reason = recoveryReason ?? .manualRefresh
             activeCatchupReason = reason
             freshness = .catchingUp(reason)
         }
-        lastError = nil
+        lastError = lastError(after: freshness)
+        scheduleHeartbeatIfNeeded()
         publish()
     }
 
     private func applyCatchupPage(_ envelope: ProjectionEnvelope<Row>) async {
         do {
             try reducer.apply(envelope, policy: policy)
+            updateProjectionMetadata(from: envelope)
             activeTurnID = envelope.activeTurnID
             if isCatchupComplete(envelope) {
                 activeCatchupReason = nil
-                freshness = .live
-                lastError = nil
+                freshness = freshnessState(after: envelope)
+                lastError = lastError(after: freshness)
+                scheduleHeartbeatIfNeeded()
                 publish()
                 await drainBufferedEnvelopes()
             } else if let activeCatchupReason {
@@ -427,9 +458,22 @@ actor StreamReconciler<Row: Equatable & Sendable> {
     private func closeCurrentConnection() async {
         updateTask?.cancel()
         updateTask = nil
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        heartbeatToken = nil
         let previousConnection = connection
         connection = nil
         await previousConnection?.close()
+    }
+
+    private func handleConnectionLoss(_ message: String) async {
+        await markOffline(message)
+        scheduleReconnectIfNeeded()
+    }
+
+    private func handleConnectionFailure(_ error: Error) async {
+        await markFailed(error)
+        scheduleReconnectIfNeeded()
     }
 
     private func markOffline(_ message: String) async {
@@ -449,6 +493,76 @@ actor StreamReconciler<Row: Equatable & Sendable> {
         freshness = .failed(message)
         lastError = message
         publish()
+    }
+
+    private func scheduleHeartbeatIfNeeded() {
+        guard let heartbeatTimeout, freshness != .closed else {
+            return
+        }
+        let token = UUID()
+        heartbeatToken = token
+        heartbeatTask?.cancel()
+        heartbeatTask = Task { [weak self, heartbeatTimeout] in
+            do {
+                try await Task.sleep(for: heartbeatTimeout)
+            } catch {
+                return
+            }
+            await self?.heartbeatTimedOut(ifCurrent: token)
+        }
+    }
+
+    private func heartbeatTimedOut(ifCurrent token: UUID) async {
+        guard heartbeatToken == token, freshness != .closed else {
+            return
+        }
+        await heartbeatTimedOut()
+    }
+
+    private func scheduleReconnectIfNeeded() {
+        guard let reconnectDelay, freshness != .closed else {
+            return
+        }
+        reconnectTask?.cancel()
+        reconnectTask = Task { [weak self, reconnectDelay] in
+            do {
+                try await Task.sleep(for: reconnectDelay)
+            } catch {
+                return
+            }
+            await self?.start()
+        }
+    }
+
+    private func updateProjectionMetadata(from envelope: ProjectionEnvelope<Row>) {
+        complete = envelope.complete ?? complete
+        totalRows = envelope.totalRows ?? totalRows
+        window = envelope.window ?? window
+    }
+
+    private func freshnessState(after envelope: ProjectionEnvelope<Row>) -> StreamReconcilerFreshnessState {
+        if envelope.liveState == "closed" {
+            return .closed
+        }
+        switch envelope.freshnessStatus {
+        case "stale":
+            return .stale(envelope.freshnessError ?? "Stale")
+        case "offline":
+            return .offline(envelope.freshnessError ?? "Offline")
+        case "error":
+            return .failed(envelope.freshnessError ?? "Error")
+        default:
+            return .live
+        }
+    }
+
+    private func lastError(after freshness: StreamReconcilerFreshnessState) -> String? {
+        switch freshness {
+        case .stale(let message), .offline(let message), .failed(let message):
+            return message
+        case .connecting, .subscribing, .live, .catchingUp, .closed:
+            return nil
+        }
     }
 
     private func addSink(
@@ -484,6 +598,9 @@ actor StreamReconciler<Row: Equatable & Sendable> {
             seq: reducer.seq,
             generation: reducer.generation,
             activeTurnID: activeTurnID,
+            complete: complete,
+            totalRows: totalRows,
+            window: window,
             bufferedEnvelopeCount: bufferedEnvelopes.count,
             lastError: lastError
         )

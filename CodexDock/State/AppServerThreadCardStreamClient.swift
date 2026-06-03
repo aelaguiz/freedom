@@ -11,6 +11,71 @@ public protocol ThreadCardStreamConnecting: Sendable {
     func connect(to host: DockHostConfiguration) async throws -> any ThreadCardStreamConnection
 }
 
+struct ThreadCardProjectionStreamConnector: ProjectionStreamConnecting {
+    private let host: DockHostConfiguration
+    private let streamClient: any ThreadCardStreamConnecting
+
+    init(
+        host: DockHostConfiguration,
+        streamClient: any ThreadCardStreamConnecting
+    ) {
+        self.host = host
+        self.streamClient = streamClient
+    }
+
+    func connect() async throws -> any ProjectionStreamConnection<DockThreadCardDTO> {
+        let connection = try await streamClient.connect(to: host)
+        return ThreadCardProjectionStreamConnection(connection: connection)
+    }
+}
+
+private final class ThreadCardProjectionStreamConnection: ProjectionStreamConnection, @unchecked Sendable {
+    private let connection: any ThreadCardStreamConnection
+    private let updateStream: AsyncThrowingStream<ProjectionEnvelope<DockThreadCardDTO>, Error>
+    private let updateContinuation: AsyncThrowingStream<ProjectionEnvelope<DockThreadCardDTO>, Error>.Continuation
+    private var updateTask: Task<Void, Never>?
+
+    init(connection: any ThreadCardStreamConnection) {
+        self.connection = connection
+        let stream = AsyncThrowingStream<ProjectionEnvelope<DockThreadCardDTO>, Error>.makeStream()
+        self.updateStream = stream.stream
+        self.updateContinuation = stream.continuation
+        self.updateTask = Task { [connection, updateContinuation] in
+            do {
+                for try await update in connection.updates() {
+                    updateContinuation.yield(ProjectionEnvelope(update))
+                }
+                updateContinuation.finish()
+            } catch {
+                updateContinuation.finish(throwing: error)
+            }
+        }
+    }
+
+    deinit {
+        updateTask?.cancel()
+        updateContinuation.finish()
+    }
+
+    func subscribe() async throws -> ProjectionEnvelope<DockThreadCardDTO> {
+        ProjectionEnvelope(try await connection.subscribe())
+    }
+
+    func resync(reason _: StreamReconcilerRecoveryReason) async throws -> ProjectionEnvelope<DockThreadCardDTO> {
+        ProjectionEnvelope(try await connection.resync())
+    }
+
+    func updates() -> AsyncThrowingStream<ProjectionEnvelope<DockThreadCardDTO>, Error> {
+        updateStream
+    }
+
+    func close() async {
+        updateTask?.cancel()
+        updateContinuation.finish()
+        await connection.close()
+    }
+}
+
 public struct AppServerThreadCardStreamClient: ThreadCardStreamConnecting {
     private let view: ThreadCardStreamView
     private let makeClient: @Sendable (DockRelayEndpoint) -> AppServerClient

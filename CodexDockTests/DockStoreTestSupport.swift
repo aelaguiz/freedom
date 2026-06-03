@@ -689,6 +689,54 @@ func dockStreamSnapshot(
     )
 }
 
+func threadCardReconcilerSnapshot(
+    _ update: ThreadCardStreamUpdateDTO,
+    freshness: StreamReconcilerFreshnessState? = nil
+) throws -> StreamReconcilerSnapshot<DockThreadCardDTO> {
+    var reducer = ProjectionReducer<DockThreadCardDTO>()
+    let policy = ProjectionReducerPolicy<DockThreadCardDTO>.threadCards(expectedView: update.view)
+    try reducer.apply(ProjectionEnvelope(update), policy: policy)
+    return StreamReconcilerSnapshot(
+        viewKey: ProjectionViewKey(
+            sourceHostID: update.sourceHostID,
+            view: update.view.rawValue,
+            scope: update.scope,
+            viewParamsKey: update.viewParamsKey
+        ),
+        freshness: freshness ?? threadCardFreshnessState(update.freshness),
+        rows: reducer.sortedRows(policy: policy),
+        epoch: reducer.epoch,
+        seq: reducer.seq,
+        generation: reducer.generation,
+        activeTurnID: nil,
+        complete: update.complete,
+        totalRows: update.totalRows,
+        window: update.window.map {
+            ProjectionWindow(
+                offset: $0.offset,
+                limit: $0.limit,
+                rowCount: $0.rowCount,
+                nextOffset: $0.nextOffset
+            )
+        },
+        bufferedEnvelopeCount: 0,
+        lastError: update.freshness.lastError
+    )
+}
+
+private func threadCardFreshnessState(_ freshness: DockStreamFreshnessDTO) -> StreamReconcilerFreshnessState {
+    switch freshness.status {
+    case .unknown, .fresh:
+        return .live
+    case .stale:
+        return .stale(freshness.lastError ?? "Stale")
+    case .offline:
+        return .offline(freshness.lastError ?? "Offline")
+    case .error:
+        return .failed(freshness.lastError ?? "Error")
+    }
+}
+
 func threadCardFixture(
     host: DockHostConfiguration,
     threadID: String,

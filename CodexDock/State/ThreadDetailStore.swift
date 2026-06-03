@@ -538,7 +538,7 @@ public final class ThreadDetailStore: ObservableObject {
         if latestConnectionState == .connected {
             await reconciler?.foregroundResumed()
         } else if latestConnectionState.shouldWaitForForegroundRehydrate {
-            await reconciler?.staleDeadlineExceeded("Resuming")
+            await reconciler?.transportReconnecting("Resuming")
         } else {
             await reconciler?.transportDisconnected(message(from: latestConnectionState))
         }

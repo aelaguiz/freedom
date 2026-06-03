@@ -21,21 +21,20 @@ final class ArchiveDataEngineTests: XCTestCase {
 
         await engine.loadLocalMetadata()
         await engine.ensureHosts()
-        let result = await engine.applySnapshot(
-            dockStreamSnapshot(
+        try await engine.apply(
+            threadCardReconcilerSnapshot(dockStreamSnapshot(
                 host: host,
                 epoch: "archive-engine",
                 seq: 1,
                 cards: [card],
                 view: .archive
-            ),
+            )),
             host: host
         )
         await engine.migrateMetadataHostAliases()
         let loadedSnapshot = await engine.snapshot()
         let snapshot = try XCTUnwrap(loadedSnapshot)
 
-        XCTAssertEqual(result, .applied)
         XCTAssertEqual(snapshot.rowCount, 1)
         XCTAssertEqual(snapshot.sections.map(\.title), ["main"])
         XCTAssertEqual(snapshot.sections[0].rows.map(\.title), ["Archived row"])
@@ -61,8 +60,8 @@ final class ArchiveDataEngineTests: XCTestCase {
 
         await engine.loadLocalMetadata()
         await engine.ensureHosts()
-        _ = await engine.applySnapshot(
-            dockStreamSnapshot(
+        try await engine.apply(
+            threadCardReconcilerSnapshot(dockStreamSnapshot(
                 host: host,
                 epoch: "archive-windowed",
                 seq: 1,
@@ -71,7 +70,7 @@ final class ArchiveDataEngineTests: XCTestCase {
                 complete: false,
                 totalRows: 2,
                 window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1, nextOffset: 1)
-            ),
+            )),
             host: host
         )
 
@@ -79,9 +78,7 @@ final class ArchiveDataEngineTests: XCTestCase {
         let snapshot = try XCTUnwrap(loadedSnapshot)
 
         XCTAssertEqual(snapshot.rowCount, 1)
-        XCTAssertEqual(snapshot.hostStates.map(\.status), [
-            .loaded(rowCount: 1, window: DockHostWindow(visibleRows: 1, totalRows: 2))
-        ])
+        XCTAssertEqual(snapshot.hostStates.map(\.status), [.loaded(rowCount: 1, window: DockHostWindow(visibleRows: 1, totalRows: 2))])
     }
 
     func testEngineBuildsResolverForLogicalHostRowsLoadedFromEndpointHost() async throws {
@@ -104,14 +101,14 @@ final class ArchiveDataEngineTests: XCTestCase {
 
         await engine.loadLocalMetadata()
         await engine.ensureHosts()
-        _ = await engine.applySnapshot(
-            dockStreamSnapshot(
+        try await engine.apply(
+            threadCardReconcilerSnapshot(dockStreamSnapshot(
                 host: host,
                 epoch: "archive-logical",
                 seq: 1,
                 cards: [card],
                 view: .archive
-            ),
+            )),
             host: host
         )
         let loadedSnapshot = await engine.snapshot()
@@ -156,8 +153,8 @@ final class ArchiveDataEngineTests: XCTestCase {
 
         await engine.loadLocalMetadata()
         await engine.ensureHosts()
-        _ = await engine.applySnapshot(
-            dockStreamSnapshot(
+        try await engine.apply(
+            threadCardReconcilerSnapshot(dockStreamSnapshot(
                 host: host,
                 epoch: "archive-catchup",
                 seq: 1,
@@ -166,28 +163,17 @@ final class ArchiveDataEngineTests: XCTestCase {
                 complete: false,
                 totalRows: 2,
                 window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1, nextOffset: 1)
-            ),
+            )),
             host: host
         )
-        _ = await engine.applyUpdate(
-            ThreadCardStreamUpdateDTO(
-                kind: .upsert,
-                schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
-                identityVersion: 1,
-                projectionEngineVersion: 1,
-                sourceHostID: host.id,
-                view: .archive,
-                scope: "view",
-                viewParamsKey: "dock:\(host.id)",
-                complete: true,
-                totalRows: 2,
-                window: DockStreamWindowDTO(offset: 1, limit: 1, rowCount: 1),
+        try await engine.apply(
+            threadCardReconcilerSnapshot(dockStreamSnapshot(
+                host: host,
                 epoch: "archive-catchup",
                 seq: 2,
-                order: "displayOrderKeyAscending",
-                freshness: DockStreamFreshnessDTO(status: .fresh),
-                rows: [secondCard]
-            ),
+                cards: [firstCard, secondCard],
+                view: .archive
+            )),
             host: host
         )
 

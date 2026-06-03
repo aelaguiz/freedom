@@ -2,7 +2,7 @@ import Foundation
 
 actor DockDataEngine {
     private var hosts: [DockHostConfiguration]
-    private var cardTable = ThreadCardTable()
+    private var projectionState = ThreadCardProjectionState()
     private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata]
 
     init(
@@ -11,12 +11,12 @@ actor DockDataEngine {
     ) {
         self.hosts = registry.hosts
         self.localMetadata = localMetadata
-        self.cardTable.reset(hosts: registry.hosts)
+        self.projectionState.reset(hosts: registry.hosts)
     }
 
     func updateRegistry(_ registry: HostRegistry) {
         hosts = registry.hosts
-        cardTable.reset(hosts: registry.hosts)
+        projectionState.reset(hosts: registry.hosts)
     }
 
     func updateLocalMetadata(_ values: [LocalThreadMetadataKey: LocalThreadMetadata]) {
@@ -24,37 +24,22 @@ actor DockDataEngine {
     }
 
     func ensureHosts() {
-        cardTable.ensureHosts(hosts)
+        projectionState.ensureHosts(hosts)
     }
 
-    func markChecking(host: DockHostConfiguration) {
-        cardTable.markChecking(host: host)
-    }
-
-    func markFailure(_ failure: DockRequestFailure, host: DockHostConfiguration) {
-        cardTable.markFailure(failure, host: host)
-    }
-
-    func applySnapshot(
-        _ update: ThreadCardStreamUpdateDTO,
+    func apply(
+        _ snapshot: StreamReconcilerSnapshot<DockThreadCardDTO>,
         host: DockHostConfiguration
-    ) -> ThreadCardTableApplyResult {
-        cardTable.applySnapshot(update, host: host)
-    }
-
-    func applyUpdate(
-        _ update: ThreadCardStreamUpdateDTO,
-        host: DockHostConfiguration
-    ) -> ThreadCardTableApplyResult {
-        cardTable.applyUpdate(update, host: host)
+    ) {
+        projectionState.apply(snapshot, host: host)
     }
 
     func rowCount(for host: DockHostConfiguration) -> Int {
-        cardTable.rowCount(for: host)
+        projectionState.rowCount(for: host)
     }
 
     func hostIdentityResolver() -> DockHostIdentityResolver {
-        cardTable.hostIdentityResolver(hosts: hosts)
+        projectionState.hostIdentityResolver(hosts: hosts)
     }
 
     func snapshot(now: @escaping @Sendable () -> Date = Date.init) -> DockSnapshot? {
@@ -62,7 +47,7 @@ actor DockDataEngine {
             return nil
         }
         return DockRenderProjector(now: now).snapshot(
-            from: cardTable.renderInput(hosts: hosts),
+            from: projectionState.renderInput(hosts: hosts),
             localMetadata: localMetadata
         )
     }

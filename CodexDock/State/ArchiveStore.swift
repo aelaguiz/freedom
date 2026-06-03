@@ -57,8 +57,12 @@ public final class ArchiveStore: ObservableObject {
 
     private var hosts: [DockHostConfiguration]
     private let commandEngine: ClientCommandEngine
+    private let streamClient: any ThreadCardStreamConnecting
+    private let streamReconnectDelay: Duration
+    private let streamHeartbeatTimeout: Duration
     private var dataEngine: ArchiveDataEngine?
-    private var streamLifecycle: ThreadCardStreamLifecycle?
+    private var streamReconcilers: [String: StreamReconciler<DockThreadCardDTO>] = [:]
+    private var streamTasks: [String: Task<Void, Never>] = [:]
     private var isLoading = false
     private weak var connectivityReporter: (any AppConnectivityReporting)?
     private let connectivityEventSink: ConnectivityEventSink?
@@ -73,25 +77,18 @@ public final class ArchiveStore: ObservableObject {
     ) {
         self.hosts = registry.hosts
         self.commandEngine = ClientCommandEngine(archiver: archiver)
+        self.streamClient = streamClient
+        self.streamReconnectDelay = CodexDockConstants.Dock.autoRefreshInterval
+        self.streamHeartbeatTimeout = CodexDockConstants.Dock.streamHeartbeatTimeout
         self.connectivityEventSink = connectivityEventSink
         self.dataEngine = ArchiveDataEngine(
             registry: registry,
             metadataStore: metadataStore,
             now: now
         )
-        self.streamLifecycle = nil
         let initialState = ArchiveStoreState.idle(registry.hosts.map(DockHostViewModel.init))
         self.state = initialState
         self.screenStore = ArchiveScreenStore(state: initialState)
-        self.streamLifecycle = ThreadCardStreamLifecycle(
-            view: .archive,
-            streamClient: streamClient,
-            streamReconnectDelay: CodexDockConstants.Dock.autoRefreshInterval,
-            streamHeartbeatTimeout: CodexDockConstants.Dock.streamHeartbeatTimeout,
-            logger: DockLog.archive,
-            logName: "archive",
-            delegate: self
-        )
     }
 
     public init(
@@ -103,16 +100,28 @@ public final class ArchiveStore: ObservableObject {
     ) {
         self.hosts = []
         self.commandEngine = ClientCommandEngine(archiver: archiver)
+        self.streamClient = AppServerThreadCardStreamClient(view: .archive)
+        self.streamReconnectDelay = CodexDockConstants.Dock.autoRefreshInterval
+        self.streamHeartbeatTimeout = CodexDockConstants.Dock.streamHeartbeatTimeout
         self.connectivityEventSink = connectivityEventSink
         self.dataEngine = nil
-        self.streamLifecycle = nil
         let initialState = ArchiveStoreState.configurationError(error.localizedDescription)
         self.state = initialState
         self.screenStore = ArchiveScreenStore(state: initialState)
     }
 
+    deinit {
+        streamTasks.values.forEach { $0.cancel() }
+        let reconcilers = Array(streamReconcilers.values)
+        Task {
+            for reconciler in reconcilers {
+                await reconciler.close()
+            }
+        }
+    }
+
     public func updateRegistry(_ registry: HostRegistry) async {
-        await streamLifecycle?.closeStreams()
+        await closeAllReconcilers()
         hosts = registry.hosts
         if let dataEngine {
             await dataEngine.updateRegistry(registry)
@@ -270,7 +279,7 @@ public final class ArchiveStore: ObservableObject {
 
         await dataEngine.loadLocalMetadata()
         await dataEngine.ensureHosts()
-        await streamLifecycle?.synchronizeStreams(hosts: hosts)
+        await synchronizeStreams()
         await dataEngine.migrateMetadataHostAliases()
         await publishSnapshot()
         if let snapshot = await dataEngine.snapshot() {
@@ -288,6 +297,83 @@ public final class ArchiveStore: ObservableObject {
             setState(snapshot.rowCount == 0 ? .empty(snapshot) : .loaded(snapshot))
         }
         publishConnectivity(for: state)
+    }
+
+    private func synchronizeStreams() async {
+        let validHostIDs = Set(hosts.map(\.id))
+        for hostID in streamReconcilers.keys where !validHostIDs.contains(hostID) {
+            await closeReconciler(hostID: hostID)
+        }
+
+        for host in hosts {
+            let reconciler = streamReconcilers[host.id] ?? makeReconciler(for: host)
+            if streamReconcilers[host.id] == nil {
+                streamReconcilers[host.id] = reconciler
+                await startReconcilerObservation(reconciler, host: host)
+                await dataEngine?.apply(await reconciler.snapshot(), host: host)
+                await publishSnapshot()
+                await reconciler.start()
+            } else {
+                await reconciler.manualRefresh()
+            }
+            await dataEngine?.apply(await reconciler.snapshot(), host: host)
+            await dataEngine?.migrateMetadataHostAliases()
+            await publishSnapshot()
+        }
+    }
+
+    private func makeReconciler(for host: DockHostConfiguration) -> StreamReconciler<DockThreadCardDTO> {
+        StreamReconciler(
+            viewKey: ProjectionViewKey(
+                sourceHostID: nil,
+                view: ThreadCardStreamView.archive.rawValue,
+                scope: "view",
+                viewParamsKey: nil
+            ),
+            policy: .threadCards(expectedView: .archive),
+            connector: ThreadCardProjectionStreamConnector(
+                host: host,
+                streamClient: streamClient
+            ),
+            heartbeatTimeout: streamHeartbeatTimeout,
+            reconnectDelay: streamReconnectDelay
+        )
+    }
+
+    private func startReconcilerObservation(
+        _ reconciler: StreamReconciler<DockThreadCardDTO>,
+        host: DockHostConfiguration
+    ) async {
+        streamTasks[host.id]?.cancel()
+        let snapshots = await reconciler.snapshots()
+        streamTasks[host.id] = Task { [weak self, host] in
+            for await snapshot in snapshots {
+                await self?.handleReconcilerSnapshot(snapshot, host: host)
+            }
+        }
+    }
+
+    private func handleReconcilerSnapshot(
+        _ snapshot: StreamReconcilerSnapshot<DockThreadCardDTO>,
+        host: DockHostConfiguration
+    ) async {
+        await dataEngine?.apply(snapshot, host: host)
+        await dataEngine?.migrateMetadataHostAliases()
+        await publishSnapshot()
+    }
+
+    private func closeReconciler(hostID: String) async {
+        streamTasks[hostID]?.cancel()
+        streamTasks[hostID] = nil
+        let reconciler = streamReconcilers.removeValue(forKey: hostID)
+        await reconciler?.close()
+    }
+
+    private func closeAllReconcilers() async {
+        let hostIDs = Array(streamReconcilers.keys)
+        for hostID in hostIDs {
+            await closeReconciler(hostID: hostID)
+        }
     }
 
     private func setState(_ state: ArchiveStoreState) {
@@ -384,47 +470,5 @@ public final class ArchiveStore: ObservableObject {
         case .error(let message):
             return .error(message)
         }
-    }
-}
-
-extension ArchiveStore: ThreadCardStreamLifecycleDelegate {
-    func cardStreamLifecycleMarkChecking(host: DockHostConfiguration) async {
-        await dataEngine?.markChecking(host: host)
-    }
-
-    func cardStreamLifecycleMarkFailure(_ failure: DockRequestFailure, host: DockHostConfiguration) async {
-        await dataEngine?.markFailure(failure, host: host)
-    }
-
-    func cardStreamLifecycleApplySnapshot(
-        _ update: ThreadCardStreamUpdateDTO,
-        host: DockHostConfiguration
-    ) async -> ThreadCardTableApplyResult {
-        guard let dataEngine else {
-            return .needsResync(.streamContract)
-        }
-        return await dataEngine.applySnapshot(update, host: host)
-    }
-
-    func cardStreamLifecycleApplyUpdate(
-        _ update: ThreadCardStreamUpdateDTO,
-        host: DockHostConfiguration
-    ) async -> ThreadCardTableApplyResult {
-        guard let dataEngine else {
-            return .needsResync(.streamContract)
-        }
-        return await dataEngine.applyUpdate(update, host: host)
-    }
-
-    func cardStreamLifecycleRowCount(for host: DockHostConfiguration) async -> Int {
-        await dataEngine?.rowCount(for: host) ?? 0
-    }
-
-    func cardStreamLifecyclePublishSnapshot() async {
-        await publishSnapshot()
-    }
-
-    func cardStreamLifecycleMigrateMetadataHostAliases() async {
-        await dataEngine?.migrateMetadataHostAliases()
     }
 }

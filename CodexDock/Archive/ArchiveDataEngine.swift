@@ -2,7 +2,7 @@ import Foundation
 
 actor ArchiveDataEngine {
     private var hosts: [DockHostConfiguration]
-    private var cardTable = ThreadCardTable(expectedView: .archive)
+    private var projectionState = ThreadCardProjectionState()
     private let metadataEngine: LocalMetadataEngine
     private let now: @Sendable () -> Date
     private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
@@ -15,12 +15,12 @@ actor ArchiveDataEngine {
         self.hosts = registry.hosts
         self.metadataEngine = LocalMetadataEngine(store: metadataStore, now: now)
         self.now = now
-        self.cardTable.reset(hosts: registry.hosts)
+        self.projectionState.reset(hosts: registry.hosts)
     }
 
     func updateRegistry(_ registry: HostRegistry) {
         hosts = registry.hosts
-        cardTable.reset(hosts: registry.hosts)
+        projectionState.reset(hosts: registry.hosts)
     }
 
     func loadLocalMetadata() async {
@@ -35,41 +35,26 @@ actor ArchiveDataEngine {
     }
 
     func ensureHosts() {
-        cardTable.ensureHosts(hosts)
+        projectionState.ensureHosts(hosts)
     }
 
-    func markChecking(host: DockHostConfiguration) {
-        cardTable.markChecking(host: host)
-    }
-
-    func markFailure(_ failure: DockRequestFailure, host: DockHostConfiguration) {
-        cardTable.markFailure(failure, host: host)
-    }
-
-    func applySnapshot(
-        _ update: ThreadCardStreamUpdateDTO,
+    func apply(
+        _ snapshot: StreamReconcilerSnapshot<DockThreadCardDTO>,
         host: DockHostConfiguration
-    ) -> ThreadCardTableApplyResult {
-        cardTable.applySnapshot(update, host: host)
-    }
-
-    func applyUpdate(
-        _ update: ThreadCardStreamUpdateDTO,
-        host: DockHostConfiguration
-    ) -> ThreadCardTableApplyResult {
-        cardTable.applyUpdate(update, host: host)
+    ) {
+        projectionState.apply(snapshot, host: host)
     }
 
     func rowCount(for host: DockHostConfiguration) -> Int {
-        cardTable.rowCount(for: host)
+        projectionState.rowCount(for: host)
     }
 
     func hostIdentityResolver() -> DockHostIdentityResolver {
-        cardTable.hostIdentityResolver(hosts: hosts)
+        projectionState.hostIdentityResolver(hosts: hosts)
     }
 
     func migrateMetadataHostAliases() async {
-        let resolver = cardTable.hostIdentityResolver(hosts: hosts)
+        let resolver = projectionState.hostIdentityResolver(hosts: hosts)
         do {
             localMetadata = try await metadataEngine.migrateHostAliases(using: resolver)
         } catch {
@@ -82,7 +67,7 @@ actor ArchiveDataEngine {
             return nil
         }
 
-        let input = cardTable.renderInput(hosts: hosts)
+        let input = projectionState.renderInput(hosts: hosts)
         let sections = ArchiveThreadCardProjector(
             hosts: hosts,
             hostIdentityResolver: input.hostIdentityResolver,

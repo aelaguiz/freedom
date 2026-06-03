@@ -108,7 +108,7 @@ final class ThreadDetailStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDockRowAdvanceSchedulesSettledCanonicalHistoryRefresh() async throws {
+    func testDockRowAdvanceDoesNotScheduleSettledSecondRefresh() async throws {
         let host = makeDetailHost()
         let initialRow = makeDetailRow(
             hostID: host.id,
@@ -158,16 +158,19 @@ final class ThreadDetailStoreTests: XCTestCase {
         await store.load()
         store.observeDockRowUpdate(updatedRow)
 
-        try await waitForDetailStore {
-            guard case let .loaded(snapshot) = store.state else {
-                return false
-            }
-            return snapshot.events.map(\.body) == ["Settled canonical read", "Initial turn"]
-                && snapshot.liveState == .live
+        try await waitForDetailStoreAsync {
+            session.detailResyncParamsSnapshot().count == 1
         }
+        try await Task.sleep(for: .milliseconds(50))
+
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.events.map(\.body), ["Initial turn"])
+        XCTAssertEqual(snapshot.liveState, .live)
 
         XCTAssertEqual(session.detailSubscribeParamsSnapshot().count, 1)
-        XCTAssertEqual(session.detailResyncParamsSnapshot().count, 2)
+        XCTAssertEqual(session.detailResyncParamsSnapshot().count, 1)
         XCTAssertEqual(session.readParamsSnapshot(), [])
         XCTAssertEqual(session.turnsListParamsSnapshot(), [])
         XCTAssertEqual(session.resumeParamsSnapshot(), [])
@@ -251,16 +254,13 @@ final class ThreadDetailStoreTests: XCTestCase {
             return XCTFail("Expected immediate canonical reread to preserve live-ahead event, got \(store.state)")
         }
 
-        try await waitForDetailStoreAsync {
-            session.detailResyncParamsSnapshot().count == 2
+        try await Task.sleep(for: .milliseconds(150))
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected loaded state after row advance, got \(store.state)")
         }
-        try await waitForDetailStore {
-            guard case let .loaded(snapshot) = store.state else {
-                return false
-            }
-            return snapshot.events.map(\.body) == ["Canonical settled", "Initial turn"]
-                && snapshot.liveState == .live
-        }
+        XCTAssertEqual(session.detailResyncParamsSnapshot().count, 1)
+        XCTAssertEqual(snapshot.events.map(\.body), ["Live ahead", "Initial turn"])
+        XCTAssertEqual(snapshot.liveState, .live)
     }
 
     @MainActor
@@ -600,7 +600,7 @@ final class ThreadDetailStoreTests: XCTestCase {
                   case let .stale(message) = snapshot.liveState else {
                 return false
             }
-            return message == "Live update stream ended."
+            return message == "Projection stream closed."
         }
     }
 
