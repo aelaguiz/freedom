@@ -234,21 +234,22 @@ Implementation is done only when all of these are true:
 
 # 2) Problem Statement
 
-The app is a live monitor, but the client architecture currently behaves like a
-collection of mostly-independent live monitors:
+The app is a live monitor. The bug class came from an older client architecture
+that behaved like a collection of mostly-independent live monitors:
 
 - `AppServerClient` reconnects the socket and emits connection states.
-- Dock and Archive use `ThreadCardStreamLifecycle` and `ThreadCardTable`.
-- Thread Detail uses `ThreadDetailStore`, `ThreadDetailDataEngine`, and
+- Dock and Archive used `ThreadCardStreamLifecycle` and `ThreadCardTable`.
+- Thread Detail used `ThreadDetailStore`, `ThreadDetailDataEngine`, and
   `ThreadDetailLiveEventBuffer`.
 - Dock row changes can trigger Thread Detail rehydrate attempts.
 - Foreground resume can trigger a separate Thread Detail recovery path.
 - Relay `resyncRequired`, client sequence gaps, heartbeat timeouts, command
   sends, and route diagnostics each touch freshness through different code.
-- Tests include useful static fixtures but do not yet prove the full real-life
+- Tests included useful static fixtures that did not prove the full real-life
   chain from relay projection change to visible simulator state over time.
 
-That split explains the bugs the user has been seeing:
+That split explains the bugs the user was seeing and the regressions this plan
+must keep preventing:
 
 - The relay can have current Codex data while the current Thread Detail view
   stays stale.
@@ -256,8 +257,8 @@ That split explains the bugs the user has been seeing:
 - A command can succeed while the visible row does not arrive, arrives twice, or
   arrives under a different identity.
 - Dock or Archive catch-up can disagree with Swift sequence handling.
-- Tests can pass because they validate isolated snapshots instead of the whole
-  live runtime.
+- Tests can pass when they validate isolated snapshots instead of the whole live
+  runtime.
 
 # 3) Research Grounding
 
@@ -274,24 +275,23 @@ Swift runtime sources:
   transport reconnect, notification streams, connection state, and typed route
   helpers such as `threadDetailSubscribe` and `threadDetailResync`.
 - `CodexDock/AppServer/AppServerMethods.swift`: route name registry.
-- `CodexDock/AppServer/AppServerThreadCardStreamClient.swift`: current Dock and
-  Archive stream connection wrapper.
-- `CodexDock/State/ThreadCardStreamLifecycle.swift`: current root-stream
-  subscribe, resync, heartbeat, reconnect, update task, and failure handling.
-- `CodexDock/State/ThreadCardTable.swift`: current Dock/Archive projection table
-  and sequence/contract validation.
+- `CodexDock/AppServer/AppServerThreadCardStreamClient.swift`: thin Dock and
+  Archive projection transport adapter used by the reconciler.
+- `CodexDock/Projection/ProjectionReducer.swift`: shared projection envelope law,
+  row identity, ordering, revision, duplicate detection, sequence continuity,
+  catch-up page, live mutation, heartbeat, and `resyncRequired` handling.
+- `CodexDock/Projection/StreamReconciler.swift`: shared subscription lifecycle
+  owner for subscribe, resync, reconnect intent, foreground resume, heartbeat
+  timeout, bounded buffering, catch-up replay, stale/offline/failed state, and
+  close semantics.
 - `CodexDock/State/DockStore.swift` and `CodexDock/State/ArchiveStore.swift`:
-  current store adapters around root streams and rendered snapshots.
-- `CodexDock/State/ThreadDetailStore.swift`: current Thread Detail load,
-  notification observation, foreground recovery, Dock-row-triggered recovery,
-  composer sends, request-card responses, and stale/live UI state.
-- `CodexDock/ThreadDetail/ThreadDetailDataEngine.swift`: current Thread Detail
-  projection validation and row index.
-- `CodexDock/State/ThreadDetailLiveEventBuffer.swift`: current detail replay
-  buffer.
+  store adapters around reconciler output plus local filter, lens, archive, and
+  metadata decoration state.
+- `CodexDock/State/ThreadDetailStore.swift`: store adapter around reconciler
+  output plus local composer, voice, request-card, and command state.
 - `CodexDock/State/AppConnectivityStore.swift` and
-  `CodexDock/State/SystemHealthProjector.swift`: current route health and
-  freshness presentation.
+  `CodexDock/State/SystemHealthProjector.swift`: route health and user-facing
+  health presentation, separate from view-specific projection freshness.
 - `CodexDock/ThreadDetail/ThreadDetailScreenStore.swift` and
   `CodexDock/ThreadDetail/ThreadEventDisplayOrder.swift`: render projection and
   visible ordering.
@@ -362,20 +362,19 @@ architecture decision remains open before planning the phases.
 <!-- arch_skill:block:current_architecture:start -->
 ## 4.1 Current Runtime Shape
 
-The current client has multiple live runtimes:
+The current client has one projection runtime shape, with transport and render
+code kept as adapters around it:
 
-| Area | Current owner | What it owns today | Why it can drift |
+| Area | Current owner | What it owns today | Drift boundary |
 | --- | --- | --- | --- |
-| JSON-RPC transport | `AppServerClient` | WebSocket open/close, reconnect, initialize, pending requests, notifications | It proves socket state, not per-view projection catch-up. |
-| Dock root stream | `ThreadCardStreamLifecycle` plus `ThreadCardTable` | Subscribe, resync, heartbeat timeout, update task, table apply | It is separate from Thread Detail recovery and has its own failure model. |
-| Archive root stream | Another `ThreadCardStreamLifecycle` plus `ThreadCardTable` | Same as Dock for archive rows | It duplicates Dock lifecycle and can drift in tests or options. |
-| Thread Detail | `ThreadDetailStore` plus `ThreadDetailDataEngine` plus `ThreadDetailLiveEventBuffer` | Subscribe, notification observation, rehydrate, replay buffer, stale/live labels | It owns a second recovery state machine and can block catch-up behind `recoveryTask`. |
-| Dock-row-triggered detail refresh | `ThreadDetailStore.observeDockRowUpdate` | Immediate and settled detail resync | It uses Dock activity as a proxy for detail freshness. |
-| Foreground recovery | `AppLifecycleCoordinator` consumers | Background stale marking and foreground rehydrate | Root streams and detail use different lifecycle paths. |
-| Command sends | `ClientCommandEngine` through `ThreadDetailStore` | `turnStart`, `turnSteer`, `sendResponse`, active turn state | Command acknowledgement can be confused with visible projection update. |
-| Connectivity | `AppConnectivityStore`, `SystemHealthProjector` | Route health, screen phases, freshness labels | Health can look acceptable while a view-specific projection is stale. |
-| Render projection | `DockCardProjection`, `ThreadEventDisplayOrder`, screen stores | Filtering, ordering, row mapping, UI state | Render code can hide or reorder truth if it carries data-policy logic. |
-| Proof and tests | XCTest, UI tests, proof scripts, previews | Static fixtures, fake routes, visible-state dumps | Fakes can pass without exercising the production projection runtime. |
+| JSON-RPC transport | `AppServerClient` | WebSocket open/close, reconnect, initialize, pending requests, notifications | It proves socket state only. View freshness remains reconciler-owned. |
+| Projection apply law | `ProjectionReducer<Row>` | Envelope validation, identity, ordering, revision, duplicates, sequence continuity, snapshot, page, upsert, delete, heartbeat, and `resyncRequired` | No store or renderer may rebuild these rules. |
+| Projection lifecycle | `StreamReconciler<Row>` | Subscribe, resync, reconnect intent, foreground resume, heartbeat timeout, bounded buffering, catch-up replay, stale/offline/failed state, and close | Transport reconnect and route health cannot mark a view live. |
+| Dock and Archive | `DockStore` and `ArchiveStore` | Host/view-key setup, rendering from reconciler snapshots, local filters, archive actions, metadata decoration | Relay projection owns row existence, order, identity, and freshness. |
+| Thread Detail | `ThreadDetailStore` | Rendering from reconciler snapshots plus composer, voice, request-card, and command-local state | Visible rows arrive only through relay projection. |
+| Connectivity | `AppConnectivityStore`, `SystemHealthProjector` | Route health, configured host health, and user-facing status copy | Health is evidence, not row truth. |
+| Render projection | `DockCardProjection`, `ThreadEventDisplayOrder`, screen stores | Filtering, formatting, row mapping, and UI state | Render code may format and filter; it may not invent identity, order, or freshness. |
+| Proof and tests | XCTest, UI tests, proof scripts | Reducer/reconciler tests, relay contract tests, structured UI dumps, and controlled simulator proof | Acceptance proof must use relay-owned projection routes and visible accessibility state over time. |
 
 Additional current contributors:
 
@@ -395,28 +394,28 @@ Additional current contributors:
 
 Dock and Archive:
 
-1. Store asks `ThreadCardStreamLifecycle` to synchronize streams for configured
-   hosts.
-2. Lifecycle creates a `ThreadCardStreamConnection` through
-   `AppServerThreadCardStreamClient`.
-3. Connection subscribes to relay route `dock/subscribe` or `archive/subscribe`.
-4. Initial payload is applied as a snapshot by `ThreadCardTable`.
-5. A task consumes `dock/update` or `archive/update` notifications.
-6. Heartbeat timeout, sequence gap, or relay `resyncRequired` calls resync.
-7. Store publishes a rendered snapshot.
+1. Store builds one `StreamReconciler<DockThreadCardDTO>` per configured host
+   and view.
+2. The reconciler connects through `AppServerThreadCardStreamClient`.
+3. The connection subscribes to `dock/subscribe` or `archive/subscribe`.
+4. `ProjectionReducer<DockThreadCardDTO>` applies the initial snapshot.
+5. The reconciler consumes `dock/update` or `archive/update` notifications.
+6. Heartbeat timeout, sequence gap, foreground resume, stream close, buffer
+   overflow, or relay `resyncRequired` takes the reconciler resync path.
+7. Store publishes a rendered snapshot from reconciler rows and local UI state.
 
 Thread Detail:
 
 1. `SessionDetailView` creates `ThreadDetailStore`.
-2. `ThreadDetailStore.load()` creates a session and calls
-   `connectAndInitialize`.
-3. It begins `ThreadDetailLiveEventBuffer`, starts notification observation,
-   then calls `thread/detail/subscribe`.
-4. Snapshot rows replace the detail index in `ThreadDetailDataEngine`.
-5. Buffered notifications replay.
-6. Later notifications call `ThreadDetailDataEngine.apply`.
-7. Foreground resume, connection reconnect, Dock row advance, and relay
-   `resyncRequired` can each call a rehydrate/resync path.
+2. `ThreadDetailStore.load()` creates a projection session and starts one
+   `StreamReconciler<ThreadDetailEventDTO>` for the thread view key.
+3. The connection subscribes to `thread/detail/subscribe`.
+4. `ProjectionReducer<ThreadDetailEventDTO>` applies the initial snapshot.
+5. Later `thread/detail/update` notifications flow through the same reconciler
+   and reducer.
+6. Foreground resume, transport reconnect intent, sequence gap, heartbeat
+   timeout, command-completed invalidation, and relay `resyncRequired` all call
+   reconciler resync.
 
 Transport:
 
@@ -424,8 +423,7 @@ Transport:
 2. If the transport fails and a reconnect policy exists, it reconnects the
    socket and initializes again.
 3. It emits connection states and notifications.
-4. It does not know which screens were subscribed or whether those screens
-   caught up after reconnect.
+4. It does not decide whether any subscribed screen caught up after reconnect.
 
 ## 4.3 Current Relay Communication Flow
 
@@ -444,27 +442,22 @@ Thread Detail:
 1. `thread/detail/subscribe` builds or resumes relay detail projection state.
 2. `thread/detail/update` notifications carry live projection updates.
 3. `thread/detail/resync` rebuilds the canonical detail state.
-4. `thread/detail/read` can return a snapshot outside the live subscription path
-   and therefore cannot remain a production display path after cutover.
 
-Relay drift points found by the parallel audit:
+Relay source boundaries still worth keeping explicit:
 
 - Dock/Archive projection truth is SQLite-backed through `RelayStateStore` and
-  `StateSubscriptionHub`; Thread Detail projection truth is currently a
-  per-WebSocket `ThreadDetailLedger`. They are projection-shaped, but they do
-  not share one retained event log or one catch-up mechanism.
-- `projection/witness/read` currently records Thread Detail envelopes through
-  explicit witness calls. Dock and Archive stream envelopes are not guaranteed
-  to pass through the same witness recorder.
-- Relay window catch-up currently has a same-`seq` `upsert` shape in the state
-  engine, while Swift and proof expect `upsert/delete` to increment sequence.
+  `StateSubscriptionHub`; Thread Detail projection truth is held by
+  `ThreadDetailLedger`. Both emit the shared projection envelope law.
+- `projection/witness/read` is proof-only and disabled unless explicitly
+  enabled for proof.
+- Relay window catch-up uses explicit `page` updates instead of same-sequence
+  live `upsert` payloads.
 - `session_index.jsonl`, live leases, live status cache, raw `thread/list`, raw
   `thread/read`, raw `thread/turns/list`, and live loaded sessions are relay
   input sources only before the projection collapse point. None may become
   Swift-visible truth.
-- Dormant or legacy relay structures such as old subscription tables, conflicts,
-  summary caches, loopback-only responses, and unsupported debug routes must not
-  be treated as retained side paths.
+- Unsupported debug, state, raw app-server, or loopback-only routes must stay
+  unavailable to production app display and acceptance proof.
 
 ## 4.4 Route Classification
 
@@ -479,7 +472,6 @@ Production display routes today:
 - `thread/detail/subscribe`
 - `thread/detail/update`
 - `thread/detail/resync`
-- `thread/detail/read` until cutover only
 
 Production command and adjacent routes:
 
@@ -525,40 +517,46 @@ display code:
 
 ## 4.5 Current Test And Proof Pattern
 
-The current repo has useful tests, but the default green path is not the same as
-real-life live-update proof:
+The current repo now has behavior-level proof for the shared runtime, but final
+completion still requires the simulator proof gates in Section 8:
 
-- Swift unit tests mostly prove stores, reducers, and fake streams.
-- Relay tests mostly prove relay fixtures, scripts, and contract behavior.
+- Swift unit tests prove the shared reducer, shared reconciler, Thread Detail
+  command invalidation, Dock/Archive stream behavior, and lifecycle recovery
+  through projection envelopes.
+- Relay tests prove route side doors are unsupported, projection witness fails
+  closed unless enabled, root/detail streams share the projection envelope law,
+  raw routes stay upstream-only, and proof reports reject side-door evidence.
 - `rtk make app-test SIM='iPhone 17'` proves the app can run UI tests with relay
-  host env, not that relay truth changed and visible UI caught up.
-- `rtk make sim-ui-dump SIM='iPhone 17'` proves what is visible at one moment,
-  not that the view is fresh.
-- `CodexDockDisplayedSyncProofTests` can skip when
-  `/tmp/codex-client/codex-dock-sim-ui-sync-config.json` is absent.
-- Controlled matrix proof is the closest current real-life gate, but defaults
-  are too loose for final acceptance: one pass, no checkpoint sweep by default,
-  and a Makefile default lag budget wider than the strict script default.
-- Proof schemas still use broad nested `additionalProperties` and deny-lists;
-  that blocks known old fields but can still admit new shadow truth fields.
-- `thread/detail/read` is still allowed in some proof paths, which risks making
-  proof compare against a route the production UI must not use.
-- Some proof code still contains legacy expected-message ID handling even when
-  it fails if used.
+  host env; it is a smoke gate, not enough by itself for live-update acceptance.
+- `rtk make sim-ui-dump SIM='iPhone 17'` dumps the current accessibility state
+  without screenshots, navigation, or relaunch. It is diagnostic evidence, not
+  over-time acceptance by itself.
+- `rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'` is the canonical
+  over-time simulator gate. Makefile defaults now require two passes, checkpoint
+  sweep, the full required controlled-scenario set, and `MAX_UI_LAG_MS=2000`.
+- Proof schemas use strict top-level report fields plus allow-listed nested
+  proof keys and route keys. Passing live-update proof must include relay-owned
+  client route evidence and cannot count `projection/witness/read` as a
+  simulator-app route.
+- Live-filter truth reads `projection/witness/read`, requires
+  byte-equivalent retained downstream envelopes, and rejects raw
+  `thread/detail/read` as acceptance truth.
 
 ## 4.6 Current Failure Pattern
 
-The confirmed class of failure is not just "old cache." It is:
+The confirmed class of failure was not just "old cache." It was:
 
 - relay has current data;
 - transport may be connected;
-- one screen-specific client state machine is waiting, stale, blocked, or out of
-  sequence;
+- one screen-specific client state machine can wait, go stale, block, or fall
+  out of sequence;
 - another layer still reports acceptable connection health;
 - tests do not force the whole path to prove visible catch-up.
 
-That is why a thread can look stuck or out of date while Codex is actively
-producing messages.
+The current code addresses this class by routing each production screen through
+`StreamReconciler` and `ProjectionReducer`. Completion is still unproven until
+the remaining Swift, app-test, `sim-ui-dump`, strict controlled simulator
+matrix, implementation audit, and strict fresh-consult gates pass.
 <!-- arch_skill:block:current_architecture:end -->
 
 # 5) Target Architecture
@@ -792,19 +790,19 @@ Final proof defaults must fail closed:
 
 | Path | Current role | Required target state |
 | --- | --- | --- |
-| `CodexDock/AppServer/AppServerClient.swift` | Transport, reconnect, typed requests, `threadDetailRead`, subscribe, resync helpers | Keep transport and typed requests. Remove production display dependence on `threadDetailRead`. Reconnect emits intents; it does not imply view freshness. |
-| `CodexDock/AppServer/AppServerMethods.swift` | Central route strings | Keep only canonical production display, command, and proof-only routes. Remove or quarantine display side-door routes from app imports. |
+| `CodexDock/AppServer/AppServerClient.swift` | Transport, reconnect, typed requests, subscribe, and resync helpers | Keep transport and typed requests. Reconnect emits intents; it does not imply view freshness. |
+| `CodexDock/AppServer/AppServerMethods.swift` | Central app-facing route strings | Keep only canonical production display and command routes. Do not import raw app-server or proof-only side-door routes into app code. |
 | `CodexDock/AppServer/AppServerHostConnector.swift` | One-shot and retained raw client construction | Keep as transport factory only. It cannot be a bypass around projection runtime for display truth. |
-| `CodexDock/Diagnostics/ObservabilityContract.swift` | Swift route diagnostics mark `thread/detail/read` app-critical today | Remove `thread/detail/read` from app-critical production display evidence after cutover. It may survive only as manual diagnostics if not imported by display/proof acceptance code. |
-| `CodexDock/AppServer/AppServerThreadCardStreamClient.swift` | Dock/Archive stream connection wrapper | Replace with a thin transport adapter used by `StreamReconciler`, or delete if reconciler owns connection directly. |
-| `CodexDock/State/ThreadCardStreamLifecycle.swift` | Root-stream lifecycle state machine | Delete after Dock and Archive use `StreamReconciler`. No test fixture keeps it alive. |
-| `CodexDock/State/ThreadCardTable.swift` | Dock/Archive projection table | Replace or merge into shared `ProjectionReducer<Row>`. Snapshot apply must reject non-snapshot updates. |
+| `CodexDock/Diagnostics/ObservabilityContract.swift` | Swift route diagnostics for canonical app-facing routes | Keep `thread/detail/subscribe`, `thread/detail/update`, and `thread/detail/resync` app-critical. Do not re-add `thread/detail/read`. |
+| `CodexDock/AppServer/AppServerThreadCardStreamClient.swift` | Thin Dock/Archive projection transport adapter | Keep only as a connection adapter used by `StreamReconciler`; it cannot own stream lifecycle or row truth. |
+| `CodexDock/State/ThreadCardStreamLifecycle.swift` | Deleted root-stream lifecycle state machine | Remain deleted. No test fixture keeps it alive. |
+| `CodexDock/State/ThreadCardTable.swift` | Deleted Dock/Archive projection table | Remain deleted. `ProjectionReducer<Row>` owns projection apply law. |
 | `CodexDock/State/DockStore.swift` | Root screen store and stream delegate | Become a store adapter around reconciler output and local filter/lens state. |
 | `CodexDock/State/ArchiveStore.swift` | Archive screen store and stream delegate | Same as Dock. |
 | `CodexDock/State/DockDataEngine.swift` and archive equivalents | Current row/projector support | Keep only render/local metadata logic that does not decide projection truth, or fold into render projectors. |
-| `CodexDock/State/ThreadDetailStore.swift` | Detail live state machine, recovery task, buffer, command owner, render adapter | Remove subscribe/resync/replay/heartbeat/freshness ownership. Keep composer, voice, request-card inputs, command calls, and render binding. |
-| `CodexDock/State/ThreadDetailLiveEventBuffer.swift` | Detail-only replay buffer | Delete. Reconciler owns bounded buffering and catch-up. |
-| `CodexDock/ThreadDetail/ThreadDetailDataEngine.swift` | Detail-only projection reducer | Merge semantics into shared `ProjectionReducer<Row>` or make it a typed specialization of the shared reducer. |
+| `CodexDock/State/ThreadDetailStore.swift` | Detail store adapter, command owner, and local input owner | Keep composer, voice, request-card inputs, command calls, and render binding. Do not reintroduce subscribe/resync/replay/heartbeat/freshness ownership. |
+| `CodexDock/State/ThreadDetailLiveEventBuffer.swift` | Deleted detail-only replay buffer | Remain deleted. Reconciler owns bounded buffering and catch-up. |
+| `CodexDock/ThreadDetail/ThreadDetailDataEngine.swift` | Deleted detail-only projection reducer | Remain deleted. Shared `ProjectionReducer<Row>` owns projection apply law. |
 | `CodexDock/ThreadDetail/ThreadEventDisplayOrder.swift` | Relay-order rendering | Keep as render-only; do not use it to recover missing order. |
 | `CodexDock/ThreadDetail/ThreadDetailScreenStore.swift` | Render coalescing and screen model | Keep render-only behavior; no communication or freshness authority. |
 | `CodexDock/State/ClientCommandEngine.swift` | Command routes | Keep command execution. Add canonical projection invalidation/wait integration through reconciler. |
@@ -819,15 +817,15 @@ Final proof defaults must fail closed:
 | `CodexDock/Automation/AutomationID.swift` | UI proof identifiers | Keep stable IDs for structured UI dumps and proof. Remove IDs only tied to deleted side doors. |
 | `CodexDockUITests/DisplayedUICaptureSupport.swift` | Current visible UI extraction | Make this the canonical structured dump producer for Dock and Thread Detail, not screenshot proof. |
 | `scripts/dock-relay.mjs` | Route dispatch and bridge | Remove production display reliance on raw/detail read side doors. Keep witness proof route proof-only. |
-| `scripts/dock-relay-observability-contract.mjs`, `scripts/dock-relay-status.mjs` | Relay route diagnostics and route status | Remove `thread/detail/read` as app-critical production display evidence. If kept, classify it as manual diagnostic-only. |
+| `scripts/dock-relay-observability-contract.mjs`, `scripts/dock-relay-status.mjs` | Relay route diagnostics and route status | Keep only canonical app-facing projection routes as app-critical display evidence. Do not re-add `thread/detail/read`. |
 | `scripts/dock-relay-state-engine.mjs` | Relay root projection, reconciliation, catch-up | Emit explicit `page` catch-up contract. No same-sequence catch-up upsert. |
 | `scripts/dock-relay-state-subscriptions.mjs` | Subscription hub and heartbeats | Support canonical update kinds and exact route/view identity. |
 | `scripts/dock-relay-state-store.mjs` | State persistence and sequence | Own projection sequence/generation for each view. Cache invalidation must be deterministic for contract bumps. |
 | `scripts/dock-relay-thread-detail-*` | Detail projection and ledger | Use the same envelope/update law as root streams. |
 | `scripts/dock-relay-thread-data.mjs`, `dock-relay-live-status-cache.mjs`, `dock-relay-thread-summary-cache.mjs` | Raw source collapse, live leases, summary helpers | Treat as relay input or delete if unused. None can emit Swift-visible truth outside projection. |
 | `contract/**` | Schema and DTO truth | Generate one projection envelope/update contract consumed by relay, Swift DTOs, tests, and proof. |
-| `scripts/proof*.mjs` and `contract/proof/**` | Proof reports and UI dump contracts | Compare simulator-visible state to relay witness for the same view key. Deny alternate production-display paths. |
-| `scripts/codex-dock-live-filter-truth.mjs`, `codex-dock-live-filter-compare.mjs`, and related tests | Live-filter proof oracle currently reads `thread/detail/read` | Migrate to projection witness for the same view key or quarantine as non-acceptance diagnostics. |
+| `scripts/proof*.mjs` and `contract/proof/**` | Proof reports and UI dump contracts | Compare simulator-visible state to relay witness for the same view key. Strictly allow-list proof fields and route evidence. |
+| `scripts/codex-dock-live-filter-truth.mjs`, `codex-dock-live-filter-compare.mjs`, and related tests | Live-filter proof oracle reads projection witness | Keep projection witness as the truth source and reject raw `thread/detail/read` as acceptance proof. |
 | `CodexDockTests/**` | Unit/integration coverage | Migrate to shared reducer and reconciler fixtures. Delete tests that instantiate old lifecycle/table paths as behavior owners. |
 | `CodexDockUITests/**` | Simulator proof | Exercise live change, reconnect, catch-up, stale, and duplicate scenarios through production app routes. |
 | `README.md` | Canonical runbook | Update after implementation with one runtime, one proof path, and no stale side-door instructions. |
@@ -926,8 +924,8 @@ Blocking proof:
 ```bash
 rtk npm run contract:check
 rtk swift test --filter ProjectionReducerTests
-rtk swift test --filter ThreadDetailDataEngineTests
 rtk swift test --filter DockDataEngineTests
+rtk swift test --filter ThreadDetailStoreTests
 ```
 
 ## Phase 2 - Relay Projection Stream Contract Cutover
@@ -1100,7 +1098,6 @@ Blocking proof:
 
 ```bash
 rtk swift test --filter DockStoreTests
-rtk swift test --filter ArchiveStoreTests
 rtk make sim-ui-controlled-scenario-sync-proof SIM='iPhone 17' SCENARIO=resync-gap MAX_UI_LAG_MS=2000
 ```
 
