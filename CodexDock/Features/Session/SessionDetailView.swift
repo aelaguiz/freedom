@@ -79,6 +79,24 @@ public struct SessionDetailView: View {
                 automationID: AutomationID.Session.state(.stale)
             )
         }
+        ComposerView(
+            screenStore: screenStore,
+            onUpdateDraft: { draft in
+                store.updateDraft(draft)
+            },
+            onSendDraft: {
+                await store.sendDraft()
+            },
+            onBeginVoiceCapture: {
+                await store.beginVoiceCapture()
+            },
+            onFinishVoiceCapture: {
+                await store.finishVoiceCapture()
+            },
+            onToggleTapVoiceCapture: {
+                await store.toggleTapVoiceCapture()
+            }
+        )
         ThreadMessageListView(
             rows: renderSnapshot.rows,
             filter: filter,
@@ -97,24 +115,6 @@ public struct SessionDetailView: View {
             },
             onFileChangeApprovalRiskConfirmed: { cardID in
                 store.confirmFileChangeApprovalRisk(cardID: cardID)
-            }
-        )
-        ComposerView(
-            screenStore: screenStore,
-            onUpdateDraft: { draft in
-                store.updateDraft(draft)
-            },
-            onSendDraft: {
-                await store.sendDraft()
-            },
-            onBeginVoiceCapture: {
-                await store.beginVoiceCapture()
-            },
-            onFinishVoiceCapture: {
-                await store.finishVoiceCapture()
-            },
-            onToggleTapVoiceCapture: {
-                await store.toggleTapVoiceCapture()
             }
         )
     }

@@ -118,12 +118,12 @@ final class CodexDockAutomationSmokeTests: XCTestCase {
         )
         XCTAssertTrue(app.element(id: AutomationID.Session.header).waitForExistence(timeout: 10))
         XCTAssertTrue(app.element(id: AutomationID.Session.messageFilter).waitForExistence(timeout: 10))
-        XCTAssertTrue(app.element(id: AutomationID.Composer.root).exists)
+        app.assertElementVisibleForTap(id: AutomationID.Composer.root)
         let messageField = app.element(id: AutomationID.Composer.messageField)
-        XCTAssertTrue(messageField.exists)
+        app.assertElementVisibleForTap(id: AutomationID.Composer.messageField)
         messageField.tap()
         messageField.typeText("UI smoke")
-        XCTAssertTrue(app.element(id: AutomationID.Composer.sendButton).waitForExistence(timeout: 5))
+        app.assertElementVisibleForTap(id: AutomationID.Composer.sendButton, timeout: 5)
     }
 
     func testArchivedThreadRowOpensSessionDetailByIdentifierWhenRowsExist() throws {
@@ -221,6 +221,28 @@ private extension XCUIApplication {
         if !element.waitForExistence(timeout: timeout) {
             XCTFail("\(context) Missing id=\(id).\n\nAccessibility tree:\n\(debugDescription)", file: file, line: line)
         }
+    }
+
+    func assertElementVisibleForTap(
+        id: AutomationID,
+        timeout: TimeInterval = 5,
+        context: String = "Expected simulator UI hook to be visible and tappable.",
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let element = element(id: id)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.exists, isVisibleForTap(element.frame), element.isHittable {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        XCTFail(
+            "\(context) id=\(id.rawValue) exists=\(element.exists) hittable=\(element.isHittable) frame=\(element.frame)\n\nAccessibility tree:\n\(debugDescription)",
+            file: file,
+            line: line
+        )
     }
 
     func waitForFirstIdentifier(_ identifiers: [String], timeout: TimeInterval) -> String? {
