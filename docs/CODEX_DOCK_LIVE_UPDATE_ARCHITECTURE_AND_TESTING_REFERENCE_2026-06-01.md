@@ -590,8 +590,8 @@ display code:
 
 ## 4.5 Current Test And Proof Pattern
 
-The current repo now has behavior-level proof for the shared runtime, but final
-completion still requires the simulator proof gates in Section 8:
+The current repo now has behavior-level proof for the shared runtime and the
+`iPhone 17` simulator acceptance path:
 
 - Swift unit tests prove the shared reducer, shared reconciler, Thread Detail
   command invalidation, Dock/Archive stream behavior, and lifecycle recovery
@@ -615,6 +615,10 @@ completion still requires the simulator proof gates in Section 8:
   byte-equivalent retained downstream envelopes, and rejects raw
   `thread/detail/read` as acceptance truth.
 
+The implementation audit block is the canonical evidence ledger for the latest
+executed commands and artifact paths. This section describes the current proof
+architecture; it is not a second moving gate checklist.
+
 ## 4.6 Current Failure Pattern
 
 The confirmed class of failure was not just "old cache." It was:
@@ -627,9 +631,9 @@ The confirmed class of failure was not just "old cache." It was:
 - tests do not force the whole path to prove visible catch-up.
 
 The current code addresses this class by routing each production screen through
-`StreamReconciler` and `ProjectionReducer`. Completion is still unproven until
-the remaining Swift, app-test, `sim-ui-dump`, strict controlled simulator
-matrix, implementation audit, and strict fresh-consult gates pass.
+`StreamReconciler` and `ProjectionReducer`, with unsupported legacy reads
+failing loud and simulator proof required to observe visible convergence over
+time instead of accepting static snapshots.
 <!-- arch_skill:block:current_architecture:end -->
 
 # 5) Target Architecture
