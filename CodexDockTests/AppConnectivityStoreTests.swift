@@ -159,6 +159,29 @@ final class AppConnectivityStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testGlobalConnectivityIndicatorPartialLabelDoesNotClaimOnline() throws {
+        let label = GlobalConnectivityIndicatorView.displayLabel(
+            for: .partial("home: dock/subscribe failed"),
+            hosts: [
+                HostConnectivitySnapshot(
+                    id: "amir-m5",
+                    displayName: "Amir-M5",
+                    endpoint: "amir-m5.fairy-salmon.ts.net:4510",
+                    phase: .online("259 sessions")
+                ),
+                HostConnectivitySnapshot(
+                    id: "home",
+                    displayName: "home",
+                    endpoint: "home.fairy-salmon.ts.net:4510",
+                    phase: .partial("dock/subscribe failed")
+                ),
+            ]
+        )
+
+        XCTAssertEqual(label, "Partial 2/2")
+    }
+
+    @MainActor
     func testAllOfflineRollsUpToOffline() throws {
         let host = makeConnectivityHost()
         let store = AppConnectivityStore(hosts: [host])

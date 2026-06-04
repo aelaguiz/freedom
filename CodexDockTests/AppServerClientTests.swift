@@ -405,6 +405,69 @@ final class AppServerClientTests: XCTestCase {
         await connection.close()
     }
 
+    func testThreadCardStreamConnectionFinishesUpdatesWhenOneShotTransportCloses() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport, connectionPolicy: .oneShot)
+        try await completeHandshake(client: client, transport: transport)
+        let host = makeHost()
+        let connection = AppServerThreadCardStreamConnection(client: client, host: host)
+
+        let subscribeTask = Task {
+            try await connection.subscribe()
+        }
+        let subscribeRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(subscribeRequest.method, AppServerMethods.dockSubscribe)
+        let snapshot = ThreadCardStreamUpdateDTO(
+            kind: .snapshot,
+            schemaVersion: CodexDockConstants.Dock.streamSchemaVersion,
+            identityVersion: 1,
+            projectionEngineVersion: 1,
+            sourceHostID: host.id,
+            view: .dock,
+            scope: "view",
+            viewParamsKey: "dock:\(host.id)",
+            complete: true,
+            totalRows: 1,
+            window: DockStreamWindowDTO(offset: 0, limit: 1, rowCount: 1),
+            epoch: "epoch-1",
+            seq: 1,
+            order: "displayOrderKeyAscending",
+            freshness: DockStreamFreshnessDTO(status: .fresh),
+            rows: [
+                threadCardFixture(
+                    host: host,
+                    threadID: "thread-1",
+                    title: "Thread 1",
+                    status: .dormant,
+                    updatedAt: 1_780_000_000
+                )
+            ]
+        )
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: subscribeRequest.id,
+                    result: try JSONValue.encoded(snapshot)
+                )
+            )
+        )
+        _ = try await subscribeTask.value
+
+        let updateTask = Task {
+            var iterator = connection.updates().makeAsyncIterator()
+            return try await iterator.next()
+        }
+        await transport.closeInbound()
+
+        let update = try await valueWithinOneSecond {
+            try await updateTask.value
+        }
+        XCTAssertNil(update)
+        let state = await client.state
+        XCTAssertEqual(state, .offline(reason: "transport closed"))
+        await connection.close()
+    }
+
     func testDockThreadCardRejectsLegacyPayloadWithoutProjectionEnvelope() throws {
         let payload = """
         {

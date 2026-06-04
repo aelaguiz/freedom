@@ -42,13 +42,20 @@ public struct GlobalConnectivityIndicatorView: View {
     }
 
     private var displayLabel: String {
-        switch store.overallStatus {
+        Self.displayLabel(for: store.overallStatus, hosts: store.hosts)
+    }
+
+    static func displayLabel(
+        for status: AppConnectivityOverallStatus,
+        hosts: [HostConnectivitySnapshot]
+    ) -> String {
+        switch status {
         case .checking:
-            return store.hosts.count > 1 ? "Checking \(store.hosts.count) hosts" : "Checking"
+            return hosts.count > 1 ? "Checking \(hosts.count) hosts" : "Checking"
         case .online:
-            return hostCountLabel(prefix: "Online") ?? "Online"
+            return hostCountLabel(prefix: "Online", hosts: hosts) ?? "Online"
         case .partial:
-            return hostCountLabel(prefix: "Online") ?? "Partial"
+            return hostCountLabel(prefix: "Partial", hosts: hosts) ?? "Partial"
         case .offline:
             return "Offline"
         case .error:
@@ -68,12 +75,12 @@ public struct GlobalConnectivityIndicatorView: View {
         }
     }
 
-    private func hostCountLabel(prefix: String) -> String? {
-        guard store.hosts.count > 1 else {
+    private static func hostCountLabel(prefix: String, hosts: [HostConnectivitySnapshot]) -> String? {
+        guard hosts.count > 1 else {
             return nil
         }
-        let onlineCount = store.hosts.filter(\.phase.isOnlineLike).count
-        return "\(prefix) \(onlineCount)/\(store.hosts.count)"
+        let onlineCount = hosts.filter(\.phase.isOnlineLike).count
+        return "\(prefix) \(onlineCount)/\(hosts.count)"
     }
 
     private var systemImage: String {

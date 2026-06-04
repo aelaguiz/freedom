@@ -80,16 +80,33 @@ public struct AppServerThreadCardStreamClient: ThreadCardStreamConnecting {
     private let view: ThreadCardStreamView
     private let makeClient: @Sendable (DockRelayEndpoint) -> AppServerClient
     private let observabilityStore: ClientObservabilityStore
+    let defaultConnectionPolicy: AppServerConnectionPolicy?
 
     public init(
         view: ThreadCardStreamView = .dock,
         observabilityStore: ClientObservabilityStore = .shared,
-        makeClient: @escaping @Sendable (DockRelayEndpoint) -> AppServerClient = {
-            AppServerClient(webSocketURL: $0.webSocketURL, bearerToken: nil, connectionPolicy: .liveDetail)
-        }
+        connectionPolicy: AppServerConnectionPolicy = .oneShot
     ) {
         self.view = view
         self.observabilityStore = observabilityStore
+        self.defaultConnectionPolicy = connectionPolicy
+        self.makeClient = { endpoint in
+            AppServerClient(
+                webSocketURL: endpoint.webSocketURL,
+                bearerToken: nil,
+                connectionPolicy: connectionPolicy
+            )
+        }
+    }
+
+    public init(
+        view: ThreadCardStreamView = .dock,
+        observabilityStore: ClientObservabilityStore = .shared,
+        makeClient: @escaping @Sendable (DockRelayEndpoint) -> AppServerClient
+    ) {
+        self.view = view
+        self.observabilityStore = observabilityStore
+        self.defaultConnectionPolicy = nil
         self.makeClient = makeClient
     }
 
