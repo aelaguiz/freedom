@@ -534,30 +534,58 @@ function threadIDFromRenameNotification(message) {
   return message?.params?.threadId || message?.params?.threadID || null;
 }
 
+function threadIDFromStatusNotification(message) {
+  return message?.params?.threadId || message?.params?.threadID || null;
+}
+
 function ingestRelayStateNotification(config, message, source = {}) {
-  if (message?.method !== "thread/name/updated") {
-    return false;
-  }
-  try {
-    relayStateEngineForConfig(config)
-      .handleThreadNameNotification(message)
-      .catch((error) => {
-        relayLogger(config).warn("state.thread_name_notification_ingest_failed", {
-          method: message.method,
-          sourceLabel: source?.label || null,
-          threadIDHash: shortHash(threadIDFromRenameNotification(message)),
-          error,
+  if (message?.method === "thread/name/updated") {
+    try {
+      relayStateEngineForConfig(config)
+        .handleThreadNameNotification(message)
+        .catch((error) => {
+          relayLogger(config).warn("state.thread_name_notification_ingest_failed", {
+            method: message.method,
+            sourceLabel: source?.label || null,
+            threadIDHash: shortHash(threadIDFromRenameNotification(message)),
+            error,
+          });
         });
+    } catch (error) {
+      relayLogger(config).warn("state.thread_name_notification_ingest_failed", {
+        method: message.method,
+        sourceLabel: source?.label || null,
+        threadIDHash: shortHash(threadIDFromRenameNotification(message)),
+        error,
       });
-  } catch (error) {
-    relayLogger(config).warn("state.thread_name_notification_ingest_failed", {
-      method: message.method,
-      sourceLabel: source?.label || null,
-      threadIDHash: shortHash(threadIDFromRenameNotification(message)),
-      error,
-    });
+    }
+    return true;
   }
-  return true;
+
+  if (message?.method === "thread/status/changed") {
+    try {
+      relayStateEngineForConfig(config)
+        .handleThreadStatusNotification(message)
+        .catch((error) => {
+          relayLogger(config).warn("state.thread_status_notification_ingest_failed", {
+            method: message.method,
+            sourceLabel: source?.label || null,
+            threadIDHash: shortHash(threadIDFromStatusNotification(message)),
+            error,
+          });
+        });
+    } catch (error) {
+      relayLogger(config).warn("state.thread_status_notification_ingest_failed", {
+        method: message.method,
+        sourceLabel: source?.label || null,
+        threadIDHash: shortHash(threadIDFromStatusNotification(message)),
+        error,
+      });
+    }
+    return true;
+  }
+
+  return false;
 }
 
 function reconcileThreadNameAfterResponse(config, params = {}) {

@@ -143,6 +143,7 @@ test("controlled simulator matrix parses report dirs and defaults", () => {
   assert.ok(options.requiredScenarios.includes("large-list-checkpoint"));
   assert.ok(options.requiredScenarios.includes("rapid-mutations"));
   assert.ok(options.requiredScenarios.includes("server-rename-notification"));
+  assert.ok(options.requiredScenarios.includes("server-status-notification"));
 });
 
 test("proof contracts reject passing live proof with no client route evidence", () => {
@@ -222,6 +223,26 @@ test("controlled simulator matrix accepts server rename notification coverage", 
 
   assert.equal(report.summary.ok, true);
   assert.equal(report.scenarios[0].scenario, "server-rename-notification");
+  assert.equal(report.scenarios[0].passingReportCount, 1);
+  assert.equal(report.findings.length, 0);
+});
+
+test("controlled simulator matrix accepts server status notification coverage", () => {
+  const report = buildMatrixReport({
+    entries: [
+      entry({
+        scenario: "server-status-notification",
+        routes: { "dock/subscribe": 1, "dock/update": 1 },
+        ui: { scenarioChecks: 1 },
+      }),
+    ],
+    requiredScenarios: ["server-status-notification"],
+    minPasses: 1,
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.equal(report.scenarios[0].scenario, "server-status-notification");
   assert.equal(report.scenarios[0].passingReportCount, 1);
   assert.equal(report.findings.length, 0);
 });

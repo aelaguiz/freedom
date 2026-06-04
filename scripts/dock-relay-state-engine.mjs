@@ -1054,6 +1054,17 @@ class RelayStateEngine {
     return this.handleThreadNameMutation(mutation);
   }
 
+  async handleThreadStatusNotification(message) {
+    const mutation = this.ingestor.ingestThreadStatusChanged(message);
+    if (!mutation) {
+      return null;
+    }
+    return this.queueMutationReconciliation(async () => ({
+      reason: mutation.reason,
+      dock: await this.reconcileDock({ reason: mutation.reason }),
+    }));
+  }
+
   async handleThreadNameMutation({ threadId, reason = "thread/name/set" }) {
     if (!threadId) {
       return null;

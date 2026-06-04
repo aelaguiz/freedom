@@ -94,6 +94,26 @@ async function startCanonicalActivityAppServer({
     }
     return sent;
   };
+  const setThreadStatusLocally = (threadId, status) => {
+    const thread = rows[threadId];
+    if (!thread) {
+      throw new Error(`missing fake thread: ${threadId}`);
+    }
+    thread.status = status;
+    thread.updatedAt = Math.max(Number(thread.updatedAt || 0), 4_100);
+  };
+  const emitThreadStatusChanged = (threadId, status, { resumedOnly = false } = {}) => {
+    const targets = resumedOnly ? resumedClients : initializedClients;
+    let sent = 0;
+    for (const ws of targets) {
+      if (ws.readyState !== 1) {
+        continue;
+      }
+      ws.send(appServerNotification("thread/status/changed", { threadId, status }));
+      sent += 1;
+    }
+    return sent;
+  };
   wss.on("connection", (ws) => {
     clients.add(ws);
     ws.on("close", () => {
@@ -180,7 +200,9 @@ async function startCanonicalActivityAppServer({
     url,
     renameRequests,
     emitThreadNameUpdated,
+    emitThreadStatusChanged,
     renameThreadLocally,
+    setThreadStatusLocally,
     get initializedClientCount() {
       return initializedClients.size;
     },
@@ -418,6 +440,40 @@ test("thread/name/updated from active detail upstream refreshes dock card title 
         const updatedCard = update.params.rows.find((card) => card.threadID === "newer");
 
         assert.equal(updatedCard?.title, "Detail upstream rename");
+      } finally {
+        ws.close();
+      }
+    });
+  } finally {
+    await appServer.close();
+  }
+});
+
+test("thread/status/changed from history upstream refreshes dock card status without waiting for polling", async () => {
+  const appServer = await startCanonicalActivityAppServer();
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.relayStateEngine.reconcileDock({ reason: "test-initial" });
+      const ws = await openWebSocket(wsURL);
+      try {
+        const initial = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(initial.error, undefined);
+        const initialCard = initial.result.rows.find((card) => card.threadID === "newer");
+        assert.equal(initialCard?.status, "idle");
+
+        const updatePromise = waitForRelayMessage(ws, (message) => (
+          message.method === "dock/update"
+          && (message.params?.rows || []).some((card) => (
+            card.threadID === "newer" && card.status === "running"
+          ))
+        ));
+        const runningStatus = { type: "active", activeFlags: [] };
+        appServer.setThreadStatusLocally("newer", runningStatus);
+        assert.ok(appServer.emitThreadStatusChanged("newer", runningStatus) > 0);
+        const update = await updatePromise;
+        const updatedCard = update.params.rows.find((card) => card.threadID === "newer");
+
+        assert.equal(updatedCard?.status, "running");
       } finally {
         ws.close();
       }

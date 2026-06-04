@@ -39,6 +39,20 @@ class NotificationIngestor {
     };
   }
 
+  ingestThreadStatusChanged(message) {
+    if (message?.method !== "thread/status/changed") {
+      return null;
+    }
+    const threadId = message?.params?.threadId || message?.params?.threadID;
+    if (typeof threadId !== "string" || threadId.trim().length === 0) {
+      return null;
+    }
+    return {
+      threadId,
+      reason: "thread/status/changed",
+    };
+  }
+
   markScopeStale(scopeName, error) {
     this.store.markScopeStale(this.hostId, scopeName, error);
     this.scheduleReconciliation?.({

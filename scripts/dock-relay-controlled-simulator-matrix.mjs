@@ -19,6 +19,7 @@ const DEFAULT_REQUIRED_SCENARIOS = [
   "large-list-checkpoint",
   "thread-activity",
   "server-rename-notification",
+  "server-status-notification",
   "server-request",
   "source-refresh",
   "live-lease-expiry",
@@ -86,6 +87,11 @@ const SCENARIO_REQUIREMENTS = {
     minCheckpointSweeps: 1,
   },
   "server-rename-notification": {
+    routes: ["dock/subscribe", "dock/update"],
+    minScenarioTransitionChecks: 1,
+    minCheckpointSweeps: 1,
+  },
+  "server-status-notification": {
     routes: ["dock/subscribe", "dock/update"],
     minScenarioTransitionChecks: 1,
     minCheckpointSweeps: 1,

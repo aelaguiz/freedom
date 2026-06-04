@@ -45,6 +45,7 @@ const SUPPORTED_SCENARIOS = new Set([
   "root-catchup-window-contract",
   "server-request",
   "server-rename-notification",
+  "server-status-notification",
   "source-refresh",
   "spawn-edge",
   "thread-activity",
@@ -81,7 +82,7 @@ const FORBIDDEN_SIMULATOR_DETAIL_SIDE_DOOR_ROUTES = new Set([
 function usage() {
   return [
     "Usage:",
-    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <archive-toggle|current-work-visible|detail-reconnect|detail-history-request|detail-replay-pressure|file-change-review|foreground-resume-all-surfaces|large-list-checkpoint|live-lease-expiry|multi-host-isolation|mutation-ack-projection-refresh-failure|rapid-mutations|resync-gap|root-catchup-window-contract|server-request|server-rename-notification|source-refresh|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
+    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <archive-toggle|current-work-visible|detail-reconnect|detail-history-request|detail-replay-pressure|file-change-review|foreground-resume-all-surfaces|large-list-checkpoint|live-lease-expiry|multi-host-isolation|mutation-ack-projection-refresh-failure|rapid-mutations|resync-gap|root-catchup-window-contract|server-request|server-rename-notification|server-status-notification|source-refresh|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
     "",
     "Options:",
     "  --summary-out <path>                 Write Markdown summary.",
@@ -2417,6 +2418,334 @@ async function runServerRenameNotificationScenario(options) {
           sourceHostID: hostID,
           stableThreadID,
           threadID: renamedThreadID,
+        },
+        transitions,
+        findings,
+      }],
+      stream: {
+        notificationCount: streamProbe.notifications.length,
+        resyncCount: streamProbe.resyncs.length,
+        finalState: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
+      },
+      clientPathEvidence,
+      findings,
+      unsupportedFacts: [],
+    };
+
+    writeProofReport(options.jsonOut, report);
+    if (options.summaryOut) {
+      writeText(options.summaryOut, buildMarkdownSummary(report));
+    }
+    await waitForFile(options.stopIn, options.waitTimeoutMs, "simulator UI sampler completion");
+    return report;
+  } finally {
+    await streamProbe.close().catch(() => null);
+    await relay.close().catch(() => null);
+    await closeWebSocketServer(historyServer).catch(() => null);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function runServerStatusNotificationScenario(options) {
+  const scenarioName = "server-status-notification";
+  const routeEvents = [];
+  const findings = [];
+  const transitions = [];
+  const samples = [];
+  const startedAtMs = Date.now();
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `codex-dock-sim-${scenarioName}-`));
+  const hostID = `sim-${scenarioName}-fixture`;
+  const stableThreadID = `sim-${scenarioName}-stable`;
+  const statusThreadID = `sim-${scenarioName}-status`;
+  const initializedClients = new Set();
+  let notificationSentAtMs = null;
+  let sourceRows = [
+    fixtureThreadWithStatus(
+      stableThreadID,
+      "Simulator server status stable row",
+      200,
+      { type: "notLoaded" }
+    ),
+    fixtureThreadWithStatus(
+      statusThreadID,
+      "Simulator server status before notification",
+      100,
+      { type: "idle" }
+    ),
+  ];
+  const rowForThread = (threadID) => sourceRows.find((row) => row.id === threadID) || null;
+  const emitThreadStatusChanged = (threadID, status) => {
+    let sent = 0;
+    for (const ws of initializedClients) {
+      if (ws.readyState !== WebSocket.OPEN) {
+        continue;
+      }
+      ws.send(JSON.stringify({
+        jsonrpc: "2.0",
+        method: "thread/status/changed",
+        params: { threadId: threadID, status },
+      }));
+      sent += 1;
+    }
+    recordClientRoute(
+      routeEvents,
+      "thread/status/changed",
+      "fixture upstream emitted server-side thread status notification",
+      { threadID, count: sent }
+    );
+    return sent;
+  };
+
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise((resolve) => historyServer.once("listening", resolve));
+  historyServer.on("connection", (ws) => {
+    ws.on("close", () => {
+      initializedClients.delete(ws);
+    });
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        recordClientRoute(routeEvents, "initialize", "relay initialized server-status fixture upstream", { threadID: statusThreadID });
+        sendFixtureResult(ws, message.id, {
+          userAgent: `codex-sim-${scenarioName}-fixture`,
+          codexHome: tempDir,
+          platformFamily: "unix",
+          platformOs: "macos",
+        });
+      } else if (message.method === "initialized") {
+        initializedClients.add(ws);
+        recordClientRoute(routeEvents, "initialized", "relay sent initialized notification to server-status fixture upstream", { threadID: statusThreadID });
+      } else if (message.method === "thread/list") {
+        sendFixtureResult(ws, message.id, {
+          data: activeFixtureRows(message, sourceRows),
+          nextCursor: null,
+          backwardsCursor: null,
+        });
+      } else if (message.method === "thread/loaded/list") {
+        sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
+      } else if (message.method === "thread/read" || message.method === "thread/resume") {
+        sendFixtureThreadRead(ws, message, rowForThread(fixtureMessageThreadID(message)));
+      } else if (message.method === "thread/turns/list") {
+        sendFixtureThreadTurnsList(ws, message, rowForThread(fixtureMessageThreadID(message)));
+      } else if (message.method === "thread/status/changed") {
+        transitionFailure(
+          findings,
+          "scenario_server_status_notification_client_status_request_seen",
+          "server-side status notification scenario unexpectedly received a client thread/status/changed request",
+          { threadID: fixtureMessageThreadID(message) }
+        );
+      }
+    });
+  });
+
+  const relayConfig = {
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    hostId: hostID,
+    hostName: "Simulator Server Status Fixture",
+    hostEndpoint: "127.0.0.1:0",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+    observabilityDir: false,
+    relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
+    relayStateAutoStart: false,
+    logger: {
+      debug() {},
+      info() {},
+      warn() {},
+      error() {},
+      fault() {},
+      fatalSync() {},
+    },
+  };
+  const relay = startServer(relayConfig);
+  await relay.listening;
+  const relayPort = relay.server.address().port;
+  const relayUrl = `ws://127.0.0.1:${relayPort}`;
+  const fixtureOptions = {
+    ...options,
+    relayUrl,
+    codexHome: tempDir,
+    sqliteHome: tempDir,
+    detail: "none",
+  };
+  const streamProbe = new DockStreamProbe(fixtureOptions);
+
+  try {
+    await streamProbe.open();
+    const initialWait = await waitForStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => {
+        const statusCard = dockSnapshotCardForThread(snapshot, statusThreadID);
+        return dockSnapshotThreadIndex(snapshot, stableThreadID) === 0
+          && dockSnapshotThreadIndex(snapshot, statusThreadID) === 1
+          && statusCard?.status === "idle";
+      },
+    });
+    if (!initialWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_server_status_notification_initial_idle_missing",
+        "initial server-status fixture rows did not appear with the expected idle status before simulator launch",
+        { threadID: statusThreadID }
+      );
+    }
+    const initial = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+    findings.push(...scenarioComparisonFindings({ phase: "initial", comparison: initial.comparison }));
+    const initialFinishedAt = new Date().toISOString();
+    samples.push({
+      sampleIndex: 0,
+      startedAt: new Date(startedAtMs).toISOString(),
+      finishedAt: initialFinishedAt,
+      freshDock: sanitizeDockSnapshotForReport(initial.freshDock),
+    });
+
+    writeJSON(options.readyOut, {
+      ready: true,
+      scenario: scenarioName,
+      relayUrl,
+      hosts: `127.0.0.1:${relayPort}`,
+      target: {
+        sourceHostID: hostID,
+        stableThreadID,
+        threadID: statusThreadID,
+      },
+      at: new Date().toISOString(),
+    });
+    await waitForFile(options.uiReadyIn, options.waitTimeoutMs, "simulator UI sampler readiness");
+    await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 1_500));
+
+    const runningStatus = { type: "active", activeFlags: [] };
+    notificationSentAtMs = Date.now();
+    sourceRows = [
+      fixtureThreadWithStatus(
+        statusThreadID,
+        "Simulator server status after notification",
+        300,
+        runningStatus
+      ),
+      fixtureThreadWithStatus(
+        stableThreadID,
+        "Simulator server status stable row",
+        200,
+        { type: "notLoaded" }
+      ),
+    ];
+    const notificationCount = emitThreadStatusChanged(statusThreadID, runningStatus);
+    if (notificationCount < 1) {
+      transitionFailure(
+        findings,
+        "scenario_server_status_notification_no_upstream_client",
+        "server-side status notification scenario had no initialized upstream relay client to notify",
+        { threadID: statusThreadID }
+      );
+    }
+
+    const statusWait = await waitForStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => {
+        const statusCard = dockSnapshotCardForThread(snapshot, statusThreadID);
+        return dockSnapshotThreadIndex(snapshot, statusThreadID) === 0
+          && dockSnapshotThreadIndex(snapshot, stableThreadID) === 1
+          && statusCard?.status === "running";
+      },
+    });
+    const statusLag = scenarioLagSummary({
+      transition: "server-status-notification",
+      startedAtMs: notificationSentAtMs,
+      acknowledgedAtMs: notificationSentAtMs,
+      observedAtMs: statusWait.observedAtMs,
+      maxStreamLagMs: options.maxStreamLagMs,
+    });
+    if (!statusWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_server_status_notification_running_not_seen",
+        "server-side thread/status/changed notification did not change the Dock stream card status to running",
+        { threadID: statusThreadID }
+      );
+    } else if (statusLag.exceeded) {
+      transitionFailure(
+        findings,
+        "scenario_server_status_notification_lag_exceeded",
+        "server-side status notification changed the Dock stream after the relay lag budget",
+        {
+          observedLagMs: statusLag.lag_change_to_relay_ms,
+          maxStreamLagMs: options.maxStreamLagMs,
+        }
+      );
+    }
+    const statusComparison = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+    const statusCard = dockSnapshotCardForThread(statusComparison.freshDock, statusThreadID);
+    if (statusCard?.status !== "running") {
+      transitionFailure(
+        findings,
+        "scenario_server_status_notification_fresh_dock_status_mismatch",
+        "fresh Dock client-path snapshot did not show the status notification row as running",
+        {
+          threadID: statusThreadID,
+          actualStatus: statusCard?.status || null,
+        }
+      );
+    }
+    findings.push(...scenarioComparisonFindings({ phase: "server-status-notification", comparison: statusComparison.comparison }));
+    transitions.push({
+      name: "server-status-notification",
+      kind: "server-thread-status-changed-notification",
+      iteration: 1,
+      route: "dock/update",
+      expectedStatus: "running",
+      wait: statusWait,
+      lag: statusLag,
+      freshDock: sanitizeDockSnapshotForReport(statusComparison.freshDock),
+      streamComparison: statusComparison.comparison,
+      streamComparisonAttempts: statusComparison.attempts,
+    });
+
+    const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
+    findings.push(...requiredRouteFindings(
+      clientPathEvidence,
+      ["dock/subscribe", "dock/update"]
+    ));
+    const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
+    const report = {
+      schemaVersion: 1,
+      kind: "codex-dock-controlled-simulator-scenario-relay-report",
+      mode: "scenario",
+      scenario: scenarioName,
+      startedAt: new Date(startedAtMs).toISOString(),
+      endedAt: new Date().toISOString(),
+      relayUrl,
+      summary: {
+        ok: scenarioOK,
+        clientPathOK: scenarioOK,
+        scenario: scenarioName,
+        scenarioOK,
+        scenarioCount: 1,
+        scenarioTransitionCount: transitions.length,
+        implementedScenarios: [scenarioName],
+        unimplementedRequiredScenarios: [],
+        failures: findings.length,
+        clientPathRouteCounts: clientPathEvidence.routeCounts,
+      },
+      samples,
+      scenarios: [{
+        id: scenarioName,
+        ok: scenarioOK,
+        actuator: {
+          type: "controlled app-server thread/status/changed notification through real relay Dock routes",
+          routes: ["dock/subscribe", "dock/update"],
+          clientExercised: true,
+          note: "The fixture starts a visible Dock row as idle, emits thread/status/changed from the upstream app-server, and requires the simulator UI to render that row as running.",
+        },
+        target: {
+          sourceHostID: hostID,
+          stableThreadID,
+          threadID: statusThreadID,
         },
         transitions,
         findings,
@@ -6517,6 +6846,8 @@ async function main() {
     report = await runServerRequestScenario(options);
   } else if (options.scenario === "server-rename-notification") {
     report = await runServerRenameNotificationScenario(options);
+  } else if (options.scenario === "server-status-notification") {
+    report = await runServerStatusNotificationScenario(options);
   } else if (options.scenario === "live-lease-expiry") {
     report = await runLiveLeaseExpiryScenario(options);
   } else if (options.scenario === "multi-host-isolation") {

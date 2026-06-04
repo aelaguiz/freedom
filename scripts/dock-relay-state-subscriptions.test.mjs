@@ -223,6 +223,29 @@ test("thread/name/updated notifications are parsed as thread-name invalidations"
   }), null);
 });
 
+test("thread/status/changed notifications are parsed as status invalidations", () => {
+  const ingestor = new NotificationIngestor({ store: {}, hostId: "home" });
+
+  assert.deepEqual(ingestor.ingestThreadStatusChanged({
+    method: "thread/status/changed",
+    params: {
+      threadId: "thread-1",
+      status: { type: "active", activeFlags: [] },
+    },
+  }), {
+    threadId: "thread-1",
+    reason: "thread/status/changed",
+  });
+  assert.equal(ingestor.ingestThreadStatusChanged({
+    method: "thread/name/updated",
+    params: { threadId: "thread-1" },
+  }), null);
+  assert.equal(ingestor.ingestThreadStatusChanged({
+    method: "thread/status/changed",
+    params: { status: { type: "active", activeFlags: [] } },
+  }), null);
+});
+
 test("thread/name/updated notifications reconcile and publish dock and archive views", async () => {
   const calls = [];
   const engine = new RelayStateEngine(
@@ -260,6 +283,44 @@ test("thread/name/updated notifications reconcile and publish dock and archive v
   assert.equal(result.reason, "thread/name/updated");
   assert.deepEqual(result.dock, { seq: 6 });
   assert.deepEqual(result.archive, { seq: 7 });
+});
+
+test("thread/status/changed notifications reconcile dock cards without refreshing archive", async () => {
+  const calls = [];
+  const engine = new RelayStateEngine(
+    { hostId: "home", logger: null },
+    {
+      store: {
+        currentSeq() {
+          return 1;
+        },
+        close() {},
+      },
+    },
+  );
+  engine.reconcileDock = async ({ reason }) => {
+    calls.push({ view: "dock", reason });
+    return { seq: 8 };
+  };
+  engine.reconcileArchive = async ({ reason }) => {
+    calls.push({ view: "archive", reason });
+    return { seq: 9 };
+  };
+
+  const result = await engine.handleThreadStatusNotification({
+    method: "thread/status/changed",
+    params: {
+      threadId: "thread-1",
+      status: { type: "active", activeFlags: [] },
+    },
+  });
+
+  assert.deepEqual(calls, [
+    { view: "dock", reason: "thread/status/changed" },
+  ]);
+  assert.equal(result.reason, "thread/status/changed");
+  assert.deepEqual(result.dock, { seq: 8 });
+  assert.equal("archive" in result, false);
 });
 
 test("thread/name/updated reconcile failures do not log raw thread names", async () => {
