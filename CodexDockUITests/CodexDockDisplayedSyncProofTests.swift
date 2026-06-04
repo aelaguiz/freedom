@@ -156,13 +156,20 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
                 sampleIndex += 1
             }
         } else {
+            let baselineSampleStartedAt = Date()
+            try record(captureSample(index: sampleIndex))
+            sampleIndex += 1
+            waitUntilNextSample(startedAt: baselineSampleStartedAt, sampleMS: config.sampleMS)
+
             try DisplayedUIArtifactWriter.markReady(to: config.readyPath)
 
             let deadline = Date().addingTimeInterval(TimeInterval(config.durationMS) / 1000.0)
             let dockLenses = config.resolvedDockLenses
+            var lensIndex = 0
             repeat {
                 let sampleStartedAt = Date()
-                let lens = dockLenses[sampleIndex % dockLenses.count]
+                let lens = dockLenses[lensIndex % dockLenses.count]
+                lensIndex += 1
                 XCTAssertTrue(
                     selectDockLens(lens, app: app, root: root),
                     "Displayed sync proof could not switch Dock lens to \(lens.rawValue)."
@@ -230,12 +237,15 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
     }
 }
 
-private struct DisplayedUISyncConfig: Codable {
+struct DisplayedUISyncConfig: Codable {
     var outputPath: String
     var hosts: String
     var durationMS: Int
     var sampleMS: Int
     var expiresAt: String
+    var simulatorUDID: String?
+    var appBundleID: String?
+    var appDataContainer: String?
     var readyPath: String?
     var checkpointSweep: Bool?
     var detailCheckpointSweep: Bool?

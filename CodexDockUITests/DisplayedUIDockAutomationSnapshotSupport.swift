@@ -84,6 +84,16 @@ extension XCUIApplication {
                 bundleID: dumpConfig.appBundleID
             ))
         }
+        if let syncConfig = try? DisplayedUISyncConfig.load() {
+            append(syncConfig.appDataContainer)
+            if let udid = displayedUINonEmpty(syncConfig.simulatorUDID),
+               let bundleID = displayedUINonEmpty(syncConfig.appBundleID) {
+                append(dockAutomationSimulatorAppDataContainer(
+                    udid: udid,
+                    bundleID: bundleID
+                ))
+            }
+        }
         let environment = ProcessInfo.processInfo.environment
         append(environment["CODEX_DOCK_UI_TEST_APP_DATA_CONTAINER"])
         if let udid = displayedUINonEmpty(environment["CODEX_DOCK_UI_TEST_SIMULATOR_UDID"]),

@@ -8,12 +8,35 @@ reviewers: [model-consensus, composer-2.5-fast, thermo-nuclear-code-quality-revi
 doc_type: architectural_change
 related:
   - docs/IPHONE_17_PRO_DOCK_LAG_PROFILE_WORKLOG_2026-06-04.md
+  - docs/DOCK_LIGHTNING_FAST_ARCHITECTURE_FIX_PLAN_2026-06-04_WORKLOG.md
   - .arch_skill/model-consensus/dock-lightning-fast-20260604T181258Z/round-03/model-a-final.md
   - .arch_skill/model-consensus/dock-lightning-fast-20260604T181258Z/round-03/model-b-final.md
   - /tmp/fresh-consult/dock-lightning-fast-plan-rerun-20260604TRzTiNn/final.txt
+  - /tmp/fresh-consult/dock-lightning-fast-arch-plan-20260604T211426Z-gpvW9n/final.txt
 ---
 
 # TL;DR
+
+<!-- arch_skill:block:implementation_audit:start -->
+# Implementation Audit (authoritative)
+Date: 2026-06-04
+Verdict (code): COMPLETE
+Manual QA: n/a (non-blocking)
+
+## Code blockers (why code is not done)
+- none
+
+## Reopened phases (false-complete fixes)
+- none
+
+## Missing items (code gaps; evidence-anchored; no tables)
+- none
+
+## Non-blocking follow-ups (manual QA / screenshots / human verification)
+- Relay rollout remains a deployment obligation under Phase 6, not missing code.
+- Physical phone testing is intentionally out of scope for this goal by user
+  instruction.
+<!-- arch_skill:block:implementation_audit:end -->
 
 ## Outcome
 
@@ -1210,10 +1233,34 @@ split:
   and `0` failures.
 - `rtk npm run test:relay` passed with `195` tests and `0` failures.
 - `rtk git diff --check` passed.
-- `CODEX_DOCK_UI_TEST_HOSTS='amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510' rtk make app-test SIM='iPhone 17' APP_TEST_ONLY='CodexDockUITests/CodexDockPerformanceScrollUITests/testDockScrollGestureRunsWithPerformanceProfilingEnabled'`
-  passed on the `iPhone 17` simulator. Result bundle:
-  `.codex-dock/DerivedData/Logs/Test/Test-CodexDockApp-2026.06.04_15-59-03--0500.xcresult`;
-  test case duration: `26.796s`.
+- `rtk node scripts/sim-ui-sync-config.mjs annotate --path <config.json>
+  --simulator-udid <udid> --app-bundle-id <bundle-id> --app-data-container
+  <path>` passed against a scratch config and wrote the expected simulator
+  metadata.
+- `rtk make sim-ui-controlled-scenario-sync-proof SIM='iPhone 17'
+  SIM_UI_SYNC_SCENARIO='mutation-ack-projection-refresh-failure'
+  SIM_UI_SYNC_DURATION_MS=10000 SIM_UI_SYNC_SCENARIO_HOLD_MS=3500
+  SIM_UI_SYNC_CHECKPOINT_SWEEP=1` passed after simulator app-container metadata
+  moved into the JSON proof config.
+- `rtk make sim-ui-controlled-scenario-sync-proof SIM='iPhone 17'
+  SIM_UI_SYNC_SCENARIO='spawn-edge' SIM_UI_SYNC_DURATION_MS=10000
+  SIM_UI_SYNC_SCENARIO_HOLD_MS=3500 SIM_UI_SYNC_CHECKPOINT_SWEEP=1` passed after
+  the Dock sampler recorded one baseline sample before advertising ready.
+- `rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'` passed. Matrix
+  report:
+  `/tmp/codex-client/sim-ui-controlled-matrix-run-20260604T221252Z/controlled-simulator-matrix.json`;
+  summary report:
+  `/tmp/codex-client/sim-ui-controlled-matrix-run-20260604T221252Z/controlled-simulator-matrix.md`.
+  The matrix produced `36` reports across `18` required scenarios, with `18`
+  passing scenarios, `0` failed scenarios, `0` missing scenarios, and max
+  observed UI lag `446 ms` against the `2000 ms` budget.
+- `rtk make app-test SIM='iPhone 17'
+  APP_TEST_ONLY='CodexDockUITests/CodexDockPerformanceScrollUITests/testDockScrollGestureRunsWithPerformanceProfilingEnabled'`
+  passed on the `iPhone 17` simulator after the final proof-sampler review fix.
+  Result bundle:
+  `.codex-dock/DerivedData/Logs/Test/Test-CodexDockApp-2026.06.04_17-34-22--0500.xcresult`;
+  log:
+  `.codex-dock/logs/app-test-20260604223420.log`.
 
 Fresh simulator log proof at `1,248` Dock rows:
 
@@ -1228,8 +1275,12 @@ perf event=dock.store.publish_snapshot context=handleReconcilerSnapshot duration
 This proves the old root `rowValues=` bottleneck is removed from the tested
 simulator path: the root accessibility value no longer carries the
 `469,211`-character row payload and no longer spends `20-22 ms` rebuilding that
-payload at `1,248` rows. Frame hitches can still come from other UI/runtime
-work, but this specific measured offender is gone.
+payload at `1,248` rows. The controlled matrix additionally proves the relay to
+client displayed-state path stayed inside the `2000 ms` UI lag budget for all
+required simulator scenarios. Frame hitches can still come from other
+UI/runtime work, but this specific measured offender is gone and the simulator
+contract now fails loud through JSON snapshot evidence instead of root-row
+accessibility scraping.
 
 Physical-phone testing is intentionally stopped by user instruction. This proof
 section is simulator/local only.
@@ -1548,6 +1599,99 @@ Follow-ups:
 
 Use the Mac checkout as source of truth and `home` only as a pull-and-run
 deployment copy.
+
+## 2026-06-04 - Composer 2.5 Fast auto-plan sign-off
+
+Context
+
+The current user objective requires `$fresh-consult composer-2.5-fast` to agree
+that this plan is exhaustively specified, unified, and deletes old row-proof
+paths with no test exceptions before `$arch-step auto-implement` proceeds.
+
+Consulted
+
+`/tmp/fresh-consult/dock-lightning-fast-arch-plan-20260604T211426Z-gpvW9n/final.txt`
+
+Decision
+
+Accept the consult as the required Composer 2.5 Fast sign-off. It returned
+`VERDICT: pass`, `BLOCKING: none`, and `CONFIDENCE: high`.
+
+Consequences
+
+The plan has passed both the generated `$arch-step auto-plan` receipt gate and
+the user-requested independent Composer gate. Implementation can proceed through
+`$arch-step auto-implement` against current repo state.
+
+Follow-ups
+
+Create or update the implementation worklog during `$arch-step auto-implement`
+and use the implementation audit block as the authoritative code-completeness
+verdict.
+
+## 2026-06-04 - Make simulator UI proof config self-contained
+
+Context
+
+The controlled simulator proof failed because `xcodebuild test-without-building`
+did not reliably forward the custom shell environment that the UI test used to
+locate the app data container. The product path was correct, but the proof
+sampler could not always find the JSON automation snapshot after Xcode
+reinstalled the simulator app.
+
+Options
+
+- Keep relying on process environment.
+- Shell out from Swift UI tests.
+- Store simulator UDID, app bundle id, and optional app data container in the
+  existing simulator UI sync JSON config.
+
+Decision
+
+Keep Makefile as the shell owner and annotate the existing simulator UI sync
+config through `scripts/sim-ui-sync-config.mjs`. The UI test resolver now reads
+that config before process environment and still fails loud if no candidate
+container contains the advertised snapshot file.
+
+Consequences
+
+Simulator proof no longer depends on undocumented `xcodebuild` environment
+forwarding, and Swift UI tests still avoid shelling out.
+
+Follow-ups
+
+None.
+
+## 2026-06-04 - Sample baseline before controlled fixture mutation
+
+Context
+
+The `spawn-edge` controlled simulator proof briefly exceeded the `2000 ms`
+transition budget because the Dock-only UI sampler marked itself ready before it
+had captured any Dock sample. The controlled fixture could mutate immediately,
+so the judge measured from the relay transition timestamp to the first later UI
+sample instead of from an already-observed baseline.
+
+Options
+
+- Increase the UI lag budget.
+- Add a scenario-specific delay.
+- Capture one baseline Dock sample before writing the ready file.
+
+Decision
+
+Capture one baseline sample before `DisplayedUIArtifactWriter.markReady(...)`
+in the Dock-only sampler branch.
+
+Consequences
+
+The fixture mutates only after the sampler has real UI evidence. Targeted
+`spawn-edge` proof passed, and the final full controlled matrix passed with max
+observed UI lag `446 ms`.
+
+Follow-ups
+
+None.
 
 # Appendix B) Conversion Notes
 
