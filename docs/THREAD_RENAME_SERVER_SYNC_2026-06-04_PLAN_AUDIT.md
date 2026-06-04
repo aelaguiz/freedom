@@ -4,7 +4,7 @@ Plan: `docs/THREAD_RENAME_SERVER_SYNC_2026-06-04.md`
 Audit log: `docs/THREAD_RENAME_SERVER_SYNC_2026-06-04_PLAN_AUDIT.md`
 Current plan verdict: ready
 Current implementation code-review verdict: pass
-Last reviewed: 2026-06-04T10:53:27Z
+Last reviewed: 2026-06-04T11:00:11Z
 Scope: whole plan
 
 ## Current Blocking Findings
@@ -107,3 +107,18 @@ Conditional lens notes:
 - Findings carried forward: none
 - Verdict: pass
 - Next audit focus: none before commit
+
+### Pass 3 - 2026-06-04T11:00:11Z
+
+- Mode: completion-audit
+- Scope: original user objective end state: plan, plan audit, unified implementation, tests, simulator proof, thermonuclear review, commit/push, local relay update, and home relay update
+- Baseline reviewed: local checkout at `6251279 Ingest host thread rename notifications`; pushed branch `origin/codex-dock-agents-tab-live-counts`; home checkout at `/home/aelaguiz/workspace/codex-client`
+- Additional evidence accepted:
+  - `rtk swift test --filter ThreadDetailStoreTests` passed 64/64
+  - `rtk make app SIM='iPhone 17' FORCE_LAUNCH=1` passed
+  - `rtk make dock-relay-status` reported local `launchd` services active and ready
+  - `rtk make dock-relay-status HOST_SERVICE_PLATFORM=linux` on `home` reported `systemd-user` services active and ready
+  - `git ls-remote origin refs/heads/codex-dock-agents-tab-live-counts` pointed to `6251279`
+- Findings added: none
+- Findings carried forward: none
+- Verdict: complete

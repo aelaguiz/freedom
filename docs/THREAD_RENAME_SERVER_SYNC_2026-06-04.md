@@ -28,6 +28,7 @@ Implementation result:
 - Client-initiated `thread/name/set` and server-initiated `thread/name/updated` share the same Dock and Archive reconciliation helper.
 - The iPhone client still consumes `dock/update` / `archive/update`; raw rename notifications are not exposed as a phone-side route.
 - Verified on 2026-06-04 with Node relay tests, focused Swift Dock tests, full Node test suite, and the controlled iPhone 17 simulator proof.
+- Completion audit on 2026-06-04 also verified `ThreadDetailStoreTests`, standalone `rtk make app SIM='iPhone 17' FORCE_LAUNCH=1`, pushed commit state, and local/home relay readiness.
 
 # 1. Current Behavior
 
@@ -446,13 +447,13 @@ Mitigation:
 - [x] Server-initiated rename publishes `dock/update` with the new title.
 - [x] Duplicate command-plus-notification does not duplicate visible unchanged updates.
 - [x] Swift client still consumes card streams, not raw rename notifications.
-- [ ] Open detail header updates from `observeDockRowUpdate`.
+- [x] Open detail header updates from `observeDockRowUpdate`.
 - [x] `rtk npm run test:relay` passes.
 - [x] `rtk swift test --filter DockStoreTests` passes.
-- [ ] `rtk swift test --filter ThreadDetailStoreTests` passes if touched.
-- [ ] `rtk make app SIM='iPhone 17' FORCE_LAUNCH=1` passes.
+- [x] `rtk swift test --filter ThreadDetailStoreTests` passes.
+- [x] `rtk make app SIM='iPhone 17' FORCE_LAUNCH=1` passes.
 - [x] Simulator proof shows a server-side rename visible in the app.
 - [x] Thermonuclear review has no blocking findings.
-- [ ] Changes are committed and pushed.
-- [ ] Local relay is restarted on updated code.
-- [ ] Home checkout is fast-forwarded and home relay is restarted on updated code.
+- [x] Changes are committed and pushed.
+- [x] Local relay is restarted on updated code.
+- [x] Home checkout is fast-forwarded and home relay is restarted on updated code.
