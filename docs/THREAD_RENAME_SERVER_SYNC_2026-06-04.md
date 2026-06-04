@@ -554,7 +554,7 @@ Exit criteria (all required):
 
 ## Phase 5 - Review, Commit, Push, And Deploy Relay
 
-Status: IN PROGRESS
+Status: COMPLETE
 
 Work:
 - Run the requested final review, commit, push, and update runtime deployments.
@@ -611,6 +611,7 @@ Exit criteria (all required):
 - 2026-06-04 - Fresh consult #2: Composer 2.5 Fast returned `VERDICT: pass-with-notes`, `BLOCKING: none`, and confirmed the stamped plan is ready for implementation. Adopted its doc-drift note by marking Phase 0 complete.
 - 2026-06-04 - Implementation proof: Relay, Swift command/UI, focused tests, simulator real-data rename proof, and post-proof title restoration completed. The simulator proof covered both row context-menu rename and Thread Detail toolbar rename against real relay-backed thread `019e56d4-4339-76a1-9ef3-37f081af3f08`.
 - 2026-06-04 - Final review: Thermonuclear review found and repaired two maintainability issues: the opt-in UI proof moved out of the smoke test file, and `ClientCommandEngine` now uses explicit rename wiring instead of a runtime cast. Fresh consult #3 returned `VERDICT: pass-with-notes`, `BLOCKING: none`; its detail-toolbar UI proof note was closed before commit.
+- 2026-06-04 - Deployment proof: Mac commit `4c2201637bbc233f575fb88b2145e5d13dcf82cb` was pushed, the local launchd relay was restarted and reported ready, `/home/aelaguiz/workspace/codex-client` was fast-forwarded to the same commit, the Linux systemd-user host service was reinstalled/restarted and reported ready, and `http://100.66.11.7:4510/routesz` included `thread/name/set`.
 
 <!-- arch_skill:block:consistency_pass:start -->
 - Decision-complete: yes
