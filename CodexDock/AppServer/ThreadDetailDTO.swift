@@ -447,3 +447,17 @@ public struct ThreadUnarchiveResponseDTO: Codable, Equatable, Sendable {
         self.thread = thread
     }
 }
+
+public struct ThreadSetNameParams: Codable, Equatable, Sendable {
+    public let threadId: String
+    public let name: String
+
+    public init(threadId: String, name: String) {
+        self.threadId = threadId
+        self.name = name
+    }
+}
+
+public struct ThreadSetNameResponseDTO: Codable, Equatable, Sendable {
+    public init() {}
+}

@@ -55,6 +55,7 @@ public enum ObservabilityContract {
         ObservabilityRouteConfig(name: AppServerMethods.threadDetailUpdate, probeSafety: .passiveOnly, appCritical: true),
         ObservabilityRouteConfig(name: AppServerMethods.threadArchive, probeSafety: .passiveOnly, appCritical: true),
         ObservabilityRouteConfig(name: AppServerMethods.threadUnarchive, probeSafety: .passiveOnly, appCritical: true),
+        ObservabilityRouteConfig(name: AppServerMethods.threadNameSet, probeSafety: .passiveOnly, appCritical: true),
         ObservabilityRouteConfig(name: AppServerMethods.dockSubscribe, probeSafety: .autoProbeSafe, appCritical: true),
         ObservabilityRouteConfig(name: AppServerMethods.dockUpdate, probeSafety: .passiveOnly, appCritical: true),
         ObservabilityRouteConfig(name: AppServerMethods.dockResync, probeSafety: .autoProbeSafe, appCritical: true),

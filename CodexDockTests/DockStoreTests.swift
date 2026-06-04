@@ -772,6 +772,134 @@ final class DockStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRenameRefreshesDockRowOnlyAfterServerSuccess() async {
+        let host = makeHost()
+        let loader = SequencedThreadCardFixtureLoader(results: [
+            .success(ThreadCardFixtureResult(fixtures: [
+                makeThreadCardFixtureSummary(
+                    hostID: host.id,
+                    threadID: "thread-rename",
+                    branch: "main",
+                    status: .idle,
+                    lastActivity: Date(timeIntervalSince1970: 1_900),
+                    prompt: "Old title"
+                )
+            ])),
+            .success(ThreadCardFixtureResult(fixtures: [
+                makeThreadCardFixtureSummary(
+                    hostID: host.id,
+                    threadID: "thread-rename",
+                    branch: "main",
+                    status: .idle,
+                    lastActivity: Date(timeIntervalSince1970: 1_910),
+                    prompt: "New title"
+                )
+            ]))
+        ])
+        let renamer = RecordingThreadRenamer()
+        let store = DockStore(
+            host: host,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
+            renamer: renamer
+        )
+
+        await store.load()
+        guard case let .loaded(initialSnapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+
+        let row = initialSnapshot.rows[0]
+        let renamed = await store.rename(row, to: " New title ")
+
+        XCTAssertTrue(renamed)
+        let renameRequests = await renamer.renamedRequests()
+        XCTAssertEqual(
+            renameRequests,
+            [RecordedThreadRename(threadID: "thread-rename", name: "New title", hostID: host.id)]
+        )
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected loaded state after rename, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.rows.map(\.title), ["New title"])
+        XCTAssertNil(store.actionError)
+    }
+
+    @MainActor
+    func testFailedRenameKeepsDockRowRecoverable() async {
+        let host = makeHost()
+        let loader = FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: [
+            makeThreadCardFixtureSummary(
+                hostID: host.id,
+                threadID: "thread-keep-name",
+                branch: "main",
+                status: .idle,
+                lastActivity: Date(timeIntervalSince1970: 1_900),
+                prompt: "Keep title"
+            )
+        ])))
+        let renamer = RecordingThreadRenamer(mode: .failure(.error("rename failed")))
+        let store = DockStore(
+            host: host,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
+            renamer: renamer
+        )
+
+        await store.load()
+        guard case let .loaded(initialSnapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+
+        let row = initialSnapshot.rows[0]
+        let renamed = await store.rename(row, to: "New title")
+
+        XCTAssertFalse(renamed)
+        XCTAssertEqual(store.actionError, "rename failed")
+        guard case let .loaded(snapshot) = store.state else {
+            return XCTFail("Expected row to remain loaded, got \(store.state)")
+        }
+        XCTAssertEqual(snapshot.rows[0].title, "Keep title")
+        let renameRequests = await renamer.renamedRequests()
+        XCTAssertEqual(
+            renameRequests,
+            [RecordedThreadRename(threadID: "thread-keep-name", name: "New title", hostID: host.id)]
+        )
+    }
+
+    @MainActor
+    func testEmptyRenameIsRejectedBeforeServerCommand() async {
+        let host = makeHost()
+        let loader = FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: [
+            makeThreadCardFixtureSummary(
+                hostID: host.id,
+                threadID: "thread-empty-name",
+                branch: "main",
+                status: .idle,
+                lastActivity: Date(timeIntervalSince1970: 1_900),
+                prompt: "Keep title"
+            )
+        ])))
+        let renamer = RecordingThreadRenamer()
+        let store = DockStore(
+            host: host,
+            streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
+            renamer: renamer
+        )
+
+        await store.load()
+        guard case let .loaded(initialSnapshot) = store.state else {
+            return XCTFail("Expected loaded state, got \(store.state)")
+        }
+
+        let row = initialSnapshot.rows[0]
+        let renamed = await store.rename(row, to: "   ")
+
+        XCTAssertFalse(renamed)
+        XCTAssertEqual(store.actionError, "Thread name cannot be empty.")
+        let renameRequests = await renamer.renamedRequests()
+        XCTAssertEqual(renameRequests, [])
+    }
+
+    @MainActor
     func testArchiveRemovesDockRowOnlyAfterServerSuccessAndRefresh() async {
         let host = makeHost()
         let loader = SequencedThreadCardFixtureLoader(results: [

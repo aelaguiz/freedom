@@ -80,6 +80,7 @@ import {
   preferThread,
   sanitizeRelayFields,
   sessionRouterForConfig,
+  setThreadName,
   statusPriority,
   unarchiveThread,
 } from "./dock-relay-thread-data.mjs";
@@ -803,6 +804,14 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       await relayStateEngineForConfig(config).handleArchiveMutation({
         threadId: params?.threadId,
         archived: false,
+      });
+      return result;
+    }
+    case "thread/name/set":
+    {
+      const result = await setThreadName(config, params || {});
+      await relayStateEngineForConfig(config).handleThreadNameMutation({
+        threadId: params?.threadId,
       });
       return result;
     }

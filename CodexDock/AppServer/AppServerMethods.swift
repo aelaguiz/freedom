@@ -8,6 +8,7 @@ public enum AppServerMethods {
     public static let threadDetailUpdate = "thread/detail/update"
     public static let threadArchive = "thread/archive"
     public static let threadUnarchive = "thread/unarchive"
+    public static let threadNameSet = "thread/name/set"
     public static let dockSubscribe = "dock/subscribe"
     public static let dockUpdate = "dock/update"
     public static let dockResync = "dock/resync"

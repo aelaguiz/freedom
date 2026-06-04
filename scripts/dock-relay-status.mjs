@@ -375,7 +375,7 @@ function classifyRelayRequestError(method, error) {
     };
   }
   if (method === "thread/detail/resync"
-    || method === "thread/archive" || method === "thread/unarchive") {
+    || method === "thread/archive" || method === "thread/unarchive" || method === "thread/name/set") {
     return {
       subsystem: "history",
       retryable: true,

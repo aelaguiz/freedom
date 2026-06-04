@@ -2,7 +2,7 @@ import XCTest
 @testable import CodexDock
 
 final class ClientCommandEngineTests: XCTestCase {
-    func testArchiveAndUnarchiveCommandsUseArchiverActor() async throws {
+    func testThreadCommandsUseCommandActor() async throws {
         let host = makeHost()
         let projectionID = "host:\(host.id)/thread:thread-a/row:threadCard"
         let row = DockRowViewModel(
@@ -24,15 +24,22 @@ final class ClientCommandEngineTests: XCTestCase {
             origin: .humanInteractive(subtype: .cli)
         )
         let archiver = RecordingThreadArchiver()
-        let engine = ClientCommandEngine(archiver: archiver)
+        let renamer = RecordingThreadRenamer()
+        let engine = ClientCommandEngine(archiver: archiver, renamer: renamer)
 
         try await engine.archive(row, on: host)
         try await engine.unarchive(row, on: host)
+        try await engine.rename(row, to: "Renamed thread", on: host)
 
         let archivedIDs = await archiver.archivedIDs()
         let unarchivedIDs = await archiver.unarchivedIDs()
+        let renamedRequests = await renamer.renamedRequests()
         XCTAssertEqual(archivedIDs, ["thread-a"])
         XCTAssertEqual(unarchivedIDs, ["thread-a"])
+        XCTAssertEqual(
+            renamedRequests,
+            [RecordedThreadRename(threadID: "thread-a", name: "Renamed thread", hostID: host.id)]
+        )
     }
 
     func testThreadDraftCommandStartsOrSteersTurnThroughSession() async throws {

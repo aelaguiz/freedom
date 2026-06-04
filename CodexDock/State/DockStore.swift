@@ -29,6 +29,16 @@ public final class DockStore: ObservableObject {
         hosts.first
     }
 
+    private static func makeCommandEngine(
+        archiver: any ThreadArchiveCommanding,
+        renamer: (any ThreadRenameCommanding)?
+    ) -> ClientCommandEngine {
+        guard let renamer else {
+            return ClientCommandEngine(archiver: archiver)
+        }
+        return ClientCommandEngine(archiver: archiver, renamer: renamer)
+    }
+
     public var currentDockSnapshot: DockSnapshot? {
         guard case .loaded(let snapshot) = state else {
             return nil
@@ -65,6 +75,7 @@ public final class DockStore: ObservableObject {
         host: DockHostConfiguration,
         streamClient: any ThreadCardStreamConnecting = AppServerThreadCardStreamClient(),
         archiver: any ThreadArchiveCommanding = AppServerThreadCommandClient(),
+        renamer: (any ThreadRenameCommanding)? = nil,
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval,
         streamHeartbeatTimeout: Duration = CodexDockConstants.Dock.streamHeartbeatTimeout,
@@ -73,7 +84,7 @@ public final class DockStore: ObservableObject {
     ) {
         let hostViewModels = [DockHostViewModel(host: host)]
         self.hosts = [host]
-        self.commandEngine = ClientCommandEngine(archiver: archiver)
+        self.commandEngine = Self.makeCommandEngine(archiver: archiver, renamer: renamer)
         self.metadataEngine = LocalMetadataEngine(store: metadataStore, now: now)
         self.streamClient = streamClient
         self.streamReconnectDelay = streamReconnectDelay
@@ -94,6 +105,7 @@ public final class DockStore: ObservableObject {
         registry: HostRegistry,
         streamClient: any ThreadCardStreamConnecting = AppServerThreadCardStreamClient(),
         archiver: any ThreadArchiveCommanding = AppServerThreadCommandClient(),
+        renamer: (any ThreadRenameCommanding)? = nil,
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval,
         streamHeartbeatTimeout: Duration = CodexDockConstants.Dock.streamHeartbeatTimeout,
@@ -102,7 +114,7 @@ public final class DockStore: ObservableObject {
     ) {
         let hostViewModels = registry.hosts.map(DockHostViewModel.init)
         self.hosts = registry.hosts
-        self.commandEngine = ClientCommandEngine(archiver: archiver)
+        self.commandEngine = Self.makeCommandEngine(archiver: archiver, renamer: renamer)
         self.metadataEngine = LocalMetadataEngine(store: metadataStore, now: now)
         self.streamClient = streamClient
         self.streamReconnectDelay = streamReconnectDelay
@@ -119,6 +131,7 @@ public final class DockStore: ObservableObject {
         configurationError error: Error,
         streamClient: any ThreadCardStreamConnecting = AppServerThreadCardStreamClient(),
         archiver: any ThreadArchiveCommanding = AppServerThreadCommandClient(),
+        renamer: (any ThreadRenameCommanding)? = nil,
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval,
         streamHeartbeatTimeout: Duration = CodexDockConstants.Dock.streamHeartbeatTimeout,
@@ -127,7 +140,7 @@ public final class DockStore: ObservableObject {
     ) {
         let message = error.localizedDescription
         self.hosts = []
-        self.commandEngine = ClientCommandEngine(archiver: archiver)
+        self.commandEngine = Self.makeCommandEngine(archiver: archiver, renamer: renamer)
         self.metadataEngine = LocalMetadataEngine(store: metadataStore, now: now)
         self.streamClient = streamClient
         self.streamReconnectDelay = streamReconnectDelay
@@ -224,6 +237,34 @@ public final class DockStore: ObservableObject {
             threadID: nil
         ) {
             try await metadataEngine.reorderPinnedRows(visibleRowsInNewOrder)
+        }
+    }
+
+    @discardableResult
+    public func rename(_ row: DockRowViewModel, to name: String) async -> Bool {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            setActionError("Thread name cannot be empty.")
+            return false
+        }
+
+        guard let host = hostConfiguration(for: row) else {
+            DockLog.dock.error("dock rename skipped missing host_id=\(row.hostID, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public)")
+            setActionError("Host \(row.hostID) is no longer configured.")
+            return false
+        }
+
+        do {
+            DockLog.dock.notice("dock rename action started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public)")
+            try await commandEngine.rename(row, to: trimmedName, on: host)
+            setActionError(nil)
+            await refresh()
+            DockLog.dock.notice("dock rename action finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public)")
+            return true
+        } catch {
+            DockLog.dock.error("dock rename action failed host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+            setActionError(error.localizedDescription)
+            return false
         }
     }
 

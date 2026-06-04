@@ -44,6 +44,7 @@ const ROUTE_NAMES = Object.freeze({
   threadDetailUpdate: "thread/detail/update",
   threadArchive: "thread/archive",
   threadUnarchive: "thread/unarchive",
+  threadNameSet: "thread/name/set",
   dockSubscribe: "dock/subscribe",
   dockUpdate: "dock/update",
   dockResync: "dock/resync",
@@ -167,6 +168,13 @@ const ROUTE_CONFIGS = Object.freeze({
   }),
   [ROUTE_NAMES.threadUnarchive]: route({
     name: ROUTE_NAMES.threadUnarchive,
+    kind: "json-rpc",
+    probeSafety: PROBE_SAFETY.PASSIVE_ONLY,
+    appCritical: true,
+    budgetMs: 10_000,
+  }),
+  [ROUTE_NAMES.threadNameSet]: route({
+    name: ROUTE_NAMES.threadNameSet,
     kind: "json-rpc",
     probeSafety: PROBE_SAFETY.PASSIVE_ONLY,
     appCritical: true,

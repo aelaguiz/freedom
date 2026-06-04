@@ -3,6 +3,7 @@ import SwiftUI
 struct DockRowContextMenu: View {
     let row: DockRowViewModel
     let store: DockStore
+    let onRename: @MainActor (DockRowViewModel) -> Void
     let onArchiveSucceeded: @MainActor () async -> Void
 
     var body: some View {
@@ -18,6 +19,19 @@ struct DockRowContextMenu: View {
                 hostID: row.hostID,
                 threadID: row.threadID,
                 action: row.isPinned ? .unpin : .pin
+            )
+        )
+
+        Button {
+            onRename(row)
+        } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+        .codexAutomationID(
+            AutomationID.Dock.rowAction(
+                hostID: row.hostID,
+                threadID: row.threadID,
+                action: .rename
             )
         )
 

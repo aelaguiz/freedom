@@ -5,6 +5,10 @@ public protocol ThreadArchiveCommanding: Sendable {
     func unarchiveThread(_ threadID: String, on host: DockHostConfiguration) async throws
 }
 
+public protocol ThreadRenameCommanding: Sendable {
+    func renameThread(_ threadID: String, to name: String, on host: DockHostConfiguration) async throws
+}
+
 public enum DockRequestFailure: Error, Equatable, LocalizedError, Sendable {
     case offline(String)
     case error(String)
@@ -17,7 +21,7 @@ public enum DockRequestFailure: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
-public struct AppServerThreadCommandClient: ThreadArchiveCommanding {
+public struct AppServerThreadCommandClient: ThreadArchiveCommanding, ThreadRenameCommanding {
     public init() {}
 
     public func archiveThread(_ threadID: String, on host: DockHostConfiguration) async throws {
@@ -50,6 +54,22 @@ public struct AppServerThreadCommandClient: ThreadArchiveCommanding {
             )
         }
         DockLog.archive.notice("archive restore finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")
+    }
+
+    public func renameThread(_ threadID: String, to name: String, on host: DockHostConfiguration) async throws {
+        DockLog.dock.notice("dock rename started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")
+        _ = try await withClient(for: host) { client in
+            try await client.threadSetName(
+                params: ThreadSetNameParams(threadId: threadID, name: name),
+                timeout: CodexDockConstants.AppServer.defaultRequestTimeout,
+                observabilityContext: AppServerRequestObservabilityContext(
+                    configuredHostID: host.id,
+                    route: AppServerMethods.threadNameSet,
+                    store: .shared
+                )
+            )
+        }
+        DockLog.dock.notice("dock rename finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(threadID), privacy: .public)")
     }
 
     private func withClient<Value>(

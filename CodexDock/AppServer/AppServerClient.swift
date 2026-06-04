@@ -335,6 +335,20 @@ public actor AppServerClient {
         )
     }
 
+    public func threadSetName(
+        params: ThreadSetNameParams,
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
+    ) async throws -> ThreadSetNameResponseDTO {
+        try await sendRequest(
+            method: AppServerMethods.threadNameSet,
+            params: try JSONValue.encoded(params),
+            timeout: timeout,
+            observabilityContext: observabilityContext,
+            as: ThreadSetNameResponseDTO.self
+        )
+    }
+
     public func turnStart(
         params: TurnStartParams,
         timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,

@@ -48,6 +48,7 @@ public extension AutomationID {
         case unpin
         case markWatch = "mark-watch"
         case clearLabel = "clear-label"
+        case rename
         case archive
         case color
         case clearColor = "clear-color"
@@ -184,6 +185,10 @@ public extension AutomationID {
         public static let pinnedRowsList = AutomationID("codexdock.dock.pinned.rows")
         public static let pinnedBodyDivider = AutomationID("codexdock.dock.pinned.body-divider")
         public static let pinnedHiddenHint = AutomationID("codexdock.dock.pinned.hidden")
+        public static let renameSheet = AutomationID("codexdock.dock.rename.sheet")
+        public static let renameNameField = AutomationID("codexdock.dock.rename.name")
+        public static let renameSaveButton = AutomationID("codexdock.dock.rename.save")
+        public static let renameCancelButton = AutomationID("codexdock.dock.rename.cancel")
 
         public static func state(_ kind: StateKind) -> AutomationID {
             AutomationID("codexdock.dock.state.\(kind.rawValue)")
@@ -329,6 +334,7 @@ public extension AutomationID {
 
     enum Session {
         public static let header = AutomationID("codexdock.session.header")
+        public static let renameButton = AutomationID("codexdock.session.rename")
         public static let hostPill = AutomationID("codexdock.session.header.host")
         public static let livePill = AutomationID("codexdock.session.header.live")
         public static let statusPill = AutomationID("codexdock.session.header.status")

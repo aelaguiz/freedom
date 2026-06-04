@@ -102,7 +102,8 @@ public struct SystemHealthProjector: Sendable {
                 AppServerMethods.archiveUpdate,
                 AppServerMethods.archiveResync,
                 AppServerMethods.threadArchive,
-                AppServerMethods.threadUnarchive
+                AppServerMethods.threadUnarchive,
+                AppServerMethods.threadNameSet
             ]
         case .voice:
             return [

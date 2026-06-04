@@ -48,6 +48,7 @@ public struct ClientRuntime: Sendable {
     public func makeDockStore(
         streamClient: any ThreadCardStreamConnecting = AppServerThreadCardStreamClient(),
         archiver: any ThreadArchiveCommanding = AppServerThreadCommandClient(),
+        renamer: (any ThreadRenameCommanding)? = nil,
         metadataStore: any LocalThreadMetadataStoring = FileLocalThreadMetadataStore(),
         streamReconnectDelay: Duration = CodexDockConstants.Dock.autoRefreshInterval
     ) -> DockStore {
@@ -55,6 +56,7 @@ public struct ClientRuntime: Sendable {
             registry: registry,
             streamClient: streamClient,
             archiver: archiver,
+            renamer: renamer,
             metadataStore: metadataStore,
             streamReconnectDelay: streamReconnectDelay,
             connectivityEventSink: connectivityEventSink,

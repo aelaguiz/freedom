@@ -501,6 +501,32 @@ actor RecordingThreadArchiver: ThreadArchiveCommanding {
     }
 }
 
+struct RecordedThreadRename: Equatable, Sendable {
+    let threadID: String
+    let name: String
+    let hostID: String
+}
+
+actor RecordingThreadRenamer: ThreadRenameCommanding {
+    private let mode: FakeMode
+    private var renamed: [RecordedThreadRename] = []
+
+    init(mode: FakeMode = .success(ThreadCardFixtureResult(fixtures: []))) {
+        self.mode = mode
+    }
+
+    func renamedRequests() -> [RecordedThreadRename] {
+        renamed
+    }
+
+    func renameThread(_ threadID: String, to name: String, on host: DockHostConfiguration) async throws {
+        renamed.append(RecordedThreadRename(threadID: threadID, name: name, hostID: host.id))
+        if case let .failure(error) = mode {
+            throw error
+        }
+    }
+}
+
 actor InMemoryLocalThreadMetadataStore: LocalThreadMetadataStoring {
     private var values: [LocalThreadMetadataKey: LocalThreadMetadata]
 

@@ -57,6 +57,36 @@ final class SystemHealthProjectorTests: XCTestCase {
         XCTAssertFalse(status?.detail.contains(AppServerMethods.threadArchive) ?? true)
     }
 
+    func testRenameRouteFailureMapsToArchiveHealthWithoutRawRouteName() {
+        let host = HostConnectivitySnapshot(
+            id: "amir",
+            displayName: "Amir-M5",
+            endpoint: "amir-m5.local:4510",
+            phase: .partial("Rename route failed"),
+            routeDiagnostics: [
+                RouteDiagnosticSnapshot(
+                    configuredHostID: "amir",
+                    route: AppServerMethods.threadNameSet,
+                    routeStatus: .failed,
+                    statusReasons: [
+                        RouteStatusReason(code: "validation", message: "Rename route rejected the title")
+                    ],
+                    appCritical: true
+                )
+            ]
+        )
+
+        let snapshot = SystemHealthProjector().snapshot(
+            hosts: [host],
+            overallStatus: .partial("Rename route failed")
+        )
+
+        let status = snapshot.status(for: .archive)
+        XCTAssertEqual(status?.label, "Failed")
+        XCTAssertTrue(status?.detail.contains("Rename route rejected the title") ?? false)
+        XCTAssertFalse(status?.detail.contains(AppServerMethods.threadNameSet) ?? true)
+    }
+
     func testPartialRouteEvidenceMapsToDegradedWithoutRawRouteName() {
         let host = HostConnectivitySnapshot(
             id: "amir",

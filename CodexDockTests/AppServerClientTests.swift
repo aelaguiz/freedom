@@ -1411,7 +1411,7 @@ final class AppServerClientTests: XCTestCase {
         await session.disconnect()
     }
 
-    func testThreadArchiveAndUnarchiveSendTypedRequests() async throws {
+    func testThreadArchiveUnarchiveAndRenameSendTypedRequests() async throws {
         let transport = ScriptedAppServerTransport()
         let client = AppServerClient(transport: transport)
         try await completeHandshake(client: client, transport: transport)
@@ -1467,6 +1467,30 @@ final class AppServerClientTests: XCTestCase {
 
         let unarchiveResponse = try await unarchiveTask.value
         XCTAssertEqual(unarchiveResponse.thread.id, "thread-1")
+
+        let setNameTask = Task {
+            try await client.threadSetName(
+                params: ThreadSetNameParams(threadId: "thread-1", name: "New thread name"),
+                timeout: .seconds(1)
+            )
+        }
+        let setNameRequest = try await transport.nextSentRequest()
+        XCTAssertEqual(setNameRequest.method, AppServerMethods.threadNameSet)
+        guard case .object(let setNameParams) = try XCTUnwrap(setNameRequest.params) else {
+            return XCTFail("Expected object params")
+        }
+        XCTAssertEqual(setNameParams["threadId"], .string("thread-1"))
+        XCTAssertEqual(setNameParams["name"], .string("New thread name"))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: setNameRequest.id,
+                    result: try JSONValue.encoded(ThreadSetNameResponseDTO())
+                )
+            )
+        )
+        _ = try await setNameTask.value
     }
 
     func testArchiveRouteFailureIsObservedFromRealTraffic() async throws {

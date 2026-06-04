@@ -9,10 +9,15 @@ import AppKit
 public struct SessionDetailView: View {
     @StateObject private var store: ThreadDetailStore
     @StateObject private var screenStore: ThreadDetailScreenStore
+    private let onRename: (@MainActor (DockRowViewModel) -> Void)?
 
-    public init(store: ThreadDetailStore) {
+    public init(
+        store: ThreadDetailStore,
+        onRename: (@MainActor (DockRowViewModel) -> Void)? = nil
+    ) {
         _store = StateObject(wrappedValue: store)
         _screenStore = StateObject(wrappedValue: store.screenStore)
+        self.onRename = onRename
     }
 
     public var body: some View {
@@ -29,6 +34,19 @@ public struct SessionDetailView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .toolbar {
+            if let onRename {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        onRename(store.row)
+                    } label: {
+                        Image(systemName: "pencil")
+                    }
+                    .accessibilityLabel("Rename Thread")
+                    .codexAutomationID(AutomationID.Session.renameButton)
+                }
+            }
+        }
         .task {
             await store.load()
         }

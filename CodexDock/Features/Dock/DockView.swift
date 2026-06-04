@@ -89,6 +89,7 @@ public struct CodexDockRootView: View {
         let dockStore = runtime.makeDockStore(
             streamClient: streamClient,
             archiver: client,
+            renamer: client,
             metadataStore: metadataStore
         )
         _dockStore = StateObject(
@@ -326,6 +327,8 @@ public struct DockView: View {
     @State private var selectedDetailStore: ThreadDetailStore?
     @State private var collapsedHostGroupIDs: Set<String> = []
     @State private var collapsedBranchGroupIDs: Set<String> = []
+    @State private var renameDraft: DockRenameDraft?
+    @State private var isRenameInFlight = false
     @FocusState private var isSearchFocused: Bool
 
     public init(
@@ -383,6 +386,21 @@ public struct DockView: View {
             DockFilterSurfaceView(
                 filters: filtersBinding,
                 projection: currentProjection
+            )
+        }
+        .sheet(item: $renameDraft) { draft in
+            DockRenameThreadSheet(
+                draft: draft,
+                isSaving: isRenameInFlight,
+                onCancel: {
+                    guard !isRenameInFlight else {
+                        return
+                    }
+                    renameDraft = nil
+                },
+                onSave: { name in
+                    await saveRename(draft, name: name)
+                }
             )
         }
     }
@@ -598,7 +616,12 @@ public struct DockView: View {
     @ViewBuilder
     private var selectedDetailDestination: some View {
         if let selectedDetailStore {
-            SessionDetailView(store: selectedDetailStore)
+            SessionDetailView(
+                store: selectedDetailStore,
+                onRename: { row in
+                    presentRenameSheet(for: row)
+                }
+            )
         } else {
             DockMessageView(
                 icon: "exclamationmark.triangle",
@@ -619,6 +642,34 @@ public struct DockView: View {
             row: row,
             hostIdentityResolver: currentSnapshot?.hostIdentityResolver
         )
+    }
+
+    private func presentRenameSheet(for row: DockRowViewModel) {
+        guard store.hostConfiguration(for: row) != nil else {
+            return
+        }
+        renameDraft = DockRenameDraft(row: row)
+    }
+
+    private func saveRename(_ draft: DockRenameDraft, name: String) async -> Bool {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            return false
+        }
+        guard trimmedName != draft.initialName else {
+            renameDraft = nil
+            return true
+        }
+
+        isRenameInFlight = true
+        defer {
+            isRenameInFlight = false
+        }
+        let renamed = await store.rename(draft.row, to: trimmedName)
+        if renamed {
+            renameDraft = nil
+        }
+        return renamed
     }
 
     private func syncSelectedDetail(with state: DockScreenState) {
@@ -882,6 +933,9 @@ public struct DockView: View {
                 await store.setPinned(!row.isPinned, for: row)
             }
         }
+        .accessibilityAction(named: Text("Rename thread")) {
+            presentRenameSheet(for: row)
+        }
     }
 
     private func dockPinnedRow(_ row: DockRowViewModel) -> some View {
@@ -895,6 +949,9 @@ public struct DockView: View {
             Task {
                 await store.setPinned(false, for: row)
             }
+        }
+        .accessibilityAction(named: Text("Rename thread")) {
+            presentRenameSheet(for: row)
         }
     }
 
@@ -1041,6 +1098,9 @@ public struct DockView: View {
         DockRowContextMenu(
             row: row,
             store: store,
+            onRename: { row in
+                presentRenameSheet(for: row)
+            },
             onArchiveSucceeded: onArchiveSucceeded
         )
     }

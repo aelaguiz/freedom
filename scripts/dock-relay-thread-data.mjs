@@ -1110,6 +1110,25 @@ async function archiveThread(config, params = {}) {
   );
 }
 
+async function setThreadName(config, params = {}) {
+  if (!params.threadId) {
+    throw new Error("thread/name/set requires threadId");
+  }
+  if (typeof params.name !== "string" || params.name.trim().length === 0) {
+    throw new Error("thread/name/set requires name");
+  }
+  await assertHumanThreadID(config, params.threadId);
+  const endpoint = await endpointForThread(config, params.threadId);
+  if (isHistoryEndpoint(config, endpoint)) {
+    return historyClientForConfig(config).request("thread/name/set", params);
+  }
+  return withClient(
+    endpoint.url,
+    { bearerToken: endpoint.bearerToken || null, logger: relayLogger(config) },
+    async (client) => client.request("thread/name/set", params),
+  );
+}
+
 async function unarchiveThread(config, params = {}) {
   if (!params.threadId) {
     throw new Error("thread/unarchive requires threadId");
@@ -1143,6 +1162,7 @@ export {
   readHistoryThreadList,
   readSessionIndexHumanStartedSupplements,
   sanitizeRelayFields,
+  setThreadName,
   liveStatusCacheForConfig,
   sessionRouterForConfig,
   statusPriority,

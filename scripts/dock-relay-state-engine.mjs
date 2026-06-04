@@ -1015,6 +1015,37 @@ class RelayStateEngine {
     };
   }
 
+  async handleThreadNameMutation({ threadId }) {
+    if (!threadId) {
+      return null;
+    }
+    const reason = "thread/name/set";
+    const results = await Promise.allSettled([
+      this.reconcileDock({ reason }),
+      this.reconcileArchive({ reason }),
+    ]);
+    for (const [index, result] of results.entries()) {
+      if (result.status !== "rejected" && !result.value?.error) {
+        continue;
+      }
+      this.logger?.warn?.("state.thread_name_mutation_reconcile_failed", {
+        reason,
+        view: index === 0 ? DOCK_VIEW : ARCHIVE_VIEW,
+        error: result.status === "rejected" ? result.reason : result.value.error,
+      });
+    }
+    const failed = results.find((result) => result.status === "rejected" || result.value?.error);
+    if (failed) {
+      const error = failed.status === "rejected" ? failed.reason : failed.value.error;
+      throw error instanceof Error ? error : new Error(String(error || "thread name mutation reconcile failed"));
+    }
+    return {
+      reason,
+      dock: results[0].status === "fulfilled" ? results[0].value : null,
+      archive: results[1].status === "fulfilled" ? results[1].value : null,
+    };
+  }
+
   stateHealth() {
     return {
       ok: true,

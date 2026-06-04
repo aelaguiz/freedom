@@ -49,6 +49,7 @@ final class DiagnosticsLoggingTests: XCTestCase {
             AppServerMethods.threadDetailUpdate,
             AppServerMethods.threadArchive,
             AppServerMethods.threadUnarchive,
+            AppServerMethods.threadNameSet,
             AppServerMethods.dockSubscribe,
             AppServerMethods.dockUpdate,
             AppServerMethods.dockResync,
@@ -72,6 +73,8 @@ final class DiagnosticsLoggingTests: XCTestCase {
         XCTAssertEqual(Set(ObservabilityContract.routes.map(\.name)), expectedRoutes)
         XCTAssertEqual(ObservabilityContract.config(for: AppServerMethods.turnStart).probeSafety, .passiveOnly)
         XCTAssertEqual(ObservabilityContract.config(for: AppServerMethods.threadArchive).probeSafety, .passiveOnly)
+        XCTAssertEqual(ObservabilityContract.config(for: AppServerMethods.threadNameSet).probeSafety, .passiveOnly)
+        XCTAssertTrue(ObservabilityContract.config(for: AppServerMethods.threadNameSet).appCritical)
         XCTAssertEqual(ObservabilityContract.config(for: AppServerMethods.audioTranscriptionStart).probeSafety, .passiveOnly)
         XCTAssertTrue(ObservabilityContract.config(for: AppServerMethods.dockSubscribe).appCritical)
         XCTAssertTrue(ObservabilityContract.config(for: AppServerMethods.archiveSubscribe).appCritical)

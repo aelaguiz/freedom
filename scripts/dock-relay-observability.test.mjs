@@ -58,6 +58,9 @@ async function withRelayConfig(overrides, testFn) {
 test("observability contract contains only supported app-facing routes", () => {
   assert.equal(ROUTE_NAMES.dockSubscribe, "dock/subscribe");
   assert.equal(ROUTE_NAMES.archiveSubscribe, "archive/subscribe");
+  assert.equal(ROUTE_NAMES.threadNameSet, "thread/name/set");
+  assert.equal(ROUTE_CONFIGS[ROUTE_NAMES.threadNameSet]?.probeSafety, "passive-only");
+  assert.equal(ROUTE_CONFIGS[ROUTE_NAMES.threadNameSet]?.appCritical, true);
   assert.equal(ROUTE_CONFIGS["thread/list"], undefined);
   assert.equal(ROUTE_CONFIGS["thread/search"], undefined);
   assert.equal(ROUTE_CONFIGS["thread/goal/get"], undefined);

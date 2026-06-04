@@ -166,6 +166,39 @@ test("archive mutations reconcile and publish dock and archive views", async () 
   assert.deepEqual(result.archive, { seq: 3 });
 });
 
+test("thread name mutations reconcile and publish dock and archive views", async () => {
+  const calls = [];
+  const engine = new RelayStateEngine(
+    { hostId: "home", logger: null },
+    {
+      store: {
+        currentSeq() {
+          return 1;
+        },
+        close() {},
+      },
+    },
+  );
+  engine.reconcileDock = async ({ reason }) => {
+    calls.push({ view: "dock", reason });
+    return { seq: 4 };
+  };
+  engine.reconcileArchive = async ({ reason }) => {
+    calls.push({ view: "archive", reason });
+    return { seq: 5 };
+  };
+
+  const result = await engine.handleThreadNameMutation({ threadId: "thread-1" });
+
+  assert.deepEqual(calls, [
+    { view: "dock", reason: "thread/name/set" },
+    { view: "archive", reason: "thread/name/set" },
+  ]);
+  assert.equal(result.reason, "thread/name/set");
+  assert.deepEqual(result.dock, { seq: 4 });
+  assert.deepEqual(result.archive, { seq: 5 });
+});
+
 test("RelayStateEngine treats a fresh empty dock view as complete instead of reconciling forever", () => {
   const engine = new RelayStateEngine(
     { hostId: "home", logger: null },
