@@ -144,4 +144,89 @@ final class DockRenderProjectorTests: XCTestCase {
         XCTAssertEqual(snapshot.rows.map(\.threadID), ["human-thread"])
         XCTAssertTrue(snapshot.rows[0].isPinned)
     }
+
+    func testProjectionAutomationRowsRespectExpansionState() async {
+        let host = makeHost()
+        let pinnedKey = LocalThreadMetadataKey(
+            hostID: host.id,
+            backendSessionID: "pinned-thread-session",
+            threadID: "pinned-thread"
+        )
+        let input = DockRenderInput(
+            hosts: [host],
+            hostStates: [
+                DockHostStateViewModel(
+                    host: DockHostViewModel(host: host),
+                    status: .loaded(rowCount: 2)
+                )
+            ],
+            cardsByHostID: [
+                host.id: [
+                    threadCardFixture(host: host, threadID: "pinned-thread", title: "Pinned", updatedAt: 2_100),
+                    threadCardFixture(host: host, threadID: "body-thread", title: "Body", updatedAt: 2_000),
+                ]
+            ],
+            isPartial: false
+        )
+        let snapshot = DockRenderProjector(now: { Date(timeIntervalSince1970: 2_000) })
+            .snapshot(
+                from: input,
+                localMetadata: [
+                    pinnedKey: LocalThreadMetadata(
+                        isPinned: true,
+                        pinnedAt: Date(timeIntervalSince1970: 10)
+                    )
+                ]
+            )
+
+        let expanded = snapshot.project(
+            options: DockProjectionOptions(
+                lens: .newest,
+                expansionState: DockProjectionExpansionState(isPinnedCollapsed: false)
+            )
+        )
+        let collapsed = snapshot.project(
+            options: DockProjectionOptions(
+                lens: .newest,
+                expansionState: DockProjectionExpansionState(isPinnedCollapsed: true)
+            )
+        )
+
+        XCTAssertEqual(expanded.automationRows.map(\.threadID), ["pinned-thread", "body-thread"])
+        XCTAssertEqual(collapsed.automationRows.map(\.threadID), ["body-thread"])
+    }
+
+    func testProjectionAutomationRowsRespectCollapsedHostGroups() async {
+        let host = makeHost()
+        let input = DockRenderInput(
+            hosts: [host],
+            hostStates: [
+                DockHostStateViewModel(
+                    host: DockHostViewModel(host: host),
+                    status: .loaded(rowCount: 1)
+                )
+            ],
+            cardsByHostID: [
+                host.id: [
+                    threadCardFixture(host: host, threadID: "body-thread", title: "Body", updatedAt: 2_000),
+                ]
+            ],
+            isPartial: false
+        )
+        let snapshot = DockRenderProjector(now: { Date(timeIntervalSince1970: 2_000) })
+            .snapshot(from: input, localMetadata: [:])
+
+        let expanded = snapshot.project(options: DockProjectionOptions(lens: .host))
+        let collapsed = snapshot.project(
+            options: DockProjectionOptions(
+                lens: .host,
+                expansionState: DockProjectionExpansionState(
+                    collapsedHostGroupIDs: ["host::\(host.id)"]
+                )
+            )
+        )
+
+        XCTAssertEqual(expanded.automationRows.map(\.threadID), ["body-thread"])
+        XCTAssertEqual(collapsed.automationRows, [])
+    }
 }

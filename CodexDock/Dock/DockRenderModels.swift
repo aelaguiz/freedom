@@ -25,5 +25,33 @@ struct DockRenderInput: Equatable, Sendable {
 struct DockRenderSnapshot: Equatable, Sendable {
     let revision: RenderRevision
     let snapshot: DockSnapshot
+    let options: DockProjectionOptions
     let projection: DockCardProjection
+    let rowByID: [String: DockRowViewModel]
+    let automationSnapshot: DockAutomationSnapshotMetadata?
+
+    init(
+        revision: RenderRevision,
+        snapshot: DockSnapshot,
+        options: DockProjectionOptions,
+        projection: DockCardProjection,
+        automationSnapshot: DockAutomationSnapshotMetadata? = nil
+    ) {
+        self.revision = revision
+        self.snapshot = snapshot
+        self.options = options
+        self.projection = projection
+        self.rowByID = Dictionary(uniqueKeysWithValues: snapshot.rows.map { ($0.id, $0) })
+        self.automationSnapshot = automationSnapshot
+    }
+
+    func withAutomationSnapshot(_ metadata: DockAutomationSnapshotMetadata?) -> DockRenderSnapshot {
+        DockRenderSnapshot(
+            revision: revision,
+            snapshot: snapshot,
+            options: options,
+            projection: projection,
+            automationSnapshot: metadata
+        )
+    }
 }

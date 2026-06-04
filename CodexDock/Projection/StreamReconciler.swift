@@ -95,6 +95,7 @@ actor StreamReconciler<Row: Equatable & Sendable> {
     private var complete: Bool?
     private var totalRows: Int?
     private var window: ProjectionWindow?
+    private var latestEnvelopeKind: ProjectionUpdateKind?
     private var activeCatchupReason: StreamReconcilerRecoveryReason?
     private var isResyncing = false
     private var pendingRecoveryReason: StreamReconcilerRecoveryReason?
@@ -326,6 +327,7 @@ actor StreamReconciler<Row: Equatable & Sendable> {
     }
 
     private func applyIncoming(_ envelope: ProjectionEnvelope<Row>) async {
+        latestEnvelopeKind = envelope.kind
         guard validateViewKey(envelope) else {
             await requestResync(reason: .streamContract)
             return
@@ -362,6 +364,7 @@ actor StreamReconciler<Row: Equatable & Sendable> {
         _ envelope: ProjectionEnvelope<Row>,
         recoveryReason: StreamReconcilerRecoveryReason?
     ) throws {
+        latestEnvelopeKind = envelope.kind
         guard validateViewKey(envelope), envelope.kind == .snapshot else {
             throw ProjectionReducerError.streamContract("Projection subscribe/resync must return a snapshot for the reconciler view key.")
         }
@@ -384,6 +387,7 @@ actor StreamReconciler<Row: Equatable & Sendable> {
     }
 
     private func applyCatchupPage(_ envelope: ProjectionEnvelope<Row>) async {
+        latestEnvelopeKind = envelope.kind
         do {
             try reducer.apply(envelope, policy: policy)
             updateProjectionMetadata(from: envelope)
@@ -419,6 +423,7 @@ actor StreamReconciler<Row: Equatable & Sendable> {
     }
 
     private func buffer(_ envelope: ProjectionEnvelope<Row>) async {
+        latestEnvelopeKind = envelope.kind
         if bufferedEnvelopes.count >= maxBufferedEnvelopeCount {
             bufferedEnvelopes.removeAll()
             if isResyncing {
@@ -593,11 +598,33 @@ actor StreamReconciler<Row: Equatable & Sendable> {
     }
 
     private func publish() {
+        let startedAt = Date()
         revision += 1
+        let snapshotStartedAt = Date()
         let snapshot = currentSnapshot()
+        let snapshotDurationMilliseconds = PerformanceProbe.milliseconds(since: snapshotStartedAt)
+        let yieldStartedAt = Date()
         for continuation in sinks.values {
             continuation.yield(snapshot)
         }
+        PerformanceProbe.event(
+            "stream_reconciler.publish",
+            fields: [
+                "view": snapshot.viewKey.view,
+                "source_host_id": snapshot.viewKey.sourceHostID ?? "none",
+                "revision": "\(snapshot.revision)",
+                "rows": "\(snapshot.rows.count)",
+                "seq": "\(snapshot.seq)",
+                "generation": "\(snapshot.generation)",
+                "freshness": "\(snapshot.freshness)",
+                "last_kind": latestEnvelopeKind?.rawValue ?? "none",
+                "sinks": "\(sinks.count)",
+                "buffered": "\(snapshot.bufferedEnvelopeCount)",
+                "snapshot_ms": "\(snapshotDurationMilliseconds)",
+                "yield_ms": "\(PerformanceProbe.milliseconds(since: yieldStartedAt))",
+                "duration_ms": "\(PerformanceProbe.milliseconds(since: startedAt))",
+            ]
+        )
     }
 
     private func currentSnapshot() -> StreamReconcilerSnapshot<Row> {

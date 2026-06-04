@@ -464,12 +464,13 @@ extension XCUIApplication {
         let dockRootCapturedAt = codexDockISO8601Now()
         let dockRowsCaptureStartedAt = codexDockISO8601Now()
         let dockRows: [DisplayedUIDockRow]
-        if let rootRows = dockRowsFromRootValue(rootValue) {
+        if let rootRows = dockRowsFromAutomationSnapshot(rootValue) {
             dockRows = rootRows
         } else {
             // Dock proof is deliberately single-path: rendered rows come from
-            // the Dock root payload. If that payload is missing, leave the row
-            // dump empty so strict proof fails instead of using a second oracle.
+            // the revision-keyed JSON snapshot named by the Dock root. Missing
+            // snapshot metadata leaves rows empty so strict proof fails instead
+            // of using a second oracle.
             dockRows = []
         }
         let dockRowsCapturedAt = codexDockISO8601Now()
@@ -556,10 +557,10 @@ extension XCUIApplication {
         let expectedRootRows = dockRootRowCount(rootValue)
         let maxSteps = 30
 
-        // Dock checkpoint proof uses the same rendered row payload as normal
-        // sampling. Do not add a second row-discovery path here; missing payload
-        // is a proof failure, not a reason to reconstruct UI truth another way.
-        if let rootRows = dockRowsFromRootValue(rootValue) {
+        // Dock checkpoint proof uses the same JSON snapshot oracle as normal
+        // sampling. Do not add a second row-discovery path here; missing
+        // metadata is a proof failure, not a reason to reconstruct UI truth.
+        if let rootRows = dockRowsFromAutomationSnapshot(rootValue) {
             let reason = expectedRootRows.map { rootRows.count >= $0 ? "expectedRowsReached" : "rootRowsIncomplete" }
                 ?? "expectedRowsReached"
             return DisplayedUIDockSweep(
@@ -631,34 +632,6 @@ extension XCUIApplication {
             return Int(trimmed.dropFirst("rows=".count))
         }
         return nil
-    }
-
-    private func dockRowsFromRootValue(_ rootValue: String) -> [DisplayedUIDockRow]? {
-        guard let field = codexDockAutomationField("rowValues", in: rootValue) else {
-            return nil
-        }
-        guard !field.isEmpty else {
-            return []
-        }
-        return field.split(separator: "|").enumerated().compactMap { index, encoded in
-            let raw = String(encoded)
-            let decoded = raw.removingPercentEncoding ?? raw
-            guard let separator = decoded.firstIndex(of: "=") else {
-                return nil
-            }
-            let identifier = String(decoded[..<separator])
-            let valueStart = decoded.index(after: separator)
-            let value = String(decoded[valueStart...])
-            guard identifier.hasPrefix("codexdock.dock.row.") else {
-                return nil
-            }
-            return DisplayedUIDockRow(
-                identifier: identifier,
-                value: value,
-                label: "",
-                frame: DisplayedUIFrame(minX: 0, minY: Double(index), width: 1, height: 1)
-            )
-        }
     }
 
     private func checkpointDetailSweep() -> DisplayedUIDetailSweep {

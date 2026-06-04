@@ -99,7 +99,11 @@ public final class DockStore: ObservableObject {
         self.streamHeartbeatTimeout = streamHeartbeatTimeout
         self.connectivityEventSink = connectivityEventSink
         self.now = now
-        self.screenStore = DockScreenStore(hosts: hostViewModels, now: now)
+        self.screenStore = DockScreenStore(
+            hosts: hostViewModels,
+            automationSnapshotStore: DockAutomationSnapshotConfiguration.makeIfEnabled(),
+            now: now
+        )
         if let registry = try? HostRegistry(hosts: [host]) {
             self.dataEngine = DockDataEngine(registry: registry)
         } else {
@@ -129,7 +133,11 @@ public final class DockStore: ObservableObject {
         self.streamHeartbeatTimeout = streamHeartbeatTimeout
         self.connectivityEventSink = connectivityEventSink
         self.now = now
-        self.screenStore = DockScreenStore(hosts: hostViewModels, now: now)
+        self.screenStore = DockScreenStore(
+            hosts: hostViewModels,
+            automationSnapshotStore: DockAutomationSnapshotConfiguration.makeIfEnabled(),
+            now: now
+        )
         self.dataEngine = DockDataEngine(registry: registry)
         self.state = .idle(hostViewModels)
         self.screenStore.start()
@@ -302,7 +310,7 @@ public final class DockStore: ObservableObject {
         } catch {
             if pendingRenameTitles[submission.threadIdentity] == submission.title {
                 pendingRenameTitles[submission.threadIdentity] = nil
-                await publishSnapshot()
+                await publishSnapshot(context: "renameFailed")
             }
             DockLog.dock.error("dock rename action failed host_id=\(submission.host.id, privacy: .public) thread_id=\(DockLog.publicID(submission.row.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             setActionError(error.localizedDescription)
@@ -345,9 +353,23 @@ public final class DockStore: ObservableObject {
         let startedAt = Date()
         let signpostState = DockSignpost.dock.beginInterval("dock.reload")
         DockLog.dock.notice("dock stream reload started hosts=\(self.hosts.count, privacy: .public) show_loading=\(showLoading, privacy: .public)")
+        PerformanceProbe.event(
+            "dock.reload.started",
+            fields: [
+                "hosts": "\(hosts.count)",
+                "show_loading": "\(showLoading)",
+            ]
+        )
         isLoading = true
         defer {
             DockSignpost.dock.endInterval("dock.reload", signpostState)
+            PerformanceProbe.event(
+                "dock.reload.finished",
+                fields: [
+                    "hosts": "\(hosts.count)",
+                    "duration_ms": "\(PerformanceProbe.milliseconds(since: startedAt))",
+                ]
+            )
             isLoading = false
         }
 
@@ -370,21 +392,24 @@ public final class DockStore: ObservableObject {
         await dataEngine?.updateLocalMetadata(localMetadata)
         await dataEngine?.ensureHosts()
         await synchronizeStreams()
-        await migrateMetadataHostAliases()
-        await publishSnapshot()
+        await migrateMetadataHostAliases(context: "reload")
+        await publishSnapshot(context: "reload")
         if case let .loaded(snapshot) = state {
             DockLog.dock.notice("dock stream reload finished hosts=\(self.hosts.count, privacy: .public) rows=\(snapshot.rowCount, privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
         }
     }
 
     private func synchronizeStreams() async {
+        let startedAt = Date()
         let validHostIDs = Set(hosts.map(\.id))
         for hostID in streamReconcilers.keys where !validHostIDs.contains(hostID) {
             await closeReconciler(hostID: hostID)
         }
 
         for host in hosts {
+            let hostStartedAt = Date()
             let reconciler = streamReconcilers[host.id] ?? makeReconciler(for: host)
+            let isNewReconciler = streamReconcilers[host.id] == nil
             if streamReconcilers[host.id] == nil {
                 streamReconcilers[host.id] = reconciler
                 await reconciler.start()
@@ -392,10 +417,29 @@ public final class DockStore: ObservableObject {
             } else {
                 await reconciler.manualRefresh()
             }
-            await dataEngine?.apply(await reconciler.snapshot(), host: host)
-            await migrateMetadataHostAliases()
-            await publishSnapshot()
+            let reconcilerSnapshot = await reconciler.snapshot()
+            await dataEngine?.apply(reconcilerSnapshot, host: host)
+            await migrateMetadataHostAliases(context: "synchronizeStreams")
+            await publishSnapshot(context: "synchronizeStreams")
+            PerformanceProbe.event(
+                "dock.synchronize_streams.host",
+                fields: [
+                    "host_id": host.id,
+                    "new_reconciler": "\(isNewReconciler)",
+                    "revision": "\(reconcilerSnapshot.revision)",
+                    "rows": "\(reconcilerSnapshot.rows.count)",
+                    "freshness": "\(reconcilerSnapshot.freshness)",
+                    "duration_ms": "\(PerformanceProbe.milliseconds(since: hostStartedAt))",
+                ]
+            )
         }
+        PerformanceProbe.event(
+            "dock.synchronize_streams.finished",
+            fields: [
+                "hosts": "\(hosts.count)",
+                "duration_ms": "\(PerformanceProbe.milliseconds(since: startedAt))",
+            ]
+        )
     }
 
     private func makeReconciler(for host: DockHostConfiguration) -> StreamReconciler<DockThreadCardDTO> {
@@ -433,9 +477,33 @@ public final class DockStore: ObservableObject {
         _ snapshot: StreamReconcilerSnapshot<DockThreadCardDTO>,
         host: DockHostConfiguration
     ) async {
+        let startedAt = Date()
+        PerformanceProbe.event(
+            "dock.host_snapshot.received",
+            fields: [
+                "host_id": host.id,
+                "revision": "\(snapshot.revision)",
+                "rows": "\(snapshot.rows.count)",
+                "seq": "\(snapshot.seq)",
+                "generation": "\(snapshot.generation)",
+                "freshness": "\(snapshot.freshness)",
+                "complete": snapshot.complete.map(String.init) ?? "none",
+                "total_rows": snapshot.totalRows.map(String.init) ?? "none",
+                "buffered": "\(snapshot.bufferedEnvelopeCount)",
+            ]
+        )
         await dataEngine?.apply(snapshot, host: host)
-        await migrateMetadataHostAliases()
-        await publishSnapshot()
+        await migrateMetadataHostAliases(context: "handleReconcilerSnapshot")
+        await publishSnapshot(context: "handleReconcilerSnapshot")
+        PerformanceProbe.event(
+            "dock.host_snapshot.handled",
+            fields: [
+                "host_id": host.id,
+                "revision": "\(snapshot.revision)",
+                "rows": "\(snapshot.rows.count)",
+                "duration_ms": "\(PerformanceProbe.milliseconds(since: startedAt))",
+            ]
+        )
     }
 
     private func closeReconciler(hostID: String) async {
@@ -452,17 +520,37 @@ public final class DockStore: ObservableObject {
         }
     }
 
-    private func publishSnapshot() async {
+    private func publishSnapshot(context: String = "unspecified") async {
         guard !hosts.isEmpty else {
             return
         }
+        let startedAt = Date()
+        let modelStartedAt = Date()
         guard let snapshot = await dataEngine?.snapshot(now: now) else {
             return
         }
+        let modelDurationMilliseconds = PerformanceProbe.milliseconds(since: modelStartedAt)
+        let pendingRenameStartedAt = Date()
         let displayedSnapshot = snapshotApplyingPendingRenames(to: snapshot)
-        state = .loaded(displayedSnapshot)
-        screenStore.publish(snapshot: displayedSnapshot)
-        publishConnectivity(for: state)
+        let pendingRenameDurationMilliseconds = PerformanceProbe.milliseconds(since: pendingRenameStartedAt)
+        let screenPublishStartedAt = Date()
+        let didPublish = publishDisplayedSnapshot(displayedSnapshot, context: context)
+        let screenPublishDurationMilliseconds = PerformanceProbe.milliseconds(since: screenPublishStartedAt)
+        PerformanceProbe.event(
+            "dock.store.publish_snapshot",
+            fields: [
+                "context": context,
+                "published": "\(didPublish)",
+                "hosts": "\(displayedSnapshot.hosts.count)",
+                "rows": "\(displayedSnapshot.rows.count)",
+                "partial": "\(displayedSnapshot.isPartial)",
+                "pending_renames": "\(pendingRenameTitles.count)",
+                "model_ms": "\(modelDurationMilliseconds)",
+                "pending_rename_ms": "\(pendingRenameDurationMilliseconds)",
+                "screen_publish_ms": "\(screenPublishDurationMilliseconds)",
+                "duration_ms": "\(PerformanceProbe.milliseconds(since: startedAt))",
+            ]
+        )
     }
 
     private func publishCurrentSnapshotWithPendingRenames() {
@@ -473,9 +561,32 @@ public final class DockStore: ObservableObject {
             to: snapshot,
             clearsConfirmedPendingRenames: false
         )
-        state = .loaded(displayedSnapshot)
+        _ = publishDisplayedSnapshot(displayedSnapshot, context: "pendingRename")
+    }
+
+    @discardableResult
+    private func publishDisplayedSnapshot(
+        _ displayedSnapshot: DockSnapshot,
+        context: String
+    ) -> Bool {
+        let newState = DockStoreState.loaded(displayedSnapshot)
+        guard state != newState else {
+            PerformanceProbe.event(
+                "dock.store.publish_snapshot.noop",
+                fields: [
+                    "context": context,
+                    "rows": "\(displayedSnapshot.rows.count)",
+                    "hosts": "\(displayedSnapshot.hosts.count)",
+                    "partial": "\(displayedSnapshot.isPartial)",
+                ]
+            )
+            return false
+        }
+
+        state = newState
         screenStore.publish(snapshot: displayedSnapshot)
         publishConnectivity(for: state)
+        return true
     }
 
     private func snapshotApplyingPendingRenames(
@@ -522,7 +633,8 @@ public final class DockStore: ObservableObject {
         }
     }
 
-    private func migrateMetadataHostAliases() async {
+    private func migrateMetadataHostAliases(context: String = "unspecified") async {
+        let startedAt = Date()
         guard let resolver = await dataEngine?.hostIdentityResolver() else {
             return
         }
@@ -536,6 +648,14 @@ public final class DockStore: ObservableObject {
         } catch {
             DockLog.persistence.warning("dock metadata host alias migration failed error=\(DockLog.errorSummary(error), privacy: .public)")
         }
+        PerformanceProbe.event(
+            "dock.metadata_alias_migration",
+            fields: [
+                "context": context,
+                "metadata_entries": "\(localMetadata.count)",
+                "duration_ms": "\(PerformanceProbe.milliseconds(since: startedAt))",
+            ]
+        )
     }
 
     private func publishConnectivity(for state: DockStoreState) {

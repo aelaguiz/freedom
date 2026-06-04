@@ -322,11 +322,8 @@ public struct DockView: View {
     private let onOpenRelaySettings: @MainActor () -> Void
     private let onArchiveSucceeded: @MainActor () async -> Void
     @State private var isFilterSurfacePresented = false
-    @State private var isPinnedCollapsed = false
     @State private var selectedDetailRow: DockRowViewModel?
     @State private var selectedDetailStore: ThreadDetailStore?
-    @State private var collapsedHostGroupIDs: Set<String> = []
-    @State private var collapsedBranchGroupIDs: Set<String> = []
     @State private var renameDraft: DockRenameDraft?
     @FocusState private var isSearchFocused: Bool
 
@@ -361,6 +358,10 @@ public struct DockView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    DockScrollOffsetProbe()
+                        .frame(height: 0)
+                        .accessibilityHidden(true)
+
                     header
                     controls
                     content
@@ -369,6 +370,7 @@ public struct DockView: View {
                 .padding(.top, 14)
                 .padding(.bottom, 104)
             }
+            .coordinateSpace(name: DockScrollCoordinateSpace.name)
             .background(dockBackgroundColor)
             .dockNavigationChrome()
             .refreshable {
@@ -379,6 +381,7 @@ public struct DockView: View {
             }
             .onChange(of: screenStore.state) { _, state in
                 syncSelectedDetail(with: state)
+                recordLoadedDockViewState(state)
             }
         }
         .sheet(isPresented: $isFilterSurfacePresented) {
@@ -389,6 +392,10 @@ public struct DockView: View {
         }
         .overlay(alignment: .top) {
             renameOverlay
+        }
+        .onAppear {
+            startPerformanceFrameMonitorIfNeeded()
+            recordLoadedDockViewState(screenStore.state)
         }
     }
 
@@ -706,7 +713,7 @@ public struct DockView: View {
         guard let selectedDetailRow,
               let selectedDetailStore,
               case .loaded(let renderSnapshot) = state,
-              let updatedRow = renderSnapshot.snapshot.rows.first(where: { $0.id == selectedDetailRow.id }) else {
+              let updatedRow = renderSnapshot.rowByID[selectedDetailRow.id] else {
             return
         }
 
@@ -808,7 +815,7 @@ public struct DockView: View {
             if !projection.pinnedRows.isEmpty {
                 DockPinnedSectionView(
                     projection: projection,
-                    isCollapsed: $isPinnedCollapsed,
+                    isCollapsed: pinnedCollapsedBinding,
                     onMove: { rows in Task { await store.reorderPinnedRows(rows) } },
                     onUnpin: { row in Task { await store.setPinned(false, for: row) } },
                     onOpen: { row in openDetail(row: row) },
@@ -843,8 +850,7 @@ public struct DockView: View {
                 LazyVStack(spacing: 12) {
                     ForEach(projection.groups) { group in
                         projectionGroup(
-                            group,
-                            collapsedIDs: $collapsedHostGroupIDs
+                            group
                         )
                     }
                 }
@@ -852,8 +858,7 @@ public struct DockView: View {
                 LazyVStack(spacing: 12) {
                     ForEach(projection.groups) { group in
                         projectionGroup(
-                            group,
-                            collapsedIDs: $collapsedBranchGroupIDs
+                            group
                         )
                     }
                     ForEach(contextualHostStates(in: snapshot)) { hostState in
@@ -895,44 +900,34 @@ public struct DockView: View {
         case .loading(let hosts):
             return "loading; hosts=\(hosts.count); lens=\(selectedLens.rawValue); filters=\(filterState.activeFilterCount)"
         case .loaded(let renderSnapshot):
+            let startedAt = Date()
             let snapshot = renderSnapshot.snapshot
             let pinnedCount = renderSnapshot.projection.pinnedRows.count
-            let visibleRows = dockAutomationRows(in: renderSnapshot.projection)
-            let encodedRowValues = visibleRows
-                .map { row in
-                    let identifier = AutomationID.Dock.row(hostID: row.hostID, threadID: row.threadID).rawValue
-                    return automationEncoded("\(identifier)=\(row.automationValue)")
-                }
-                .joined(separator: "|")
-            return "loaded; rows=\(snapshot.rowCount); visibleRows=\(visibleRows.count); pinned=\(pinnedCount); lens=\(selectedLens.rawValue); search=\(!searchText.isEmpty); filters=\(filterState.activeFilterCount); rowValues=\(encodedRowValues); \(activeSummaryText)"
-        }
-    }
-
-    private func dockAutomationRows(in projection: DockCardProjection) -> [DockRowViewModel] {
-        var rows: [DockRowViewModel] = []
-        if !isPinnedCollapsed {
-            rows.append(contentsOf: projection.pinnedRows)
-        }
-        switch selectedLens {
-        case .newest:
-            rows.append(contentsOf: projection.rows)
-        case .host:
-            for group in projection.groups where !collapsedHostGroupIDs.contains(group.id) {
-                rows.append(contentsOf: group.rows)
+            var parts = [
+                "loaded",
+                "rows=\(snapshot.rowCount)",
+                "visibleRows=\(renderSnapshot.projection.automationRows.count)",
+                "pinned=\(pinnedCount)",
+                "lens=\(selectedLens.rawValue)",
+                "search=\(!searchText.isEmpty)",
+                "filters=\(filterState.activeFilterCount)",
+                "revision=\(renderSnapshot.revision.rawValue)",
+            ]
+            if let automationSnapshot = renderSnapshot.automationSnapshot {
+                parts.append("automationRevision=\(automationSnapshot.revision.rawValue)")
+                parts.append("automationSnapshotPath=\(automationSnapshot.relativePath)")
             }
-        case .branch:
-            for group in projection.groups where !collapsedBranchGroupIDs.contains(group.id) {
-                rows.append(contentsOf: group.rows)
-            }
+            parts.append(activeSummaryText)
+            let value = parts.joined(separator: "; ")
+            PerformanceProbe.dockAccessibilityValueBuilt(
+                revision: renderSnapshot.revision,
+                rowCount: snapshot.rowCount,
+                visibleRowCount: renderSnapshot.projection.automationRows.count,
+                encodedLength: value.count,
+                durationMilliseconds: PerformanceProbe.milliseconds(since: startedAt)
+            )
+            return value
         }
-
-        var seen = Set<String>()
-        return rows.filter { seen.insert($0.projectionID).inserted }
-    }
-
-    private func automationEncoded(_ value: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
     private func dockRow(
@@ -1006,10 +1001,9 @@ public struct DockView: View {
     }
 
     private func projectionGroup(
-        _ group: DockProjectionGroupViewModel,
-        collapsedIDs: Binding<Set<String>>
+        _ group: DockProjectionGroupViewModel
     ) -> some View {
-        let isCollapsed = collapsedIDs.wrappedValue.contains(group.id)
+        let isCollapsed = isProjectionGroupCollapsed(group)
         let groupAutomationID = group.kind == .host
             ? AutomationID.Dock.hostGroup(group.id)
             : AutomationID.Dock.branchGroup(group.id)
@@ -1019,11 +1013,11 @@ public struct DockView: View {
 
         return VStack(alignment: .leading, spacing: 8) {
             Button {
-                if isCollapsed {
-                    collapsedIDs.wrappedValue.remove(group.id)
-                } else {
-                    collapsedIDs.wrappedValue.insert(group.id)
-                }
+                screenStore.setGroupCollapsed(
+                    kind: group.kind,
+                    id: group.id,
+                    isCollapsed: !isCollapsed
+                )
             } label: {
                 DockGroupHeaderView(group: group, isCollapsed: isCollapsed)
             }
@@ -1050,6 +1044,22 @@ public struct DockView: View {
             }
         }
         .codexAutomationID(groupAutomationID)
+    }
+
+    private var pinnedCollapsedBinding: Binding<Bool> {
+        Binding(
+            get: { screenStore.options.expansionState.isPinnedCollapsed },
+            set: { screenStore.setPinnedCollapsed($0) }
+        )
+    }
+
+    private func isProjectionGroupCollapsed(_ group: DockProjectionGroupViewModel) -> Bool {
+        switch group.kind {
+        case .host:
+            return screenStore.options.expansionState.collapsedHostGroupIDs.contains(group.id)
+        case .branch:
+            return screenStore.options.expansionState.collapsedBranchGroupIDs.contains(group.id)
+        }
     }
 
     private func currentHostState(hostID: String) -> DockHostStateViewModel? {
@@ -1133,6 +1143,26 @@ public struct DockView: View {
             },
             onArchiveSucceeded: onArchiveSucceeded
         )
+    }
+
+    private func recordLoadedDockViewState(_ state: DockScreenState) {
+        guard case .loaded(let renderSnapshot) = state else {
+            return
+        }
+        PerformanceProbe.dockViewLoadedRevision(
+            revision: renderSnapshot.revision,
+            snapshot: renderSnapshot.snapshot,
+            projection: renderSnapshot.projection,
+            options: screenStore.options
+        )
+    }
+
+    private func startPerformanceFrameMonitorIfNeeded() {
+        #if os(iOS)
+        Task { @MainActor in
+            PerformanceFrameMonitor.shared.startIfNeeded()
+        }
+        #endif
     }
 
 }

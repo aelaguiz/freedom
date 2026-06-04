@@ -211,6 +211,12 @@ struct DockRowView: View {
         .accessibilityElement(children: .combine)
         .accessibilityValue(row.automationValue)
         .codexAutomationID(automationID)
+        .onAppear {
+            PerformanceProbe.dockRowAppeared(row)
+        }
+        .onDisappear {
+            PerformanceProbe.dockRowDisappeared(row)
+        }
     }
 
     private var railColor: Color {

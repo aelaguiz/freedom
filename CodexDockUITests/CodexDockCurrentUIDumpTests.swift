@@ -66,6 +66,11 @@ final class CodexDockCurrentUIDumpTests: XCTestCase {
         } else if screenBefore != screenAfter {
             status = .fail
             reason = "Screen changed during dump: \(screenBefore.rawValue) -> \(screenAfter.rawValue)."
+        } else if sampleAfter.dockRootValue.contains("loaded"),
+                  codexDockAutomationField("automationSnapshotPath", in: sampleAfter.dockRootValue) == nil,
+                  sampleAfter.dockRows.isEmpty {
+            status = .blocked
+            reason = "Dock automation snapshot metadata is missing; launch the app with CODEX_DOCK_AUTOMATION_SNAPSHOTS=1 before running sim-ui-dump."
         } else if let expectedScreen = config.expectedScreenKind, expectedScreen != screenAfter {
             status = .fail
             reason = "Expected screen \(expectedScreen.rawValue), observed \(screenAfter.rawValue)."
@@ -145,12 +150,13 @@ final class CodexDockCurrentUIDumpTests: XCTestCase {
     }
 }
 
-private struct DisplayedUICurrentDumpConfig: Codable {
+struct DisplayedUICurrentDumpConfig: Codable {
     var jsonPath: String
     var markdownPath: String
     var simulatorName: String
     var simulatorUDID: String
     var appBundleID: String
+    var appDataContainer: String?
     var configuredBuildNumber: String?
     var expectedScreen: String?
     var expectedThreadID: String?
@@ -199,6 +205,7 @@ private struct DisplayedUICurrentDumpConfig: Codable {
             simulatorName: "unknown",
             simulatorUDID: "unknown",
             appBundleID: "com.aelaguiz.CodexDockApp",
+            appDataContainer: nil,
             configuredBuildNumber: nil,
             expectedScreen: nil,
             expectedThreadID: nil,

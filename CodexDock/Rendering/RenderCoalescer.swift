@@ -20,11 +20,25 @@ public actor RenderCoalescer<Snapshot: Sendable> {
     public func submit(_ snapshot: Snapshot, revision: RenderRevision) {
         if let latestAcceptedRevision,
            revision < latestAcceptedRevision {
+            PerformanceProbe.event(
+                "render.coalescer.drop_stale",
+                fields: [
+                    "revision": "\(revision.rawValue)",
+                    "latest_revision": "\(latestAcceptedRevision.rawValue)",
+                ]
+            )
             return
         }
 
         latestAcceptedRevision = revision
-        continuation.yield(snapshot)
+        let result = continuation.yield(snapshot)
+        PerformanceProbe.event(
+            "render.coalescer.submit",
+            fields: [
+                "revision": "\(revision.rawValue)",
+                "yield_result": "\(result)",
+            ]
+        )
     }
 
     public func stream() -> AsyncStream<Snapshot> {

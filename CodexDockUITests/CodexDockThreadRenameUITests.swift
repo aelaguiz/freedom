@@ -251,12 +251,7 @@ final class CodexDockThreadRenameUITests: XCTestCase {
     }
 
     private func launchRelayBackedApp(hosts: String? = nil) -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchEnvironment["CODEX_DOCK_HOSTS"] = hosts
-            ?? ProcessInfo.processInfo.environment["CODEX_DOCK_UI_TEST_HOSTS"]
-            ?? "amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510"
-        app.launch()
-        return app
+        launchRelayBackedCodexDockApp(hosts: hosts)
     }
 }
 

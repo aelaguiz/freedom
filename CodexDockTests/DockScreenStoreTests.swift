@@ -63,6 +63,69 @@ final class DockScreenStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testScreenStoreSkipsIdenticalSnapshotAndOptions() async throws {
+        let host = makeHost()
+        let store = DockScreenStore(
+            hosts: [DockHostViewModel(host: host)],
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+        let snapshot = makeSnapshot(host: host)
+
+        store.start()
+        store.publish(snapshot: snapshot)
+        let firstRender = await waitForLoadedRender(in: store)
+        store.publish(snapshot: snapshot)
+        try await Task.sleep(for: .milliseconds(50))
+
+        guard case .loaded(let render) = store.state else {
+            return XCTFail("Expected loaded render")
+        }
+        XCTAssertEqual(firstRender?.revision, RenderRevision(rawValue: 1))
+        XCTAssertEqual(render.revision, RenderRevision(rawValue: 1))
+    }
+
+    @MainActor
+    func testScreenStoreWritesAutomationSnapshotBeforePublishingLoadedRevision() async throws {
+        let host = makeHost()
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-dock-snapshot-test-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let store = DockScreenStore(
+            hosts: [DockHostViewModel(host: host)],
+            automationSnapshotStore: DockAutomationSnapshotStore(
+                directoryURL: directory,
+                now: { Date(timeIntervalSince1970: 2_000) }
+            ),
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+        let snapshot = makeSnapshot(host: host)
+
+        store.start()
+        store.publish(snapshot: snapshot)
+
+        let render = await waitForLoadedRender(
+            in: store,
+            where: { $0.automationSnapshot != nil }
+        )
+        let metadata = try XCTUnwrap(render?.automationSnapshot)
+        XCTAssertEqual(metadata.revision, RenderRevision(rawValue: 1))
+        XCTAssertEqual(
+            metadata.relativePath,
+            "CodexDock/DockAutomationSnapshots/dock-automation-snapshot-1.json"
+        )
+
+        let data = try Data(
+            contentsOf: directory.appendingPathComponent("dock-automation-snapshot-1.json")
+        )
+        let json = try XCTUnwrap(String(data: data, encoding: .utf8))
+        XCTAssertTrue(json.contains(#""schemaVersion":1"#))
+        XCTAssertTrue(json.contains(#""revision":1"#))
+        XCTAssertTrue(json.contains("codexdock.dock.row."))
+    }
+
+    @MainActor
     func testScreenStoreReprojectsWhenOptionsChange() async throws {
         let host = makeHost()
         let store = DockScreenStore(

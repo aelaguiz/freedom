@@ -594,11 +594,14 @@ rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'
 The matrix mutates controlled Codex data, watches relay truth, samples the
 literal simulator accessibility state over time, and fails when the UI does not
 converge within the configured lag budget. Dock row identity and order are read
-from the Dock root `rowValues=` automation payload, so missing structured Dock
-state fails loud instead of being reconstructed from a visual scrape. Thread
-Detail message order is checked from top-to-bottom accessibility frames in the
-scenarios where ordering matters. The proof reports are schema-checked by
-`rtk npm run contract:check`.
+from the test-only Dock automation snapshot file advertised by the Dock root
+accessibility value as `automationSnapshotPath=...`, so missing structured Dock
+state fails loud instead of being reconstructed from a visual scrape. The root
+value stays bounded to scalar state such as row count, revision, and snapshot
+metadata; it no longer carries a full row payload. Thread Detail message order
+is checked from top-to-bottom accessibility frames in the scenarios where
+ordering matters. The proof reports are schema-checked by `rtk npm run
+contract:check`.
 
 The generated-project test target includes UI automation smoke tests. Those
 tests use the accessibility tree as the primary proof: screens, controls, rows,

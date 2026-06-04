@@ -61,12 +61,14 @@ Git keeps that history.
 - `README.md` documents `rtk make sim-ui-dump SIM='iPhone 17'` as the canonical
   structured current-screen dump and `rtk make sim-ui-controlled-matrix-proof
   SIM='iPhone 17'` as the over-time simulator proof.
-- `CodexDock/Features/Dock/DockView.swift` exposes the rendered Dock row order
-  in the Dock root `rowValues=` automation payload.
-- `CodexDockUITests/DisplayedUICaptureSupport.swift` uses that `rowValues=`
-  payload as the single Dock row dump/proof path. If the payload is missing,
-  strict proof fails instead of using accessibility-tree scrolling as a second
-  row oracle.
+- `CodexDock/Features/Dock/DockView.swift` now keeps the Dock root
+  accessibility value bounded to scalar state. When test snapshot mode is
+  enabled, it advertises `automationSnapshotPath=...` for structured Dock row
+  proof.
+- `CodexDockUITests/DisplayedUICaptureSupport.swift` now uses that JSON
+  automation snapshot as the single Dock row dump/proof path. If the snapshot
+  is missing, strict proof fails instead of using accessibility-tree scrolling
+  as a second row oracle.
 
 ## Verification Run So Far
 

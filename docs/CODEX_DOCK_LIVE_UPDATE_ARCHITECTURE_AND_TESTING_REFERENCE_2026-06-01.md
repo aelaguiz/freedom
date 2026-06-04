@@ -82,13 +82,14 @@ Manual QA: n/a (non-blocking)
     references are proof-only route code/tests/scripts.
 - Structured UI dump and no alternate Dock proof oracle:
   - [CodexDock/Features/Dock/DockView.swift](/Users/aelaguiz/workspace/codex-client/CodexDock/Features/Dock/DockView.swift)
-    exposes rendered Dock row payloads through `rowValues=` for structured UI
-    dump/proof state.
+    exposes bounded scalar Dock state on the root accessibility value and, when
+    test snapshot mode is enabled, advertises the structured row oracle through
+    `automationSnapshotPath=...`.
   - [CodexDockUITests/DisplayedUICaptureSupport.swift](/Users/aelaguiz/workspace/codex-client/CodexDockUITests/DisplayedUICaptureSupport.swift)
-    now treats the Dock root `rowValues` payload as the single Dock proof path.
-    If that payload is missing, normal samples expose zero Dock rows and
-    checkpoint sweep returns `rootRowsMissing`; strict proof fails instead of
-    reconstructing row truth from accessibility-tree scrolling.
+    now treats the JSON automation snapshot as the single Dock proof path. If
+    that snapshot metadata or file is missing, normal samples expose zero Dock
+    rows and strict proof fails instead of reconstructing row truth from
+    accessibility-tree scrolling.
   - `rtk node --test scripts/dock-relay-simulator-ui-sync-proof.test.mjs scripts/proof-report-contracts.test.mjs`
     passed on 2026-06-03 with 54 tests.
 - Real simulator proof:

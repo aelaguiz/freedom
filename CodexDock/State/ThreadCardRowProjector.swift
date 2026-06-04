@@ -6,13 +6,54 @@ struct ThreadCardRowProjector {
     let localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata]
     let now: @Sendable () -> Date
 
-    func rows(from cards: [DockThreadCardDTO]) -> [DockRowViewModel] {
-        cards.filter(\.isAppFacingHumanThreadCard).map { card in
-            makeRow(card: card)
+    private struct ProjectionStats {
+        var filteredOutCount = 0
+        var exactMetadataHits = 0
+        var fallbackMetadataHits = 0
+        var fallbackMetadataMisses = 0
+    }
+
+    func rows(
+        from cards: [DockThreadCardDTO],
+        configuredHostID: String? = nil
+    ) -> [DockRowViewModel] {
+        let startedAt = Date()
+        var stats = ProjectionStats()
+        let rows = cards.compactMap { card -> DockRowViewModel? in
+            guard card.isAppFacingHumanThreadCard else {
+                stats.filteredOutCount += 1
+                return nil
+            }
+            return makeRow(card: card, stats: &stats)
         }
+        if PerformanceProbe.isEnabled {
+            PerformanceProbe.event(
+                "dock.rows.project",
+                fields: [
+                    "configured_host_id": configuredHostID ?? "none",
+                    "cards": "\(cards.count)",
+                    "rows": "\(rows.count)",
+                    "filtered_out": "\(stats.filteredOutCount)",
+                    "metadata_entries": "\(localMetadata.count)",
+                    "metadata_exact_hits": "\(stats.exactMetadataHits)",
+                    "metadata_fallback_hits": "\(stats.fallbackMetadataHits)",
+                    "metadata_fallback_misses": "\(stats.fallbackMetadataMisses)",
+                    "duration_ms": "\(PerformanceProbe.milliseconds(since: startedAt))",
+                ]
+            )
+        }
+        return rows
     }
 
     func makeRow(card: DockThreadCardDTO) -> DockRowViewModel {
+        var stats = ProjectionStats()
+        return makeRow(card: card, stats: &stats)
+    }
+
+    private func makeRow(
+        card: DockThreadCardDTO,
+        stats: inout ProjectionStats
+    ) -> DockRowViewModel {
         guard let resolvedSourceHostID = nonEmpty(card.sourceHostID),
               let projectionID = nonEmpty(card.projectionID),
               let displayOrderKey = nonEmpty(card.displayOrderKey) else {
@@ -24,7 +65,8 @@ struct ThreadCardRowProjector {
         let metadata = metadata(
             for: id,
             backendSessionID: card.backendSessionID,
-            sourceHostID: resolvedSourceHostID
+            sourceHostID: resolvedSourceHostID,
+            stats: &stats
         )
         let activityDate = activityDate(for: card)
         return DockRowViewModel(
@@ -57,7 +99,8 @@ struct ThreadCardRowProjector {
     private func metadata(
         for id: HostScopedThreadID,
         backendSessionID: String,
-        sourceHostID: String?
+        sourceHostID: String?,
+        stats: inout ProjectionStats
     ) -> LocalThreadMetadata? {
         let exactKey = LocalThreadMetadataKey(
             hostID: id.hostID,
@@ -65,10 +108,11 @@ struct ThreadCardRowProjector {
             threadID: id.threadID
         )
         if let metadata = localMetadata[exactKey] {
+            stats.exactMetadataHits += 1
             return metadata
         }
 
-        return localMetadata.first { key, _ in
+        let fallback = localMetadata.first { key, _ in
             guard key.backendSessionID == backendSessionID,
                   key.threadID == id.threadID else {
                 return false
@@ -78,6 +122,12 @@ struct ThreadCardRowProjector {
                 sourceConfiguredHostID: sourceHostID
             ) == id.hostID
         }?.value
+        if fallback == nil {
+            stats.fallbackMetadataMisses += 1
+        } else {
+            stats.fallbackMetadataHits += 1
+        }
+        return fallback
     }
 
     private func activityDate(for card: DockThreadCardDTO) -> Date {

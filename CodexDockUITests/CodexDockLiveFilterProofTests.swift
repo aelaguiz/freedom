@@ -108,11 +108,7 @@ final class CodexDockLiveFilterProofTests: XCTestCase {
     }
 
     private func launchRelayBackedApp(hosts: String) -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchEnvironment["CODEX_DOCK_HOSTS"] = hosts
-        app.terminate()
-        app.launch()
-        return app
+        launchRelayBackedCodexDockApp(hosts: hosts, terminateFirst: true)
     }
 }
 

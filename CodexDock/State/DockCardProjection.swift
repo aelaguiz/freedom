@@ -1,18 +1,37 @@
 import Foundation
 
+struct DockProjectionExpansionState: Equatable, Sendable {
+    var isPinnedCollapsed: Bool
+    var collapsedHostGroupIDs: Set<String>
+    var collapsedBranchGroupIDs: Set<String>
+
+    init(
+        isPinnedCollapsed: Bool = false,
+        collapsedHostGroupIDs: Set<String> = [],
+        collapsedBranchGroupIDs: Set<String> = []
+    ) {
+        self.isPinnedCollapsed = isPinnedCollapsed
+        self.collapsedHostGroupIDs = collapsedHostGroupIDs
+        self.collapsedBranchGroupIDs = collapsedBranchGroupIDs
+    }
+}
+
 struct DockProjectionOptions: Equatable, Sendable {
     let lens: DockLensID
     let searchText: String
     let filters: DockFilterState
+    let expansionState: DockProjectionExpansionState
 
     init(
         lens: DockLensID = .newest,
         searchText: String = "",
-        filters: DockFilterState = .default
+        filters: DockFilterState = .default,
+        expansionState: DockProjectionExpansionState = DockProjectionExpansionState()
     ) {
         self.lens = lens
         self.searchText = searchText
         self.filters = filters
+        self.expansionState = expansionState
     }
 }
 
@@ -23,6 +42,7 @@ struct DockCardProjection: Equatable, Sendable {
     let pinnedSummary: DockPinnedSummary
     let rows: [DockRowViewModel]
     let groups: [DockProjectionGroupViewModel]
+    let automationRows: [DockRowViewModel]
     let summary: DockProjectionSummary
     let availableFacets: DockProjectionFacets
     let emptyReason: DockProjectionEmptyReason?
@@ -41,19 +61,46 @@ private struct DockCardProjectionProjector {
     let options: DockProjectionOptions
 
     func project() -> DockCardProjection {
+        let projectStartedAt = Date()
+        let searchStartedAt = Date()
         let searchedRows = snapshot.rows.filter(matchesSearch)
+        let searchDurationMilliseconds = PerformanceProbe.milliseconds(since: searchStartedAt)
         // Idle is a normal status facet. Do not add a second visibility gate.
+        let filterStartedAt = Date()
         let filteredRows = searchedRows.filter(matchesFilters)
+        let filterDurationMilliseconds = PerformanceProbe.milliseconds(since: filterStartedAt)
+        let pinnedStartedAt = Date()
         let pinnedRows = filteredRows.filter(\.isPinned).sorted(by: pinnedRowPrecedes)
+        let pinnedDurationMilliseconds = PerformanceProbe.milliseconds(since: pinnedStartedAt)
+        let bodyStartedAt = Date()
         let bodyRows = filteredRows
             .filter { !$0.isPinned }
             .sorted(by: rowPrecedesByRelayOrder)
+        let bodyDurationMilliseconds = PerformanceProbe.milliseconds(since: bodyStartedAt)
+        let visibleStartedAt = Date()
         let visibleRows = (pinnedRows + bodyRows).sorted(by: rowPrecedesByRelayOrder)
+        let visibleDurationMilliseconds = PerformanceProbe.milliseconds(since: visibleStartedAt)
+        let allPinnedStartedAt = Date()
         let allPinnedRows = snapshot.rows.filter(\.isPinned).sorted(by: pinnedRowPrecedes)
+        let allPinnedDurationMilliseconds = PerformanceProbe.milliseconds(since: allPinnedStartedAt)
+        let groupsStartedAt = Date()
         let groups = groups(for: bodyRows)
+        let groupsDurationMilliseconds = PerformanceProbe.milliseconds(since: groupsStartedAt)
+        let automationRows = automationRows(
+            pinnedRows: pinnedRows,
+            bodyRows: bodyRows,
+            groups: groups
+        )
         let emptyReason = visibleRows.isEmpty ? emptyReason(searchedRows: searchedRows) : nil
+        let summaryStartedAt = Date()
+        let projectionSummary = summary(for: visibleRows)
+        let summaryDurationMilliseconds = PerformanceProbe.milliseconds(since: summaryStartedAt)
+        let facetsStartedAt = Date()
+        let facets = availableFacets()
+        let facetsDurationMilliseconds = PerformanceProbe.milliseconds(since: facetsStartedAt)
+        let checkingHostCount = snapshot.hostStates.filter { $0.status == .checking }.count
 
-        return DockCardProjection(
+        let projection = DockCardProjection(
             lens: options.lens,
             pinnedRows: pinnedRows,
             allPinnedRows: allPinnedRows,
@@ -64,12 +111,46 @@ private struct DockCardProjectionProjector {
             ),
             rows: options.lens == .newest ? bodyRows : [],
             groups: groups,
-            summary: summary(for: visibleRows),
-            availableFacets: availableFacets(),
+            automationRows: automationRows,
+            summary: projectionSummary,
+            availableFacets: facets,
             emptyReason: emptyReason,
             isPartial: snapshot.isPartial,
-            checkingHostCount: snapshot.hostStates.filter { $0.status == .checking }.count
+            checkingHostCount: checkingHostCount
         )
+        if PerformanceProbe.isEnabled {
+            PerformanceProbe.event(
+                "dock.card_projection.project",
+                fields: [
+                    "rows": "\(snapshot.rows.count)",
+                    "searched_rows": "\(searchedRows.count)",
+                    "filtered_rows": "\(filteredRows.count)",
+                    "body_rows": "\(bodyRows.count)",
+                    "visible_rows": "\(visibleRows.count)",
+                    "automation_rows": "\(automationRows.count)",
+                    "pinned_rows": "\(pinnedRows.count)",
+                    "all_pinned_rows": "\(allPinnedRows.count)",
+                    "groups": "\(groups.count)",
+                    "hosts": "\(snapshot.hosts.count)",
+                    "checking_hosts": "\(checkingHostCount)",
+                    "lens": options.lens.rawValue,
+                    "search": normalizedQuery(options.searchText).isEmpty ? "false" : "true",
+                    "filters": "\(options.filters.activeFilterCount)",
+                    "partial": "\(snapshot.isPartial)",
+                    "search_ms": "\(searchDurationMilliseconds)",
+                    "filter_ms": "\(filterDurationMilliseconds)",
+                    "pinned_ms": "\(pinnedDurationMilliseconds)",
+                    "body_ms": "\(bodyDurationMilliseconds)",
+                    "visible_ms": "\(visibleDurationMilliseconds)",
+                    "all_pinned_ms": "\(allPinnedDurationMilliseconds)",
+                    "groups_ms": "\(groupsDurationMilliseconds)",
+                    "summary_ms": "\(summaryDurationMilliseconds)",
+                    "facets_ms": "\(facetsDurationMilliseconds)",
+                    "duration_ms": "\(PerformanceProbe.milliseconds(since: projectStartedAt))",
+                ]
+            )
+        }
+        return projection
     }
 
     private func groups(
@@ -143,6 +224,32 @@ private struct DockCardProjectionProjector {
             )
         }
         .sorted(by: groupPrecedes)
+    }
+
+    private func automationRows(
+        pinnedRows: [DockRowViewModel],
+        bodyRows: [DockRowViewModel],
+        groups: [DockProjectionGroupViewModel]
+    ) -> [DockRowViewModel] {
+        var rows: [DockRowViewModel] = []
+        if !options.expansionState.isPinnedCollapsed {
+            rows.append(contentsOf: pinnedRows)
+        }
+        switch options.lens {
+        case .newest:
+            rows.append(contentsOf: bodyRows)
+        case .host:
+            for group in groups where !options.expansionState.collapsedHostGroupIDs.contains(group.id) {
+                rows.append(contentsOf: group.rows)
+            }
+        case .branch:
+            for group in groups where !options.expansionState.collapsedBranchGroupIDs.contains(group.id) {
+                rows.append(contentsOf: group.rows)
+            }
+        }
+
+        var seen = Set<String>()
+        return rows.filter { seen.insert($0.projectionID).inserted }
     }
 
     private func summary(for rows: [DockRowViewModel]) -> DockProjectionSummary {

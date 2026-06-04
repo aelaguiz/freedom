@@ -159,7 +159,24 @@ public actor AppServerThreadCardStreamConnection: ThreadCardStreamConnection {
                     guard let params = notification.params else {
                         continue
                     }
-                    updateContinuation.yield(try params.decoded(as: ThreadCardStreamUpdateDTO.self))
+                    let decodeStartedAt = Date()
+                    let update = try params.decoded(as: ThreadCardStreamUpdateDTO.self)
+                    PerformanceProbe.event(
+                        "dock.stream.notification_decoded",
+                        fields: [
+                            "host_id": host.id,
+                            "route": updateRoute,
+                            "kind": update.kind.rawValue,
+                            "seq": "\(update.seq)",
+                            "generation": "\(update.generation)",
+                            "rows": "\(update.rows?.count ?? 0)",
+                            "projection_ids": "\(update.projectionIDs?.count ?? 0)",
+                            "complete": update.complete.map(String.init) ?? "none",
+                            "total_rows": update.totalRows.map(String.init) ?? "none",
+                            "duration_ms": "\(PerformanceProbe.milliseconds(since: decodeStartedAt))",
+                        ]
+                    )
+                    updateContinuation.yield(update)
                 } catch {
                     updateContinuation.finish(throwing: AppServerClientError.responseDecoding(error.localizedDescription))
                     return
@@ -188,6 +205,20 @@ public actor AppServerThreadCardStreamConnection: ThreadCardStreamConnection {
             observabilityContext: context,
             as: ThreadCardStreamUpdateDTO.self
         )
+        PerformanceProbe.event(
+            "dock.stream.subscribe_response",
+            fields: [
+                "host_id": host.id,
+                "route": route,
+                "kind": response.kind.rawValue,
+                "seq": "\(response.seq)",
+                "generation": "\(response.generation)",
+                "rows": "\(response.rows?.count ?? 0)",
+                "projection_ids": "\(response.projectionIDs?.count ?? 0)",
+                "complete": response.complete.map(String.init) ?? "none",
+                "total_rows": response.totalRows.map(String.init) ?? "none",
+            ]
+        )
         DockLog.dock.notice("thread card stream subscribe finished view=\(self.view.rawValue, privacy: .public) host_id=\(self.host.id, privacy: .public) seq=\(response.seq, privacy: .public)")
         return response
     }
@@ -199,12 +230,27 @@ public actor AppServerThreadCardStreamConnection: ThreadCardStreamConnection {
             route: route,
             store: observabilityStore
         )
-        return try await client.sendRequest(
+        let response = try await client.sendRequest(
             method: route,
             timeout: CodexDockConstants.AppServer.defaultRequestTimeout,
             observabilityContext: context,
             as: ThreadCardStreamUpdateDTO.self
         )
+        PerformanceProbe.event(
+            "dock.stream.resync_response",
+            fields: [
+                "host_id": host.id,
+                "route": route,
+                "kind": response.kind.rawValue,
+                "seq": "\(response.seq)",
+                "generation": "\(response.generation)",
+                "rows": "\(response.rows?.count ?? 0)",
+                "projection_ids": "\(response.projectionIDs?.count ?? 0)",
+                "complete": response.complete.map(String.init) ?? "none",
+                "total_rows": response.totalRows.map(String.init) ?? "none",
+            ]
+        )
+        return response
     }
 
     public nonisolated func updates() -> AsyncThrowingStream<ThreadCardStreamUpdateDTO, Error> {
