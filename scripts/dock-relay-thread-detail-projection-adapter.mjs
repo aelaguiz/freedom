@@ -277,6 +277,7 @@ function makeProjectionRow({
   request = null,
   fileChange = null,
   diagnostic = null,
+  clientID = null,
   revision = 1,
   sourceWatermark = null,
 }) {
@@ -300,6 +301,9 @@ function makeProjectionRow({
     request,
     diagnostic,
   };
+  if (clientID) {
+    payload.clientID = clientID;
+  }
   if (fileChange) {
     payload.fileChange = fileChange;
   }
@@ -360,6 +364,7 @@ function rowSpecsForItem(item) {
         visibility: "message",
         title: "User message",
         body: userInputText(item.content) || "User input",
+        clientID: item.clientId || null,
         rowOrder: 0,
       }];
     case "agentMessage":
@@ -542,6 +547,7 @@ function eventsFromItem(item, {
     rowOrder: spec.rowOrder,
     renderState,
     fileChange: spec.fileChange || null,
+    clientID: spec.clientID || null,
   }));
 }
 

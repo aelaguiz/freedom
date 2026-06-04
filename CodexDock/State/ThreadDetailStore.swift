@@ -8,6 +8,7 @@ public protocol ThreadDetailSession: Sendable {
     func connectAndInitialize(params: InitializeParams, timeout: Duration) async throws -> InitializeResponse
     func threadDetailSubscribe(params: ThreadDetailParams, timeout: Duration) async throws -> ThreadDetailSnapshotDTO
     func threadDetailResync(params: ThreadDetailParams, timeout: Duration) async throws -> ThreadDetailSnapshotDTO
+    func threadMessageSend(params: ThreadMessageSendParams, timeout: Duration) async throws -> ThreadMessageSendResponseDTO
     func turnStart(params: TurnStartParams, timeout: Duration) async throws -> TurnStartResponseDTO
     func turnSteer(params: TurnSteerParams, timeout: Duration) async throws -> TurnSteerResponseDTO
     func sendResponse(id: JSONRPCRequestID, result: JSONValue) async throws
@@ -86,6 +87,19 @@ public struct ThreadDetailSnapshot: Equatable, Sendable {
     public let header: ThreadDetailHeader
     public let liveState: ThreadDetailLiveState
     public let events: [ThreadEvent]
+    public let pendingOutboundMessages: [PendingOutboundMessage]
+
+    public init(
+        header: ThreadDetailHeader,
+        liveState: ThreadDetailLiveState,
+        events: [ThreadEvent],
+        pendingOutboundMessages: [PendingOutboundMessage] = []
+    ) {
+        self.header = header
+        self.liveState = liveState
+        self.events = events
+        self.pendingOutboundMessages = pendingOutboundMessages
+    }
 }
 
 public enum ThreadDetailStoreState: Equatable, Sendable {
@@ -166,6 +180,7 @@ public final class ThreadDetailStore: ObservableObject {
     private var confirmedFileChangeApprovalRiskIDs: Set<String> = []
     private var latestDockRowActivityMarker: DockRowActivityMarker
     private var lastCompletedDockRowRefreshMarker: DockRowActivityMarker
+    private var pendingOutboundMessages = PendingOutboundMessageRegistry()
 
     public init(
         host: DockHostConfiguration,
@@ -377,31 +392,102 @@ public final class ThreadDetailStore: ObservableObject {
             return
         }
 
-        let startedAt = Date()
-        DockLog.threadDetail.notice("send draft started thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) characters=\(text.count, privacy: .public) active_turn=\((self.activeTurnID != nil), privacy: .public)")
-        composer.isSending = true
+        let clientMessageID = ClientUserMessageID.make()
+        let pending = PendingOutboundMessage(
+            id: clientMessageID,
+            threadID: row.threadID,
+            input: [TurnUserInputDTO(text: text)],
+            createdAt: now()
+        )
+        DockLog.threadDetail.notice("send draft accepted thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) client_message_id=\(DockLog.publicID(clientMessageID.rawValue), privacy: .public) characters=\(text.count, privacy: .public)")
+        pendingOutboundMessages.insert(pending)
+        composer.draft = ""
+        composer.isSending = false
         composer.lastError = nil
+        publishLoaded()
 
+        let deliverySession = session
+        let deliveryThreadID = row.threadID
+        let deliveryBody = pending.body
+        let commandEngine = commandEngine
+        Task { [weak self, deliverySession, commandEngine, deliveryThreadID, deliveryBody, clientMessageID] in
+            await Self.deliverPendingOutboundMessage(
+                clientMessageID,
+                body: deliveryBody,
+                threadID: deliveryThreadID,
+                session: deliverySession,
+                commandEngine: commandEngine,
+                store: self
+            )
+        }
+    }
+
+    private nonisolated static func deliverPendingOutboundMessage(
+        _ clientMessageID: ClientUserMessageID,
+        body: String,
+        threadID: String,
+        session: any ThreadDetailSession,
+        commandEngine: ClientCommandEngine,
+        store: ThreadDetailStore?
+    ) async {
+        let startedAt = Date()
         do {
-            // Projection v1 does not create Swift-side optimistic rows. Visible
-            // outbound rows must come from relay projection updates, otherwise
-            // pending and canonical identities can split into duplicates.
-            let nextTurnID = try await commandEngine.sendDraft(
-                text,
-                threadID: row.threadID,
-                activeTurnID: activeTurnID,
+            let response = try await commandEngine.sendUserMessage(
+                body,
+                threadID: threadID,
+                clientUserMessageID: clientMessageID,
                 session: session
             )
-            activeTurnID = nextTurnID ?? activeTurnID
-            composer.draft = ""
-            composer.isSending = false
-            await reconciler?.commandCompletedInvalidation()
-            DockLog.threadDetail.notice("send draft finished thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) active_turn_id=\(DockLog.publicID(self.activeTurnID), privacy: .public)")
+            await store?.handlePendingOutboundMessageDelivered(
+                clientMessageID,
+                response: response
+            )
+            DockLog.threadDetail.notice("pending user message delivery finished thread_id=\(DockLog.publicID(threadID), privacy: .public) client_message_id=\(DockLog.publicID(clientMessageID.rawValue), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public)")
         } catch {
-            composer.isSending = false
-            composer.lastError = message(from: error)
-            DockLog.threadDetail.error("send draft failed thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+            let errorMessage = userFacingMessage(from: error)
+            await store?.handlePendingOutboundMessageFailed(
+                clientMessageID,
+                message: errorMessage
+            )
+            DockLog.threadDetail.error("pending user message delivery failed thread_id=\(DockLog.publicID(threadID), privacy: .public) client_message_id=\(DockLog.publicID(clientMessageID.rawValue), privacy: .public) duration_ms=\(DockLog.milliseconds(since: startedAt), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
         }
+    }
+
+    private func handlePendingOutboundMessageDelivered(
+        _ clientMessageID: ClientUserMessageID,
+        response: ThreadMessageSendResponseDTO
+    ) async {
+        updatePendingOutboundMessage(clientMessageID) { message in
+            message.deliveryState = OutboundMessageDeliveryState(response: response)
+            message.canonicalTurnID = response.turnId
+            message.canonicalItemID = response.itemId
+        }
+        if let turnID = response.turnId {
+            activeTurnID = turnID
+        }
+        await reconciler?.commandCompletedInvalidation()
+    }
+
+    private func handlePendingOutboundMessageFailed(
+        _ clientMessageID: ClientUserMessageID,
+        message: String
+    ) {
+        updatePendingOutboundMessage(clientMessageID) { pendingMessage in
+            pendingMessage.deliveryState = .failedAmbiguous(message)
+        }
+    }
+
+    private func updatePendingOutboundMessage(
+        _ clientMessageID: ClientUserMessageID,
+        update: (inout PendingOutboundMessage) -> Void
+    ) {
+        let didUpdate = pendingOutboundMessages.update(clientMessageID) { message in
+            update(&message)
+        }
+        guard didUpdate else {
+            return
+        }
+        publishLoaded()
     }
 
     public func updateRequestCardInput(cardID: String, draft: String) {
@@ -629,6 +715,7 @@ public final class ThreadDetailStore: ObservableObject {
         )
         events = nextEvents
         activeTurnID = projectionSnapshot.activeTurnID
+        pendingOutboundMessages.prune(canonicalEvents: nextEvents)
         pruneFileChangeReviewState(to: nextEvents)
         requestCardPresentation.prune(to: nextEvents)
         liveState = ThreadDetailLiveState(projectionSnapshot: projectionSnapshot)
@@ -643,7 +730,8 @@ public final class ThreadDetailStore: ObservableObject {
         let snapshot = ThreadDetailSnapshot(
             header: header,
             liveState: liveState,
-            events: events
+            events: events,
+            pendingOutboundMessages: pendingOutboundMessages.sortedMessages()
         )
         state = .loaded(snapshot)
         screenStore.publish(snapshot: snapshot, requestCardPresentation: requestCardPresentation)
@@ -747,6 +835,10 @@ public final class ThreadDetailStore: ObservableObject {
     }
 
     private func message(from error: Error) -> String {
+        Self.userFacingMessage(from: error)
+    }
+
+    private nonisolated static func userFacingMessage(from error: Error) -> String {
         if let message = ThreadDetailHumanOnlyRejection.message(for: error) {
             return message
         }

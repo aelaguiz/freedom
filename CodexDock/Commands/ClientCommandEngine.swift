@@ -54,29 +54,20 @@ actor ClientCommandEngine {
         try await renamer.renameThread(row.threadID, to: name, on: host)
     }
 
-    func sendDraft(
+    func sendUserMessage(
         _ text: String,
         threadID: String,
-        activeTurnID: String?,
+        clientUserMessageID: ClientUserMessageID,
         session: any ThreadDetailSession
-    ) async throws -> String? {
-        if let activeTurnID {
-            let response = try await session.turnSteer(
-                params: .text(
-                    threadId: threadID,
-                    text: text,
-                    expectedTurnId: activeTurnID
-                ),
-                timeout: CodexDockConstants.AppServer.defaultRequestTimeout
-            )
-            return response.turnId
-        }
-
-        let response = try await session.turnStart(
-            params: .text(threadId: threadID, text: text),
+    ) async throws -> ThreadMessageSendResponseDTO {
+        try await session.threadMessageSend(
+            params: .text(
+                threadId: threadID,
+                clientUserMessageId: clientUserMessageID.rawValue,
+                text: text
+            ),
             timeout: CodexDockConstants.AppServer.defaultRequestTimeout
         )
-        return response.turn.objectValue?["id"]?.stringValue
     }
 
     func respondToServerRequest(

@@ -349,6 +349,20 @@ public actor AppServerClient {
         )
     }
 
+    public func threadMessageSend(
+        params: ThreadMessageSendParams,
+        timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
+        observabilityContext: AppServerRequestObservabilityContext? = nil
+    ) async throws -> ThreadMessageSendResponseDTO {
+        try await sendRequest(
+            method: AppServerMethods.threadMessageSend,
+            params: try JSONValue.encoded(params),
+            timeout: timeout,
+            observabilityContext: observabilityContext,
+            as: ThreadMessageSendResponseDTO.self
+        )
+    }
+
     public func turnStart(
         params: TurnStartParams,
         timeout: Duration = CodexDockConstants.AppServer.defaultRequestTimeout,
@@ -1050,6 +1064,13 @@ public extension AppServerClient {
         timeout: Duration
     ) async throws -> TurnStartResponseDTO {
         try await turnStart(params: params, timeout: timeout, observabilityContext: nil)
+    }
+
+    func threadMessageSend(
+        params: ThreadMessageSendParams,
+        timeout: Duration
+    ) async throws -> ThreadMessageSendResponseDTO {
+        try await threadMessageSend(params: params, timeout: timeout, observabilityContext: nil)
     }
 
     func turnSteer(

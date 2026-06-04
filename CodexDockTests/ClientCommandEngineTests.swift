@@ -42,29 +42,30 @@ final class ClientCommandEngineTests: XCTestCase {
         )
     }
 
-    func testThreadDraftCommandStartsOrSteersTurnThroughSession() async throws {
+    func testThreadUserMessageCommandSubmitsIdempotentRelayCommandThroughSession() async throws {
         let session = makeThreadSession()
         let engine = ClientCommandEngine()
+        let clientID = ClientUserMessageID(rawValue: "dock-msg:test-command")
 
-        let startedTurnID = try await engine.sendDraft(
+        let response = try await engine.sendUserMessage(
             "Start work",
             threadID: "thread-a",
-            activeTurnID: nil,
-            session: session
-        )
-        let steeredTurnID = try await engine.sendDraft(
-            "Keep going",
-            threadID: "thread-a",
-            activeTurnID: "turn-started",
+            clientUserMessageID: clientID,
             session: session
         )
 
-        let startParams = session.turnStartParamsSnapshot()
-        let steerParams = session.turnSteerParamsSnapshot()
-        XCTAssertEqual(startedTurnID, "turn-started")
-        XCTAssertEqual(steeredTurnID, "turn-started")
-        XCTAssertEqual(startParams.map(\.threadId), ["thread-a"])
-        XCTAssertEqual(steerParams.map(\.expectedTurnId), ["turn-started"])
+        let messageParams = session.threadMessageSendParamsSnapshot()
+        XCTAssertEqual(response.clientUserMessageId, "dock-msg:test-command")
+        XCTAssertEqual(response.state, "submittedUpstream")
+        XCTAssertEqual(messageParams, [
+            ThreadMessageSendParams.text(
+                threadId: "thread-a",
+                clientUserMessageId: "dock-msg:test-command",
+                text: "Start work"
+            ),
+        ])
+        XCTAssertEqual(session.turnStartParamsSnapshot(), [])
+        XCTAssertEqual(session.turnSteerParamsSnapshot(), [])
     }
 
     func testThreadRequestResponseCommandSendsPayloadThroughSession() async throws {

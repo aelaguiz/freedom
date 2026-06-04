@@ -20,15 +20,25 @@ public struct TurnUserInputDTO: Codable, Equatable, Sendable {
 
 public struct TurnStartParams: Codable, Equatable, Sendable {
     public let threadId: String
+    public let clientUserMessageId: String?
     public let input: [TurnUserInputDTO]
 
-    public init(threadId: String, input: [TurnUserInputDTO]) {
+    public init(threadId: String, clientUserMessageId: String? = nil, input: [TurnUserInputDTO]) {
         self.threadId = threadId
+        self.clientUserMessageId = clientUserMessageId
         self.input = input
     }
 
-    public static func text(threadId: String, text: String) -> TurnStartParams {
-        TurnStartParams(threadId: threadId, input: [TurnUserInputDTO(text: text)])
+    public static func text(
+        threadId: String,
+        text: String,
+        clientUserMessageId: String? = nil
+    ) -> TurnStartParams {
+        TurnStartParams(
+            threadId: threadId,
+            clientUserMessageId: clientUserMessageId,
+            input: [TurnUserInputDTO(text: text)]
+        )
     }
 }
 
@@ -42,11 +52,18 @@ public struct TurnStartResponseDTO: Codable, Equatable, Sendable {
 
 public struct TurnSteerParams: Codable, Equatable, Sendable {
     public let threadId: String
+    public let clientUserMessageId: String?
     public let input: [TurnUserInputDTO]
     public let expectedTurnId: String
 
-    public init(threadId: String, input: [TurnUserInputDTO], expectedTurnId: String) {
+    public init(
+        threadId: String,
+        clientUserMessageId: String? = nil,
+        input: [TurnUserInputDTO],
+        expectedTurnId: String
+    ) {
         self.threadId = threadId
+        self.clientUserMessageId = clientUserMessageId
         self.input = input
         self.expectedTurnId = expectedTurnId
     }
@@ -54,10 +71,12 @@ public struct TurnSteerParams: Codable, Equatable, Sendable {
     public static func text(
         threadId: String,
         text: String,
-        expectedTurnId: String
+        expectedTurnId: String,
+        clientUserMessageId: String? = nil
     ) -> TurnSteerParams {
         TurnSteerParams(
             threadId: threadId,
+            clientUserMessageId: clientUserMessageId,
             input: [TurnUserInputDTO(text: text)],
             expectedTurnId: expectedTurnId
         )
@@ -69,5 +88,47 @@ public struct TurnSteerResponseDTO: Codable, Equatable, Sendable {
 
     public init(turnId: String) {
         self.turnId = turnId
+    }
+}
+
+public struct ThreadMessageSendParams: Codable, Equatable, Sendable {
+    public let threadId: String
+    public let clientUserMessageId: String
+    public let input: [TurnUserInputDTO]
+
+    public init(threadId: String, clientUserMessageId: String, input: [TurnUserInputDTO]) {
+        self.threadId = threadId
+        self.clientUserMessageId = clientUserMessageId
+        self.input = input
+    }
+
+    public static func text(threadId: String, clientUserMessageId: String, text: String) -> ThreadMessageSendParams {
+        ThreadMessageSendParams(
+            threadId: threadId,
+            clientUserMessageId: clientUserMessageId,
+            input: [TurnUserInputDTO(text: text)]
+        )
+    }
+}
+
+public struct ThreadMessageSendResponseDTO: Codable, Equatable, Sendable {
+    public let clientUserMessageId: String
+    public let state: String
+    public let turnId: String?
+    public let itemId: String?
+    public let error: String?
+
+    public init(
+        clientUserMessageId: String,
+        state: String,
+        turnId: String? = nil,
+        itemId: String? = nil,
+        error: String? = nil
+    ) {
+        self.clientUserMessageId = clientUserMessageId
+        self.state = state
+        self.turnId = turnId
+        self.itemId = itemId
+        self.error = error
     }
 }

@@ -53,11 +53,13 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
     private var detailSubscribeResults: [Result<ThreadDetailProjectionSeed, any Error>]
     private var detailResyncResults: [Result<ThreadDetailProjectionSeed, any Error>]
     private var projectionRowsResults: [Result<[ThreadDetailEventDTO], any Error>]
+    private let threadMessageSendResult: Result<ThreadMessageSendResponseDTO, any Error>
     private let turnStartResult: Result<TurnStartResponseDTO, any Error>
     private let turnSteerResult: Result<TurnSteerResponseDTO, any Error>
     private let projectionDelay: Duration?
     private var detailSubscribeParams: [ThreadDetailParams] = []
     private var detailResyncParams: [ThreadDetailParams] = []
+    private var threadMessageSendParams: [ThreadMessageSendParams] = []
     private var turnStartParams: [TurnStartParams] = []
     private var turnSteerParams: [TurnSteerParams] = []
     private var sentResponses: [SentServerResponse] = []
@@ -72,6 +74,13 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         detailSubscribeResult: Result<ThreadDetailProjectionSeed, any Error> = .success(.thread()),
         projectionRowsResult: Result<[ThreadDetailEventDTO], any Error> = .success([]),
         detailResyncResult: Result<ThreadDetailProjectionSeed, any Error> = .success(.thread()),
+        threadMessageSendResult: Result<ThreadMessageSendResponseDTO, any Error> = .success(
+            ThreadMessageSendResponseDTO(
+                clientUserMessageId: "dock-msg:test",
+                state: "submittedUpstream",
+                turnId: "turn-started"
+            )
+        ),
         turnStartResult: Result<TurnStartResponseDTO, any Error> = .success(
             TurnStartResponseDTO(
                 turn: .object([
@@ -102,6 +111,7 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         self.detailResyncResults = detailResyncResults ?? [detailResyncResult]
         self.projectionRowsResults = projectionRowsResults ?? [projectionRowsResult]
         self.detailSourceHostID = detailSourceHostID
+        self.threadMessageSendResult = threadMessageSendResult
         self.turnStartResult = turnStartResult
         self.turnSteerResult = turnSteerResult
         self.projectionDelay = projectionDelay
@@ -148,6 +158,24 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
             seed: nextProjectionSeed(from: &detailResyncResults),
             requestedThreadID: params.threadId,
             preservingLiveEvents: true
+        )
+    }
+
+    func threadMessageSend(
+        params: ThreadMessageSendParams,
+        timeout: Duration
+    ) async throws -> ThreadMessageSendResponseDTO {
+        threadMessageSendParams.append(params)
+        let response = try threadMessageSendResult.get()
+        guard response.clientUserMessageId == "dock-msg:test" else {
+            return response
+        }
+        return ThreadMessageSendResponseDTO(
+            clientUserMessageId: params.clientUserMessageId,
+            state: response.state,
+            turnId: response.turnId,
+            itemId: response.itemId,
+            error: response.error
         )
     }
 
@@ -274,6 +302,10 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
 
     func detailResyncParamsSnapshot() -> [ThreadDetailParams] {
         detailResyncParams
+    }
+
+    func threadMessageSendParamsSnapshot() -> [ThreadMessageSendParams] {
+        threadMessageSendParams
     }
 
     func turnStartParamsSnapshot() -> [TurnStartParams] {
@@ -513,7 +545,8 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
             renderState: event.isStreamingDelta ? .streaming : (event.isLive ? .live : .settled),
             requestID: event.request?.requestID.description,
             request: event.request,
-            fileChange: event.fileChange
+            fileChange: event.fileChange,
+            clientID: event.clientID
         )
     }
 
@@ -791,6 +824,7 @@ func makeProjectedDetailEvent(
     renderState: ThreadDetailRenderState = .settled,
     request: ThreadDetailEventRequestDTO? = nil,
     fileChange: ThreadDetailFileChangeDTO? = nil,
+    clientID: String? = nil,
     revision: Int = 1
 ) -> ThreadDetailEventDTO {
     let resolvedItemID = itemID ?? turnID.map { "\($0)-agent" }
@@ -833,7 +867,8 @@ func makeProjectedDetailEvent(
         renderState: renderState,
         requestID: requestID,
         request: request,
-        fileChange: fileChange
+        fileChange: fileChange,
+        clientID: clientID
     )
 }
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { RelayOutboundUserMessageStore } from "./dock-relay-outbound-user-message-store.mjs";
 import { RelayStateStore } from "./dock-relay-state-store.mjs";
 
 test("relay state store exposes per-view stream sequence cursors", () => {
@@ -152,6 +153,76 @@ test("relay state store does not create projection changes for repeated fresh em
     assert.equal(second.changed, false);
     assert.equal(second.seq, first.seq);
     assert.equal(store.currentSeqForView("archive"), first.seq);
+  } finally {
+    store.close();
+  }
+});
+
+test("relay state store keeps outbound user-message commands outside derived projection resets", () => {
+  const store = new RelayStateStore({
+    hostId: "home",
+    relayStateDatabasePath: ":memory:",
+  });
+  const outboundMessages = new RelayOutboundUserMessageStore(store.db);
+  try {
+    const inserted = outboundMessages.upsertAccepted({
+      hostID: "home",
+      threadID: "thread-1",
+      clientUserMessageID: "dock-msg:1",
+      inputJSON: JSON.stringify([{ text: "hello" }]),
+      inputHash: "hash-1",
+      at: "2026-06-04T00:00:00.000Z",
+    });
+    assert.equal(inserted.status, "inserted");
+    assert.equal(inserted.row.state, "acceptedByRelay");
+
+    const existing = outboundMessages.upsertAccepted({
+      hostID: "home",
+      threadID: "thread-1",
+      clientUserMessageID: "dock-msg:1",
+      inputJSON: JSON.stringify([{ text: "hello" }]),
+      inputHash: "hash-1",
+      at: "2026-06-04T00:00:01.000Z",
+    });
+    assert.equal(existing.status, "existing");
+
+    const collision = outboundMessages.upsertAccepted({
+      hostID: "home",
+      threadID: "thread-1",
+      clientUserMessageID: "dock-msg:1",
+      inputJSON: JSON.stringify([{ text: "different" }]),
+      inputHash: "hash-2",
+      at: "2026-06-04T00:00:02.000Z",
+    });
+    assert.equal(collision.status, "collision");
+
+    const submitted = outboundMessages.markSubmitted({
+      hostID: "home",
+      threadID: "thread-1",
+      clientUserMessageID: "dock-msg:1",
+      upstreamEndpointUrl: "ws://home:4500",
+      upstreamMethod: "turn/start",
+      codexTurnID: "turn-1",
+      at: "2026-06-04T00:00:03.000Z",
+    });
+    assert.equal(submitted.state, "submittedUpstream");
+    assert.equal(submitted.codexTurnID, "turn-1");
+
+    store.resetDerivedProjectionCache(4);
+    const afterReset = outboundMessages.messageForClientID("home", "thread-1", "dock-msg:1");
+    assert.equal(afterReset.state, "submittedUpstream");
+    assert.equal(afterReset.upstreamMethod, "turn/start");
+
+    const canonical = outboundMessages.markCanonicalObserved({
+      hostID: "home",
+      threadID: "thread-1",
+      clientUserMessageID: "dock-msg:1",
+      codexTurnID: "turn-1",
+      codexItemID: "item-1",
+      at: "2026-06-04T00:00:04.000Z",
+    });
+    assert.equal(canonical.state, "canonicalObserved");
+    assert.equal(canonical.codexItemID, "item-1");
   } finally {
     store.close();
   }

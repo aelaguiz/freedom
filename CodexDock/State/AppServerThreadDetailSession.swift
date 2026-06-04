@@ -110,6 +110,14 @@ private actor AppServerThreadDetailSession: ThreadDetailSession {
         )
     }
 
+    func threadMessageSend(params: ThreadMessageSendParams, timeout: Duration) async throws -> ThreadMessageSendResponseDTO {
+        try await requireClient().threadMessageSend(
+            params: params,
+            timeout: timeout,
+            observabilityContext: context(for: AppServerMethods.threadMessageSend)
+        )
+    }
+
     func turnStart(params: TurnStartParams, timeout: Duration) async throws -> TurnStartResponseDTO {
         try await requireClient().turnStart(
             params: params,

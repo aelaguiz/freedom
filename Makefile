@@ -101,6 +101,10 @@ SIM_UI_CLIENT_RENAME_DIR := /tmp/codex-client/sim-ui-client-rename-$(SIM_UI_CLIE
 endif
 SIM_UI_CLIENT_RENAME_SERVER_ACK_DELAY_MS ?= 1500
 SIM_UI_CLIENT_RENAME_UI_BUDGET_MS ?= 700
+SIM_UI_USER_MESSAGE_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
+SIM_UI_USER_MESSAGE_DIR ?= /tmp/codex-client/sim-ui-user-message-$(SIM_UI_USER_MESSAGE_RUN_ID)
+SIM_UI_USER_MESSAGE_UPSTREAM_ACK_DELAY_MS ?= 2500
+SIM_UI_USER_MESSAGE_UI_BUDGET_MS ?= 700
 EXPECTED_SCREEN ?=
 EXPECTED_THREAD_ID ?=
 SIM_UI_MATRIX_REPORT_DIRS ?=
@@ -136,7 +140,7 @@ SIM_UI_SYNC_SCENARIO_THREAD_ARG = $(if $(SIM_UI_SYNC_SCENARIO_THREAD_ID),--scena
 
 .DEFAULT_GOAL := help
 
-.PHONY: help contract-generate contract-check app app-test sim-ui-dump sim-ui-client-rename-proof sim-ui-sync-proof sim-ui-scenario-sync-proof sim-ui-isolated-scenario-sync-proof sim-ui-controlled-scenario-sync-proof sim-ui-controlled-matrix-verify sim-ui-controlled-matrix-proof sim-sync-audit sim-config-verify device-install device-install-iphone-17-pro device-install-iphone-14 iphone-17-pro iphone-14 device-install-all device-config device-config-verify device-config-verify-all device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart relay-doctor relay-debug-bundle relay-host-compare sim-debug-bundle device-debug-bundle app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
+.PHONY: help contract-generate contract-check app app-test sim-ui-dump sim-ui-client-rename-proof sim-ui-user-message-latency-proof sim-ui-sync-proof sim-ui-scenario-sync-proof sim-ui-isolated-scenario-sync-proof sim-ui-controlled-scenario-sync-proof sim-ui-controlled-matrix-verify sim-ui-controlled-matrix-proof sim-sync-audit sim-config-verify device-install device-install-iphone-17-pro device-install-iphone-14 iphone-17-pro iphone-14 device-install-all device-config device-config-verify device-config-verify-all device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart relay-doctor relay-debug-bundle relay-host-compare sim-debug-bundle device-debug-bundle app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
 
 help:
 	@printf "%s\n" "Codex Dock commands:"
@@ -147,6 +151,7 @@ help:
 	@printf "%s\n" "  rtk make app-test SIM='iPhone 17' Run generated-project app tests in a simulator"
 	@printf "%s\n" "  rtk make sim-ui-dump SIM='iPhone 17' Dump the current simulator Dock/Thread screen as accessibility JSON"
 	@printf "%s\n" "  rtk make sim-ui-client-rename-proof SIM='iPhone 17' Run controlled client rename latency proof"
+	@printf "%s\n" "  rtk make sim-ui-user-message-latency-proof SIM='iPhone 17' Run controlled user-message send latency proof"
 	@printf "%s\n" "  rtk make sim-ui-sync-proof SIM='iPhone 17' Run real relay-backed displayed-UI sync proof"
 	@printf "%s\n" "  rtk make sim-ui-scenario-sync-proof SIM='iPhone 17' Run displayed-UI scenario transition proof"
 	@printf "%s\n" "  rtk make sim-ui-isolated-scenario-sync-proof SIM='iPhone 17' Seed temp Codex home and run isolated displayed-UI transition proof"
@@ -380,6 +385,92 @@ sim-ui-client-rename-proof:
 		fi; \
 		if [ "$$fixture_status" -ne 0 ]; then \
 			echo "client rename latency fixture failed; see $$fixture_log" >&2; \
+			tail -n 120 "$$fixture_log" >&2; \
+			if [ -f "$$ui_result" ]; then echo "wrote $$ui_result"; fi; \
+			if [ -f "$$report_json" ]; then echo "wrote $$report_json"; fi; \
+			exit 1; \
+		fi; \
+		echo "wrote $$ui_result"; \
+		echo "wrote $$report_json"; \
+		echo "wrote $$report_md"'
+
+sim-ui-user-message-latency-proof:
+	@rtk python3 scripts/sim.py boot "$(SIM)"
+	@rtk xcodegen generate --spec project.yml
+	@rtk sh -c '\
+		set -eu; \
+		udid="$$(python3 scripts/sim.py resolve "$(SIM)")"; \
+		output_dir="$(SIM_UI_USER_MESSAGE_DIR)"; \
+		mkdir -p "$$output_dir" "$(APP_BUILD_LOG_DIR)"; \
+		fixture_ready="$$output_dir/user-message-fixture-ready.json"; \
+		ui_result="$$output_dir/user-message-latency-ui.json"; \
+		fixture_stop="$$output_dir/user-message-fixture-stop"; \
+		report_json="$$output_dir/user-message-latency.json"; \
+		report_md="$$output_dir/user-message-latency.md"; \
+		host_ready="/tmp/codex-client/codex-dock-user-message-proof-ready.json"; \
+		host_ui_result="/tmp/codex-client/codex-dock-user-message-latency-ui.json"; \
+		build_log="$(APP_BUILD_LOG_DIR)/sim-ui-user-message-build-$(APP_BUILD_NUMBER).log"; \
+		test_log="$(APP_BUILD_LOG_DIR)/sim-ui-user-message-test-$(APP_BUILD_NUMBER).log"; \
+		fixture_log="$$output_dir/user-message-fixture.out.log"; \
+		rm -f "$$fixture_ready" "$$ui_result" "$$fixture_stop" "$$report_json" "$$report_md" "$$host_ready" "$$host_ui_result"; \
+		echo "resetting simulator app data for user-message latency proof"; \
+		xcrun simctl uninstall "$$udid" "$(APP_BUNDLE_ID)" >/dev/null 2>&1 || true; \
+		echo "building user-message latency proof test for $(APP_SCHEME) on simulator $$udid build $(APP_BUILD_NUMBER)"; \
+		if ! xcodebuild -quiet build-for-testing -project CodexDock.xcodeproj -scheme "$(APP_SCHEME)" -destination "id=$$udid" -derivedDataPath "$(APP_DERIVED_DATA)" CURRENT_PROJECT_VERSION="$(APP_BUILD_NUMBER)" > "$$build_log" 2>&1; then \
+			echo "user-message proof build failed; see $$build_log" >&2; \
+			tail -n 80 "$$build_log" >&2; \
+			exit 1; \
+		fi; \
+		fixture_pid=""; \
+		cleanup() { \
+			status="$${1:-$$?}"; \
+			touch "$$fixture_stop" 2>/dev/null || true; \
+			if [ -n "$${fixture_pid:-}" ] && kill -0 "$$fixture_pid" 2>/dev/null; then \
+				kill "$$fixture_pid" 2>/dev/null || true; \
+				wait "$$fixture_pid" 2>/dev/null || true; \
+			fi; \
+			rm -f "$$host_ready" "$$host_ui_result"; \
+			exit "$$status"; \
+		}; \
+		trap cleanup INT TERM; \
+		echo "starting user-message latency fixture"; \
+		rtk node scripts/dock-relay-user-message-latency-fixture.mjs --ready-out "$$fixture_ready" --ui-result-in "$$ui_result" --stop-in "$$fixture_stop" --json-out "$$report_json" --summary-out "$$report_md" --upstream-ack-delay-ms "$(SIM_UI_USER_MESSAGE_UPSTREAM_ACK_DELAY_MS)" --ui-budget-ms "$(SIM_UI_USER_MESSAGE_UI_BUDGET_MS)" --wait-timeout-ms "$(SIM_UI_SYNC_READY_TIMEOUT_MS)" > "$$fixture_log" 2>&1 & \
+		fixture_pid="$$!"; \
+		deadline=$$(( $$(date +%s) + ( $(SIM_UI_SYNC_READY_TIMEOUT_MS) / 1000 ) )); \
+		while [ ! -f "$$fixture_ready" ]; do \
+			if ! kill -0 "$$fixture_pid" 2>/dev/null; then \
+				echo "user-message fixture exited before ready; see $$fixture_log" >&2; \
+				tail -n 120 "$$fixture_log" >&2; \
+				cleanup 1; \
+			fi; \
+			if [ "$$(date +%s)" -gt "$$deadline" ]; then \
+				echo "user-message fixture did not become ready; see $$fixture_log" >&2; \
+				tail -n 120 "$$fixture_log" >&2; \
+				cleanup 1; \
+			fi; \
+			sleep 0.2; \
+		done; \
+		cp "$$fixture_ready" "$$host_ready"; \
+		echo "running controlled user-message latency UI test on $(SIM)"; \
+		test_status=0; \
+		if ! CODEX_DOCK_USER_MESSAGE_PROOF_READY="$$fixture_ready" CODEX_DOCK_USER_MESSAGE_PROOF_UI_RESULT_HOST="$$ui_result" xcodebuild -quiet test-without-building -project CodexDock.xcodeproj -scheme "$(APP_SCHEME)" -destination "id=$$udid" -derivedDataPath "$(APP_DERIVED_DATA)" -only-testing:CodexDockUITests/CodexDockUserMessageLatencyUITests/testControlledUserMessageSendIsNonBlockingWhenConfigured > "$$test_log" 2>&1; then \
+			test_status=1; \
+		fi; \
+		touch "$$fixture_stop"; \
+		fixture_status=0; \
+		if ! wait "$$fixture_pid"; then fixture_status=1; fi; \
+		fixture_pid=""; \
+		trap - INT TERM; \
+		rm -f "$$host_ready" "$$host_ui_result"; \
+		if [ "$$test_status" -ne 0 ]; then \
+			echo "user-message latency UI test failed; see $$test_log" >&2; \
+			tail -n 120 "$$test_log" >&2; \
+			if [ -f "$$ui_result" ]; then echo "wrote $$ui_result"; fi; \
+			if [ -f "$$report_json" ]; then echo "wrote $$report_json"; fi; \
+			exit 1; \
+		fi; \
+		if [ "$$fixture_status" -ne 0 ]; then \
+			echo "user-message latency fixture failed; see $$fixture_log" >&2; \
 			tail -n 120 "$$fixture_log" >&2; \
 			if [ -f "$$ui_result" ]; then echo "wrote $$ui_result"; fi; \
 			if [ -f "$$report_json" ]; then echo "wrote $$report_json"; fi; \

@@ -156,6 +156,7 @@ public struct ThreadDetailEventPayloadDTO: Codable, Equatable, Sendable {
     public let request: ThreadDetailEventRequestDTO?
     public let fileChange: ThreadDetailFileChangeDTO?
     public let diagnostic: JSONValue?
+    public let clientID: String?
 
     public init(
         itemType: String? = nil,
@@ -174,7 +175,8 @@ public struct ThreadDetailEventPayloadDTO: Codable, Equatable, Sendable {
         requestID: String? = nil,
         request: ThreadDetailEventRequestDTO? = nil,
         fileChange: ThreadDetailFileChangeDTO? = nil,
-        diagnostic: JSONValue? = nil
+        diagnostic: JSONValue? = nil,
+        clientID: String? = nil
     ) {
         self.itemType = itemType
         self.visibility = visibility
@@ -193,6 +195,7 @@ public struct ThreadDetailEventPayloadDTO: Codable, Equatable, Sendable {
         self.request = request
         self.fileChange = fileChange
         self.diagnostic = diagnostic
+        self.clientID = clientID
     }
 }
 
@@ -228,6 +231,7 @@ public struct ThreadDetailEventDTO: Codable, Equatable, Sendable {
     public var request: ThreadDetailEventRequestDTO? { payload.request }
     public var fileChange: ThreadDetailFileChangeDTO? { payload.fileChange }
     public var diagnostic: JSONValue? { payload.diagnostic }
+    public var clientID: String? { payload.clientID }
 
     public init(
         schemaVersion: Int = 1,
@@ -258,7 +262,8 @@ public struct ThreadDetailEventDTO: Codable, Equatable, Sendable {
         requestID: String? = nil,
         request: ThreadDetailEventRequestDTO? = nil,
         fileChange: ThreadDetailFileChangeDTO? = nil,
-        diagnostic: JSONValue? = nil
+        diagnostic: JSONValue? = nil,
+        clientID: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.identityVersion = identityVersion
@@ -289,7 +294,8 @@ public struct ThreadDetailEventDTO: Codable, Equatable, Sendable {
             requestID: requestID,
             request: request,
             fileChange: fileChange,
-            diagnostic: diagnostic
+            diagnostic: diagnostic,
+            clientID: clientID
         )
     }
 }

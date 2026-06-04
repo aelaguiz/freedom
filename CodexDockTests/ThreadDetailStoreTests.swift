@@ -951,20 +951,12 @@ final class ThreadDetailStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testSendDraftStartsTurnWhenNoActiveTurnAndClearsDraft() async {
+    func testSendDraftPublishesPendingMessageAndSubmitsThroughRelayCommand() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1")),
-            detailResyncResult: .success(.thread("thread-1")),
-            turnStartResult: .success(
-                TurnStartResponseDTO(
-                    turn: .object([
-                        "id": .string("turn-new"),
-                        "status": .string("inProgress"),
-                    ])
-                )
-            )
+            detailResyncResult: .success(.thread("thread-1"))
         )
         let store = ThreadDetailStore(
             host: host,
@@ -978,11 +970,28 @@ final class ThreadDetailStoreTests: XCTestCase {
 
         XCTAssertEqual(store.composer.draft, "")
         XCTAssertEqual(store.composer.lastError, nil)
+        guard case .loaded(let immediateSnapshot) = store.state else {
+            return XCTFail("Expected loaded state after sendDraft")
+        }
+        XCTAssertEqual(immediateSnapshot.pendingOutboundMessages.count, 1)
+        XCTAssertEqual(immediateSnapshot.pendingOutboundMessages.first?.body, "Run the smoke test")
+        XCTAssertEqual(immediateSnapshot.pendingOutboundMessages.first?.deliveryState, .pendingLocal)
+
+        try await waitForDetailStore {
+            session.threadMessageSendParamsSnapshot().count == 1
+        }
+        guard case .loaded(let deliveredSnapshot) = store.state else {
+            return XCTFail("Expected loaded state after relay acceptance")
+        }
+        XCTAssertEqual(deliveredSnapshot.pendingOutboundMessages.first?.deliveryState, .submittedUpstream)
+        let messageParams = session.threadMessageSendParamsSnapshot()
         let startParams = session.turnStartParamsSnapshot()
         let steerParams = session.turnSteerParamsSnapshot()
-        XCTAssertEqual(startParams, [
-            TurnStartParams.text(threadId: "thread-1", text: "Run the smoke test"),
-        ])
+        XCTAssertEqual(messageParams.count, 1)
+        XCTAssertEqual(messageParams.first?.threadId, "thread-1")
+        XCTAssertEqual(messageParams.first?.input, [TurnUserInputDTO(text: "Run the smoke test")])
+        XCTAssertTrue(messageParams.first?.clientUserMessageId.hasPrefix("dock-msg:") == true)
+        XCTAssertEqual(startParams, [])
         XCTAssertEqual(steerParams, [])
     }
 
@@ -1001,35 +1010,16 @@ final class ThreadDetailStoreTests: XCTestCase {
             lastActivityDate: Date(timeIntervalSince1970: 3_100),
             displayOrderKey: "3100"
         )
-        let canonicalOutboundRow = makeProjectedDetailEvent(
-            threadID: "thread-1",
-            turnID: "turn-new",
-            itemID: "item-user-1",
-            kind: .userMessage,
-            visibility: .message,
-            rowRole: "userMessage",
-            title: "User message",
-            startedAt: 3_100,
-            text: "Run the smoke test"
-        )
         let session = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1")),
             detailResyncResult: .success(.thread("thread-1")),
-            turnStartResult: .success(
-                TurnStartResponseDTO(
-                    turn: .object([
-                        "id": .string("turn-new"),
-                        "status": .string("inProgress"),
-                    ])
-                )
-            ),
             detailSubscribeResults: [
                 .success(.thread("thread-1")),
                 .success(.thread("thread-1")),
             ],
             projectionRowsResults: [
                 .success([]),
-                .success([canonicalOutboundRow]),
+                .success([]),
             ],
             detailResyncResults: [
                 .success(.thread("thread-1")),
@@ -1046,8 +1036,25 @@ final class ThreadDetailStoreTests: XCTestCase {
         await store.load()
         store.updateDraft("Run the smoke test")
         await store.sendDraft()
+        try await waitForDetailStore {
+            session.threadMessageSendParamsSnapshot().count == 1
+        }
+        let sentClientID = try XCTUnwrap(session.threadMessageSendParamsSnapshot().first?.clientUserMessageId)
+        let canonicalOutboundRow = makeProjectedDetailEvent(
+            threadID: "thread-1",
+            turnID: "turn-new",
+            itemID: "item-user-1",
+            kind: .userMessage,
+            visibility: .message,
+            rowRole: "userMessage",
+            title: "User message",
+            startedAt: 3_100,
+            text: "Run the smoke test",
+            clientID: sentClientID
+        )
         if case .loaded(let snapshot) = store.state {
             XCTAssertTrue(snapshot.events.isEmpty)
+            XCTAssertEqual(snapshot.pendingOutboundMessages.count, 1)
         } else {
             XCTFail("Expected loaded state after sendDraft")
         }
@@ -1057,7 +1064,8 @@ final class ThreadDetailStoreTests: XCTestCase {
             guard case let .loaded(snapshot) = store.state else {
                 return false
             }
-            return snapshot.events.map(\.body) == ["Run the smoke test"]
+            return snapshot.events.filter { $0.body == "Run the smoke test" }.count == 1
+                && snapshot.pendingOutboundMessages.isEmpty
         }
 
         store.observeDockRowUpdate(updatedRow)
@@ -1069,18 +1077,18 @@ final class ThreadDetailStoreTests: XCTestCase {
             let matchingRows = snapshot.events.filter { $0.body == "Run the smoke test" }
             return session.detailResyncParamsSnapshot().count == 1
                 && matchingRows.count == 1
+                && snapshot.pendingOutboundMessages.isEmpty
                 && snapshot.events.map(\.body) == ["Run the smoke test"]
         }
     }
 
     @MainActor
-    func testSendDraftSteersKnownActiveTurn() async {
+    func testSendDraftUsesRelayCommandEvenWhenActiveTurnIsKnown() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1", activeTurnID: "active-turn")),
-            detailResyncResult: .success(.thread("thread-1")),
-            turnSteerResult: .success(TurnSteerResponseDTO(turnId: "active-turn"))
+            detailResyncResult: .success(.thread("thread-1"))
         )
         let store = ThreadDetailStore(
             host: host,
@@ -1092,26 +1100,26 @@ final class ThreadDetailStoreTests: XCTestCase {
         store.updateDraft("Also check the relay")
         await store.sendDraft()
 
+        try await waitForDetailStore {
+            session.threadMessageSendParamsSnapshot().count == 1
+        }
+        let messageParams = session.threadMessageSendParamsSnapshot()
         let startParams = session.turnStartParamsSnapshot()
         let steerParams = session.turnSteerParamsSnapshot()
+        XCTAssertEqual(messageParams.first?.threadId, "thread-1")
+        XCTAssertEqual(messageParams.first?.input, [TurnUserInputDTO(text: "Also check the relay")])
         XCTAssertEqual(startParams, [])
-        XCTAssertEqual(steerParams, [
-            TurnSteerParams.text(
-                threadId: "thread-1",
-                text: "Also check the relay",
-                expectedTurnId: "active-turn"
-            ),
-        ])
+        XCTAssertEqual(steerParams, [])
     }
 
     @MainActor
-    func testSendDraftFailurePreservesDraftAndPublishesError() async {
+    func testSendDraftFailureKeepsClearedDraftAndMarksPendingAmbiguous() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
         let session = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1")),
             detailResyncResult: .success(.thread("thread-1")),
-            turnStartResult: .failure(FakeThreadDetailError.turnFailed)
+            threadMessageSendResult: .failure(FakeThreadDetailError.turnFailed)
         )
         let store = ThreadDetailStore(
             host: host,
@@ -1123,9 +1131,15 @@ final class ThreadDetailStoreTests: XCTestCase {
         store.updateDraft("Do not lose this")
         await store.sendDraft()
 
-        XCTAssertEqual(store.composer.draft, "Do not lose this")
+        XCTAssertEqual(store.composer.draft, "")
         XCTAssertEqual(store.composer.isSending, false)
-        XCTAssertEqual(store.composer.lastError, "turn failed")
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.pendingOutboundMessages.first?.deliveryState == .failedAmbiguous("turn failed")
+        }
+        XCTAssertEqual(store.composer.lastError, nil)
     }
 
     @MainActor
@@ -1268,10 +1282,14 @@ final class ThreadDetailStoreTests: XCTestCase {
         XCTAssertEqual(beforeSendStartParams, [])
 
         await store.sendDraft()
+        try await waitForDetailStore {
+            session.threadMessageSendParamsSnapshot().count == 1
+        }
+        let messageParams = session.threadMessageSendParamsSnapshot()
         let afterSendStartParams = session.turnStartParamsSnapshot()
-        XCTAssertEqual(afterSendStartParams, [
-            TurnStartParams.text(threadId: "thread-1", text: "Check relay status"),
-        ])
+        XCTAssertEqual(messageParams.first?.threadId, "thread-1")
+        XCTAssertEqual(messageParams.first?.input, [TurnUserInputDTO(text: "Check relay status")])
+        XCTAssertEqual(afterSendStartParams, [])
     }
 
     @MainActor

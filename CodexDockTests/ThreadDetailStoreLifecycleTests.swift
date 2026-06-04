@@ -478,7 +478,7 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             detailSubscribeResult: .success(.thread("thread-1")),
             projectionRowsResult: .success([]),
             detailResyncResult: .success(.thread("thread-1")),
-            turnStartResult: .failure(FakeThreadDetailError.turnFailed),
+            threadMessageSendResult: .failure(FakeThreadDetailError.turnFailed),
             projectionRowsResults: [
                 .success([]),
                 .success([]),
@@ -497,7 +497,12 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
         await store.load()
         store.updateDraft("Do not replay this")
         await store.sendDraft()
-        XCTAssertEqual(store.composer.lastError, "turn failed")
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.pendingOutboundMessages.first?.deliveryState == .failedAmbiguous("turn failed")
+        }
 
         await session.emitConnectionState(.reconnecting(attempt: 1, reason: "transport closed"))
         await session.emitConnectionState(.connected)
@@ -508,12 +513,14 @@ final class ThreadDetailStoreTestsLifecycle: XCTestCase {
             return snapshot.liveState == .live
         }
 
+        let messageParams = session.threadMessageSendParamsSnapshot()
         let startParams = session.turnStartParamsSnapshot()
-        XCTAssertEqual(startParams, [
-            TurnStartParams.text(threadId: "thread-1", text: "Do not replay this"),
-        ])
-        XCTAssertEqual(store.composer.draft, "Do not replay this")
-        XCTAssertEqual(store.composer.lastError, "turn failed")
+        XCTAssertEqual(messageParams.count, 1)
+        XCTAssertEqual(messageParams.first?.threadId, "thread-1")
+        XCTAssertEqual(messageParams.first?.input, [TurnUserInputDTO(text: "Do not replay this")])
+        XCTAssertEqual(startParams, [])
+        XCTAssertEqual(store.composer.draft, "")
+        XCTAssertEqual(store.composer.lastError, nil)
     }
 
     @MainActor

@@ -86,6 +86,7 @@ import {
 } from "./dock-relay-thread-data.mjs";
 import { threadMatchesSourceKinds } from "./dock-relay-source-filter.mjs";
 import { UpstreamConnectionPool } from "./dock-relay-upstream-pool.mjs";
+import { userMessageCommandEngineForConfig } from "./dock-relay-user-message-command.mjs";
 
 function shortHash(value) {
   if (!value) {
@@ -422,6 +423,21 @@ function recordProjectionWitness(config, envelope) {
   }
 }
 
+function recordCanonicalUserMessageRows(config, envelope) {
+  const rows = Array.isArray(envelope?.rows) ? envelope.rows : [];
+  if (!rows.some((row) => row?.payload?.clientID)) {
+    return;
+  }
+  try {
+    userMessageCommandEngineForConfig(config).markCanonicalRows(rows);
+  } catch (error) {
+    relayLogger(config).warn("user_message_command.canonical_mark_failed", {
+      subsystem: "user-message-command",
+      error,
+    });
+  }
+}
+
 function projectionWitnessEnvelopeMatches(envelope, params) {
   if (params.sourceHostID && envelope.sourceHostID !== params.sourceHostID) {
     return false;
@@ -505,6 +521,7 @@ function sendThreadDetailUpdate(config, downstreamWs, update) {
   if (!update) {
     return;
   }
+  recordCanonicalUserMessageRows(config, update);
   recordProjectionWitness(config, update);
   sendJson(downstreamWs, {
     jsonrpc: "2.0",
@@ -616,6 +633,7 @@ async function subscribeThreadDetail(config, params = {}, session, downstreamWs)
   if (isArchivedProjectionThread(config, params.threadId)) {
     const ledger = await readThreadDetailLedger(config, params);
     const snapshot = ledger.snapshot("thread/detail/subscribe");
+    recordCanonicalUserMessageRows(config, snapshot);
     recordProjectionWitness(config, snapshot);
     return snapshot;
   }
@@ -628,6 +646,7 @@ async function subscribeThreadDetail(config, params = {}, session, downstreamWs)
     replayPendingDetailMessages(session);
     detail.buffering = false;
     const snapshot = ledger.snapshot("thread/detail/subscribe");
+    recordCanonicalUserMessageRows(config, snapshot);
     recordProjectionWitness(config, snapshot);
     return snapshot;
   } catch (error) {
@@ -667,6 +686,7 @@ async function resyncThreadDetail(config, params = {}, session) {
     }
   }
   const snapshot = ledger.snapshot("thread/detail/resync");
+  recordCanonicalUserMessageRows(config, snapshot);
   recordProjectionWitness(config, snapshot);
   return snapshot;
 }
@@ -867,6 +887,8 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       reconcileThreadNameAfterResponse(config, params || {});
       return result;
     }
+    case "thread/message/send":
+      return userMessageCommandEngineForConfig(config).send(params || {}, { session });
     case "audio/transcription/start":
       return session.realtimeTranscription.start(params || {});
     case "audio/transcription/append":
@@ -877,6 +899,18 @@ async function handleRequest(config, method, params, session, downstreamWs) {
       return session.realtimeTranscription.cancel(params || {});
     case "turn/start":
     case "turn/steer":
+      if (!params?.clientUserMessageId) {
+        throw relayError(`${method} through the relay requires clientUserMessageId; use thread/message/send`, -32602, {
+          subsystem: "user-message-command",
+          reason: "missing_client_user_message_id",
+          retryable: false,
+        });
+      }
+      return userMessageCommandEngineForConfig(config).send(params || {}, {
+        session,
+        preferredMethod: method,
+        expectedTurnId: params?.expectedTurnId || null,
+      });
     case "turn/interrupt":
       return forwardToActiveUpstream(config, session, method, params || {});
     default:

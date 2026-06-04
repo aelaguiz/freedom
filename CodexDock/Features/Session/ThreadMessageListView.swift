@@ -238,6 +238,22 @@ private struct ThreadMessageCard: View {
         if event.isLive {
             statusBadge("Live", color: .green)
         }
+        if let outboundDeliveryState = event.outboundDeliveryState {
+            statusBadge(outboundDeliveryState.label, color: color(for: outboundDeliveryState))
+        }
+    }
+
+    private func color(for state: OutboundMessageDeliveryState) -> Color {
+        switch state {
+        case .pendingLocal, .acceptedByRelay, .submittedUpstream:
+            return .orange
+        case .canonicalObserved:
+            return .green
+        case .failedDefinite:
+            return .red
+        case .failedAmbiguous:
+            return .yellow
+        }
     }
 
     private func statusBadge(_ label: String, color: Color) -> some View {

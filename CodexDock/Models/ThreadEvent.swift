@@ -59,6 +59,8 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
     public let isStreamingDelta: Bool
     public let request: ThreadDetailEventRequestDTO?
     public let fileChange: ThreadDetailFileChangeDTO?
+    public let clientID: String?
+    public let outboundDeliveryState: OutboundMessageDeliveryState?
 
     public init(
         id: String,
@@ -78,7 +80,9 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
         activityDate: Date? = nil,
         isStreamingDelta: Bool = false,
         request: ThreadDetailEventRequestDTO? = nil,
-        fileChange: ThreadDetailFileChangeDTO? = nil
+        fileChange: ThreadDetailFileChangeDTO? = nil,
+        clientID: String? = nil,
+        outboundDeliveryState: OutboundMessageDeliveryState? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -98,6 +102,8 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
         self.isStreamingDelta = isStreamingDelta
         self.request = request
         self.fileChange = fileChange
+        self.clientID = clientID
+        self.outboundDeliveryState = outboundDeliveryState
     }
 
     public init(detailEvent dto: ThreadDetailEventDTO) {
@@ -120,7 +126,8 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
             activityDate: activityDate,
             isStreamingDelta: dto.renderState == .streaming,
             request: dto.request,
-            fileChange: dto.fileChange
+            fileChange: dto.fileChange,
+            clientID: dto.clientID
         )
     }
 
@@ -157,7 +164,9 @@ public struct ThreadEvent: Equatable, Identifiable, Sendable {
                 ?? ThreadMessageSemantics.activityDate(for: self),
             isStreamingDelta: isStreamingDelta,
             request: request,
-            fileChange: fileChange
+            fileChange: fileChange,
+            clientID: clientID,
+            outboundDeliveryState: outboundDeliveryState
         )
     }
 }

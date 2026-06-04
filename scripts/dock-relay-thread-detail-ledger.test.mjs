@@ -77,6 +77,39 @@ test("thread detail ledger gives history and live item notifications the same us
   assert.equal(liveEvent.payload.itemID, "item-user-1");
 });
 
+test("thread detail ledger carries user-message client ids into projection payloads", () => {
+  const historyEvent = eventsFromThread({
+    id: "thread-1",
+    turns: [{
+      id: "turn-1",
+      startedAt: 1_800_000_000,
+      items: [{
+        id: "item-user-1",
+        type: "userMessage",
+        clientId: "dock-msg:history",
+        content: [{ text: "hello" }],
+      }],
+    }],
+  }, { sourceHostID: "home" }).find((event) => event.payload.renderKind === "userMessage");
+  const liveEvent = eventsFromNotification({
+    method: "item/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-user-2",
+      completedAtMs: 1_800_000_001_000,
+      item: {
+        type: "userMessage",
+        clientId: "dock-msg:live",
+        content: [{ text: "hi" }],
+      },
+    },
+  }, { sourceHostID: "home", nowMs: 1_800_000_001_000 }).find((event) => event.payload.renderKind === "userMessage");
+
+  assert.equal(historyEvent.payload.clientID, "dock-msg:history");
+  assert.equal(liveEvent.payload.clientID, "dock-msg:live");
+});
+
 test("thread detail projection rows carry the shared projection envelope", () => {
   const rows = [
     ...eventsFromThread(historyThread(), { sourceHostID: "home" }),

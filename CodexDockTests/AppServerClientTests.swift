@@ -1590,7 +1590,11 @@ final class AppServerClientTests: XCTestCase {
 
         let startTask = Task {
             try await client.turnStart(
-                params: .text(threadId: "thread-1", text: "Do the thing"),
+                params: .text(
+                    threadId: "thread-1",
+                    text: "Do the thing",
+                    clientUserMessageId: "dock-msg:start"
+                ),
                 timeout: .seconds(1)
             )
         }
@@ -1602,6 +1606,7 @@ final class AppServerClientTests: XCTestCase {
             return XCTFail("Expected turn/start text input params")
         }
         XCTAssertEqual(startParams["threadId"], .string("thread-1"))
+        XCTAssertEqual(startParams["clientUserMessageId"], .string("dock-msg:start"))
         XCTAssertEqual(textInput["type"], .string("text"))
         XCTAssertEqual(textInput["text"], .string("Do the thing"))
         XCTAssertEqual(textInput["text_elements"], .array([]))
@@ -1627,7 +1632,8 @@ final class AppServerClientTests: XCTestCase {
                 params: .text(
                     threadId: "thread-1",
                     text: "Add this too",
-                    expectedTurnId: "turn-1"
+                    expectedTurnId: "turn-1",
+                    clientUserMessageId: "dock-msg:steer"
                 ),
                 timeout: .seconds(1)
             )
@@ -1639,6 +1645,7 @@ final class AppServerClientTests: XCTestCase {
         }
         XCTAssertEqual(steerParams["threadId"], .string("thread-1"))
         XCTAssertEqual(steerParams["expectedTurnId"], .string("turn-1"))
+        XCTAssertEqual(steerParams["clientUserMessageId"], .string("dock-msg:steer"))
 
         await transport.enqueue(
             .response(
@@ -1650,6 +1657,59 @@ final class AppServerClientTests: XCTestCase {
         )
         let steerResponse = try await steerTask.value
         XCTAssertEqual(steerResponse.turnId, "turn-1")
+    }
+
+    func testThreadMessageSendSendsTypedTextInputWithClientID() async throws {
+        let transport = ScriptedAppServerTransport()
+        let client = AppServerClient(transport: transport)
+        try await completeHandshake(client: client, transport: transport)
+
+        let sendTask = Task {
+            try await client.threadMessageSend(
+                params: .text(
+                    threadId: "thread-1",
+                    clientUserMessageId: "dock-msg:message",
+                    text: "Do the thing"
+                ),
+                timeout: .seconds(1)
+            )
+        }
+        let request = try await transport.nextSentRequest()
+        XCTAssertEqual(request.method, AppServerMethods.threadMessageSend)
+        guard case .object(let params) = try XCTUnwrap(request.params),
+              case .array(let input) = try XCTUnwrap(params["input"]),
+              case .object(let textInput) = try XCTUnwrap(input.first) else {
+            return XCTFail("Expected thread/message/send text input params")
+        }
+        XCTAssertEqual(params["threadId"], .string("thread-1"))
+        XCTAssertEqual(params["clientUserMessageId"], .string("dock-msg:message"))
+        XCTAssertEqual(textInput["type"], .string("text"))
+        XCTAssertEqual(textInput["text"], .string("Do the thing"))
+        XCTAssertEqual(textInput["text_elements"], .array([]))
+
+        await transport.enqueue(
+            .response(
+                JSONRPCResponse(
+                    id: request.id,
+                    result: .object([
+                        "clientUserMessageId": .string("dock-msg:message"),
+                        "state": .string("submittedUpstream"),
+                        "turnId": .string("turn-1"),
+                        "itemId": .string("item-1"),
+                    ])
+                )
+            )
+        )
+        let response = try await sendTask.value
+        XCTAssertEqual(
+            response,
+            ThreadMessageSendResponseDTO(
+                clientUserMessageId: "dock-msg:message",
+                state: "submittedUpstream",
+                turnId: "turn-1",
+                itemId: "item-1"
+            )
+        )
     }
 
     func testRealtimeTranscriptionMethodsSendTypedRequestsWithoutProviderConfig() async throws {

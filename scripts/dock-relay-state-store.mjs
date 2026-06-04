@@ -19,6 +19,10 @@ import {
   normalizeStoredCard,
 } from "./dock-relay-state-views.mjs";
 import {
+  ensureOutboundUserMessageStoreSchema,
+  pruneForeignOutboundUserMessages,
+} from "./dock-relay-outbound-user-message-store.mjs";
+import {
   HUMAN_APP_FACING_THREAD_SQL,
   HUMAN_APP_FACING_THREAD_SQL_FOR_ALIAS,
   deleteRejectedLiveLeases,
@@ -311,6 +315,7 @@ class RelayStateStore {
       CREATE INDEX IF NOT EXISTS idx_changes_view_seq
         ON changes(view, seq);
     `);
+    ensureOutboundUserMessageStoreSchema(this.db);
     this.ensureThreadColumns();
     this.ensureLiveLeaseColumns();
     // Card truth lives on stored thread rows. Remove the old decorative
@@ -440,6 +445,7 @@ class RelayStateStore {
       ]) {
         this.db.prepare(`DELETE FROM ${table} WHERE host_id != ?`).run(hostID);
       }
+      pruneForeignOutboundUserMessages(this.db, hostID);
       this.db.prepare("DELETE FROM subscriptions WHERE host_id IS NOT NULL AND host_id != ?").run(hostID);
       this.db.prepare("DELETE FROM changes WHERE host_id IS NOT NULL AND host_id != ?").run(hostID);
       this.db.prepare("DELETE FROM audit_findings WHERE host_id IS NOT NULL AND host_id != ?").run(hostID);
