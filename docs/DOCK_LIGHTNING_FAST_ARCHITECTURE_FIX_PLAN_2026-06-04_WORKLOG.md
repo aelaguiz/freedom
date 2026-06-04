@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - Lightning-Fast Dock Rendering - Implementation Worklog"
 date: 2026-06-04
-status: active
+status: complete
 plan: docs/DOCK_LIGHTNING_FAST_ARCHITECTURE_FIX_PLAN_2026-06-04.md
 ---
 
@@ -128,10 +128,20 @@ Post-fix proof:
   passed. Result bundle:
   `.codex-dock/DerivedData/Logs/Test/Test-CodexDockApp-2026.06.04_17-34-22--0500.xcresult`.
 
-## 2026-06-04 - Remaining rollout
+## 2026-06-04 - Rollout complete
 
-Remaining work before marking this worklog complete:
+Rollout evidence:
 
-- Commit and push explicit touched paths.
-- Pull the pushed branch into the `home` deployment checkout.
-- Restart and verify the Mac/local relay and `home` relay.
+- Commit `13a6741` (`Fix Dock simulator proof latency harness`) pushed to
+  `origin/codex-dock-agents-tab-live-counts`.
+- `home` fast-forwarded to `13a6741` with `git fetch` and
+  `git pull --ff-only`.
+- Local/Mac `rtk make dock-relay-restart` returned `status: restarted`.
+- Local/Mac `rtk make dock-relay-status` returned `status: ready` with
+  `raw-app-server-readyz`, `relay-readyz`, and `relay-statusz` all `ok: true`.
+- `home` service install/restart returned `status: installed`,
+  `status: restarted`, then `status: ready`.
+- `home` final `rtk make dock-relay-status HOST_SERVICE_PLATFORM=linux ...`
+  returned `status: ready` with `raw-app-server-readyz`, `relay-readyz`, and
+  `relay-statusz` all `ok: true`.
+- Physical phone testing was not run.

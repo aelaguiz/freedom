@@ -1,7 +1,7 @@
 ---
 title: "Codex Dock - Lightning-Fast Dock Rendering - Architecture Plan"
 date: 2026-06-04
-status: active
+status: complete
 fallback_policy: forbidden
 owners: [Amir, Codex]
 reviewers: [model-consensus, composer-2.5-fast, thermo-nuclear-code-quality-review]
@@ -33,7 +33,7 @@ Manual QA: n/a (non-blocking)
 - none
 
 ## Non-blocking follow-ups (manual QA / screenshots / human verification)
-- Relay rollout remains a deployment obligation under Phase 6, not missing code.
+- Relay rollout completed after commit/push.
 - Physical phone testing is intentionally out of scope for this goal by user
   instruction.
 <!-- arch_skill:block:implementation_audit:end -->
@@ -1284,6 +1284,26 @@ accessibility scraping.
 
 Physical-phone testing is intentionally stopped by user instruction. This proof
 section is simulator/local only.
+
+## 9.5 Rollout proof
+
+Final rollout state:
+
+- Commit `13a6741` (`Fix Dock simulator proof latency harness`) pushed to
+  `origin/codex-dock-agents-tab-live-counts`.
+- `home` fast-forwarded to `13a6741` with `git fetch` and `git pull --ff-only`.
+- Local/Mac relay restart returned `status: restarted`; final
+  `rtk make dock-relay-status` returned `status: ready`.
+- `home` relay install/restart returned `status: installed`, then
+  `status: restarted`, then final `rtk make dock-relay-status
+  HOST_SERVICE_PLATFORM=linux ...` returned `status: ready`.
+- Local/Mac final status showed `raw-app-server-readyz`, `relay-readyz`, and
+  `relay-statusz` all `ok: true`.
+- `home` final status showed `raw-app-server-readyz`, `relay-readyz`, and
+  `relay-statusz` all `ok: true`.
+- Final `git status --short` on the Mac checkout was clean before this
+  completion-only doc update.
+- Physical phone testing was not run.
 
 <!-- arch_skill:block:consistency_pass:start -->
 ## Consistency Pass
