@@ -142,7 +142,13 @@ actor StreamReconciler<Row: Equatable & Sendable> {
     }
 
     func start() async {
-        reconnectTask?.cancel()
+        await start(cancelScheduledReconnect: true)
+    }
+
+    private func start(cancelScheduledReconnect: Bool) async {
+        if cancelScheduledReconnect {
+            reconnectTask?.cancel()
+        }
         reconnectTask = nil
         guard freshness != .closed || connection == nil else {
             freshness = .connecting
@@ -539,7 +545,7 @@ actor StreamReconciler<Row: Equatable & Sendable> {
             } catch {
                 return
             }
-            await self?.start()
+            await self?.start(cancelScheduledReconnect: false)
         }
     }
 

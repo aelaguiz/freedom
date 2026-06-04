@@ -453,3 +453,70 @@ cause and prove the fix on both hosts.
   - Xcode/CoreDevice and Mobile MCP both fail to expose the physical iPhone;
   - the remaining physical installed-app proof cannot be gathered from this Mac
     until the device becomes available.
+
+## 2026-06-03 Physical iPhone Log Fallback And Reconnect Root Cause
+
+- Canonical physical log collection still failed:
+  - `rtk make device-logs DEVICE=CB9FFF0E-89AD-57B5-9C00-6552D814875E`
+  - result: `log: Must be root to collect logs from attached device`
+  - user retry with `sudo make device-logs ...` failed with:
+    - `Warning: --predicate is ignored when collecting from attached device`
+    - `log: failed to create archive: Device not configured (6)`
+- CoreDevice diagnostics were also unhealthy:
+  - `rtk make device-debug-bundle DEVICE=CB9FFF0E-89AD-57B5-9C00-6552D814875E`
+  - result:
+    - `A connection to this device could not be established.`
+    - `Timed out while attempting to negotiate tunnel parameters`
+- Alternate path that worked:
+  - installed Homebrew `libimobiledevice`
+  - hardware UDID: `00008150-00054DEC1461401C`
+  - `idevicepair -u 00008150-00054DEC1461401C validate`
+    returned success
+  - pulled archive with:
+    - `idevicesyslog -u 00008150-00054DEC1461401C archive /tmp/codex-client/iphone17pro-idevicesyslog-archive-last10m.tar --age-limit 600 --size-limit 100000000`
+- Physical log artifacts:
+  - raw archive:
+    `/tmp/codex-client/iphone17pro-idevicesyslog-archive-last10m.tar`
+  - extracted unified log archive:
+    `/tmp/codex-client/iphone17pro-idevicesyslog-last10m.logarchive`
+  - filtered app subsystem log:
+    `/tmp/codex-client/iphone17pro-codexdock-unified-last10m.log`
+  - filtered process log:
+    `/tmp/codex-client/iphone17pro-codexdock-process-unified-last10m.log`
+  - live syslog sample:
+    `/tmp/codex-client/iphone17pro-codexdock-syslog-60s.log`
+- The physical app log reproduced the user-visible failure:
+  - repeated every approximately five seconds:
+    - `app-server connect initialize started`
+    - `app-server request failed method=initialize request_id=initialize duration_ms=0 error=AppServerClientError: JSON-RPC request \`initialize\` was cancelled`
+    - `app-server connect initialize failed duration_ms=1 error=AppServerClientError: JSON-RPC request \`initialize\` was cancelled`
+    - `connectivity overall status=Partial message=Amir-M5: JSON-RPC request \`initialize\` was cancelled`
+  - CFNetwork showed the app canceling its own HTTP/WebSocket task:
+    - `NSURLErrorDomain Code=-999`
+    - `HTTP load canceled, 0/0 bytes`
+  - The network path was available while this happened:
+    - `Path is satisfied`
+    - `uses wifi`
+    - `LQM: good` or `moderate`
+- Root cause found in `StreamReconciler`:
+  - a scheduled reconnect task slept for `streamReconnectDelay`;
+  - after the sleep, that same task called `start()`;
+  - `start()` immediately cancelled `reconnectTask`;
+  - because the caller was the reconnect task, it cancelled itself;
+  - the next `connectAndInitialize()` inherited that cancellation and canceled
+    the `initialize` request in `0-1ms`.
+- Fix:
+  - `StreamReconciler.start()` now delegates to
+    `start(cancelScheduledReconnect:)`;
+  - external starts still cancel any pending reconnect task;
+  - scheduled reconnects call `start(cancelScheduledReconnect: false)` so they
+    do not cancel themselves before opening the connection.
+- Regression proof:
+  - added
+    `DockStoreStreamTests.testScheduledReconnectDoesNotCancelItsOwnConnectTask`
+  - it records `Task.isCancelled` for the original connect and scheduled
+    reconnect connect;
+  - expected states are `[false, false]`.
+- Test run:
+  - `rtk swift test --filter DockStoreStreamTests`
+  - result: `19` tests, `0` failures.

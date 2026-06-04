@@ -927,4 +927,71 @@ final class DockStoreStreamTests: XCTestCase {
         let connectCount = await streamClient.connectCount()
         XCTAssertEqual(connectCount, 2)
     }
+
+    @MainActor
+    func testScheduledReconnectDoesNotCancelItsOwnConnectTask() async throws {
+        let host = makeHost()
+        let firstConnection = ScriptedThreadCardTransportConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-1",
+                seq: 1,
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-a", title: "Initial row", updatedAt: 1_000)
+                ]
+            )
+        )
+        let secondConnection = ScriptedThreadCardTransportConnection(
+            subscribeSnapshot: dockStreamSnapshot(
+                host: host,
+                epoch: "epoch-2",
+                seq: 1,
+                cards: [
+                    threadCardFixture(host: host, threadID: "thread-b", title: "Reconnected row", updatedAt: 1_200)
+                ]
+            )
+        )
+        let streamClient = CancellationRecordingThreadCardStreamClient(
+            connections: [firstConnection, secondConnection]
+        )
+        let store = DockStore(
+            host: host,
+            streamClient: streamClient,
+            streamReconnectDelay: .milliseconds(10)
+        )
+
+        await store.load()
+        await firstConnection.finish()
+
+        guard await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.threadID) == ["thread-b"] }
+        ) != nil else {
+            return XCTFail("Expected scheduled reconnect to replace rows, got \(store.state)")
+        }
+
+        let cancellationStates = await streamClient.connectCancellationStates()
+        XCTAssertEqual(cancellationStates, [false, false])
+    }
+}
+
+private actor CancellationRecordingThreadCardStreamClient: ThreadCardStreamConnecting {
+    private var connections: [ScriptedThreadCardTransportConnection]
+    private var cancellationStates: [Bool] = []
+
+    init(connections: [ScriptedThreadCardTransportConnection]) {
+        self.connections = connections
+    }
+
+    func connect(to host: DockHostConfiguration) async throws -> any ThreadCardStreamConnection {
+        cancellationStates.append(Task.isCancelled)
+        guard !connections.isEmpty else {
+            throw DockRequestFailure.offline("No scripted stream connection for \(host.id)")
+        }
+        return connections.removeFirst()
+    }
+
+    func connectCancellationStates() -> [Bool] {
+        cancellationStates
+    }
 }
