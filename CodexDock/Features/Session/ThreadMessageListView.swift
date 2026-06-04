@@ -170,6 +170,7 @@ struct DetailMessageView: View {
 }
 
 private struct ThreadMessageCard: View {
+    @FocusState private var isRequestInputFocused: Bool
     let event: ThreadEvent
     let requestCard: ServerRequestCard?
     let fileChangeViewedFileIDs: Set<String>
@@ -285,6 +286,11 @@ private struct ThreadMessageCard: View {
                     axis: .vertical
                 )
                 .lineLimit(1...3)
+                .focused($isRequestInputFocused)
+                .submitLabel(.send)
+                .onSubmit {
+                    submitRequestInput(for: card)
+                }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -331,12 +337,12 @@ private struct ThreadMessageCard: View {
             }
         case .userInput:
             Button {
-                onRequestAction(card.id, .submitInput)
+                submitRequestInput(for: card)
             } label: {
                 Label("Send", systemImage: "paperplane.fill")
             }
             .buttonStyle(.borderedProminent)
-            .disabled(card.isBusyOrDone || card.inputDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(!canSubmitRequestInput(card))
             .codexAutomationID(AutomationID.RequestCard.sendButton(cardID: card.id))
         case .mcpElicitation:
             Button {
@@ -353,6 +359,18 @@ private struct ThreadMessageCard: View {
                 .foregroundStyle(.secondary)
                 .codexAutomationID(AutomationID.RequestCard.unsupportedState(cardID: card.id))
         }
+    }
+
+    private func submitRequestInput(for card: ServerRequestCard) {
+        guard canSubmitRequestInput(card) else {
+            return
+        }
+        isRequestInputFocused = false
+        onRequestAction(card.id, .submitInput)
+    }
+
+    private func canSubmitRequestInput(_ card: ServerRequestCard) -> Bool {
+        !card.isBusyOrDone && !card.inputDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var messageAutomationValue: String {

@@ -19,6 +19,8 @@ final class CodexDockUserMessageLatencyUITests: XCTestCase {
             timings: UserMessageLatencyUITimings? = nil,
             composerValueAfter: String? = nil,
             messageListValueAfter: String? = nil,
+            keyboardVisibleBeforeSend: Bool? = nil,
+            keyboardVisibleAfterSend: Bool? = nil,
             rawAccessibilityTree: String? = nil
         ) throws {
             let report = UserMessageLatencyUIReport(
@@ -35,6 +37,8 @@ final class CodexDockUserMessageLatencyUITests: XCTestCase {
                 timings: timings,
                 composerValueAfter: composerValueAfter,
                 messageListValueAfter: messageListValueAfter,
+                keyboardVisibleBeforeSend: keyboardVisibleBeforeSend,
+                keyboardVisibleAfterSend: keyboardVisibleAfterSend,
                 rawAccessibilityTree: rawAccessibilityTree
             )
             try report.write(to: config.uiResultPath)
@@ -106,24 +110,19 @@ final class CodexDockUserMessageLatencyUITests: XCTestCase {
 
         let tappedAtMs = monotonicMilliseconds()
         let tappedAt = codexDockISO8601Now()
+        let keyboardVisibleBeforeSend = app.softwareKeyboardVisibleForUserMessageProof()
         sendButton.tap()
 
         let composerRoot = app.element(id: AutomationID.Composer.root)
-        let composerCleared = app.waitForUserMessageProof(
-            timeout: TimeInterval(config.uiBudgetMS) / 1_000.0
-        ) {
-            composerRoot.exists
-                && composerRoot.displayedUIStringValue.contains("can-send=false")
-                && composerRoot.displayedUIStringValue.contains("sending=false")
-        }
         let messageList = app.element(id: AutomationID.Session.messageList)
-        let pendingObserved = app.waitForUserMessageProof(
-            timeout: TimeInterval(config.uiBudgetMS) / 1_000.0
-        ) {
-            messageList.exists
-                && messageList.displayedUIStringValue.contains("pending%3A")
-                && messageList.displayedUIStringValue.contains("events=1")
-        }
+        let budgetObservations = app.observeUserMessageProofBudget(
+            composerRoot: composerRoot,
+            messageList: messageList,
+            keyboardVisibleBeforeSend: keyboardVisibleBeforeSend,
+            tappedAt: tappedAt,
+            tappedAtMs: tappedAtMs,
+            timeoutMS: config.uiBudgetMS
+        )
         let canonicalObserved = app.waitForUserMessageProof(timeout: 12) {
             messageList.exists
                 && messageList.displayedUIStringValue.contains("item-user-proof")
@@ -133,17 +132,49 @@ final class CodexDockUserMessageLatencyUITests: XCTestCase {
         let timings = UserMessageLatencyUITimings(
             sendTappedAt: tappedAt,
             sendTappedAtMs: tappedAtMs,
-            composerClearedAt: composerCleared?.at,
-            composerClearedAtMs: composerCleared?.atMs,
-            composerClearMS: composerCleared.map { Int($0.atMs - tappedAtMs) } ?? Int.max,
-            pendingObservedAt: pendingObserved?.at,
-            pendingObservedAtMs: pendingObserved?.atMs,
-            pendingObservedMS: pendingObserved.map { Int($0.atMs - tappedAtMs) } ?? Int.max,
+            composerFocusClearedAt: budgetObservations.composerFocusCleared?.at,
+            composerFocusClearedAtMs: budgetObservations.composerFocusCleared?.atMs,
+            composerFocusClearMS: budgetObservations.composerFocusCleared.map { Int($0.atMs - tappedAtMs) } ?? Int.max,
+            composerClearedAt: budgetObservations.composerCleared?.at,
+            composerClearedAtMs: budgetObservations.composerCleared?.atMs,
+            composerClearMS: budgetObservations.composerCleared.map { Int($0.atMs - tappedAtMs) } ?? Int.max,
+            pendingObservedAt: budgetObservations.pendingObserved?.at,
+            pendingObservedAtMs: budgetObservations.pendingObserved?.atMs,
+            pendingObservedMS: budgetObservations.pendingObserved.map { Int($0.atMs - tappedAtMs) } ?? Int.max,
             canonicalObservedAt: canonicalObserved?.at,
             canonicalObservedAtMs: canonicalObserved?.atMs,
-            canonicalObservedMS: canonicalObserved.map { Int($0.atMs - tappedAtMs) } ?? Int.max
+            canonicalObservedMS: canonicalObserved.map { Int($0.atMs - tappedAtMs) } ?? Int.max,
+            keyboardDismissedAt: budgetObservations.keyboardDismissed?.at,
+            keyboardDismissedAtMs: budgetObservations.keyboardDismissed?.atMs,
+            keyboardDismissMS: budgetObservations.keyboardDismissed.map { Int($0.atMs - tappedAtMs) } ?? Int.max
         )
 
+        if timings.composerFocusClearMS > config.uiBudgetMS {
+            try writeResult(
+                status: .fail,
+                reason: "Composer focus cleared in \(timings.composerFocusClearMS) ms, over budget \(config.uiBudgetMS) ms.",
+                timings: timings,
+                composerValueAfter: composerRoot.displayedUIStringValue,
+                messageListValueAfter: messageList.displayedUIStringValue,
+                keyboardVisibleBeforeSend: keyboardVisibleBeforeSend,
+                keyboardVisibleAfterSend: app.softwareKeyboardVisibleForUserMessageProof(),
+                rawAccessibilityTree: app.debugDescription
+            )
+            return
+        }
+        if keyboardVisibleBeforeSend && timings.keyboardDismissMS > config.uiBudgetMS {
+            try writeResult(
+                status: .fail,
+                reason: "Software keyboard dismissed in \(timings.keyboardDismissMS) ms, over budget \(config.uiBudgetMS) ms.",
+                timings: timings,
+                composerValueAfter: composerRoot.displayedUIStringValue,
+                messageListValueAfter: messageList.displayedUIStringValue,
+                keyboardVisibleBeforeSend: keyboardVisibleBeforeSend,
+                keyboardVisibleAfterSend: app.softwareKeyboardVisibleForUserMessageProof(),
+                rawAccessibilityTree: app.debugDescription
+            )
+            return
+        }
         if timings.composerClearMS > config.uiBudgetMS {
             try writeResult(
                 status: .fail,
@@ -151,6 +182,8 @@ final class CodexDockUserMessageLatencyUITests: XCTestCase {
                 timings: timings,
                 composerValueAfter: composerRoot.displayedUIStringValue,
                 messageListValueAfter: messageList.displayedUIStringValue,
+                keyboardVisibleBeforeSend: keyboardVisibleBeforeSend,
+                keyboardVisibleAfterSend: app.softwareKeyboardVisibleForUserMessageProof(),
                 rawAccessibilityTree: app.debugDescription
             )
             return
@@ -162,6 +195,8 @@ final class CodexDockUserMessageLatencyUITests: XCTestCase {
                 timings: timings,
                 composerValueAfter: composerRoot.displayedUIStringValue,
                 messageListValueAfter: messageList.displayedUIStringValue,
+                keyboardVisibleBeforeSend: keyboardVisibleBeforeSend,
+                keyboardVisibleAfterSend: app.softwareKeyboardVisibleForUserMessageProof(),
                 rawAccessibilityTree: app.debugDescription
             )
             return
@@ -173,6 +208,8 @@ final class CodexDockUserMessageLatencyUITests: XCTestCase {
                 timings: timings,
                 composerValueAfter: composerRoot.displayedUIStringValue,
                 messageListValueAfter: messageList.displayedUIStringValue,
+                keyboardVisibleBeforeSend: keyboardVisibleBeforeSend,
+                keyboardVisibleAfterSend: app.softwareKeyboardVisibleForUserMessageProof(),
                 rawAccessibilityTree: app.debugDescription
             )
             return
@@ -183,7 +220,9 @@ final class CodexDockUserMessageLatencyUITests: XCTestCase {
             reason: nil,
             timings: timings,
             composerValueAfter: composerRoot.displayedUIStringValue,
-            messageListValueAfter: messageList.displayedUIStringValue
+            messageListValueAfter: messageList.displayedUIStringValue,
+            keyboardVisibleBeforeSend: keyboardVisibleBeforeSend,
+            keyboardVisibleAfterSend: app.softwareKeyboardVisibleForUserMessageProof()
         )
     }
 
@@ -240,6 +279,9 @@ private struct UserMessageLatencyProofConfig: Decodable {
 private struct UserMessageLatencyUITimings: Codable {
     var sendTappedAt: String
     var sendTappedAtMs: Int64
+    var composerFocusClearedAt: String?
+    var composerFocusClearedAtMs: Int64?
+    var composerFocusClearMS: Int
     var composerClearedAt: String?
     var composerClearedAtMs: Int64?
     var composerClearMS: Int
@@ -249,6 +291,9 @@ private struct UserMessageLatencyUITimings: Codable {
     var canonicalObservedAt: String?
     var canonicalObservedAtMs: Int64?
     var canonicalObservedMS: Int
+    var keyboardDismissedAt: String?
+    var keyboardDismissedAtMs: Int64?
+    var keyboardDismissMS: Int
 }
 
 private struct UserMessageLatencyUIReport: Codable {
@@ -267,6 +312,8 @@ private struct UserMessageLatencyUIReport: Codable {
     var timings: UserMessageLatencyUITimings?
     var composerValueAfter: String?
     var messageListValueAfter: String?
+    var keyboardVisibleBeforeSend: Bool?
+    var keyboardVisibleAfterSend: Bool?
     var rawAccessibilityTree: String?
 
     func write(to path: String) throws {
@@ -284,6 +331,20 @@ private struct UserMessageLatencyUIReport: Codable {
 private struct UserMessageLatencyUIObservation {
     let at: String
     let atMs: Int64
+
+    static func now() -> UserMessageLatencyUIObservation {
+        UserMessageLatencyUIObservation(
+            at: codexDockISO8601Now(),
+            atMs: monotonicMilliseconds()
+        )
+    }
+}
+
+private struct UserMessageLatencyUIBudgetObservations {
+    var composerFocusCleared: UserMessageLatencyUIObservation?
+    var composerCleared: UserMessageLatencyUIObservation?
+    var pendingObserved: UserMessageLatencyUIObservation?
+    var keyboardDismissed: UserMessageLatencyUIObservation?
 }
 
 @MainActor
@@ -360,6 +421,60 @@ private extension XCUIApplication {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
         return nil
+    }
+
+    func observeUserMessageProofBudget(
+        composerRoot: XCUIElement,
+        messageList: XCUIElement,
+        keyboardVisibleBeforeSend: Bool,
+        tappedAt: String,
+        tappedAtMs: Int64,
+        timeoutMS: Int
+    ) -> UserMessageLatencyUIBudgetObservations {
+        var observations = UserMessageLatencyUIBudgetObservations(
+            keyboardDismissed: keyboardVisibleBeforeSend
+                ? nil
+                : UserMessageLatencyUIObservation(at: tappedAt, atMs: tappedAtMs)
+        )
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMS) / 1_000.0)
+        while Date() < deadline {
+            let observedAt = UserMessageLatencyUIObservation.now()
+            if composerRoot.exists {
+                let composerValue = composerRoot.displayedUIStringValue
+                if observations.composerFocusCleared == nil,
+                   composerValue.contains("message-focused=false") {
+                    observations.composerFocusCleared = observedAt
+                }
+                if observations.composerCleared == nil,
+                   composerValue.contains("can-send=false"),
+                   composerValue.contains("sending=false") {
+                    observations.composerCleared = observedAt
+                }
+            }
+            if observations.keyboardDismissed == nil,
+               !softwareKeyboardVisibleForUserMessageProof() {
+                observations.keyboardDismissed = observedAt
+            }
+            if observations.pendingObserved == nil, messageList.exists {
+                let messageListValue = messageList.displayedUIStringValue
+                if messageListValue.contains("pending%3A"),
+                   messageListValue.contains("events=1") {
+                    observations.pendingObserved = observedAt
+                }
+            }
+            if observations.composerFocusCleared != nil,
+               observations.composerCleared != nil,
+               observations.pendingObserved != nil,
+               observations.keyboardDismissed != nil {
+                break
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        return observations
+    }
+
+    func softwareKeyboardVisibleForUserMessageProof() -> Bool {
+        keyboards.firstMatch.exists
     }
 
     func collapsePinnedSectionIfExpandedForUserMessageProof() {

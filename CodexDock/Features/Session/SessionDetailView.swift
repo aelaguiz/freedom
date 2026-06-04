@@ -29,6 +29,9 @@ public struct SessionDetailView: View {
             .padding(.top, 14)
             .padding(.bottom, 24)
         }
+        #if os(iOS)
+        .scrollDismissesKeyboard(.interactively)
+        #endif
         .background(detailBackgroundColor)
         .navigationTitle("Thread")
         #if os(iOS)
@@ -103,7 +106,7 @@ public struct SessionDetailView: View {
                 store.updateDraft(draft)
             },
             onSendDraft: {
-                await store.sendDraft()
+                store.sendDraftInBackground()
             },
             onBeginVoiceCapture: {
                 await store.beginVoiceCapture()

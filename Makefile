@@ -105,6 +105,7 @@ SIM_UI_USER_MESSAGE_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
 SIM_UI_USER_MESSAGE_DIR ?= /tmp/codex-client/sim-ui-user-message-$(SIM_UI_USER_MESSAGE_RUN_ID)
 SIM_UI_USER_MESSAGE_UPSTREAM_ACK_DELAY_MS ?= 2500
 SIM_UI_USER_MESSAGE_UI_BUDGET_MS ?= 700
+SIM_UI_USER_MESSAGE_WAIT_TIMEOUT_MS ?= 180000
 EXPECTED_SCREEN ?=
 EXPECTED_THREAD_ID ?=
 SIM_UI_MATRIX_REPORT_DIRS ?=
@@ -434,7 +435,7 @@ sim-ui-user-message-latency-proof:
 		}; \
 		trap cleanup INT TERM; \
 		echo "starting user-message latency fixture"; \
-		rtk node scripts/dock-relay-user-message-latency-fixture.mjs --ready-out "$$fixture_ready" --ui-result-in "$$ui_result" --stop-in "$$fixture_stop" --json-out "$$report_json" --summary-out "$$report_md" --upstream-ack-delay-ms "$(SIM_UI_USER_MESSAGE_UPSTREAM_ACK_DELAY_MS)" --ui-budget-ms "$(SIM_UI_USER_MESSAGE_UI_BUDGET_MS)" --wait-timeout-ms "$(SIM_UI_SYNC_READY_TIMEOUT_MS)" > "$$fixture_log" 2>&1 & \
+		rtk node scripts/dock-relay-user-message-latency-fixture.mjs --ready-out "$$fixture_ready" --ui-result-in "$$ui_result" --stop-in "$$fixture_stop" --json-out "$$report_json" --summary-out "$$report_md" --upstream-ack-delay-ms "$(SIM_UI_USER_MESSAGE_UPSTREAM_ACK_DELAY_MS)" --ui-budget-ms "$(SIM_UI_USER_MESSAGE_UI_BUDGET_MS)" --wait-timeout-ms "$(SIM_UI_USER_MESSAGE_WAIT_TIMEOUT_MS)" > "$$fixture_log" 2>&1 & \
 		fixture_pid="$$!"; \
 		deadline=$$(( $$(date +%s) + ( $(SIM_UI_SYNC_READY_TIMEOUT_MS) / 1000 ) )); \
 		while [ ! -f "$$fixture_ready" ]; do \

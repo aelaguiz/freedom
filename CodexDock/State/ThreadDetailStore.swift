@@ -375,21 +375,26 @@ public final class ThreadDetailStore: ObservableObject {
     }
 
     public func sendDraft() async {
+        sendDraftInBackground()
+    }
+
+    @discardableResult
+    public func sendDraftInBackground() -> Bool {
         guard let session else {
             composer.lastError = "Thread is not connected."
             DockLog.threadDetail.warning("send draft skipped reason=no_session thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public)")
-            return
+            return false
         }
         guard !composer.voice.phase.isBusy else {
             composer.lastError = "Finish dictation before sending."
             DockLog.threadDetail.warning("send draft skipped reason=voice_busy thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public)")
-            return
+            return false
         }
 
         let text = composer.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             DockLog.threadDetail.debug("send draft skipped reason=empty thread_id=\(DockLog.publicID(self.row.threadID), privacy: .public)")
-            return
+            return false
         }
 
         let clientMessageID = ClientUserMessageID.make()
@@ -420,6 +425,7 @@ public final class ThreadDetailStore: ObservableObject {
                 store: self
             )
         }
+        return true
     }
 
     private nonisolated static func deliverPendingOutboundMessage(

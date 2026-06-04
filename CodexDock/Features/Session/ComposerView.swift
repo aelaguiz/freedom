@@ -69,8 +69,9 @@ struct ComposerVoiceControlsPresentation: Equatable {
 public struct ComposerView: View {
     @ObservedObject private var screenStore: ThreadDetailScreenStore
     @State private var isPressingMic = false
+    @FocusState private var isMessageFieldFocused: Bool
     private let onUpdateDraft: (String) -> Void
-    private let onSendDraft: () async -> Void
+    private let onSendDraft: () -> Void
     private let onBeginVoiceCapture: () async -> Void
     private let onFinishVoiceCapture: () async -> Void
     private let onToggleTapVoiceCapture: () async -> Void
@@ -78,7 +79,7 @@ public struct ComposerView: View {
     init(
         screenStore: ThreadDetailScreenStore,
         onUpdateDraft: @escaping (String) -> Void,
-        onSendDraft: @escaping () async -> Void,
+        onSendDraft: @escaping () -> Void,
         onBeginVoiceCapture: @escaping () async -> Void,
         onFinishVoiceCapture: @escaping () async -> Void,
         onToggleTapVoiceCapture: @escaping () async -> Void
@@ -103,6 +104,11 @@ public struct ComposerView: View {
                     axis: .vertical
                 )
                 .lineLimit(1...4)
+                .focused($isMessageFieldFocused)
+                .submitLabel(.send)
+                .onSubmit {
+                    submitDraftFromComposer()
+                }
                 .autocorrectionDisabled(false)
                 .disabled(!screenStore.composerRenderState.canEditDraft)
                 .accessibilityLabel("Message")
@@ -115,9 +121,7 @@ public struct ComposerView: View {
                 tapMicButton
 
                 Button {
-                    Task {
-                        await onSendDraft()
-                    }
+                    submitDraftFromComposer()
                 } label: {
                     if screenStore.composerRenderState.isSending {
                         ProgressView()
@@ -167,9 +171,7 @@ public struct ComposerView: View {
                         return
                     }
                     isPressingMic = true
-                    Task {
-                        await onBeginVoiceCapture()
-                    }
+                    beginVoiceFromComposer()
                 }
                 .onEnded { _ in
                     isPressingMic = false
@@ -186,9 +188,7 @@ public struct ComposerView: View {
 
     private var tapMicButton: some View {
         Button {
-            Task {
-                await onToggleTapVoiceCapture()
-            }
+            toggleTapVoiceFromComposer()
         } label: {
             Image(systemName: voicePresentation.tapIcon)
                 .frame(width: 22, height: 22)
@@ -239,11 +239,38 @@ public struct ComposerView: View {
         ComposerVoiceControlsPresentation(renderState: screenStore.composerRenderState)
     }
 
+    private func dismissComposerKeyboard() {
+        isMessageFieldFocused = false
+    }
+
+    private func submitDraftFromComposer() {
+        guard screenStore.composerRenderState.canSend else {
+            return
+        }
+        dismissComposerKeyboard()
+        onSendDraft()
+    }
+
+    private func beginVoiceFromComposer() {
+        dismissComposerKeyboard()
+        Task {
+            await onBeginVoiceCapture()
+        }
+    }
+
+    private func toggleTapVoiceFromComposer() {
+        dismissComposerKeyboard()
+        Task {
+            await onToggleTapVoiceCapture()
+        }
+    }
+
     private var composerAutomationValue: String {
         [
             "can-edit=\(screenStore.composerRenderState.canEditDraft)",
             "can-send=\(screenStore.composerRenderState.canSend)",
             "sending=\(screenStore.composerRenderState.isSending)",
+            "message-focused=\(isMessageFieldFocused)",
             "voice=\(voicePresentation.accessibilityValue)",
         ].joined(separator: "; ")
     }
