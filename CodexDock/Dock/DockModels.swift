@@ -12,17 +12,17 @@ public enum DockRowStatusKind: String, Codable, Equatable, Sendable, CaseIterabl
     public var label: String {
         switch self {
         case .running:
-            return "Running"
+            return "Codex is working"
         case .needsInput:
-            return "Needs input"
+            return "Needs answer"
         case .needsApproval:
             return "Needs approval"
         case .idle:
-            return "Idle"
+            return "Ready"
         case .error:
             return "Error"
         case .dormant:
-            return "Not loaded"
+            return "Saved"
         case .unknown:
             return "Unknown"
         }
@@ -33,6 +33,17 @@ public enum DockRowStatusKind: String, Codable, Equatable, Sendable, CaseIterabl
         case .running, .needsInput, .needsApproval, .error:
             return label
         case .idle, .dormant, .unknown:
+            return nil
+        }
+    }
+
+    public var threadDetailStatusLabel: String? {
+        switch self {
+        case .running, .error:
+            return label
+        case .needsInput, .needsApproval, .idle:
+            return "Your turn · \(label)"
+        case .dormant, .unknown:
             return nil
         }
     }

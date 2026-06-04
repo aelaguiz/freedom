@@ -178,7 +178,7 @@ final class DockStoreTestsProjection: XCTestCase {
             hosts: [home]
         )
 
-        for query in ["home", "feature/dock", "codex-client", "running", "watch", "Summary for Runner", "home-123"] {
+        for query in ["home", "feature/dock", "codex-client", "codex is working", "watch", "Summary for Runner", "home-123"] {
             XCTAssertEqual(
                 snapshot.project(options: .init(lens: .newest, searchText: query)).rows.map(\.threadID),
                 ["THREAD-home-123"],
@@ -213,7 +213,7 @@ final class DockStoreTestsProjection: XCTestCase {
         XCTAssertEqual(projection.summary.activeFilterCount, 4)
         XCTAssertTrue(projection.summary.text.contains("Host: Home"))
         XCTAssertTrue(projection.summary.text.contains("Branch: feature/dock"))
-        XCTAssertTrue(projection.summary.text.contains("Status: Not loaded"))
+        XCTAssertTrue(projection.summary.text.contains("Status: Saved"))
         XCTAssertTrue(projection.summary.text.contains("Source: Human"))
         XCTAssertFalse(projection.summary.text.contains("Idle hidden"))
         XCTAssertFalse(projection.summary.text.contains("Idle shown"))
@@ -275,7 +275,7 @@ final class DockStoreTestsProjection: XCTestCase {
         let projection = snapshot.project(options: .init(lens: .newest, filters: DockFilterState(statusKinds: [.idle])))
 
         XCTAssertEqual(projection.rows.map(\.threadID), ["idle"])
-        XCTAssertEqual(projection.summary.text.contains("Status: Idle"), true)
+        XCTAssertEqual(projection.summary.text.contains("Status: Ready"), true)
     }
 
     func testStatusFilterExcludingIdleHidesIdleRowsAndPinnedIdleRows() {

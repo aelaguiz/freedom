@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1536" viewBox="0 0 1024 1536">
+<rect x="0" y="0" width="1024" height="1536" rx="0" fill="#F3F4F8" stroke="none" stroke-width="0" opacity="1"/>
+<text x="104" y="70" font-family="sans-serif" font-size="40" font-weight="700" fill="#101114" text-anchor="start" opacity="1">6:47</text>
+<rect x="374" y="28" width="276" height="68" rx="34" fill="#000000" stroke="none" stroke-width="0" opacity="1"/>
+<circle cx="758" cy="60" r="5" fill="#A9ADB7" stroke="none" stroke-width="0" opacity="1"/>
+<circle cx="778" cy="60" r="5" fill="#A9ADB7" stroke="none" stroke-width="0" opacity="1"/>
+<circle cx="798" cy="60" r="5" fill="#A9ADB7" stroke="none" stroke-width="0" opacity="1"/>
+<line x1="852" y1="62" x2="884" y2="62" stroke="#111111" stroke-width="7" opacity="1" stroke-linecap="round"/>
+<line x1="860" y1="48" x2="876" y2="48" stroke="#111111" stroke-width="7" opacity="1" stroke-linecap="round"/>
+<rect x="910" y="43" width="62" height="34" rx="10" fill="none" stroke="#111111" stroke-width="4" opacity="1"/>
+<rect x="916" y="49" width="46" height="22" rx="6" fill="#111111" stroke="none" stroke-width="0" opacity="1"/>
+<rect x="976" y="54" width="6" height="14" rx="3" fill="#111111" stroke="none" stroke-width="0" opacity="1"/>
+<circle cx="96" cy="160" r="58" fill="#FFFFFF" stroke="none" stroke-width="0" opacity="1"/>
+<text x="96" y="180" font-family="sans-serif" font-size="58" font-weight="700" fill="#101114" text-anchor="middle" opacity="1">&lt;</text>
+<text x="512" y="176" font-family="sans-serif" font-size="40" font-weight="780" fill="#101114" text-anchor="middle" opacity="1">Thread</text>
+<circle cx="928" cy="160" r="58" fill="#FFFFFF" stroke="none" stroke-width="0" opacity="1"/>
+<text x="928" y="176" font-family="sans-serif" font-size="44" font-weight="800" fill="#0A84FF" text-anchor="middle" opacity="1">/</text>
+<rect x="48" y="250" width="46" height="46" rx="6" fill="none" stroke="#0A84FF" stroke-width="4" opacity="1"/>
+<text x="114" y="288" font-family="sans-serif" font-size="43" font-weight="820" fill="#101114" text-anchor="start" opacity="1">Server thread renaming</text>
+<text x="114" y="336" font-family="sans-serif" font-size="31" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">freedom ·</text>
+<text x="114" y="374" font-family="sans-serif" font-size="31" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">codex-dock-agents-tab-live-counts</text>
+<rect x="44" y="442" width="136.5" height="56" rx="28" fill="#D8ECFF" stroke="none" stroke-width="0" opacity="1"/>
+<text x="66" y="477.5" font-family="sans-serif" font-size="25" font-weight="700" fill="#0A84FF" text-anchor="start" opacity="1">Amir-M5</text>
+<rect x="200.5" y="442" width="109.5" height="56" rx="28" fill="#FFE1DE" stroke="none" stroke-width="0" opacity="1"/>
+<text x="222.5" y="477.5" font-family="sans-serif" font-size="25" font-weight="700" fill="#D8342A" text-anchor="start" opacity="1">Error</text>
+<text x="44" y="554" font-family="sans-serif" font-size="28" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">019e908c-93cd-7e20-899e-eea5c66f7d32 · 4m ago</text>
+<rect x="44" y="618" width="560" height="92" rx="8" fill="#FFFFFF" stroke="none" stroke-width="0" opacity="1"/>
+<text x="78" y="676" font-family="sans-serif" font-size="31" font-weight="400" fill="#B7BAC2" text-anchor="start" opacity="1">Message Codex</text>
+<circle cx="680" cy="664" r="48" fill="#D8ECFF" stroke="none" stroke-width="0" opacity="1"/>
+<text x="680" y="678" font-family="sans-serif" font-size="23" font-weight="800" fill="#0A84FF" text-anchor="middle" opacity="1">mic</text>
+<circle cx="808" cy="664" r="48" fill="#D8ECFF" stroke="none" stroke-width="0" opacity="1"/>
+<text x="808" y="678" font-family="sans-serif" font-size="22" font-weight="800" fill="#0A84FF" text-anchor="middle" opacity="1">dict</text>
+<circle cx="936" cy="664" r="48" fill="#D9DCE3" stroke="none" stroke-width="0" opacity="1"/>
+<text x="936" y="677" font-family="sans-serif" font-size="20" font-weight="800" fill="#7A7E87" text-anchor="middle" opacity="1">send</text>
+<rect x="44" y="756" width="936" height="250" rx="8" fill="#FFFFFF" stroke="none" stroke-width="0" opacity="1"/>
+<text x="80" y="810" font-family="sans-serif" font-size="27" font-weight="800" fill="#24A148" text-anchor="start" opacity="1">Agent</text>
+<text x="80" y="854" font-family="sans-serif" font-size="32" font-weight="820" fill="#101114" text-anchor="start" opacity="1">Last visible message</text>
+<text x="80" y="900" font-family="sans-serif" font-size="28" font-weight="400" fill="#101114" text-anchor="start" opacity="1">I was checking the exact thread state contract and</text>
+<text x="80" y="938" font-family="sans-serif" font-size="28" font-weight="400" fill="#101114" text-anchor="start" opacity="1">keeping raw error separate from turn state.</text>
+<rect x="44" y="1410" width="936" height="86" rx="8" fill="#FFFFFF" stroke="none" stroke-width="0" opacity="1"/>
+<text x="76" y="1444" font-family="sans-serif" font-size="24" font-weight="760" fill="#7A7E87" text-anchor="start" opacity="1">State details</text>
+<text x="76" y="1476" font-family="sans-serif" font-size="22" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">Raw status: systemError.</text>
+</svg>

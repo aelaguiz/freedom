@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1536" viewBox="0 0 1024 1536">
+<rect x="0" y="0" width="1024" height="1536" rx="0" fill="#F3F4F8" stroke="none" stroke-width="0" opacity="1"/>
+<text x="104" y="70" font-family="sans-serif" font-size="40" font-weight="700" fill="#101114" text-anchor="start" opacity="1">6:47</text>
+<rect x="374" y="28" width="276" height="68" rx="34" fill="#000000" stroke="none" stroke-width="0" opacity="1"/>
+<circle cx="758" cy="60" r="5" fill="#A9ADB7" stroke="none" stroke-width="0" opacity="1"/>
+<circle cx="778" cy="60" r="5" fill="#A9ADB7" stroke="none" stroke-width="0" opacity="1"/>
+<circle cx="798" cy="60" r="5" fill="#A9ADB7" stroke="none" stroke-width="0" opacity="1"/>
+<line x1="852" y1="62" x2="884" y2="62" stroke="#111111" stroke-width="7" opacity="1" stroke-linecap="round"/>
+<line x1="860" y1="48" x2="876" y2="48" stroke="#111111" stroke-width="7" opacity="1" stroke-linecap="round"/>
+<rect x="910" y="43" width="62" height="34" rx="10" fill="none" stroke="#111111" stroke-width="4" opacity="1"/>
+<rect x="916" y="49" width="46" height="22" rx="6" fill="#111111" stroke="none" stroke-width="0" opacity="1"/>
+<rect x="976" y="54" width="6" height="14" rx="3" fill="#111111" stroke="none" stroke-width="0" opacity="1"/>
+<text x="44" y="168" font-family="sans-serif" font-size="78" font-weight="800" fill="#101114" text-anchor="start" opacity="1">Dock</text>
+<rect x="588" y="128" width="238.56" height="66" rx="33" fill="#E8E9EE" stroke="none" stroke-width="0" opacity="1"/>
+<text x="610" y="170" font-family="sans-serif" font-size="28" font-weight="700" fill="#666A73" text-anchor="start" opacity="1">Status labels</text>
+<circle cx="930" cy="162" r="48" fill="#F3F4F8" stroke="none" stroke-width="0" opacity="1"/>
+<text x="930" y="174" font-family="sans-serif" font-size="34" font-weight="800" fill="#0A84FF" text-anchor="middle" opacity="1">...</text>
+<rect x="44" y="250" width="936" height="96" rx="8" fill="#FFFFFF" stroke="none" stroke-width="0" opacity="1"/>
+<text x="94" y="312" font-family="sans-serif" font-size="33" font-weight="400" fill="#B7BAC2" text-anchor="start" opacity="1">Search sessions, repo, branch, host</text>
+<rect x="44" y="388" width="238" height="88" rx="8" fill="#0A84FF" stroke="none" stroke-width="0" opacity="1"/>
+<text x="163" y="445" font-family="sans-serif" font-size="35" font-weight="800" fill="#FFFFFF" text-anchor="middle" opacity="1">Newest</text>
+<rect x="304" y="388" width="238" height="88" rx="8" fill="#F3F4F8" stroke="#D2D4DB" stroke-width="2" opacity="1"/>
+<text x="423" y="445" font-family="sans-serif" font-size="35" font-weight="760" fill="#101114" text-anchor="middle" opacity="1">Host</text>
+<rect x="564" y="388" width="238" height="88" rx="8" fill="#F3F4F8" stroke="#D2D4DB" stroke-width="2" opacity="1"/>
+<text x="683" y="445" font-family="sans-serif" font-size="35" font-weight="760" fill="#101114" text-anchor="middle" opacity="1">Branch</text>
+<circle cx="900" cy="432" r="66" fill="#D8ECFF" stroke="none" stroke-width="0" opacity="1"/>
+<text x="900" y="443" font-family="sans-serif" font-size="44" font-weight="800" fill="#0A84FF" text-anchor="middle" opacity="1">=</text>
+<text x="44" y="532" font-family="sans-serif" font-size="26" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">1,241 shown · Existing list · row badges only</text>
+<rect x="44" y="590" width="936" height="150" rx="8" fill="#FFFFFF" stroke="none" stroke-width="0" opacity="1"/>
+<rect x="74" y="618" width="8" height="94" rx="4" fill="#FF9F0A" stroke="none" stroke-width="0" opacity="1"/>
+<text x="106" y="642" font-family="sans-serif" font-size="32" font-weight="760" fill="#101114" text-anchor="start" opacity="1">Review relay restart</text>
+<rect x="746" y="616" width="208.32000000000002" height="42" rx="21" fill="#FFF1D6" stroke="none" stroke-width="0" opacity="1"/>
+<text x="768" y="643" font-family="sans-serif" font-size="22" font-weight="700" fill="#C87400" text-anchor="start" opacity="1">Needs approval</text>
+<text x="106" y="680" font-family="sans-serif" font-size="25" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">Amir-M5 · codex-client · main</text>
+<text x="106" y="716" font-family="sans-serif" font-size="27" font-weight="400" fill="#101114" text-anchor="start" opacity="1">Codex needs approval before restarting the relay...</text>
+<text x="106" y="716" font-family="sans-serif" font-size="22" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">2m ago</text>
+<text x="942" y="718" font-family="sans-serif" font-size="34" font-weight="700" fill="#7A7E87" text-anchor="middle" opacity="1">&gt;</text>
+<rect x="44" y="754" width="936" height="150" rx="8" fill="#FFFFFF" stroke="none" stroke-width="0" opacity="1"/>
+<rect x="74" y="782" width="8" height="94" rx="4" fill="#FF9F0A" stroke="none" stroke-width="0" opacity="1"/>
+<text x="106" y="806" font-family="sans-serif" font-size="32" font-weight="760" fill="#101114" text-anchor="start" opacity="1">Answer product copy question</text>
+<rect x="774" y="780" width="184.56" height="42" rx="21" fill="#FFF1D6" stroke="none" stroke-width="0" opacity="1"/>
+<text x="796" y="807" font-family="sans-serif" font-size="22" font-weight="700" fill="#C87400" text-anchor="start" opacity="1">Needs answer</text>
+<text x="106" y="844" font-family="sans-serif" font-size="25" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">Amir-M5 · codex-client · state-ux</text>
+<text x="106" y="880" font-family="sans-serif" font-size="27" font-weight="400" fill="#101114" text-anchor="start" opacity="1">Codex asked which label should appear in the thread...</text>
+<text x="106" y="880" font-family="sans-serif" font-size="22" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">5m ago</text>
+<text x="942" y="882" font-family="sans-serif" font-size="34" font-weight="700" fill="#7A7E87" text-anchor="middle" opacity="1">&gt;</text>
+<rect x="44" y="918" width="936" height="150" rx="8" fill="#FFFFFF" stroke="none" stroke-width="0" opacity="1"/>
+<rect x="74" y="946" width="8" height="94" rx="4" fill="#30D158" stroke="none" stroke-width="0" opacity="1"/>
+<text x="106" y="970" font-family="sans-serif" font-size="32" font-weight="760" fill="#101114" text-anchor="start" opacity="1">Server thread renaming</text>
+<rect x="718" y="944" width="232.08" height="42" rx="21" fill="#DDF7E6" stroke="none" stroke-width="0" opacity="1"/>
+<text x="740" y="971" font-family="sans-serif" font-size="22" font-weight="700" fill="#169A42" text-anchor="start" opacity="1">Codex is working</text>
+<text x="106" y="1008" font-family="sans-serif" font-size="25" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">Amir-M5 · freedom · codex-dock-agents-tab</text>
+<text x="106" y="1044" font-family="sans-serif" font-size="27" font-weight="400" fill="#101114" text-anchor="start" opacity="1">Latest activity 8s ago. No user action needed.</text>
+<text x="106" y="1044" font-family="sans-serif" font-size="22" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">now</text>
+<text x="942" y="1046" font-family="sans-serif" font-size="34" font-weight="700" fill="#7A7E87" text-anchor="middle" opacity="1">&gt;</text>
+<rect x="44" y="1082" width="936" height="150" rx="8" fill="#FFFFFF" stroke="none" stroke-width="0" opacity="1"/>
+<rect x="74" y="1110" width="8" height="94" rx="4" fill="#D8342A" stroke="none" stroke-width="0" opacity="1"/>
+<text x="106" y="1134" font-family="sans-serif" font-size="32" font-weight="760" fill="#101114" text-anchor="start" opacity="1">Thread state sync audit</text>
+<rect x="792" y="1108" width="150" height="42" rx="21" fill="#FFE1DE" stroke="none" stroke-width="0" opacity="1"/>
+<text x="814" y="1135" font-family="sans-serif" font-size="22" font-weight="700" fill="#D8342A" text-anchor="start" opacity="1">Error</text>
+<text x="106" y="1172" font-family="sans-serif" font-size="25" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">Amir-M5 · codex-client · state-ux</text>
+<text x="106" y="1208" font-family="sans-serif" font-size="27" font-weight="400" fill="#101114" text-anchor="start" opacity="1">Raw thread state is systemError. Badge only this...</text>
+<text x="106" y="1208" font-family="sans-serif" font-size="22" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">11m ago</text>
+<text x="942" y="1210" font-family="sans-serif" font-size="34" font-weight="700" fill="#7A7E87" text-anchor="middle" opacity="1">&gt;</text>
+<rect x="44" y="1246" width="936" height="150" rx="8" fill="#FFFFFF" stroke="none" stroke-width="0" opacity="1"/>
+<rect x="74" y="1274" width="8" height="94" rx="4" fill="#D9DCE3" stroke="none" stroke-width="0" opacity="1"/>
+<text x="106" y="1298" font-family="sans-serif" font-size="32" font-weight="760" fill="#101114" text-anchor="start" opacity="1">Hand debugging</text>
+<text x="106" y="1336" font-family="sans-serif" font-size="25" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">Amir-M5 · codex-client · main</text>
+<text x="106" y="1372" font-family="sans-serif" font-size="27" font-weight="400" fill="#101114" text-anchor="start" opacity="1">Finished · Ready for next prompt. No Dock badge...</text>
+<text x="106" y="1372" font-family="sans-serif" font-size="22" font-weight="400" fill="#7A7E87" text-anchor="start" opacity="1">18m ago</text>
+<text x="942" y="1374" font-family="sans-serif" font-size="34" font-weight="700" fill="#7A7E87" text-anchor="middle" opacity="1">&gt;</text>
+</svg>

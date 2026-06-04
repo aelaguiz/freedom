@@ -76,7 +76,7 @@ public struct ThreadDetailHeader: Equatable, Sendable {
         self.title = row.title
         self.repository = row.repository
         self.branch = row.branch
-        self.statusLabel = row.status.visibleBadgeLabel
+        self.statusLabel = row.status.threadDetailStatusLabel
         self.lastActivity = row.lastActivity
         self.lastActivityDate = row.lastActivityDate
         self.relationship = row.relationship

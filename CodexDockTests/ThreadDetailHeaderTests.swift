@@ -3,21 +3,27 @@ import XCTest
 
 final class ThreadDetailHeaderTests: XCTestCase {
     @MainActor
-    func testDormantRowDoesNotShowNotLoadedAsThreadDetailStatus() throws {
+    func testThreadDetailHeaderUsesHumanStatusLabels() throws {
         let host = makeDetailHost()
-        let dormantRow = makeDetailRow(
-            hostID: host.id,
-            threadID: "thread-1",
-            status: .dormant
-        )
-        let runningRow = makeDetailRow(
-            hostID: host.id,
-            threadID: "thread-2",
-            status: .running
-        )
+        let cases: [(DockRowStatusKind, String?)] = [
+            (.running, "Codex is working"),
+            (.needsInput, "Your turn · Needs answer"),
+            (.needsApproval, "Your turn · Needs approval"),
+            (.idle, "Your turn · Ready"),
+            (.error, "Error"),
+            (.dormant, nil),
+            (.unknown, nil),
+        ]
 
-        XCTAssertNil(ThreadDetailHeader(host: host, row: dormantRow).statusLabel)
-        XCTAssertEqual(ThreadDetailHeader(host: host, row: runningRow).statusLabel, "Running")
+        for (status, expectedLabel) in cases {
+            let row = makeDetailRow(
+                hostID: host.id,
+                threadID: "thread-\(status.rawValue)",
+                status: status
+            )
+
+            XCTAssertEqual(ThreadDetailHeader(host: host, row: row).statusLabel, expectedLabel)
+        }
     }
 
     @MainActor
