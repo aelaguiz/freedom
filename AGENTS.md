@@ -93,6 +93,7 @@ Use the smallest relevant check first:
 - Dock, host registry, relay bootstrap, archive, local metadata, or host settings changes: start with `rtk swift test --filter DockStoreTests`.
 - Thread detail, live events, composer, voice transcript handling, or request-card responses: start with `rtk swift test --filter ThreadDetailStoreTests`.
 - App target, Info.plist, assets, project config, simulator launch, or installed UI behavior: use `rtk make app SIM='iPhone 17'` or `rtk make app-test SIM='iPhone 17'`. These targets regenerate the Xcode project and write detailed build logs under `.codex-dock/logs/`.
+- When replacing an already-running simulator app, use `rtk make app SIM='iPhone 17' FORCE_LAUNCH=1`; otherwise the app target intentionally skips build/install/launch.
 - Physical installed-app behavior: use `rtk make iphone-17-pro`, `rtk make iphone-14`, `rtk make device-install DEVICE=<device-udid>`, or `rtk make device-install-all`. These targets fresh-build with a timestamped `CURRENT_PROJECT_VERSION`, install, write the per-device relay config, verify the installed build number, and launch the app.
 - If only `AGENTS.md` changed, read it back and check `rtk git status --short`; app tests are not needed.
 

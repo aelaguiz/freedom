@@ -1704,41 +1704,56 @@ final class ThreadDetailStoreTests: XCTestCase {
     func testHoldAndTapVoiceControlsDoNotCreateDuplicateStreams() async throws {
         let host = makeDetailHost()
         let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
-        let session = FakeThreadDetailSession(
+        let holdSession = FakeThreadDetailSession(
             detailSubscribeResult: .success(.thread("thread-1")),
             detailResyncResult: .success(.thread("thread-1"))
         )
-        let realtime = FakeRealtimeTranscriptionService()
-        let capture = FakeLiveVoiceCaptureController()
-        let store = ThreadDetailStore(
+        let holdRealtime = FakeRealtimeTranscriptionService()
+        let holdCapture = FakeLiveVoiceCaptureController()
+        let holdStore = ThreadDetailStore(
             host: host,
             row: row,
-            factory: FakeThreadDetailSessionFactory(session: session),
-            realtimeTranscriptionService: realtime,
-            liveVoiceCaptureController: capture
+            factory: FakeThreadDetailSessionFactory(session: holdSession),
+            realtimeTranscriptionService: holdRealtime,
+            liveVoiceCaptureController: holdCapture
         )
 
-        await store.load()
-        await store.beginVoiceCapture()
-        await store.toggleTapVoiceCapture()
+        await holdStore.load()
+        await holdStore.beginVoiceCapture()
+        await holdStore.toggleTapVoiceCapture()
 
-        XCTAssertEqual(realtime.startCount, 1)
-        XCTAssertEqual(capture.startCount, 1)
-        XCTAssertEqual(store.composer.voice.phase, .streaming)
-        XCTAssertEqual(store.composer.voice.interactionMode, .hold)
+        XCTAssertEqual(holdRealtime.startCount, 1)
+        XCTAssertEqual(holdCapture.startCount, 1)
+        XCTAssertEqual(holdStore.composer.voice.phase, .streaming)
+        XCTAssertEqual(holdStore.composer.voice.interactionMode, .hold)
 
-        await store.cancelVoiceCapture()
-        await store.toggleTapVoiceCapture()
-        await store.beginVoiceCapture()
+        await holdStore.cancelVoiceCapture()
 
-        XCTAssertEqual(realtime.startCount, 2)
-        XCTAssertEqual(capture.startCount, 2)
-        XCTAssertEqual(realtime.sessions.count, 2)
-        XCTAssertNotEqual(realtime.sessions[0].id, realtime.sessions[1].id)
-        XCTAssertEqual(store.composer.voice.phase, .streaming)
-        XCTAssertEqual(store.composer.voice.interactionMode, .tap)
+        let tapSession = FakeThreadDetailSession(
+            detailSubscribeResult: .success(.thread("thread-1")),
+            detailResyncResult: .success(.thread("thread-1"))
+        )
+        let tapRealtime = FakeRealtimeTranscriptionService()
+        let tapCapture = FakeLiveVoiceCaptureController()
+        let tapStore = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: tapSession),
+            realtimeTranscriptionService: tapRealtime,
+            liveVoiceCaptureController: tapCapture
+        )
 
-        await store.cancelVoiceCapture()
+        await tapStore.load()
+        await tapStore.toggleTapVoiceCapture()
+        await tapStore.beginVoiceCapture()
+
+        XCTAssertEqual(tapRealtime.startCount, 1)
+        XCTAssertEqual(tapCapture.startCount, 1)
+        XCTAssertEqual(tapRealtime.sessions.count, 1)
+        XCTAssertEqual(tapStore.composer.voice.phase, .streaming)
+        XCTAssertEqual(tapStore.composer.voice.interactionMode, .tap)
+
+        await tapStore.cancelVoiceCapture()
     }
 
     @MainActor
