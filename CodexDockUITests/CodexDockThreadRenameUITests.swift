@@ -1,4 +1,5 @@
 import CodexDock
+import Foundation
 import XCTest
 
 @MainActor
@@ -102,6 +103,153 @@ final class CodexDockThreadRenameUITests: XCTestCase {
         )
     }
 
+    func testControlledClientRenameIsOptimisticWhenConfigured() throws {
+        let config = try ClientRenameLatencyProofConfig.loadFromEnvironment()
+        let startedAt = codexDockISO8601Now()
+        let app = launchRelayBackedApp(hosts: config.hosts)
+
+        func writeResult(
+            status: DisplayedUIArtifactStatus,
+            reason: String?,
+            timings: ClientRenameLatencyUITimings? = nil,
+            rowValueAfter: String? = nil,
+            rootValueAfter: String? = nil,
+            rawAccessibilityTree: String? = nil,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) throws {
+            let report = ClientRenameLatencyUIReport(
+                status: status,
+                reason: reason,
+                startedAt: startedAt,
+                finishedAt: codexDockISO8601Now(),
+                hosts: config.hosts,
+                hostID: config.hostID,
+                threadID: config.threadID,
+                originalTitle: config.originalTitle,
+                newTitle: config.newTitle,
+                serverAckDelayMS: config.serverAckDelayMS,
+                uiBudgetMS: config.uiBudgetMS,
+                timings: timings,
+                rowValueAfter: rowValueAfter,
+                rootValueAfter: rootValueAfter,
+                rawAccessibilityTree: rawAccessibilityTree
+            )
+            try report.write(to: config.uiResultPath)
+            for mirrorPath in ClientRenameLatencyProofConfig.uiResultMirrorPaths(primaryPath: config.uiResultPath) {
+                try? report.write(to: mirrorPath)
+            }
+            guard status == .pass else {
+                XCTFail(reason ?? "Client rename latency proof failed.", file: file, line: line)
+                return
+            }
+        }
+
+        guard app.element(id: AutomationID.Dock.searchField).waitForExistence(timeout: 20) else {
+            try writeResult(
+                status: .blocked,
+                reason: "Dock search field did not appear.",
+                rawAccessibilityTree: app.debugDescription
+            )
+            return
+        }
+        let root = app.element(id: AutomationID.Dock.root)
+        guard root.waitForDisplayedUIStringValue(containing: "loaded;", timeout: 30) else {
+            try writeResult(
+                status: .blocked,
+                reason: "Dock did not reach loaded state before client rename latency proof.",
+                rootValueAfter: root.exists ? root.displayedUIStringValue : "not-visible",
+                rawAccessibilityTree: app.debugDescription
+            )
+            return
+        }
+        app.collapsePinnedSectionIfExpandedForRenameProof()
+        _ = app.setDockSearchText("", timeout: 5)
+
+        guard let originalRow = app.findDockRowByIdentifierForRenameProof(
+            config: config,
+            title: config.originalTitle,
+            timeout: 20
+        ) else {
+            try writeResult(
+                status: .fail,
+                reason: "Controlled Dock row was not visible with the original title.",
+                rootValueAfter: root.displayedUIStringValue,
+                rawAccessibilityTree: app.debugDescription
+            )
+            return
+        }
+
+        guard app.openRenameSheetForLatencyProof(row: originalRow, config: config) else {
+            try writeResult(
+                status: .fail,
+                reason: "Rename action did not open for the controlled Dock row.",
+                rootValueAfter: root.displayedUIStringValue,
+                rawAccessibilityTree: app.debugDescription
+            )
+            return
+        }
+
+        guard let timings = app.submitRenameSheetForLatencyProof(config: config, newTitle: config.newTitle) else {
+            try writeResult(
+                status: .fail,
+                reason: "Rename editor could not submit the controlled title.",
+                rootValueAfter: root.displayedUIStringValue,
+                rawAccessibilityTree: app.debugDescription
+            )
+            return
+        }
+
+        guard timings.optimisticTitleObservedAtMs != nil else {
+            try writeResult(
+                status: .fail,
+                reason: "Optimistic Dock row title did not appear after Save.",
+                timings: timings,
+                rootValueAfter: root.displayedUIStringValue,
+                rawAccessibilityTree: app.debugDescription
+            )
+            return
+        }
+
+        let renamedRow = app.findDockRowByIdentifierForRenameProof(
+            config: config,
+            title: config.newTitle,
+            timeout: 1
+        )
+
+        if timings.sheetDismissMS > config.uiBudgetMS {
+            try writeResult(
+                status: .fail,
+                reason: "Rename editor dismissed in \(timings.sheetDismissMS) ms, over budget \(config.uiBudgetMS) ms.",
+                timings: timings,
+                rowValueAfter: renamedRow?.displayedUIStringValue,
+                rootValueAfter: root.displayedUIStringValue,
+                rawAccessibilityTree: app.debugDescription
+            )
+            return
+        }
+
+        if timings.optimisticTitleMS > config.uiBudgetMS {
+            try writeResult(
+                status: .fail,
+                reason: "Optimistic title appeared in \(timings.optimisticTitleMS) ms, over budget \(config.uiBudgetMS) ms.",
+                timings: timings,
+                rowValueAfter: renamedRow?.displayedUIStringValue,
+                rootValueAfter: root.displayedUIStringValue,
+                rawAccessibilityTree: app.debugDescription
+            )
+            return
+        }
+
+        try writeResult(
+            status: .pass,
+            reason: nil,
+            timings: timings,
+            rowValueAfter: renamedRow?.displayedUIStringValue,
+            rootValueAfter: root.displayedUIStringValue
+        )
+    }
+
     private func launchRelayBackedApp(hosts: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["CODEX_DOCK_HOSTS"] = hosts
@@ -151,6 +299,103 @@ private struct ThreadRenameProofConfig {
     }
 }
 
+private struct ClientRenameLatencyProofConfig: Decodable {
+    let hosts: String
+    let hostID: String
+    let threadID: String
+    let originalTitle: String
+    let newTitle: String
+    let uiResultPath: String
+    let serverAckDelayMS: Int
+    let uiBudgetMS: Int
+
+    static let defaultReadyPath = "/tmp/codex-client/codex-dock-client-rename-proof-ready.json"
+    static let defaultUIResultPath = "/tmp/codex-client/codex-dock-client-rename-latency-ui.json"
+
+    static func loadFromEnvironment() throws -> ClientRenameLatencyProofConfig {
+        let environment = ProcessInfo.processInfo.environment
+        let readyPath = nonEmpty(environment["CODEX_DOCK_CLIENT_RENAME_PROOF_READY"])
+            ?? defaultReadyPath
+        guard FileManager.default.fileExists(atPath: readyPath) else {
+            throw XCTSkip("Controlled client rename latency ready file does not exist at \(readyPath).")
+        }
+        let data = try Data(contentsOf: URL(fileURLWithPath: readyPath))
+        return try JSONDecoder().decode(ClientRenameLatencyProofConfig.self, from: data)
+    }
+
+    static func uiResultMirrorPaths(primaryPath: String) -> [String] {
+        let environment = ProcessInfo.processInfo.environment
+        let paths = [
+            nonEmpty(environment["CODEX_DOCK_CLIENT_RENAME_PROOF_UI_RESULT_HOST"]),
+            defaultUIResultPath
+        ].compactMap(\.self)
+        var seen = Set([primaryPath])
+        return paths.filter { seen.insert($0).inserted }
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+}
+
+private struct ClientRenameLatencyUITimings: Codable {
+    var saveTappedAt: String
+    var saveTappedAtMs: Int64
+    var sheetDismissedAt: String
+    var sheetDismissedAtMs: Int64
+    var sheetDismissMS: Int
+    var optimisticTitleObservedAt: String?
+    var optimisticTitleObservedAtMs: Int64?
+    var optimisticTitleMS: Int
+}
+
+private struct ClientRenameLatencyUIReport: Codable {
+    var schemaVersion = 1
+    var kind = "codex-dock-client-rename-latency-ui-proof"
+    var status: DisplayedUIArtifactStatus
+    var reason: String?
+    var startedAt: String
+    var finishedAt: String
+    var hosts: String
+    var hostID: String
+    var threadID: String
+    var originalTitle: String
+    var newTitle: String
+    var serverAckDelayMS: Int
+    var uiBudgetMS: Int
+    var timings: ClientRenameLatencyUITimings?
+    var rowValueAfter: String?
+    var rootValueAfter: String?
+    var rawAccessibilityTree: String?
+
+    func write(to path: String) throws {
+        let url = URL(fileURLWithPath: path)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(self).write(to: url, options: .atomic)
+    }
+}
+
+private func codexDockNowMilliseconds() -> Int64 {
+    Int64((Date().timeIntervalSince1970 * 1_000).rounded())
+}
+
+private func codexDockISO8601String(fromMilliseconds milliseconds: Int64) -> String {
+    let date = Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1_000)
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter.string(from: date)
+}
+
 @MainActor
 private extension XCUIApplication {
     func element(id: AutomationID) -> XCUIElement {
@@ -174,6 +419,174 @@ private extension XCUIApplication {
                 return row
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        return nil
+    }
+
+    func findDockRowByIdentifierForRenameProof(
+        config: ClientRenameLatencyProofConfig,
+        title: String,
+        timeout: TimeInterval
+    ) -> XCUIElement? {
+        let identifier = AutomationID.Dock.row(hostID: config.hostID, threadID: config.threadID).rawValue
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let row = largestVisibleElement(exactIdentifier: identifier),
+               row.label.localizedCaseInsensitiveContains(title) {
+                return row
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return nil
+    }
+
+    func openRenameSheetForLatencyProof(
+        row: XCUIElement,
+        config: ClientRenameLatencyProofConfig
+    ) -> Bool {
+        row.press(forDuration: 0.8)
+
+        let actionID = AutomationID.Dock.rowAction(
+            hostID: config.hostID,
+            threadID: config.threadID,
+            action: .rename
+        )
+        let renameAction = element(id: actionID)
+        if renameAction.waitForExistence(timeout: 2) {
+            renameAction.tap()
+            return element(id: AutomationID.Dock.renameSheet).waitForExistence(timeout: 5)
+        }
+
+        let fallback = buttons["Rename"].firstMatch
+        guard fallback.waitForExistence(timeout: 2) else {
+            return false
+        }
+        fallback.tap()
+        return element(id: AutomationID.Dock.renameSheet).waitForExistence(timeout: 5)
+    }
+
+    func submitRenameSheetForLatencyProof(
+        config: ClientRenameLatencyProofConfig,
+        newTitle: String
+    ) -> ClientRenameLatencyUITimings? {
+        let sheet = element(id: AutomationID.Dock.renameSheet)
+        guard sheet.waitForExistence(timeout: 5) else {
+            return nil
+        }
+
+        let field = textFields.matching(identifier: AutomationID.Dock.renameNameField.rawValue).firstMatch
+        guard field.waitForExistence(timeout: 5) else {
+            return nil
+        }
+        guard replaceRenameFieldTextForLatencyProof(field, with: newTitle) else {
+            return nil
+        }
+
+        let saveButton = buttons.matching(identifier: AutomationID.Dock.renameSaveButton.rawValue).firstMatch
+        guard waitForEnabledElement(saveButton, timeout: 5) else {
+            return nil
+        }
+
+        let saveTappedAtMs = codexDockNowMilliseconds()
+        saveButton.tap()
+        let observations = waitForRenameLatencyObservations(
+            config: config,
+            title: newTitle,
+            editorControl: saveButton,
+            timeout: max(3, Double(config.uiBudgetMS) / 1_000 + 2)
+        )
+        let sheetDismissedAtMs = observations.sheetDismissedAtMs ?? -1
+        let optimisticTitleObservedAtMs = observations.optimisticTitleObservedAtMs
+
+        return ClientRenameLatencyUITimings(
+            saveTappedAt: codexDockISO8601String(fromMilliseconds: saveTappedAtMs),
+            saveTappedAtMs: saveTappedAtMs,
+            sheetDismissedAt: observations.sheetDismissedAtMs.map { codexDockISO8601String(fromMilliseconds: $0) } ?? "not-observed",
+            sheetDismissedAtMs: sheetDismissedAtMs,
+            sheetDismissMS: observations.sheetDismissedAtMs.map { Int($0 - saveTappedAtMs) } ?? Int.max,
+            optimisticTitleObservedAt: optimisticTitleObservedAtMs.map { codexDockISO8601String(fromMilliseconds: $0) },
+            optimisticTitleObservedAtMs: optimisticTitleObservedAtMs,
+            optimisticTitleMS: optimisticTitleObservedAtMs.map { Int($0 - saveTappedAtMs) } ?? Int.max
+        )
+    }
+
+    func replaceRenameFieldTextForLatencyProof(_ field: XCUIElement, with text: String) -> Bool {
+        for _ in 0..<3 {
+            let currentValue = field.value as? String
+            let deleteCount = max((currentValue?.count ?? 0) + 2, text.count + 2)
+            field.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: min(deleteCount, 80)))
+            field.typeText(text)
+            if (field.value as? String) == text {
+                return true
+            }
+        }
+        return (field.value as? String) == text
+    }
+
+    func waitForRenameLatencyObservations(
+        config: ClientRenameLatencyProofConfig,
+        title: String,
+        editorControl: XCUIElement,
+        timeout: TimeInterval
+    ) -> (sheetDismissedAtMs: Int64?, optimisticTitleObservedAtMs: Int64?) {
+        let identifier = AutomationID.Dock.row(hostID: config.hostID, threadID: config.threadID).rawValue
+        let deadline = Date().addingTimeInterval(timeout)
+        var sheetDismissedAtMs: Int64?
+        var optimisticTitleObservedAtMs: Int64?
+        while Date() < deadline {
+            if sheetDismissedAtMs == nil, !editorControl.exists || !editorControl.isHittable {
+                sheetDismissedAtMs = codexDockNowMilliseconds()
+            }
+            if optimisticTitleObservedAtMs == nil,
+               let row = largestVisibleElement(exactIdentifier: identifier),
+               row.label.localizedCaseInsensitiveContains(title) {
+                optimisticTitleObservedAtMs = codexDockNowMilliseconds()
+            }
+            if sheetDismissedAtMs != nil, optimisticTitleObservedAtMs != nil {
+                break
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        if sheetDismissedAtMs == nil, !editorControl.exists || !editorControl.isHittable {
+            sheetDismissedAtMs = codexDockNowMilliseconds()
+        }
+        if optimisticTitleObservedAtMs == nil,
+           let row = largestVisibleElement(exactIdentifier: identifier),
+           row.label.localizedCaseInsensitiveContains(title) {
+            optimisticTitleObservedAtMs = codexDockNowMilliseconds()
+        }
+        return (sheetDismissedAtMs, optimisticTitleObservedAtMs)
+    }
+
+    func waitForElementToDisappearTimestamp(
+        id: AutomationID,
+        timeout: TimeInterval
+    ) -> Int64? {
+        let element = element(id: id)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !element.exists {
+                return codexDockNowMilliseconds()
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        return !element.exists ? codexDockNowMilliseconds() : nil
+    }
+
+    func waitForDockRowTitleTimestampForRenameProof(
+        config: ClientRenameLatencyProofConfig,
+        title: String,
+        timeout: TimeInterval
+    ) -> Int64? {
+        let identifier = AutomationID.Dock.row(hostID: config.hostID, threadID: config.threadID).rawValue
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let row = largestVisibleElement(exactIdentifier: identifier),
+               row.label.localizedCaseInsensitiveContains(title) {
+                return codexDockNowMilliseconds()
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
         }
         return nil
     }

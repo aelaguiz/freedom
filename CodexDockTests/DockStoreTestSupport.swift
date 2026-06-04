@@ -527,6 +527,42 @@ actor RecordingThreadRenamer: ThreadRenameCommanding {
     }
 }
 
+actor DelayedThreadRenamer: ThreadRenameCommanding {
+    private var renamed: [RecordedThreadRename] = []
+    private var continuations: [CheckedContinuation<Void, Error>] = []
+
+    func renamedRequests() -> [RecordedThreadRename] {
+        renamed
+    }
+
+    func waitForRequestCount(_ count: Int) async {
+        while renamed.count < count {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+    }
+
+    func completeNext() {
+        guard !continuations.isEmpty else {
+            return
+        }
+        continuations.removeFirst().resume()
+    }
+
+    func failNext(_ error: Error) {
+        guard !continuations.isEmpty else {
+            return
+        }
+        continuations.removeFirst().resume(throwing: error)
+    }
+
+    func renameThread(_ threadID: String, to name: String, on host: DockHostConfiguration) async throws {
+        renamed.append(RecordedThreadRename(threadID: threadID, name: name, hostID: host.id))
+        try await withCheckedThrowingContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+}
+
 actor InMemoryLocalThreadMetadataStore: LocalThreadMetadataStoring {
     private var values: [LocalThreadMetadataKey: LocalThreadMetadata]
 

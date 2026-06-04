@@ -263,6 +263,32 @@ public struct DockRowViewModel: Equatable, Identifiable, Sendable {
 
     public var hostID: String { threadIdentity.hostID }
     public var threadID: String { threadIdentity.threadID }
+
+    public func withTitle(_ title: String) -> DockRowViewModel {
+        DockRowViewModel(
+            threadIdentity: threadIdentity,
+            sourceHostID: sourceHostID,
+            projectionID: projectionID,
+            backendSessionID: backendSessionID,
+            title: title,
+            hostDisplayName: hostDisplayName,
+            hostEndpoint: hostEndpoint,
+            repository: repository,
+            branch: branch,
+            status: status,
+            lastActivity: lastActivity,
+            lastActivityDate: lastActivityDate,
+            displayOrderKey: displayOrderKey,
+            summary: summary,
+            rail: rail,
+            label: label,
+            origin: origin,
+            relationship: relationship,
+            isPinned: isPinned,
+            pinnedAt: pinnedAt,
+            pinnedOrder: pinnedOrder
+        )
+    }
 }
 
 public struct DockSectionViewModel: Equatable, Identifiable, Sendable {

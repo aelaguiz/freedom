@@ -22,8 +22,16 @@ public final class DockStore: ObservableObject {
     private var streamTasks: [String: Task<Void, Never>] = [:]
     private var isLoading = false
     private var localMetadata: [LocalThreadMetadataKey: LocalThreadMetadata] = [:]
+    private var pendingRenameTitles: [HostScopedThreadID: String] = [:]
     private weak var connectivityReporter: (any AppConnectivityReporting)?
     private let connectivityEventSink: ConnectivityEventSink?
+
+    private struct PendingRenameSubmission: Sendable {
+        let row: DockRowViewModel
+        let host: DockHostConfiguration
+        let threadIdentity: HostScopedThreadID
+        let title: String
+    }
 
     public var hostConfiguration: DockHostConfiguration? {
         hosts.first
@@ -242,27 +250,61 @@ public final class DockStore: ObservableObject {
 
     @discardableResult
     public func rename(_ row: DockRowViewModel, to name: String) async -> Bool {
+        guard let submission = beginRename(row, to: name) else {
+            return false
+        }
+        return await finishRename(submission)
+    }
+
+    @discardableResult
+    public func renameInBackground(_ row: DockRowViewModel, to name: String) -> Bool {
+        guard let submission = beginRename(row, to: name) else {
+            return false
+        }
+        Task {
+            await finishRename(submission)
+        }
+        return true
+    }
+
+    private func beginRename(_ row: DockRowViewModel, to name: String) -> PendingRenameSubmission? {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
             setActionError("Thread name cannot be empty.")
-            return false
+            return nil
         }
 
         guard let host = hostConfiguration(for: row) else {
             DockLog.dock.error("dock rename skipped missing host_id=\(row.hostID, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public)")
             setActionError("Host \(row.hostID) is no longer configured.")
-            return false
+            return nil
         }
 
+        let threadIdentity = row.threadIdentity
+        pendingRenameTitles[threadIdentity] = trimmedName
+        setActionError(nil)
+        publishCurrentSnapshotWithPendingRenames()
+        return PendingRenameSubmission(
+            row: row,
+            host: host,
+            threadIdentity: threadIdentity,
+            title: trimmedName
+        )
+    }
+
+    private func finishRename(_ submission: PendingRenameSubmission) async -> Bool {
         do {
-            DockLog.dock.notice("dock rename action started host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public)")
-            try await commandEngine.rename(row, to: trimmedName, on: host)
+            DockLog.dock.notice("dock rename action started host_id=\(submission.host.id, privacy: .public) thread_id=\(DockLog.publicID(submission.row.threadID), privacy: .public)")
+            try await commandEngine.rename(submission.row, to: submission.title, on: submission.host)
             setActionError(nil)
-            await refresh()
-            DockLog.dock.notice("dock rename action finished host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public)")
+            DockLog.dock.notice("dock rename action finished host_id=\(submission.host.id, privacy: .public) thread_id=\(DockLog.publicID(submission.row.threadID), privacy: .public)")
             return true
         } catch {
-            DockLog.dock.error("dock rename action failed host_id=\(host.id, privacy: .public) thread_id=\(DockLog.publicID(row.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
+            if pendingRenameTitles[submission.threadIdentity] == submission.title {
+                pendingRenameTitles[submission.threadIdentity] = nil
+                await publishSnapshot()
+            }
+            DockLog.dock.error("dock rename action failed host_id=\(submission.host.id, privacy: .public) thread_id=\(DockLog.publicID(submission.row.threadID), privacy: .public) error=\(DockLog.errorSummary(error), privacy: .public)")
             setActionError(error.localizedDescription)
             return false
         }
@@ -417,9 +459,67 @@ public final class DockStore: ObservableObject {
         guard let snapshot = await dataEngine?.snapshot(now: now) else {
             return
         }
-        state = .loaded(snapshot)
-        screenStore.publish(snapshot: snapshot)
+        let displayedSnapshot = snapshotApplyingPendingRenames(to: snapshot)
+        state = .loaded(displayedSnapshot)
+        screenStore.publish(snapshot: displayedSnapshot)
         publishConnectivity(for: state)
+    }
+
+    private func publishCurrentSnapshotWithPendingRenames() {
+        guard case .loaded(let snapshot) = state else {
+            return
+        }
+        let displayedSnapshot = snapshotApplyingPendingRenames(
+            to: snapshot,
+            clearsConfirmedPendingRenames: false
+        )
+        state = .loaded(displayedSnapshot)
+        screenStore.publish(snapshot: displayedSnapshot)
+        publishConnectivity(for: state)
+    }
+
+    private func snapshotApplyingPendingRenames(
+        to snapshot: DockSnapshot,
+        clearsConfirmedPendingRenames: Bool = true
+    ) -> DockSnapshot {
+        guard !pendingRenameTitles.isEmpty else {
+            return snapshot
+        }
+
+        if clearsConfirmedPendingRenames {
+            clearConfirmedPendingRenames(from: snapshot)
+        }
+        guard !pendingRenameTitles.isEmpty else {
+            return snapshot
+        }
+
+        var didApplyPendingRename = false
+        let rows = snapshot.rows.map { row in
+            guard let pendingTitle = pendingRenameTitles[row.threadIdentity],
+                  row.title != pendingTitle else {
+                return row
+            }
+            didApplyPendingRename = true
+            return row.withTitle(pendingTitle)
+        }
+
+        guard didApplyPendingRename else {
+            return snapshot
+        }
+        return DockSnapshot(
+            host: snapshot.host,
+            hosts: snapshot.hosts,
+            hostStates: snapshot.hostStates,
+            hostIdentityResolver: snapshot.hostIdentityResolver,
+            rows: rows,
+            isPartial: snapshot.isPartial
+        )
+    }
+
+    private func clearConfirmedPendingRenames(from snapshot: DockSnapshot) {
+        for row in snapshot.rows where pendingRenameTitles[row.threadIdentity] == row.title {
+            pendingRenameTitles[row.threadIdentity] = nil
+        }
     }
 
     private func migrateMetadataHostAliases() async {

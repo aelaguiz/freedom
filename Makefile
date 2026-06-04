@@ -93,6 +93,14 @@ SIM_UI_DUMP_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
 SIM_UI_DUMP_DIR ?= /tmp/codex-client/sim-ui-dump-$(SIM_UI_DUMP_RUN_ID)
 SIM_UI_DUMP_JSON ?= $(SIM_UI_DUMP_DIR)/sim-ui-dump.json
 SIM_UI_DUMP_MD ?= $(SIM_UI_DUMP_DIR)/sim-ui-dump.md
+ifndef SIM_UI_CLIENT_RENAME_RUN_ID
+SIM_UI_CLIENT_RENAME_RUN_ID := $(shell date -u +%Y%m%dT%H%M%SZ)
+endif
+ifndef SIM_UI_CLIENT_RENAME_DIR
+SIM_UI_CLIENT_RENAME_DIR := /tmp/codex-client/sim-ui-client-rename-$(SIM_UI_CLIENT_RENAME_RUN_ID)
+endif
+SIM_UI_CLIENT_RENAME_SERVER_ACK_DELAY_MS ?= 1500
+SIM_UI_CLIENT_RENAME_UI_BUDGET_MS ?= 700
 EXPECTED_SCREEN ?=
 EXPECTED_THREAD_ID ?=
 SIM_UI_MATRIX_REPORT_DIRS ?=
@@ -128,7 +136,7 @@ SIM_UI_SYNC_SCENARIO_THREAD_ARG = $(if $(SIM_UI_SYNC_SCENARIO_THREAD_ID),--scena
 
 .DEFAULT_GOAL := help
 
-.PHONY: help contract-generate contract-check app app-test sim-ui-dump sim-ui-sync-proof sim-ui-scenario-sync-proof sim-ui-isolated-scenario-sync-proof sim-ui-controlled-scenario-sync-proof sim-ui-controlled-matrix-verify sim-ui-controlled-matrix-proof sim-sync-audit sim-config-verify device-install device-install-iphone-17-pro device-install-iphone-14 iphone-17-pro iphone-14 device-install-all device-config device-config-verify device-config-verify-all device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart relay-doctor relay-debug-bundle relay-host-compare sim-debug-bundle device-debug-bundle app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
+.PHONY: help contract-generate contract-check app app-test sim-ui-dump sim-ui-client-rename-proof sim-ui-sync-proof sim-ui-scenario-sync-proof sim-ui-isolated-scenario-sync-proof sim-ui-controlled-scenario-sync-proof sim-ui-controlled-matrix-verify sim-ui-controlled-matrix-proof sim-sync-audit sim-config-verify device-install device-install-iphone-17-pro device-install-iphone-14 iphone-17-pro iphone-14 device-install-all device-config device-config-verify device-config-verify-all device-launch devices services env-file node-deps host-service-install host-service-start host-service-status host-service-wait host-service-stop host-service-restart host-service-logs host-service-doctor app-server app-server-status app-server-env app-server-stop app-server-restart dock-relay dock-relay-status dock-relay-stop dock-relay-restart relay-doctor relay-debug-bundle relay-host-compare sim-debug-bundle device-debug-bundle app-server-logs dock-relay-logs sim-logs device-logs sims sim sim-list sim-boot run
 
 help:
 	@printf "%s\n" "Codex Dock commands:"
@@ -138,6 +146,7 @@ help:
 	@printf "%s\n" "  FORCE_LAUNCH=1 rtk make app SIM=<UDID> Fresh build/install/relaunch by simulator ID"
 	@printf "%s\n" "  rtk make app-test SIM='iPhone 17' Run generated-project app tests in a simulator"
 	@printf "%s\n" "  rtk make sim-ui-dump SIM='iPhone 17' Dump the current simulator Dock/Thread screen as accessibility JSON"
+	@printf "%s\n" "  rtk make sim-ui-client-rename-proof SIM='iPhone 17' Run controlled client rename latency proof"
 	@printf "%s\n" "  rtk make sim-ui-sync-proof SIM='iPhone 17' Run real relay-backed displayed-UI sync proof"
 	@printf "%s\n" "  rtk make sim-ui-scenario-sync-proof SIM='iPhone 17' Run displayed-UI scenario transition proof"
 	@printf "%s\n" "  rtk make sim-ui-isolated-scenario-sync-proof SIM='iPhone 17' Seed temp Codex home and run isolated displayed-UI transition proof"
@@ -272,6 +281,113 @@ sim-ui-dump:
 	@rtk xcodegen generate --spec project.yml
 	@rtk sh -c 'set -eu; udid="$$(python3 scripts/sim.py resolve "$(SIM)")"; output_dir="$(SIM_UI_DUMP_DIR)"; json_path="$(SIM_UI_DUMP_JSON)"; markdown_path="$(SIM_UI_DUMP_MD)"; host_config="$$output_dir/sim-ui-dump-config.json"; sim_config="/tmp/codex-client/codex-dock-sim-ui-dump-config.json"; sim_json="/tmp/codex-client/codex-dock-sim-ui-dump.json"; sim_markdown="/tmp/codex-client/codex-dock-sim-ui-dump.md"; log_dir="$(APP_BUILD_LOG_DIR)"; build_log="$$log_dir/sim-ui-dump-build-$(APP_BUILD_NUMBER).log"; test_log="$$log_dir/sim-ui-dump-test-$(APP_BUILD_NUMBER).log"; mkdir -p "$$output_dir" "$$log_dir"; installed_app="$$(xcrun simctl get_app_container "$$udid" "$(APP_BUNDLE_ID)" app 2>/dev/null || true)"; installed_build=""; if [ -n "$$installed_app" ]; then installed_build="$$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$$installed_app/Info.plist" 2>/dev/null || true)"; fi; rtk python3 -c "import datetime,json,sys; config,json_path,markdown_path,sim_name,udid,bundle_id,build,expected_screen,expected_thread=sys.argv[1:]; expires=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=10)).replace(microsecond=0).isoformat().replace(\"+00:00\",\"Z\"); payload={\"jsonPath\":json_path,\"markdownPath\":markdown_path,\"simulatorName\":sim_name,\"simulatorUDID\":udid,\"appBundleID\":bundle_id,\"configuredBuildNumber\":build or None,\"expectedScreen\":expected_screen or None,\"expectedThreadID\":expected_thread or None,\"expiresAt\":expires}; open(config,\"w\").write(json.dumps(payload)+\"\\n\")" "$$host_config" "$$sim_json" "$$sim_markdown" "$(SIM)" "$$udid" "$(APP_BUNDLE_ID)" "$$installed_build" "$(EXPECTED_SCREEN)" "$(EXPECTED_THREAD_ID)"; xcrun simctl spawn "$$udid" /bin/mkdir -p /tmp/codex-client; xcrun simctl spawn "$$udid" /bin/sh -c "/bin/cat > $$sim_config" < "$$host_config"; cleanup() { xcrun simctl spawn "$$udid" /bin/rm -f "$$sim_config" "$$sim_json" "$$sim_markdown" >/dev/null 2>&1 || true; }; copy_artifact() { sim_path="$$1"; host_path="$$2"; tmp="$$host_path.tmp"; if xcrun simctl spawn "$$udid" /bin/cat "$$sim_path" > "$$tmp" 2>/dev/null; then mv "$$tmp" "$$host_path"; return 0; fi; rm -f "$$tmp"; return 1; }; trap cleanup EXIT INT TERM; echo "building simulator UI dump test for $(APP_SCHEME) on simulator $$udid"; if ! xcodebuild -quiet build-for-testing -project CodexDock.xcodeproj -scheme "$(APP_SCHEME)" -destination "id=$$udid" -derivedDataPath "$(APP_DERIVED_DATA)" CURRENT_PROJECT_VERSION="$(APP_BUILD_NUMBER)" > "$$build_log" 2>&1; then echo "sim UI dump build failed; see $$build_log" >&2; tail -n 80 "$$build_log" >&2; exit 1; fi; echo "dumping current simulator UI state to $$json_path"; if ! CODEX_DOCK_CURRENT_UI_DUMP_REQUIRE_CONFIG=1 xcodebuild -quiet test-without-building -project CodexDock.xcodeproj -scheme "$(APP_SCHEME)" -destination "id=$$udid" -derivedDataPath "$(APP_DERIVED_DATA)" -only-testing:CodexDockUITests/CodexDockCurrentUIDumpTests/testDumpsCurrentVisibleScreenOnce > "$$test_log" 2>&1; then echo "sim UI dump failed; see $$test_log" >&2; tail -n 120 "$$test_log" >&2; copy_artifact "$$sim_json" "$$json_path" || true; copy_artifact "$$sim_markdown" "$$markdown_path" || true; if [ -f "$$json_path" ]; then rtk node scripts/check-proof-report-contracts.mjs "$$json_path"; echo "wrote $$json_path"; fi; if [ -f "$$markdown_path" ]; then echo "wrote $$markdown_path"; fi; exit 1; fi; if ! copy_artifact "$$sim_json" "$$json_path"; then echo "sim UI dump did not produce $$sim_json" >&2; exit 1; fi; if ! copy_artifact "$$sim_markdown" "$$markdown_path"; then echo "sim UI dump did not produce $$sim_markdown" >&2; exit 1; fi; echo "wrote $$json_path"; echo "wrote $$markdown_path"'
 	@rtk node scripts/check-proof-report-contracts.mjs "$(SIM_UI_DUMP_JSON)"
+
+sim-ui-client-rename-proof:
+	@rtk python3 scripts/sim.py boot "$(SIM)"
+	@rtk xcodegen generate --spec project.yml
+	@rtk sh -c '\
+		set -eu; \
+		udid="$$(python3 scripts/sim.py resolve "$(SIM)")"; \
+		output_dir="$(SIM_UI_CLIENT_RENAME_DIR)"; \
+		mkdir -p "$$output_dir" "$(APP_BUILD_LOG_DIR)"; \
+		fixture_ready="$$output_dir/client-rename-fixture-ready.json"; \
+		ui_result="$$output_dir/client-rename-latency-ui.json"; \
+		fixture_stop="$$output_dir/client-rename-fixture-stop"; \
+		report_json="$$output_dir/client-rename-latency.json"; \
+		report_md="$$output_dir/client-rename-latency.md"; \
+		sim_ready_host="$$output_dir/client-rename-fixture-ready-simulator.json"; \
+		host_ready="/tmp/codex-client/codex-dock-client-rename-proof-ready.json"; \
+		sim_ready="/tmp/codex-client/codex-dock-client-rename-proof-ready.json"; \
+		sim_ui_result="/tmp/codex-client/codex-dock-client-rename-latency-ui.json"; \
+		build_log="$(APP_BUILD_LOG_DIR)/sim-ui-client-rename-build-$(APP_BUILD_NUMBER).log"; \
+		test_log="$(APP_BUILD_LOG_DIR)/sim-ui-client-rename-test-$(APP_BUILD_NUMBER).log"; \
+		fixture_log="$$output_dir/client-rename-fixture.out.log"; \
+		rm -f "$$fixture_ready" "$$ui_result" "$$fixture_stop" "$$report_json" "$$report_md" "$$sim_ready_host" "$$host_ready"; \
+		xcrun simctl spawn "$$udid" /bin/rm -f "$$sim_ready" "$$sim_ui_result" >/dev/null 2>&1 || true; \
+		echo "resetting simulator app data for client rename latency proof"; \
+		xcrun simctl uninstall "$$udid" "$(APP_BUNDLE_ID)" >/dev/null 2>&1 || true; \
+		echo "building client rename latency proof test for $(APP_SCHEME) on simulator $$udid build $(APP_BUILD_NUMBER)"; \
+		if ! xcodebuild -quiet build-for-testing -project CodexDock.xcodeproj -scheme "$(APP_SCHEME)" -destination "id=$$udid" -derivedDataPath "$(APP_DERIVED_DATA)" CURRENT_PROJECT_VERSION="$(APP_BUILD_NUMBER)" > "$$build_log" 2>&1; then \
+			echo "client rename proof build failed; see $$build_log" >&2; \
+			tail -n 80 "$$build_log" >&2; \
+			exit 1; \
+		fi; \
+		fixture_pid=""; \
+		cleanup() { \
+			status="$${1:-$$?}"; \
+			touch "$$fixture_stop" 2>/dev/null || true; \
+			rm -f "$$host_ready"; \
+			xcrun simctl spawn "$$udid" /bin/rm -f "$$sim_ready" "$$sim_ui_result" >/dev/null 2>&1 || true; \
+			if [ -n "$${fixture_pid:-}" ] && kill -0 "$$fixture_pid" 2>/dev/null; then \
+				kill "$$fixture_pid" 2>/dev/null || true; \
+				wait "$$fixture_pid" 2>/dev/null || true; \
+			fi; \
+			exit "$$status"; \
+		}; \
+			copy_sim_ui_result() { \
+				if [ -f "$$ui_result" ]; then return 0; fi; \
+				tmp="$$ui_result.tmp"; \
+				for candidate in "$$sim_ui_result" "$$ui_result"; do \
+					if xcrun simctl spawn "$$udid" /bin/cat "$$candidate" > "$$tmp" 2>/dev/null; then \
+						mv "$$tmp" "$$ui_result"; \
+						return 0; \
+					fi; \
+				done; \
+				rm -f "$$tmp"; \
+				return 1; \
+			}; \
+		trap cleanup INT TERM; \
+		echo "starting client rename latency fixture"; \
+		rtk node scripts/dock-relay-client-rename-latency-fixture.mjs --ready-out "$$fixture_ready" --ui-result-in "$$ui_result" --stop-in "$$fixture_stop" --json-out "$$report_json" --summary-out "$$report_md" --server-ack-delay-ms "$(SIM_UI_CLIENT_RENAME_SERVER_ACK_DELAY_MS)" --ui-budget-ms "$(SIM_UI_CLIENT_RENAME_UI_BUDGET_MS)" --wait-timeout-ms "$(SIM_UI_SYNC_READY_TIMEOUT_MS)" > "$$fixture_log" 2>&1 & \
+		fixture_pid="$$!"; \
+		deadline=$$(( $$(date +%s) + ( $(SIM_UI_SYNC_READY_TIMEOUT_MS) / 1000 ) )); \
+		while [ ! -f "$$fixture_ready" ]; do \
+			if ! kill -0 "$$fixture_pid" 2>/dev/null; then \
+				echo "client rename fixture exited before ready; see $$fixture_log" >&2; \
+				tail -n 120 "$$fixture_log" >&2; \
+				cleanup 1; \
+			fi; \
+			if [ "$$(date +%s)" -gt "$$deadline" ]; then \
+				echo "client rename fixture did not become ready; see $$fixture_log" >&2; \
+				tail -n 120 "$$fixture_log" >&2; \
+				cleanup 1; \
+			fi; \
+			sleep 0.2; \
+		done; \
+		cp "$$fixture_ready" "$$host_ready"; \
+		rtk python3 -c "import json,sys; data=json.load(open(sys.argv[1])); data[\"uiResultPath\"]=sys.argv[3]; open(sys.argv[2],\"w\").write(json.dumps(data)+\"\\n\")" "$$fixture_ready" "$$sim_ready_host" "$$sim_ui_result"; \
+		xcrun simctl spawn "$$udid" /bin/mkdir -p /tmp/codex-client; \
+		xcrun simctl spawn "$$udid" /bin/sh -c "/bin/cat > $$sim_ready" < "$$sim_ready_host"; \
+		echo "running controlled client rename latency UI test on $(SIM)"; \
+		test_status=0; \
+			if ! CODEX_DOCK_CLIENT_RENAME_PROOF_UI_RESULT_HOST="$$ui_result" xcodebuild -quiet test-without-building -project CodexDock.xcodeproj -scheme "$(APP_SCHEME)" -destination "id=$$udid" -derivedDataPath "$(APP_DERIVED_DATA)" -only-testing:CodexDockUITests/CodexDockThreadRenameUITests/testControlledClientRenameIsOptimisticWhenConfigured > "$$test_log" 2>&1; then \
+				test_status=1; \
+			fi; \
+		copy_sim_ui_result || true; \
+		touch "$$fixture_stop"; \
+		fixture_status=0; \
+		if ! wait "$$fixture_pid"; then fixture_status=1; fi; \
+		fixture_pid=""; \
+		trap - INT TERM; \
+		rm -f "$$host_ready"; \
+		xcrun simctl spawn "$$udid" /bin/rm -f "$$sim_ready" "$$sim_ui_result" >/dev/null 2>&1 || true; \
+		if [ "$$test_status" -ne 0 ]; then \
+			echo "client rename latency UI test failed; see $$test_log" >&2; \
+			tail -n 120 "$$test_log" >&2; \
+			if [ -f "$$ui_result" ]; then echo "wrote $$ui_result"; fi; \
+			if [ -f "$$report_json" ]; then echo "wrote $$report_json"; fi; \
+			exit 1; \
+		fi; \
+		if [ "$$fixture_status" -ne 0 ]; then \
+			echo "client rename latency fixture failed; see $$fixture_log" >&2; \
+			tail -n 120 "$$fixture_log" >&2; \
+			if [ -f "$$ui_result" ]; then echo "wrote $$ui_result"; fi; \
+			if [ -f "$$report_json" ]; then echo "wrote $$report_json"; fi; \
+			exit 1; \
+		fi; \
+		echo "wrote $$ui_result"; \
+		echo "wrote $$report_json"; \
+		echo "wrote $$report_md"'
 
 sim-ui-sync-proof: services
 	@rtk python3 scripts/sim.py boot "$(SIM)"

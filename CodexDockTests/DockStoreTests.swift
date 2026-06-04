@@ -772,7 +772,7 @@ final class DockStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testRenameRefreshesDockRowOnlyAfterServerSuccess() async {
+    func testRenamePublishesOptimisticTitleBeforeServerSuccess() async {
         let host = makeHost()
         let loader = SequencedThreadCardFixtureLoader(results: [
             .success(ThreadCardFixtureResult(fixtures: [
@@ -784,19 +784,9 @@ final class DockStoreTests: XCTestCase {
                     lastActivity: Date(timeIntervalSince1970: 1_900),
                     prompt: "Old title"
                 )
-            ])),
-            .success(ThreadCardFixtureResult(fixtures: [
-                makeThreadCardFixtureSummary(
-                    hostID: host.id,
-                    threadID: "thread-rename",
-                    branch: "main",
-                    status: .idle,
-                    lastActivity: Date(timeIntervalSince1970: 1_910),
-                    prompt: "New title"
-                )
             ]))
         ])
-        let renamer = RecordingThreadRenamer()
+        let renamer = DelayedThreadRenamer()
         let store = DockStore(
             host: host,
             streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
@@ -809,7 +799,28 @@ final class DockStoreTests: XCTestCase {
         }
 
         let row = initialSnapshot.rows[0]
-        let renamed = await store.rename(row, to: " New title ")
+        let renameTask = Task {
+            await store.rename(row, to: " New title ")
+        }
+        await renamer.waitForRequestCount(1)
+
+        guard let optimisticSnapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.title) == ["New title"] }
+        ) else {
+            XCTFail("Expected rename to publish an optimistic title before server success, got \(store.state)")
+            await renamer.completeNext()
+            _ = await renameTask.value
+            return
+        }
+
+        XCTAssertEqual(optimisticSnapshot.rows.map(\.title), ["New title"])
+        XCTAssertNil(store.actionError)
+        let optimisticLoadCount = await loader.currentLoadCount()
+        XCTAssertEqual(optimisticLoadCount, 1)
+        await renamer.completeNext()
+
+        let renamed = await renameTask.value
 
         XCTAssertTrue(renamed)
         let renameRequests = await renamer.renamedRequests()
@@ -822,22 +833,26 @@ final class DockStoreTests: XCTestCase {
         }
         XCTAssertEqual(snapshot.rows.map(\.title), ["New title"])
         XCTAssertNil(store.actionError)
+        let finalLoadCount = await loader.currentLoadCount()
+        XCTAssertEqual(finalLoadCount, 1)
     }
 
     @MainActor
     func testFailedRenameKeepsDockRowRecoverable() async {
         let host = makeHost()
-        let loader = FakeThreadCardFixtureLoader(mode: .success(ThreadCardFixtureResult(fixtures: [
-            makeThreadCardFixtureSummary(
-                hostID: host.id,
-                threadID: "thread-keep-name",
-                branch: "main",
-                status: .idle,
-                lastActivity: Date(timeIntervalSince1970: 1_900),
-                prompt: "Keep title"
-            )
-        ])))
-        let renamer = RecordingThreadRenamer(mode: .failure(.error("rename failed")))
+        let loader = SequencedThreadCardFixtureLoader(results: [
+            .success(ThreadCardFixtureResult(fixtures: [
+                makeThreadCardFixtureSummary(
+                    hostID: host.id,
+                    threadID: "thread-keep-name",
+                    branch: "main",
+                    status: .idle,
+                    lastActivity: Date(timeIntervalSince1970: 1_900),
+                    prompt: "Keep title"
+                )
+            ]))
+        ])
+        let renamer = DelayedThreadRenamer()
         let store = DockStore(
             host: host,
             streamClient: LoaderBackedThreadCardStreamClient(loader: loader),
@@ -850,7 +865,23 @@ final class DockStoreTests: XCTestCase {
         }
 
         let row = initialSnapshot.rows[0]
-        let renamed = await store.rename(row, to: "New title")
+        let renameTask = Task {
+            await store.rename(row, to: "New title")
+        }
+        await renamer.waitForRequestCount(1)
+        guard let optimisticSnapshot = await waitForLoadedSnapshot(
+            from: store,
+            where: { $0.rows.map(\.title) == ["New title"] }
+        ) else {
+            XCTFail("Expected failed rename to publish an optimistic title before rollback, got \(store.state)")
+            await renamer.failNext(DockRequestFailure.error("rename failed"))
+            _ = await renameTask.value
+            return
+        }
+        XCTAssertEqual(optimisticSnapshot.rows[0].title, "New title")
+
+        await renamer.failNext(DockRequestFailure.error("rename failed"))
+        let renamed = await renameTask.value
 
         XCTAssertFalse(renamed)
         XCTAssertEqual(store.actionError, "rename failed")
@@ -863,6 +894,8 @@ final class DockStoreTests: XCTestCase {
             renameRequests,
             [RecordedThreadRename(threadID: "thread-keep-name", name: "New title", hostID: host.id)]
         )
+        let loadCount = await loader.currentLoadCount()
+        XCTAssertEqual(loadCount, 1)
     }
 
     @MainActor

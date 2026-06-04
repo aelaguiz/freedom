@@ -328,7 +328,6 @@ public struct DockView: View {
     @State private var collapsedHostGroupIDs: Set<String> = []
     @State private var collapsedBranchGroupIDs: Set<String> = []
     @State private var renameDraft: DockRenameDraft?
-    @State private var isRenameInFlight = false
     @FocusState private var isSearchFocused: Bool
 
     public init(
@@ -388,20 +387,39 @@ public struct DockView: View {
                 projection: currentProjection
             )
         }
-        .sheet(item: $renameDraft) { draft in
-            DockRenameThreadSheet(
-                draft: draft,
-                isSaving: isRenameInFlight,
-                onCancel: {
-                    guard !isRenameInFlight else {
-                        return
+        .overlay(alignment: .top) {
+            renameOverlay
+        }
+    }
+
+    @ViewBuilder
+    private var renameOverlay: some View {
+        if let draft = renameDraft {
+            ZStack(alignment: .top) {
+                Color.black.opacity(0.18)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        dismissRenameDraftWithoutAnimation()
                     }
-                    renameDraft = nil
-                },
-                onSave: { name in
-                    await saveRename(draft, name: name)
-                }
-            )
+
+                DockRenameThreadSheet(
+                    draft: draft,
+                    isSaving: false,
+                    onCancel: {
+                        dismissRenameDraftWithoutAnimation()
+                    },
+                    onSave: { name in
+                        saveRename(draft, name: name)
+                    }
+                )
+                .frame(maxWidth: 520)
+                .padding(.horizontal, 16)
+                .padding(.top, 76)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .transaction { transaction in
+                transaction.disablesAnimations = true
+            }
         }
     }
 
@@ -648,10 +666,12 @@ public struct DockView: View {
         guard store.hostConfiguration(for: row) != nil else {
             return
         }
-        renameDraft = DockRenameDraft(row: row)
+        DispatchQueue.main.async {
+            renameDraft = DockRenameDraft(row: row)
+        }
     }
 
-    private func saveRename(_ draft: DockRenameDraft, name: String) async -> Bool {
+    private func saveRename(_ draft: DockRenameDraft, name: String) -> Bool {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
             return false
@@ -661,15 +681,25 @@ public struct DockView: View {
             return true
         }
 
-        isRenameInFlight = true
-        defer {
-            isRenameInFlight = false
+        guard store.renameInBackground(draft.row, to: trimmedName) else {
+            return false
         }
-        let renamed = await store.rename(draft.row, to: trimmedName)
-        if renamed {
+        dismissRenameDraftWithoutAnimation()
+        return true
+    }
+
+    private func dismissRenameDraftWithoutAnimation() {
+        #if os(iOS)
+        UIView.performWithoutAnimation {
             renameDraft = nil
         }
-        return renamed
+        #else
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            renameDraft = nil
+        }
+        #endif
     }
 
     private func syncSelectedDetail(with state: DockScreenState) {

@@ -543,6 +543,27 @@ function ingestRelayStateNotification(config, message, source = {}) {
   return true;
 }
 
+function reconcileThreadNameAfterResponse(config, params = {}) {
+  const threadId = params?.threadId || params?.threadID || null;
+  try {
+    relayStateEngineForConfig(config)
+      .handleThreadNameMutation({ threadId })
+      .catch((error) => {
+        relayLogger(config).warn("state.thread_name_mutation_reconcile_failed", {
+          method: "thread/name/set",
+          threadIDHash: shortHash(threadId),
+          error,
+        });
+      });
+  } catch (error) {
+    relayLogger(config).warn("state.thread_name_mutation_reconcile_failed", {
+      method: "thread/name/set",
+      threadIDHash: shortHash(threadId),
+      error,
+    });
+  }
+}
+
 function handleDetailNotification(config, session, downstreamWs, generation, message) {
   const detail = session.detailSubscription;
   if (!detail || detail.generation !== generation) {
@@ -843,9 +864,7 @@ async function handleRequest(config, method, params, session, downstreamWs) {
     case "thread/name/set":
     {
       const result = await setThreadName(config, params || {});
-      await relayStateEngineForConfig(config).handleThreadNameMutation({
-        threadId: params?.threadId,
-      });
+      reconcileThreadNameAfterResponse(config, params || {});
       return result;
     }
     case "audio/transcription/start":

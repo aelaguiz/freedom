@@ -16,7 +16,7 @@ struct DockRenameThreadSheet: View {
     let draft: DockRenameDraft
     let isSaving: Bool
     let onCancel: @MainActor () -> Void
-    let onSave: @MainActor (String) async -> Bool
+    let onSave: @MainActor (String) -> Bool
 
     @State private var name: String
     @FocusState private var isNameFieldFocused: Bool
@@ -25,7 +25,7 @@ struct DockRenameThreadSheet: View {
         draft: DockRenameDraft,
         isSaving: Bool,
         onCancel: @escaping @MainActor () -> Void,
-        onSave: @escaping @MainActor (String) async -> Bool
+        onSave: @escaping @MainActor (String) -> Bool
     ) {
         self.draft = draft
         self.isSaving = isSaving
@@ -35,47 +35,56 @@ struct DockRenameThreadSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    nameField
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    onCancel()
                 }
-            }
-            .navigationTitle("Rename Thread")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        onCancel()
-                    }
-                    .disabled(isSaving)
-                    .codexAutomationID(AutomationID.Dock.renameCancelButton)
-                }
+                .disabled(isSaving)
+                .codexAutomationID(AutomationID.Dock.renameCancelButton)
 
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        saveIfPossible()
-                    } label: {
-                        if isSaving {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Text("Save")
-                        }
+                Spacer(minLength: 8)
+
+                Text("Rename Thread")
+                    .font(.headline)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    saveIfPossible()
+                } label: {
+                    if isSaving {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text("Save")
                     }
-                    .disabled(!canSave)
-                    .codexAutomationID(AutomationID.Dock.renameSaveButton)
                 }
+                .disabled(!canSave)
+                .codexAutomationID(AutomationID.Dock.renameSaveButton)
             }
-            .onAppear {
-                isNameFieldFocused = true
-            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            Divider()
+
+            nameField
+                .padding(16)
         }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 8)
+        .accessibilityElement(children: .contain)
         .codexAutomationID(AutomationID.Dock.renameSheet)
+        .onAppear {
+            isNameFieldFocused = true
+        }
         #if os(iOS)
-        .presentationDetents([.height(220), .medium])
+        .textFieldStyle(.roundedBorder)
         #endif
     }
 
@@ -92,7 +101,7 @@ struct DockRenameThreadSheet: View {
         #if os(iOS)
         TextField("Name", text: $name)
             .textInputAutocapitalization(.sentences)
-            .autocorrectionDisabled(false)
+            .autocorrectionDisabled()
             .focused($isNameFieldFocused)
             .submitLabel(.done)
             .disabled(isSaving)
@@ -116,8 +125,7 @@ struct DockRenameThreadSheet: View {
             return
         }
         let nextName = trimmedName
-        Task {
-            _ = await onSave(nextName)
-        }
+        isNameFieldFocused = false
+        _ = onSave(nextName)
     }
 }

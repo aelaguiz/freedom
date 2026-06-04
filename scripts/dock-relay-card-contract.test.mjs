@@ -282,6 +282,76 @@ test("thread/name/set forwards to app-server and refreshes dock card title from 
   }
 });
 
+test("thread/name/set responds before dock rename reconcile finishes", async () => {
+  const appServer = await startCanonicalActivityAppServer();
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.relayStateEngine.reconcileDock({ reason: "test-initial" });
+      const originalHandleThreadNameMutation = config.relayStateEngine.handleThreadNameMutation
+        .bind(config.relayStateEngine);
+      let releaseReconcile = () => {};
+      const reconcileGate = new Promise((resolve) => {
+        releaseReconcile = resolve;
+      });
+      let mutationStarted = false;
+      let mutationFinished = false;
+      config.relayStateEngine.handleThreadNameMutation = async (mutation) => {
+        mutationStarted = true;
+        await reconcileGate;
+        const result = await originalHandleThreadNameMutation(mutation);
+        mutationFinished = true;
+        return result;
+      };
+
+      const ws = await openWebSocket(wsURL);
+      try {
+        const initial = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(initial.error, undefined);
+
+        const updatePromise = waitForRelayMessage(ws, (message) => (
+          message.method === "dock/update"
+          && (message.params?.rows || []).some((card) => (
+            card.threadID === "newer" && card.title === "Quick response renamed newer"
+          ))
+        ));
+        const startedAt = Date.now();
+        const response = await jsonRpcRequest(ws, "thread/name/set", {
+          threadId: "newer",
+          name: "Quick response renamed newer",
+        });
+        const responseMs = Date.now() - startedAt;
+
+        assert.equal(response.error, undefined);
+        assert.equal(mutationStarted, true);
+        assert.equal(mutationFinished, false);
+        assert.ok(
+          responseMs < 500,
+          `expected thread/name/set response before delayed reconcile, got ${responseMs}ms`,
+        );
+
+        releaseReconcile();
+        const update = await updatePromise;
+        const updatedCard = update.params.rows.find((card) => card.threadID === "newer");
+
+        assert.deepEqual(appServer.renameRequests, [
+          { threadId: "newer", name: "Quick response renamed newer" },
+        ]);
+        assert.equal(updatedCard?.title, "Quick response renamed newer");
+        const reconcileFinishedDeadline = Date.now() + 1_000;
+        while (!mutationFinished && Date.now() < reconcileFinishedDeadline) {
+          await sleepMs(5);
+        }
+        assert.equal(mutationFinished, true);
+      } finally {
+        releaseReconcile();
+        ws.close();
+      }
+    });
+  } finally {
+    await appServer.close();
+  }
+});
+
 test("thread/name/updated from history upstream refreshes dock card title without client rename", async () => {
   const appServer = await startCanonicalActivityAppServer();
   try {
