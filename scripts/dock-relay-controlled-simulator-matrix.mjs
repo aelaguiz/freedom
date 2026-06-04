@@ -18,6 +18,7 @@ const DEFAULT_REQUIRED_SCENARIOS = [
   "foreground-resume-all-surfaces",
   "large-list-checkpoint",
   "thread-activity",
+  "server-rename-notification",
   "server-request",
   "source-refresh",
   "live-lease-expiry",
@@ -82,6 +83,11 @@ const SCENARIO_REQUIREMENTS = {
   "thread-activity": {
     routes: ["dock/subscribe", "dock/update"],
     minScenarioTransitionChecks: 2,
+    minCheckpointSweeps: 1,
+  },
+  "server-rename-notification": {
+    routes: ["dock/subscribe", "dock/update"],
+    minScenarioTransitionChecks: 1,
     minCheckpointSweeps: 1,
   },
   "current-work-visible": {

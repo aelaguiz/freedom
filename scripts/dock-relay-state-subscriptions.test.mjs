@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { RELAY_STATE_STREAM_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
 import { RelayStateEngine } from "./dock-relay-state-engine.mjs";
+import { NotificationIngestor } from "./dock-relay-state-ingest.mjs";
 import { StateSubscriptionHub } from "./dock-relay-state-subscriptions.mjs";
 
 function sleep(ms) {
@@ -197,6 +198,109 @@ test("thread name mutations reconcile and publish dock and archive views", async
   assert.equal(result.reason, "thread/name/set");
   assert.deepEqual(result.dock, { seq: 4 });
   assert.deepEqual(result.archive, { seq: 5 });
+});
+
+test("thread/name/updated notifications are parsed as thread-name invalidations", () => {
+  const ingestor = new NotificationIngestor({ store: {}, hostId: "home" });
+
+  assert.deepEqual(ingestor.ingestThreadNameUpdated({
+    method: "thread/name/updated",
+    params: {
+      threadId: "thread-1",
+      threadName: "Server title",
+    },
+  }), {
+    threadId: "thread-1",
+    reason: "thread/name/updated",
+  });
+  assert.equal(ingestor.ingestThreadNameUpdated({
+    method: "thread/status/changed",
+    params: { threadId: "thread-1" },
+  }), null);
+  assert.equal(ingestor.ingestThreadNameUpdated({
+    method: "thread/name/updated",
+    params: { threadName: "Missing id" },
+  }), null);
+});
+
+test("thread/name/updated notifications reconcile and publish dock and archive views", async () => {
+  const calls = [];
+  const engine = new RelayStateEngine(
+    { hostId: "home", logger: null },
+    {
+      store: {
+        currentSeq() {
+          return 1;
+        },
+        close() {},
+      },
+    },
+  );
+  engine.reconcileDock = async ({ reason }) => {
+    calls.push({ view: "dock", reason });
+    return { seq: 6 };
+  };
+  engine.reconcileArchive = async ({ reason }) => {
+    calls.push({ view: "archive", reason });
+    return { seq: 7 };
+  };
+
+  const result = await engine.handleThreadNameNotification({
+    method: "thread/name/updated",
+    params: {
+      threadId: "thread-1",
+      threadName: "Server title",
+    },
+  });
+
+  assert.deepEqual(calls, [
+    { view: "dock", reason: "thread/name/updated" },
+    { view: "archive", reason: "thread/name/updated" },
+  ]);
+  assert.equal(result.reason, "thread/name/updated");
+  assert.deepEqual(result.dock, { seq: 6 });
+  assert.deepEqual(result.archive, { seq: 7 });
+});
+
+test("thread/name/updated reconcile failures do not log raw thread names", async () => {
+  const warnings = [];
+  const rawThreadName = "Raw server rename title that must not be logged";
+  const engine = new RelayStateEngine(
+    {
+      hostId: "home",
+      logger: {
+        warn(event, fields) {
+          warnings.push({ event, fields });
+        },
+      },
+    },
+    {
+      store: {
+        currentSeq() {
+          return 1;
+        },
+        close() {},
+      },
+    },
+  );
+  engine.reconcileDock = async () => {
+    throw new Error("dock reconcile failed");
+  };
+  engine.reconcileArchive = async ({ reason }) => ({ seq: 8, reason });
+
+  await assert.rejects(
+    () => engine.handleThreadNameNotification({
+      method: "thread/name/updated",
+      params: {
+        threadId: "thread-1",
+        threadName: rawThreadName,
+      },
+    }),
+    /dock reconcile failed/u
+  );
+
+  assert.ok(warnings.some((entry) => entry.event === "state.thread_name_mutation_reconcile_failed"));
+  assert.equal(JSON.stringify(warnings).includes(rawThreadName), false);
 });
 
 test("RelayStateEngine treats a fresh empty dock view as complete instead of reconciling forever", () => {

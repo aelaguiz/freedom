@@ -44,6 +44,7 @@ const SUPPORTED_SCENARIOS = new Set([
   "resync-gap",
   "root-catchup-window-contract",
   "server-request",
+  "server-rename-notification",
   "source-refresh",
   "spawn-edge",
   "thread-activity",
@@ -80,7 +81,7 @@ const FORBIDDEN_SIMULATOR_DETAIL_SIDE_DOOR_ROUTES = new Set([
 function usage() {
   return [
     "Usage:",
-    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <archive-toggle|current-work-visible|detail-reconnect|detail-history-request|detail-replay-pressure|file-change-review|foreground-resume-all-surfaces|large-list-checkpoint|live-lease-expiry|multi-host-isolation|mutation-ack-projection-refresh-failure|rapid-mutations|resync-gap|root-catchup-window-contract|server-request|source-refresh|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
+    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <archive-toggle|current-work-visible|detail-reconnect|detail-history-request|detail-replay-pressure|file-change-review|foreground-resume-all-surfaces|large-list-checkpoint|live-lease-expiry|multi-host-isolation|mutation-ack-projection-refresh-failure|rapid-mutations|resync-gap|root-catchup-window-contract|server-request|server-rename-notification|source-refresh|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
     "",
     "Options:",
     "  --summary-out <path>                 Write Markdown summary.",
@@ -2113,6 +2114,309 @@ async function runThreadActivityScenario(options) {
           stableThreadID,
           movingThreadID,
           newThreadID,
+        },
+        transitions,
+        findings,
+      }],
+      stream: {
+        notificationCount: streamProbe.notifications.length,
+        resyncCount: streamProbe.resyncs.length,
+        finalState: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
+      },
+      clientPathEvidence,
+      findings,
+      unsupportedFacts: [],
+    };
+
+    writeProofReport(options.jsonOut, report);
+    if (options.summaryOut) {
+      writeText(options.summaryOut, buildMarkdownSummary(report));
+    }
+    await waitForFile(options.stopIn, options.waitTimeoutMs, "simulator UI sampler completion");
+    return report;
+  } finally {
+    await streamProbe.close().catch(() => null);
+    await relay.close().catch(() => null);
+    await closeWebSocketServer(historyServer).catch(() => null);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function runServerRenameNotificationScenario(options) {
+  const scenarioName = "server-rename-notification";
+  const routeEvents = [];
+  const findings = [];
+  const transitions = [];
+  const samples = [];
+  const startedAtMs = Date.now();
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `codex-dock-sim-${scenarioName}-`));
+  const hostID = `sim-${scenarioName}-fixture`;
+  const stableThreadID = `sim-${scenarioName}-stable`;
+  const renamedThreadID = `sim-${scenarioName}-renamed`;
+  const initialTitle = "Simulator server rename before notification";
+  const renamedTitle = "Simulator server rename after notification";
+  const initializedClients = new Set();
+  let notificationSentAtMs = null;
+  let sourceRows = [
+    {
+      ...fixtureThread(stableThreadID, "Simulator server rename stable row", 200),
+      name: "Simulator server rename stable title",
+    },
+    {
+      ...fixtureThread(renamedThreadID, "Simulator server rename row preview", 100),
+      name: initialTitle,
+    },
+  ];
+  const rowForThread = (threadID) => sourceRows.find((row) => row.id === threadID) || null;
+  const emitThreadNameUpdated = (threadID, threadName) => {
+    let sent = 0;
+    for (const ws of initializedClients) {
+      if (ws.readyState !== WebSocket.OPEN) {
+        continue;
+      }
+      ws.send(JSON.stringify({
+        jsonrpc: "2.0",
+        method: "thread/name/updated",
+        params: { threadId: threadID, threadName },
+      }));
+      sent += 1;
+    }
+    recordClientRoute(
+      routeEvents,
+      "thread/name/updated",
+      "fixture upstream emitted server-side thread rename notification",
+      { threadID, count: sent }
+    );
+    return sent;
+  };
+
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise((resolve) => historyServer.once("listening", resolve));
+  historyServer.on("connection", (ws) => {
+    ws.on("close", () => {
+      initializedClients.delete(ws);
+    });
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        recordClientRoute(routeEvents, "initialize", "relay initialized server-rename fixture upstream", { threadID: renamedThreadID });
+        sendFixtureResult(ws, message.id, {
+          userAgent: `codex-sim-${scenarioName}-fixture`,
+          codexHome: tempDir,
+          platformFamily: "unix",
+          platformOs: "macos",
+        });
+      } else if (message.method === "initialized") {
+        initializedClients.add(ws);
+        recordClientRoute(routeEvents, "initialized", "relay sent initialized notification to server-rename fixture upstream", { threadID: renamedThreadID });
+      } else if (message.method === "thread/list") {
+        sendFixtureResult(ws, message.id, {
+          data: activeFixtureRows(message, sourceRows),
+          nextCursor: null,
+          backwardsCursor: null,
+        });
+      } else if (message.method === "thread/loaded/list") {
+        sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
+      } else if (message.method === "thread/read" || message.method === "thread/resume") {
+        sendFixtureThreadRead(ws, message, rowForThread(fixtureMessageThreadID(message)));
+      } else if (message.method === "thread/turns/list") {
+        sendFixtureThreadTurnsList(ws, message, rowForThread(fixtureMessageThreadID(message)));
+      } else if (message.method === "thread/name/set") {
+        transitionFailure(
+          findings,
+          "scenario_server_rename_notification_client_rename_request_seen",
+          "server-side rename notification scenario unexpectedly sent a client thread/name/set request",
+          { threadID: fixtureMessageThreadID(message) }
+        );
+        sendFixtureResult(ws, message.id, {});
+      }
+    });
+  });
+
+  const relayConfig = {
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    hostId: hostID,
+    hostName: "Simulator Server Rename Fixture",
+    hostEndpoint: "127.0.0.1:0",
+    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+    historyBearerToken: "history-token",
+    advertiseBonjour: false,
+    observabilityDir: false,
+    relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
+    relayStateAutoStart: false,
+    logger: {
+      debug() {},
+      info() {},
+      warn() {},
+      error() {},
+      fault() {},
+      fatalSync() {},
+    },
+  };
+  const relay = startServer(relayConfig);
+  await relay.listening;
+  const relayPort = relay.server.address().port;
+  const relayUrl = `ws://127.0.0.1:${relayPort}`;
+  const fixtureOptions = {
+    ...options,
+    relayUrl,
+    codexHome: tempDir,
+    sqliteHome: tempDir,
+    detail: "none",
+  };
+  const streamProbe = new DockStreamProbe(fixtureOptions);
+
+  try {
+    await streamProbe.open();
+    const initialWait = await waitForStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => {
+        const renamedCard = dockSnapshotCardForThread(snapshot, renamedThreadID);
+        return dockSnapshotThreadIndex(snapshot, stableThreadID) === 0
+          && dockSnapshotThreadIndex(snapshot, renamedThreadID) === 1
+          && renamedCard?.title === initialTitle;
+      },
+    });
+    if (!initialWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_server_rename_notification_initial_title_missing",
+        "initial server-rename fixture rows did not appear with the expected title before simulator launch",
+        { threadID: renamedThreadID }
+      );
+    }
+    const initial = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+    findings.push(...scenarioComparisonFindings({ phase: "initial", comparison: initial.comparison }));
+    const initialFinishedAt = new Date().toISOString();
+    samples.push({
+      sampleIndex: 0,
+      startedAt: new Date(startedAtMs).toISOString(),
+      finishedAt: initialFinishedAt,
+      freshDock: sanitizeDockSnapshotForReport(initial.freshDock),
+    });
+
+    writeJSON(options.readyOut, {
+      ready: true,
+      scenario: scenarioName,
+      relayUrl,
+      hosts: `127.0.0.1:${relayPort}`,
+      target: {
+        sourceHostID: hostID,
+        stableThreadID,
+        threadID: renamedThreadID,
+      },
+      at: new Date().toISOString(),
+    });
+    await waitForFile(options.uiReadyIn, options.waitTimeoutMs, "simulator UI sampler readiness");
+    await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 1_500));
+
+    notificationSentAtMs = Date.now();
+    sourceRows = [
+      {
+        ...fixtureThread(renamedThreadID, "Simulator server rename row preview", 300),
+        name: renamedTitle,
+      },
+      {
+        ...fixtureThread(stableThreadID, "Simulator server rename stable row", 200),
+        name: "Simulator server rename stable title",
+      },
+    ];
+    const notificationCount = emitThreadNameUpdated(renamedThreadID, renamedTitle);
+    if (notificationCount < 1) {
+      transitionFailure(
+        findings,
+        "scenario_server_rename_notification_no_upstream_client",
+        "server-side rename notification scenario had no initialized upstream relay client to notify",
+        { threadID: renamedThreadID }
+      );
+    }
+
+    const renameWait = await waitForStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => {
+        const renamedCard = dockSnapshotCardForThread(snapshot, renamedThreadID);
+        return dockSnapshotThreadIndex(snapshot, renamedThreadID) === 0
+          && dockSnapshotThreadIndex(snapshot, stableThreadID) === 1
+          && renamedCard?.title === renamedTitle;
+      },
+    });
+    const renameLag = scenarioLagSummary({
+      transition: "server-rename-notification",
+      startedAtMs: notificationSentAtMs,
+      acknowledgedAtMs: notificationSentAtMs,
+      observedAtMs: renameWait.observedAtMs,
+      maxStreamLagMs: options.maxStreamLagMs,
+    });
+    if (!renameWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_server_rename_notification_title_not_seen",
+        "server-side thread/name/updated notification did not change the Dock stream card title",
+        { threadID: renamedThreadID }
+      );
+    } else if (renameLag.exceeded) {
+      transitionFailure(
+        findings,
+        "scenario_server_rename_notification_lag_exceeded",
+        "server-side rename notification changed the Dock stream after the relay lag budget",
+        {
+          observedLagMs: renameLag.lag_change_to_relay_ms,
+          maxStreamLagMs: options.maxStreamLagMs,
+        }
+      );
+    }
+    const renameComparison = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+    findings.push(...scenarioComparisonFindings({ phase: "server-rename-notification", comparison: renameComparison.comparison }));
+    transitions.push({
+      name: "server-rename-notification",
+      kind: "server-thread-name-updated-notification",
+      iteration: 1,
+      route: "dock/update",
+      wait: renameWait,
+      lag: renameLag,
+      freshDock: sanitizeDockSnapshotForReport(renameComparison.freshDock),
+      streamComparison: renameComparison.comparison,
+      streamComparisonAttempts: renameComparison.attempts,
+    });
+
+    const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
+    findings.push(...requiredRouteFindings(
+      clientPathEvidence,
+      ["dock/subscribe", "dock/update"]
+    ));
+    const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
+    const report = {
+      schemaVersion: 1,
+      kind: "codex-dock-controlled-simulator-scenario-relay-report",
+      mode: "scenario",
+      scenario: scenarioName,
+      startedAt: new Date(startedAtMs).toISOString(),
+      endedAt: new Date().toISOString(),
+      relayUrl,
+      summary: {
+        ok: scenarioOK,
+        clientPathOK: scenarioOK,
+        scenario: scenarioName,
+        scenarioOK,
+        scenarioCount: 1,
+        scenarioTransitionCount: transitions.length,
+        implementedScenarios: [scenarioName],
+        unimplementedRequiredScenarios: [],
+        failures: findings.length,
+        clientPathRouteCounts: clientPathEvidence.routeCounts,
+      },
+      samples,
+      scenarios: [{
+        id: scenarioName,
+        ok: scenarioOK,
+        target: {
+          sourceHostID: hostID,
+          stableThreadID,
+          threadID: renamedThreadID,
         },
         transitions,
         findings,
@@ -6211,6 +6515,8 @@ async function main() {
     report = await runFileChangeReviewScenario(options);
   } else if (options.scenario === "server-request") {
     report = await runServerRequestScenario(options);
+  } else if (options.scenario === "server-rename-notification") {
+    report = await runServerRenameNotificationScenario(options);
   } else if (options.scenario === "live-lease-expiry") {
     report = await runLiveLeaseExpiryScenario(options);
   } else if (options.scenario === "multi-host-isolation") {

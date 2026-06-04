@@ -29,6 +29,13 @@ function relayLogger(config) {
   return config?.logger || defaultRelayLogger;
 }
 
+function upstreamNotificationCallback(config, source = {}) {
+  const handler = config?.upstreamNotificationHandler;
+  return typeof handler === "function"
+    ? (message) => handler(message, source)
+    : null;
+}
+
 function upstreamPoolForConfig(config) {
   if (!config.upstreamPool) {
     config.upstreamPool = new UpstreamConnectionPool({
@@ -47,6 +54,10 @@ function historyClientForConfig(config) {
       bearerToken: config.historyBearerToken,
       logger: relayLogger(config),
       initializer: initializeClient,
+      onNotification: upstreamNotificationCallback(config, {
+        label: "history",
+        url: config.historyUrl,
+      }),
     });
   }
   return config.historyClient;
@@ -60,6 +71,7 @@ function liveStatusCacheForConfig(config) {
         endpoints: configuredLiveEndpointsForConfig(config, { includeHistory: false }),
         excludeURLs: [],
         pool: upstreamPoolForConfig(config),
+        onNotification: config.upstreamNotificationHandler || null,
       }),
       logger: relayLogger(config),
       statusTracker: config.statusTracker || null,
@@ -430,7 +442,14 @@ async function clientForEndpoint(endpoint, {
   pool = null,
   label = "live-status",
   timeoutMs = undefined,
+  onNotification = null,
 } = {}) {
+  const notificationCallback = typeof onNotification === "function"
+    ? (message) => onNotification(message, {
+        label,
+        url: endpoint.url,
+      })
+    : null;
   if (pool) {
     return pool.clientFor({
       label,
@@ -438,12 +457,14 @@ async function clientForEndpoint(endpoint, {
       bearerToken: endpoint.bearerToken || null,
       timeoutMs,
       initializer: initializeClient,
+      onNotification: notificationCallback,
     });
   }
   const client = new JsonRpcWebSocketClient(endpoint.url, {
     bearerToken: endpoint.bearerToken || null,
     timeoutMs,
     logger,
+    onNotification: notificationCallback,
   });
   await initializeClient(client);
   return client;
@@ -464,8 +485,15 @@ async function readLoadedRows(endpoint, {
   logger = defaultRelayLogger,
   pool = null,
   timeoutMs = undefined,
+  onNotification = null,
 } = {}) {
-  return withEndpointClient(endpoint, { logger, pool, label: "live-status", timeoutMs }, async (client) => {
+  return withEndpointClient(endpoint, {
+    logger,
+    pool,
+    label: "live-status",
+    timeoutMs,
+    onNotification,
+  }, async (client) => {
     const loaded = await client.request("thread/loaded/list", { limit: LIVE_LOADED_LIST_LIMIT });
     const results = await Promise.allSettled((loaded.data || []).map((threadId) => (
       client.request("thread/read", {
@@ -566,6 +594,7 @@ async function enrichRowAttention(row, endpoint, logger = defaultRelayLogger) {
 async function collectLiveRows(options = {}) {
   const logger = typeof options?.warn === "function" ? options : options.logger || defaultRelayLogger;
   const pool = typeof options?.warn === "function" ? null : options.pool || null;
+  const onNotification = typeof options?.warn === "function" ? null : options.onNotification || null;
   const excludedURLs = new Set((typeof options?.warn === "function" ? [] : options.excludeURLs || [])
     .map(canonicalURLString));
   const endpoints = (typeof options?.warn === "function" ? [] : options.endpoints || [])
@@ -578,6 +607,7 @@ async function collectLiveRows(options = {}) {
       logger,
       pool,
       timeoutMs: LIVE_STATUS_UPSTREAM_TIMEOUT_MS,
+      onNotification,
     }),
   );
   const rowsById = new Map();

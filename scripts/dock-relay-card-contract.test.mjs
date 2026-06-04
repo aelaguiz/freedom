@@ -8,6 +8,7 @@ import {
   jsonRpcRequest,
   onceListening,
   openWebSocket,
+  sleepMs,
   waitForRelayMessage,
 } from "./dock-relay-test-helpers.mjs";
 
@@ -15,7 +16,16 @@ function appServerResponse(id, result) {
   return JSON.stringify({ id, result });
 }
 
+function appServerNotification(method, params) {
+  return JSON.stringify({
+    jsonrpc: "2.0",
+    method,
+    params,
+  });
+}
+
 async function startCanonicalActivityAppServer({
+  emitRenameNotifications = false,
   failTurnsFor = new Set(),
   loadedThreadIDs = [],
   listUpdatedAt = {},
@@ -23,6 +33,8 @@ async function startCanonicalActivityAppServer({
 } = {}) {
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   const clients = new Set();
+  const initializedClients = new Set();
+  const resumedClients = new Set();
   await onceListening(wss);
   const address = wss.address();
   const url = `ws://127.0.0.1:${address.port}`;
@@ -62,9 +74,33 @@ async function startCanonicalActivityAppServer({
     },
   };
   const renameRequests = [];
+  const renameThreadLocally = (threadId, name) => {
+    const thread = rows[threadId];
+    if (!thread) {
+      throw new Error(`missing fake thread: ${threadId}`);
+    }
+    thread.name = name;
+    thread.updatedAt = Math.max(Number(thread.updatedAt || 0), 4_000);
+  };
+  const emitThreadNameUpdated = (threadId, threadName, { resumedOnly = false } = {}) => {
+    const targets = resumedOnly ? resumedClients : initializedClients;
+    let sent = 0;
+    for (const ws of targets) {
+      if (ws.readyState !== 1) {
+        continue;
+      }
+      ws.send(appServerNotification("thread/name/updated", { threadId, threadName }));
+      sent += 1;
+    }
+    return sent;
+  };
   wss.on("connection", (ws) => {
     clients.add(ws);
-    ws.on("close", () => clients.delete(ws));
+    ws.on("close", () => {
+      clients.delete(ws);
+      initializedClients.delete(ws);
+      resumedClients.delete(ws);
+    });
     ws.on("message", (raw) => {
       const message = JSON.parse(raw.toString());
       if (message.method === "initialize") {
@@ -74,6 +110,8 @@ async function startCanonicalActivityAppServer({
           platformFamily: "unix",
           platformOs: "macos",
         }));
+      } else if (message.method === "initialized") {
+        initializedClients.add(ws);
       } else if (message.method === "thread/list") {
         ws.send(appServerResponse(message.id, {
           data: [rows.older, rows.newer],
@@ -104,6 +142,17 @@ async function startCanonicalActivityAppServer({
           data: [{ id: `${message.params?.threadId}-turn`, startedAt }],
           nextCursor: null,
         }));
+      } else if (message.method === "thread/resume") {
+        const thread = rows[message.params?.threadId];
+        if (!thread) {
+          ws.send(JSON.stringify({
+            id: message.id,
+            error: { code: -32602, message: "thread not found" },
+          }));
+          return;
+        }
+        resumedClients.add(ws);
+        ws.send(appServerResponse(message.id, { thread }));
       } else if (message.method === "thread/name/set") {
         const thread = rows[message.params?.threadId];
         if (!thread) {
@@ -117,15 +166,27 @@ async function startCanonicalActivityAppServer({
           threadId: message.params.threadId,
           name: message.params.name,
         });
-        thread.name = message.params.name;
-        thread.updatedAt = Math.max(Number(thread.updatedAt || 0), 4_000);
+        renameThreadLocally(message.params.threadId, message.params.name);
         ws.send(appServerResponse(message.id, {}));
+        if (emitRenameNotifications) {
+          setTimeout(() => {
+            emitThreadNameUpdated(message.params.threadId, message.params.name);
+          }, 0);
+        }
       }
     });
   });
   return {
     url,
     renameRequests,
+    emitThreadNameUpdated,
+    renameThreadLocally,
+    get initializedClientCount() {
+      return initializedClients.size;
+    },
+    get resumedClientCount() {
+      return resumedClients.size;
+    },
     close: async () => {
       for (const ws of clients) {
         ws.close();
@@ -212,6 +273,130 @@ test("thread/name/set forwards to app-server and refreshes dock card title from 
           { threadId: "newer", name: "Renamed newer" },
         ]);
         assert.equal(updatedCard?.title, "Renamed newer");
+      } finally {
+        ws.close();
+      }
+    });
+  } finally {
+    await appServer.close();
+  }
+});
+
+test("thread/name/updated from history upstream refreshes dock card title without client rename", async () => {
+  const appServer = await startCanonicalActivityAppServer();
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.relayStateEngine.reconcileDock({ reason: "test-initial" });
+      const historyEntry = [...config.upstreamPool.entries.values()]
+        .find((entry) => entry.label === "history");
+      assert.equal(typeof historyEntry?.client?.onNotification, "function");
+
+      const ws = await openWebSocket(wsURL);
+      try {
+        const initial = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(initial.error, undefined);
+        const initialCard = initial.result.rows.find((card) => card.threadID === "newer");
+        assert.equal(initialCard?.title, "Newer turn row");
+
+        const updatePromise = waitForRelayMessage(ws, (message) => (
+          message.method === "dock/update"
+          && (message.params?.rows || []).some((card) => (
+            card.threadID === "newer" && card.title === "Server renamed newer"
+          ))
+        ));
+        appServer.renameThreadLocally("newer", "Server renamed newer");
+        assert.ok(appServer.emitThreadNameUpdated("newer", "Server renamed newer") > 0);
+        const update = await updatePromise;
+        const updatedCard = update.params.rows.find((card) => card.threadID === "newer");
+
+        assert.deepEqual(appServer.renameRequests, []);
+        assert.equal(updatedCard?.title, "Server renamed newer");
+      } finally {
+        ws.close();
+      }
+    });
+  } finally {
+    await appServer.close();
+  }
+});
+
+test("thread/name/updated from active detail upstream refreshes dock card title before detail ledger can swallow it", async () => {
+  const appServer = await startCanonicalActivityAppServer();
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.relayStateEngine.reconcileDock({ reason: "test-initial" });
+      const ws = await openWebSocket(wsURL);
+      try {
+        const initial = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(initial.error, undefined);
+        const detail = await jsonRpcRequest(ws, "thread/detail/subscribe", { threadId: "newer" });
+        assert.equal(detail.error, undefined);
+        assert.equal(detail.result?.threadID, "newer");
+        assert.equal(appServer.resumedClientCount, 1);
+
+        const updatePromise = waitForRelayMessage(ws, (message) => (
+          message.method === "dock/update"
+          && (message.params?.rows || []).some((card) => (
+            card.threadID === "newer" && card.title === "Detail upstream rename"
+          ))
+        ));
+        appServer.renameThreadLocally("newer", "Detail upstream rename");
+        assert.equal(appServer.emitThreadNameUpdated("newer", "Detail upstream rename", {
+          resumedOnly: true,
+        }), 1);
+        const update = await updatePromise;
+        const updatedCard = update.params.rows.find((card) => card.threadID === "newer");
+
+        assert.equal(updatedCard?.title, "Detail upstream rename");
+      } finally {
+        ws.close();
+      }
+    });
+  } finally {
+    await appServer.close();
+  }
+});
+
+test("thread/name/set plus app-server rename notification produces one visible title transition", async () => {
+  const appServer = await startCanonicalActivityAppServer({ emitRenameNotifications: true });
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.relayStateEngine.reconcileDock({ reason: "test-initial" });
+      const ws = await openWebSocket(wsURL);
+      const titleUpdates = [];
+      ws.on("message", (data) => {
+        const message = JSON.parse(data.toString());
+        if (message.method !== "dock/update") {
+          return;
+        }
+        for (const card of message.params?.rows || []) {
+          if (card.threadID === "newer" && card.title === "Command renamed newer") {
+            titleUpdates.push(message);
+          }
+        }
+      });
+      try {
+        const initial = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(initial.error, undefined);
+
+        const updatePromise = waitForRelayMessage(ws, (message) => (
+          message.method === "dock/update"
+          && (message.params?.rows || []).some((card) => (
+            card.threadID === "newer" && card.title === "Command renamed newer"
+          ))
+        ));
+        const response = await jsonRpcRequest(ws, "thread/name/set", {
+          threadId: "newer",
+          name: "Command renamed newer",
+        });
+        assert.equal(response.error, undefined);
+        await updatePromise;
+        await sleepMs(100);
+
+        assert.deepEqual(appServer.renameRequests, [
+          { threadId: "newer", name: "Command renamed newer" },
+        ]);
+        assert.equal(titleUpdates.length, 1);
       } finally {
         ws.close();
       }

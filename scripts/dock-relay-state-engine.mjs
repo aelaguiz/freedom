@@ -179,6 +179,7 @@ class RelayStateEngine {
       scheduleReconciliation: (request) => this.scheduleReconciliation(request),
       logger: this.logger,
     });
+    this.mutationReconcileChain = Promise.resolve(null);
     this.liveLeaseExpiryTimer = null;
     this.started = false;
   }
@@ -197,6 +198,7 @@ class RelayStateEngine {
       this.liveLeaseExpiryTimer = null;
     }
     await this.reconciler.stop();
+    await this.mutationReconcileChain.catch(() => null);
     this.store.close();
   }
 
@@ -518,6 +520,7 @@ class RelayStateEngine {
       pool: this.config.upstreamPool || null,
       endpoints,
       excludeURLs: [],
+      onNotification: this.config.upstreamNotificationHandler || null,
     });
     const endpointsByUrl = new Map(endpoints.map((endpoint) => [endpoint.url, endpoint]));
     const acceptedRows = [];
@@ -984,42 +987,27 @@ class RelayStateEngine {
     });
   }
 
-  async handleArchiveMutation({ threadId, archived }) {
-    const mutation = this.ingestor.ingestArchiveMutation({ threadId, archived });
-    if (!mutation) {
-      return null;
-    }
-    const results = await Promise.allSettled([
-      this.reconcileDock({ reason: mutation.reason }),
-      this.reconcileArchive({ reason: mutation.reason }),
-    ]);
-    for (const [index, result] of results.entries()) {
-      if (result.status !== "rejected" && !result.value?.error) {
-        continue;
+  queueMutationReconciliation(operation) {
+    const previous = this.mutationReconcileChain.catch(() => null);
+    const current = previous.then(operation, operation);
+    const cleanup = current.then(
+      () => null,
+      () => null,
+    ).then(() => {
+      if (this.mutationReconcileChain === cleanup) {
+        this.mutationReconcileChain = Promise.resolve(null);
       }
-      this.logger?.warn?.("state.archive_mutation_reconcile_failed", {
-        reason: mutation.reason,
-        view: index === 0 ? DOCK_VIEW : ARCHIVE_VIEW,
-        error: result.status === "rejected" ? result.reason : result.value.error,
-      });
-    }
-    const failed = results.find((result) => result.status === "rejected" || result.value?.error);
-    if (failed) {
-      const reason = failed.status === "rejected" ? failed.reason : failed.value.error;
-      throw reason instanceof Error ? reason : new Error(String(reason || "archive mutation reconcile failed"));
-    }
-    return {
-      reason: mutation.reason,
-      dock: results[0].status === "fulfilled" ? results[0].value : null,
-      archive: results[1].status === "fulfilled" ? results[1].value : null,
-    };
+      return null;
+    });
+    this.mutationReconcileChain = cleanup;
+    return current;
   }
 
-  async handleThreadNameMutation({ threadId }) {
-    if (!threadId) {
-      return null;
-    }
-    const reason = "thread/name/set";
+  async reconcileDockAndArchiveAfterMutation({
+    reason,
+    logEvent,
+    failureMessage,
+  }) {
     const results = await Promise.allSettled([
       this.reconcileDock({ reason }),
       this.reconcileArchive({ reason }),
@@ -1028,7 +1016,7 @@ class RelayStateEngine {
       if (result.status !== "rejected" && !result.value?.error) {
         continue;
       }
-      this.logger?.warn?.("state.thread_name_mutation_reconcile_failed", {
+      this.logger?.warn?.(logEvent, {
         reason,
         view: index === 0 ? DOCK_VIEW : ARCHIVE_VIEW,
         error: result.status === "rejected" ? result.reason : result.value.error,
@@ -1036,14 +1024,45 @@ class RelayStateEngine {
     }
     const failed = results.find((result) => result.status === "rejected" || result.value?.error);
     if (failed) {
-      const error = failed.status === "rejected" ? failed.reason : failed.value.error;
-      throw error instanceof Error ? error : new Error(String(error || "thread name mutation reconcile failed"));
+      const reason = failed.status === "rejected" ? failed.reason : failed.value.error;
+      throw reason instanceof Error ? reason : new Error(String(reason || failureMessage));
     }
     return {
       reason,
       dock: results[0].status === "fulfilled" ? results[0].value : null,
       archive: results[1].status === "fulfilled" ? results[1].value : null,
     };
+  }
+
+  async handleArchiveMutation({ threadId, archived }) {
+    const mutation = this.ingestor.ingestArchiveMutation({ threadId, archived });
+    if (!mutation) {
+      return null;
+    }
+    return this.queueMutationReconciliation(() => this.reconcileDockAndArchiveAfterMutation({
+      reason: mutation.reason,
+      logEvent: "state.archive_mutation_reconcile_failed",
+      failureMessage: "archive mutation reconcile failed",
+    }));
+  }
+
+  async handleThreadNameNotification(message) {
+    const mutation = this.ingestor.ingestThreadNameUpdated(message);
+    if (!mutation) {
+      return null;
+    }
+    return this.handleThreadNameMutation(mutation);
+  }
+
+  async handleThreadNameMutation({ threadId, reason = "thread/name/set" }) {
+    if (!threadId) {
+      return null;
+    }
+    return this.queueMutationReconciliation(() => this.reconcileDockAndArchiveAfterMutation({
+      reason,
+      logEvent: "state.thread_name_mutation_reconcile_failed",
+      failureMessage: "thread name mutation reconcile failed",
+    }));
   }
 
   stateHealth() {

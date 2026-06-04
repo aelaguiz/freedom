@@ -513,6 +513,36 @@ function sendThreadDetailUpdate(config, downstreamWs, update) {
   });
 }
 
+function threadIDFromRenameNotification(message) {
+  return message?.params?.threadId || message?.params?.threadID || null;
+}
+
+function ingestRelayStateNotification(config, message, source = {}) {
+  if (message?.method !== "thread/name/updated") {
+    return false;
+  }
+  try {
+    relayStateEngineForConfig(config)
+      .handleThreadNameNotification(message)
+      .catch((error) => {
+        relayLogger(config).warn("state.thread_name_notification_ingest_failed", {
+          method: message.method,
+          sourceLabel: source?.label || null,
+          threadIDHash: shortHash(threadIDFromRenameNotification(message)),
+          error,
+        });
+      });
+  } catch (error) {
+    relayLogger(config).warn("state.thread_name_notification_ingest_failed", {
+      method: message.method,
+      sourceLabel: source?.label || null,
+      threadIDHash: shortHash(threadIDFromRenameNotification(message)),
+      error,
+    });
+  }
+  return true;
+}
+
 function handleDetailNotification(config, session, downstreamWs, generation, message) {
   const detail = session.detailSubscription;
   if (!detail || detail.generation !== generation) {
@@ -627,6 +657,9 @@ function makeSessionUpstreamClient(config, endpoint, session, downstreamWs, gene
     logger: relayLogger(config),
     onNotification: (message) => {
       if (isSessionActive(session, downstreamWs, generation)) {
+        ingestRelayStateNotification(config, message, {
+          label: endpoint.label || "active-session",
+        });
         if (!handleDetailNotification(config, session, downstreamWs, generation, message)) {
           sendJson(downstreamWs, message);
         }
@@ -1010,6 +1043,11 @@ function startServer(config) {
     hostName: config.hostName,
     configuredHostID: configuredHostIDFromConfig(config),
   });
+  const configuredUpstreamNotificationHandler = config.upstreamNotificationHandler || null;
+  config.upstreamNotificationHandler = (message, source = {}) => {
+    ingestRelayStateNotification(config, message, source);
+    configuredUpstreamNotificationHandler?.(message, source);
+  };
   config.upstreamPool = config.upstreamPool || new UpstreamConnectionPool({
     logger,
     maxOpenByLabel: UPSTREAM_POOL_LIMITS,
@@ -1383,8 +1421,8 @@ function startServer(config) {
             reject(error);
           } else {
             try {
-              await config.upstreamPool?.closeAll?.({ reason: "relay_close" });
               await config.relayStateEngine?.close?.();
+              await config.upstreamPool?.closeAll?.({ reason: "relay_close" });
               logger.info("relay.closed");
               resolve();
             } catch (closeError) {

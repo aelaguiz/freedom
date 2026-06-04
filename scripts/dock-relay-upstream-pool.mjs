@@ -61,6 +61,7 @@ class UpstreamConnectionPool {
     connectTimeoutMs = undefined,
     requestTimeoutMs = undefined,
     initializer = null,
+    onNotification = null,
   }) {
     const key = this.keyFor({ label, url, bearerToken });
     const existing = this.entries.get(key);
@@ -94,6 +95,7 @@ class UpstreamConnectionPool {
       connectTimeoutMs,
       requestTimeoutMs,
       logger: this.logger,
+      onNotification,
       onClose: () => {
         if (entry) {
           entry.closed = true;
@@ -145,6 +147,7 @@ class UpstreamConnectionPool {
       connectTimeoutMs: options.connectTimeoutMs,
       requestTimeoutMs: options.requestTimeoutMs,
       initializer: options.initializer || null,
+      onNotification: options.onNotification || null,
     });
     try {
       return await client.request(method, params);
@@ -207,6 +210,7 @@ class HistoryClient {
     connectTimeoutMs = undefined,
     requestTimeoutMs = undefined,
     initializer,
+    onNotification = null,
   }) {
     this.pool = pool;
     this.url = url;
@@ -216,6 +220,7 @@ class HistoryClient {
     this.connectTimeoutMs = connectTimeoutMs;
     this.requestTimeoutMs = requestTimeoutMs;
     this.initializer = initializer;
+    this.onNotification = onNotification;
   }
 
   request(method, params = undefined) {
@@ -233,6 +238,7 @@ class HistoryClient {
         connectTimeoutMs: this.connectTimeoutMs,
         requestTimeoutMs: this.requestTimeoutMs,
         initializer: this.initializer,
+        onNotification: this.onNotification,
       },
     );
   }
