@@ -51,6 +51,7 @@ const SUPPORTED_SCENARIOS = new Set([
   "server-rename-notification",
   "server-status-notification",
   "source-refresh",
+  "spawned-private-child-status-rollup",
   "spawn-edge",
   "thread-activity",
 ]);
@@ -86,7 +87,7 @@ const FORBIDDEN_SIMULATOR_DETAIL_SIDE_DOOR_ROUTES = new Set([
 function usage() {
   return [
     "Usage:",
-    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <archive-toggle|current-work-visible|detail-reconnect|detail-history-request|detail-replay-pressure|file-change-review|foreground-resume-all-surfaces|large-list-checkpoint|live-lease-expiry|multi-host-isolation|mutation-ack-projection-refresh-failure|rapid-mutations|resync-gap|root-catchup-window-contract|server-request|server-rename-notification|server-status-notification|source-refresh|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
+    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <archive-toggle|current-work-visible|detail-reconnect|detail-history-request|detail-replay-pressure|file-change-review|foreground-resume-all-surfaces|large-list-checkpoint|live-lease-expiry|multi-host-isolation|mutation-ack-projection-refresh-failure|rapid-mutations|resync-gap|root-catchup-window-contract|server-request|server-rename-notification|server-status-notification|source-refresh|spawned-private-child-status-rollup|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
     "",
     "Options:",
     "  --summary-out <path>                 Write Markdown summary.",
@@ -432,6 +433,33 @@ function fixtureThreadWithStatus(id, preview, updatedAt, status) {
 
 function activeFixtureRows(message, rows) {
   return message.params?.archived === true ? [] : rows;
+}
+
+function writeFixtureSessionMeta(codexHome, {
+  id,
+  cwd = "/tmp/codex-client",
+  source = "cli",
+  threadSource = undefined,
+  git = { branch: "main", repository_url: "git@example.test:repo/example.git" },
+} = {}) {
+  const dir = path.join(codexHome, "sessions", "2026", "06", "05");
+  fs.mkdirSync(dir, { recursive: true });
+  const payload = {
+    id,
+    cwd,
+    source,
+    git,
+    ...(threadSource !== undefined ? { thread_source: threadSource } : {}),
+  };
+  fs.writeFileSync(
+    path.join(dir, `rollout-2026-06-05T12-00-00-${id}.jsonl`),
+    `${JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-06-05T12:00:00.000Z",
+      payload,
+    })}\n`,
+    "utf8",
+  );
 }
 
 function proofMessageSummary(message, overrides = {}) {
@@ -1068,6 +1096,7 @@ function mergeDockSnapshotsForSimulatorReport(snapshots) {
 async function createControlledMultiHostFixture({ options, tempDir, host, getRows }) {
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise((resolve) => historyServer.once("listening", resolve));
+  const historyUrl = `ws://127.0.0.1:${historyServer.address().port}`;
   historyServer.on("connection", (ws) => {
     ws.on("message", (data) => {
       const message = JSON.parse(data.toString());
@@ -1873,6 +1902,7 @@ async function runThreadActivityScenario(options) {
 
   const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise((resolve) => historyServer.once("listening", resolve));
+  const historyUrl = `ws://127.0.0.1:${historyServer.address().port}`;
   historyServer.on("connection", (ws) => {
     ws.on("message", (data) => {
       const message = JSON.parse(data.toString());
@@ -1907,8 +1937,11 @@ async function runThreadActivityScenario(options) {
     hostName: `Simulator ${scenarioName} Fixture`,
     hostEndpoint: "127.0.0.1:0",
     ...appServerRegistryFixtureConfig({
-      historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+      historyUrl,
       historyBearerToken: "history-token",
+      liveEndpoints: isCurrentWorkVisible
+        ? [{ label: `sim-${scenarioName}-live`, url: historyUrl }]
+        : [],
     }),
     advertiseBonjour: false,
     observabilityDir: false,
@@ -4669,6 +4702,337 @@ async function runSpawnEdgeScenario(options) {
   }
 }
 
+async function runSpawnedPrivateChildStatusRollupScenario(options) {
+  const scenarioName = "spawned-private-child-status-rollup";
+  const routeEvents = [];
+  const findings = [];
+  const transitions = [];
+  const samples = [];
+  const startedAtMs = Date.now();
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-sim-private-child-rollup-"));
+  const hostID = "sim-private-child-rollup-fixture";
+  const parentThreadID = "sim-rollup-parent";
+  const childThreadID = "sim-rollup-private-child";
+  const parentRow = fixtureThreadWithStatus(
+    parentThreadID,
+    "Simulator private child rollup parent",
+    100,
+    { type: "idle" },
+  );
+  let sourceRows = [parentRow];
+
+  writeFixtureSessionMeta(tempDir, {
+    id: childThreadID,
+    cwd: "/tmp/codex-client/private-child-rollup",
+    source: {
+      subagent: {
+        thread_spawn: {
+          parent_thread_id: parentThreadID,
+          child_thread_id: childThreadID,
+          depth: 1,
+          agent_nickname: "Hypatia",
+          agent_role: "worker",
+        },
+      },
+    },
+    threadSource: "subagent",
+    git: {
+      branch: "private-child-rollup",
+      repository_url: "git@example.test:repo/private-child-rollup.git",
+    },
+  });
+
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise((resolve) => historyServer.once("listening", resolve));
+  historyServer.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === "initialize") {
+        sendFixtureResult(ws, message.id, {
+          userAgent: "codex-sim-private-child-rollup-fixture",
+          codexHome: tempDir,
+          platformFamily: "unix",
+          platformOs: "macos",
+        });
+      } else if (message.method === "thread/list") {
+        const sourceKinds = message.params?.sourceKinds;
+        const rows = activeFixtureRows(
+          message,
+          sourceRows.filter((row) => threadMatchesSourceKinds(row, sourceKinds)),
+        );
+        sendFixtureResult(ws, message.id, {
+          data: rows,
+          nextCursor: null,
+          backwardsCursor: null,
+        });
+      } else if (message.method === "thread/loaded/list") {
+        sendFixtureResult(ws, message.id, { data: [], nextCursor: null });
+      } else if (message.method === "thread/read" || message.method === "thread/resume") {
+        const threadID = message.params?.threadId || message.params?.threadID;
+        const thread = sourceRows.find((row) => row.id === threadID);
+        if (!thread) {
+          sendFixtureError(ws, message.id, `unknown thread: ${threadID || "missing"}`);
+          return;
+        }
+        sendFixtureResult(ws, message.id, {
+          thread: {
+            ...thread,
+            turns: [],
+          },
+        });
+      } else if (message.method === "thread/turns/list") {
+        sendFixtureResult(ws, message.id, {
+          data: [],
+          nextCursor: null,
+          backwardsCursor: null,
+        });
+      }
+    });
+  });
+
+  const relayConfig = {
+    listenHost: "127.0.0.1",
+    port: 0,
+    phoneAuth: "none",
+    hostId: hostID,
+    hostName: "Simulator Private Child Rollup Fixture",
+    hostEndpoint: "127.0.0.1:0",
+    ...appServerRegistryFixtureConfig({
+      historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+      historyBearerToken: "history-token",
+      codexHome: tempDir,
+    }),
+    advertiseBonjour: false,
+    observabilityDir: false,
+    relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
+    relayStateAutoStart: false,
+    logger: {
+      debug() {},
+      info() {},
+      warn() {},
+      error() {},
+      fault() {},
+      fatalSync() {},
+    },
+  };
+  const relay = startServer(relayConfig);
+  await relay.listening;
+  const relayPort = relay.server.address().port;
+  const relayUrl = `ws://127.0.0.1:${relayPort}`;
+  const fixtureOptions = {
+    ...options,
+    relayUrl,
+    codexHome: tempDir,
+    sqliteHome: tempDir,
+    detail: "none",
+  };
+  const streamProbe = new DockStreamProbe(fixtureOptions);
+
+  try {
+    await streamProbe.open();
+    const initialWait = await waitForStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => {
+        const parentCard = dockSnapshotCardForThread(snapshot, parentThreadID);
+        return dockSnapshotThreadIndex(snapshot, parentThreadID) === 0
+          && parentCard?.status === "idle"
+          && !dockSnapshotHasThread(snapshot, childThreadID);
+      },
+    });
+    if (!initialWait.ok) {
+      transitionFailure(
+        findings,
+        "scenario_private_child_rollup_initial_state_wrong",
+        "private-child rollup fixture did not start with only the idle parent row visible",
+        { parentThreadID, childThreadID, expectedStatus: "idle" }
+      );
+    }
+    const initial = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+    findings.push(...scenarioComparisonFindings({ phase: "initial", comparison: initial.comparison }));
+    samples.push({
+      sampleIndex: 0,
+      startedAt: new Date(startedAtMs).toISOString(),
+      finishedAt: new Date().toISOString(),
+      freshDock: sanitizeDockSnapshotForReport(initial.freshDock),
+    });
+
+    writeJSON(options.readyOut, {
+      ready: true,
+      scenario: scenarioName,
+      relayUrl,
+      hosts: `127.0.0.1:${relayPort}`,
+      target: {
+        sourceHostID: hostID,
+        parentThreadID,
+        childThreadID,
+        expectedStatus: "running",
+      },
+      at: new Date().toISOString(),
+    });
+    await waitForFile(options.uiReadyIn, options.waitTimeoutMs, "simulator UI sampler readiness");
+    await sleep(Math.min(Math.max(options.scenarioHoldMs, 500), 1_500));
+
+    const rollupStartedAtMs = Date.now();
+    relayConfig.appServerRegistry.recordPrivateOwner(childThreadID, {
+      pid: 4242,
+      transport: "stdio",
+      ownerKind: "controlled-private-child-rollup",
+    });
+    await relayConfig.relayStateEngine.reconcileDock({ reason: "controlled_simulator_private_child_rollup" });
+    const rollupWait = await waitForStreamCondition({
+      streamProbe,
+      timeoutMs: options.dockCollectionTimeoutMs,
+      predicate: (snapshot) => {
+        const parentCard = dockSnapshotCardForThread(snapshot, parentThreadID);
+        return dockSnapshotHasThread(snapshot, parentThreadID)
+          && parentCard?.status === "running"
+          && !dockSnapshotHasThread(snapshot, childThreadID);
+      },
+    });
+    const rollupLag = scenarioLagSummary({
+      transition: scenarioName,
+      startedAtMs: rollupStartedAtMs,
+      acknowledgedAtMs: rollupStartedAtMs,
+      observedAtMs: rollupWait.observedAtMs,
+      maxStreamLagMs: options.maxStreamLagMs,
+    });
+    if (!rollupWait.ok) {
+      const parentCard = dockSnapshotCardForThread(streamProbe.snapshot(), parentThreadID);
+      transitionFailure(
+        findings,
+        "scenario_private_child_rollup_running_not_seen",
+        "private spawned child owner did not roll up to a running parent Dock card",
+        {
+          parentThreadID,
+          childThreadID,
+          expectedStatus: "running",
+          actualStatus: parentCard?.status || null,
+        }
+      );
+    } else if (rollupLag.exceeded) {
+      transitionFailure(
+        findings,
+        "scenario_private_child_rollup_lag_exceeded",
+        "private spawned child status rollup settled after the relay lag budget",
+        {
+          observedLagMs: rollupLag.lag_change_to_relay_ms,
+          maxStreamLagMs: options.maxStreamLagMs,
+        }
+      );
+    }
+
+    const rollupComparison = await freshComparison({ streamProbe, options: fixtureOptions, routeEvents });
+    findings.push(...scenarioComparisonFindings({ phase: scenarioName, comparison: rollupComparison.comparison }));
+    const freshParentCard = dockSnapshotCardForThread(rollupComparison.freshDock, parentThreadID);
+    const freshChildCard = dockSnapshotCardForThread(rollupComparison.freshDock, childThreadID);
+    if (freshParentCard?.status !== "running") {
+      transitionFailure(
+        findings,
+        "scenario_private_child_rollup_fresh_parent_status_mismatch",
+        "fresh Dock client-path snapshot did not show the parent row as running",
+        {
+          parentThreadID,
+          expectedStatus: "running",
+          actualStatus: freshParentCard?.status || null,
+        }
+      );
+    }
+    if (freshChildCard) {
+      transitionFailure(
+        findings,
+        "scenario_private_child_rollup_fresh_child_leaked",
+        "private spawned child row reached a fresh human-only Dock client-path subscription",
+        {
+          childThreadID,
+          actualStatus: freshChildCard.status || null,
+          lane: freshChildCard.lane || null,
+          sourceKind: freshChildCard.sourceKind || null,
+        }
+      );
+    }
+    transitions.push({
+      name: scenarioName,
+      kind: "private-spawned-child-status-rollup",
+      iteration: 1,
+      route: "dock/update",
+      wait: rollupWait,
+      lag: rollupLag,
+      status: freshParentCard?.status || null,
+      expectedStatus: "running",
+      actualStatus: freshParentCard?.status || null,
+      freshDock: sanitizeDockSnapshotForReport(rollupComparison.freshDock),
+      streamComparison: rollupComparison.comparison,
+      streamComparisonAttempts: rollupComparison.attempts,
+    });
+
+    const clientPathEvidence = summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]);
+    const scenarioOK = !findings.some((finding) => finding.severity === "error" || finding.severity === "warning");
+    const report = {
+      schemaVersion: 1,
+      kind: "codex-dock-controlled-simulator-scenario-relay-report",
+      mode: "scenario",
+      scenario: scenarioName,
+      startedAt: new Date(startedAtMs).toISOString(),
+      endedAt: new Date().toISOString(),
+      relayUrl,
+      summary: {
+        ok: scenarioOK,
+        clientPathOK: scenarioOK,
+        scenario: scenarioName,
+        scenarioOK,
+        scenarioCount: 1,
+        scenarioTransitionCount: transitions.length,
+        implementedScenarios: [scenarioName],
+        unimplementedRequiredScenarios: [],
+        failures: findings.length,
+        clientPathRouteCounts: clientPathEvidence.routeCounts,
+      },
+      samples,
+      scenarios: [{
+        id: scenarioName,
+        ok: scenarioOK,
+        actuator: {
+          type: "controlled private spawned child status rollup fixture through real relay Dock routes",
+          routes: ["dock/subscribe", "dock/update"],
+          clientExercised: true,
+          note: "The fixture records a private spawned child owner; proof expects the child to stay absent while the parent Dock row becomes running.",
+        },
+        target: {
+          sourceHostID: hostID,
+          parentThreadID,
+          childThreadID,
+          expectedStatus: "running",
+          actualStatus: freshParentCard?.status || null,
+        },
+        transitions,
+        findings,
+      }],
+      stream: {
+        notificationCount: streamProbe.notifications.length,
+        resyncCount: streamProbe.resyncs.length,
+        finalState: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
+      },
+      clientPathEvidence,
+      findings,
+      unsupportedFacts: [],
+    };
+
+    writeProofReport(options.jsonOut, report);
+    if (options.summaryOut) {
+      writeText(options.summaryOut, buildMarkdownSummary(report));
+    }
+    await waitForFile(options.stopIn, options.waitTimeoutMs, "simulator UI sampler completion");
+    return report;
+  } finally {
+    sourceRows = [];
+    await streamProbe.close().catch(() => null);
+    await relay.close().catch(() => null);
+    await closeWebSocketServer(historyServer).catch(() => null);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 async function runDetailReconnectScenario(options) {
   const scenarioName = options.scenario;
   const isForegroundResumeScenario = scenarioName === "foreground-resume-all-surfaces";
@@ -6890,6 +7254,8 @@ async function main() {
     report = await runResyncGapScenario(options);
   } else if (options.scenario === "source-refresh") {
     report = await runSourceRefreshScenario(options);
+  } else if (options.scenario === "spawned-private-child-status-rollup") {
+    report = await runSpawnedPrivateChildStatusRollupScenario(options);
   } else if (options.scenario === "spawn-edge") {
     report = await runSpawnEdgeScenario(options);
   } else {

@@ -247,6 +247,26 @@ test("controlled simulator matrix accepts server status notification coverage", 
   assert.equal(report.findings.length, 0);
 });
 
+test("controlled simulator matrix accepts spawned private child status rollup coverage", () => {
+  const report = buildMatrixReport({
+    entries: [
+      entry({
+        scenario: "spawned-private-child-status-rollup",
+        routes: { "dock/subscribe": 1, "dock/update": 1 },
+        ui: { scenarioChecks: 1 },
+      }),
+    ],
+    requiredScenarios: ["spawned-private-child-status-rollup"],
+    minPasses: 1,
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.equal(report.scenarios[0].scenario, "spawned-private-child-status-rollup");
+  assert.equal(report.scenarios[0].passingReportCount, 1);
+  assert.equal(report.findings.length, 0);
+});
+
 test("controlled simulator matrix requires variant fixtures to report the invoked scenario", () => {
   const report = buildMatrixReport({
     entries: [

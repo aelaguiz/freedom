@@ -270,6 +270,95 @@ test("dock subscribe overlays fresh live cache status before returning the first
   assert.equal(snapshot.rows[0].activityAtMs, 3_000);
 });
 
+test("dock subscribe overlays hidden child rollups before returning the first snapshot", async () => {
+  const parentCard = testDockCard({
+    threadID: "parent-thread",
+    status: "idle",
+    activityAtMs: 1_000,
+  });
+  let liveCacheRefreshed = false;
+  const engine = new RelayStateEngine(
+    {
+      hostId: "home",
+      hostName: "Home",
+      logger: null,
+      liveStatusCache: {
+        async snapshotForRouting() {
+          liveCacheRefreshed = true;
+          return this.snapshot();
+        },
+        snapshot() {
+          return {
+            checkedAt: "2026-06-04T00:00:00.000Z",
+            checkedAtMs: Date.now(),
+            ok: liveCacheRefreshed,
+            status: liveCacheRefreshed ? "up" : "unknown",
+            endpoints: [{ url: "ws://127.0.0.1:4500" }],
+            failedEndpoints: 0,
+            rows: [],
+            rollupRows: liveCacheRefreshed ? [{
+              id: "hidden-child",
+              sessionId: "hidden-child-session",
+              dockRelayRollupTargetThreadID: "parent-thread",
+              status: { type: "active", activeFlags: [] },
+              updatedAt: "1970-01-01T00:00:04.000Z",
+            }] : [],
+            error: null,
+            liveOverlay: {
+              ok: liveCacheRefreshed,
+              state: liveCacheRefreshed ? "ready" : "disabled",
+              ageMs: 0,
+              endpoints: liveCacheRefreshed ? 1 : 0,
+              failedEndpoints: 0,
+              rows: 0,
+            },
+          };
+        },
+      },
+    },
+    {
+      store: {
+        currentSeq() {
+          return 1;
+        },
+        currentSeqForView() {
+          return 1;
+        },
+        freshnessForHost(_hostID, { archived }) {
+          assert.equal(archived, false);
+          return { status: "fresh", lastError: null };
+        },
+        cardTruthCompleteForHost(_hostID, { archived }) {
+          assert.equal(archived, false);
+          return true;
+        },
+        listDockCards({ offset = 0, limit = 500 }) {
+          return {
+            cards: [parentCard].slice(offset, offset + limit),
+            totalRows: 1,
+          };
+        },
+        close() {},
+      },
+    },
+  );
+  const session = {};
+  const snapshot = await engine.subscribeDock({
+    session,
+    downstreamWs: {},
+    sendJson() {},
+  });
+  session.dockUnsubscribe?.();
+  await engine.close();
+
+  assert.equal(liveCacheRefreshed, true);
+  assert.equal(snapshot.rows.length, 1);
+  assert.equal(snapshot.rows[0].threadID, "parent-thread");
+  assert.equal(snapshot.rows[0].status, "running");
+  assert.equal(snapshot.rows[0].backendSessionID, "parent-thread");
+  assert.equal(snapshot.rows[0].activityAtMs, 4_000);
+});
+
 test("archive mutations reconcile and publish dock and archive views", async () => {
   const calls = [];
   const engine = new RelayStateEngine(

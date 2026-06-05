@@ -404,6 +404,166 @@ test("dock/subscribe rejects private live rows when rollout metadata says they a
   }
 });
 
+test("dock/subscribe rolls attachable spawned child running status up to visible parent", async () => {
+  const appServer = await startCanonicalActivityAppServer({
+    loadedThreadIDs: ["live-only"],
+    listUpdatedAt: { "live-only": 5_000 },
+    readSourceFor: {
+      "live-only": {
+        subagent: {
+          thread_spawn: {
+            parent_thread_id: "newer",
+            depth: 1,
+            agent_nickname: "Curie",
+            agent_role: "explorer",
+          },
+        },
+      },
+    },
+  });
+  try {
+    await withRelay(
+      appServer.url,
+      async ({ config, wsURL }) => {
+        appServer.setThreadStatusLocally("live-only", { type: "active", activeFlags: [] });
+        await config.relayStateEngine.reconcileDock({ reason: "test-spawned-child-rollup" });
+        const ws = await openWebSocket(wsURL);
+        try {
+          const response = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+          assert.equal(response.error, undefined);
+          assert.equal(response.result.complete, true);
+          assert.equal(response.result.rows.some((card) => card.threadID === "live-only"), false);
+          const parent = response.result.rows.find((card) => card.threadID === "newer");
+          assert.equal(parent?.status, "running");
+          assert.equal(parent?.relationship, "root");
+          assert.equal(parent?.lane, "human");
+          assert.equal(parent?.sourceKind, "human");
+          assert.equal(parent?.backendSessionID, "newer-session");
+          assert.ok(parent?.activityAtMs >= 5_000_000);
+        } finally {
+          ws.close();
+        }
+      },
+      { liveEndpoints: [{ label: "canonical-live", url: appServer.url }] },
+    );
+  } finally {
+    await appServer.close();
+  }
+});
+
+test("dock/subscribe rolls spawned child approval status up to visible parent", async () => {
+  const appServer = await startCanonicalActivityAppServer({
+    loadedThreadIDs: ["live-only"],
+    readSourceFor: {
+      "live-only": {
+        subagent: {
+          thread_spawn: {
+            parent_thread_id: "newer",
+            depth: 1,
+            agent_nickname: "Noether",
+            agent_role: "worker",
+          },
+        },
+      },
+    },
+  });
+  try {
+    await withRelay(
+      appServer.url,
+      async ({ config, wsURL }) => {
+        appServer.setThreadStatusLocally("live-only", {
+          type: "active",
+          activeFlags: ["waitingOnApproval"],
+        });
+        await config.relayStateEngine.reconcileDock({ reason: "test-spawned-child-approval-rollup" });
+        const ws = await openWebSocket(wsURL);
+        try {
+          const response = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+          assert.equal(response.error, undefined);
+          assert.equal(response.result.rows.some((card) => card.threadID === "live-only"), false);
+          const parent = response.result.rows.find((card) => card.threadID === "newer");
+          assert.equal(parent?.status, "needsApproval");
+        } finally {
+          ws.close();
+        }
+      },
+      { liveEndpoints: [{ label: "canonical-live", url: appServer.url }] },
+    );
+  } finally {
+    await appServer.close();
+  }
+});
+
+test("dock/subscribe rolls private spawned child owner up to visible parent without showing child", async () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-private-rollup-session-meta-"));
+  writeSessionMeta(codexHome, {
+    id: "private-child",
+    cwd: "/tmp/codex-client/private-subagent-workspace",
+    source: {
+      subagent: {
+        thread_spawn: {
+          parent_thread_id: "newer",
+          depth: 1,
+          agent_nickname: "Lovelace",
+          agent_role: "worker",
+        },
+      },
+    },
+    git: {
+      branch: "private-child-branch",
+      repository_url: "git@example.test:repo/private-child.git",
+    },
+  });
+  const appServer = await startCanonicalActivityAppServer();
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.appServerRegistry.refreshNow("test-private-spawn-rollup");
+      config.appServerRegistry.recordPrivateOwner("private-child", { pid: 3333, transport: "stdio" });
+      await config.relayStateEngine.reconcileDock({ reason: "test-private-spawn-rollup" });
+      const ws = await openWebSocket(wsURL);
+      try {
+        const response = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(response.error, undefined);
+        assert.equal(response.result.rows.some((card) => card.threadID === "private-child"), false);
+        const parent = response.result.rows.find((card) => card.threadID === "newer");
+        assert.equal(parent?.status, "running");
+        assert.equal(parent?.relationship, "root");
+        assert.equal(parent?.lane, "human");
+        assert.equal(parent?.sourceKind, "human");
+      } finally {
+        ws.close();
+      }
+    }, { codexHome });
+  } finally {
+    await appServer.close();
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("dock/subscribe does not turn root private owner presence into a running parent badge", async () => {
+  const appServer = await startCanonicalActivityAppServer();
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.appServerRegistry.refreshNow("test-root-private-owner");
+      config.appServerRegistry.recordPrivateOwner("private-root", { pid: 4444, transport: "stdio" });
+      await config.relayStateEngine.reconcileDock({ reason: "test-root-private-owner" });
+      const ws = await openWebSocket(wsURL);
+      try {
+        const response = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(response.error, undefined);
+        const privateRoot = response.result.rows.find((card) => card.threadID === "private-root");
+        assert.notEqual(privateRoot?.status, "running");
+        const parent = response.result.rows.find((card) => card.threadID === "newer");
+        assert.equal(parent?.status, "idle");
+      } finally {
+        ws.close();
+      }
+    });
+  } finally {
+    await appServer.close();
+  }
+});
+
 test("dock/subscribe removes stale private subagent cards even when live proof is partial", async () => {
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-private-partial-session-meta-"));
   const appServer = await startCanonicalActivityAppServer();

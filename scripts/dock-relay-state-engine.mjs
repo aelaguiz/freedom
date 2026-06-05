@@ -16,6 +16,7 @@ import {
 import {
   DOCK_VIEW,
   ARCHIVE_VIEW,
+  applyHiddenActivityRollupsToCards,
   buildWindow,
   estimateJSONBytes,
   normalizeThread,
@@ -101,6 +102,14 @@ function liveRowsFromStatusCache(cache) {
   return Array.isArray(snapshot.rows) ? snapshot.rows : [];
 }
 
+function rollupRowsFromStatusCache(cache) {
+  const snapshot = cache?.snapshot?.();
+  if (!cacheHasUsableLiveOverlay(snapshot)) {
+    return [];
+  }
+  return Array.isArray(snapshot.rollupRows) ? snapshot.rollupRows : [];
+}
+
 function cardWithLiveStatusOverlay(card, liveRow) {
   if (!card || !liveRow?.status) {
     return card;
@@ -127,14 +136,17 @@ function cardWithLiveStatusOverlay(card, liveRow) {
   };
 }
 
-function applyLiveStatusOverlayToCards(cards, liveRows = []) {
-  if (!Array.isArray(cards) || cards.length === 0 || !Array.isArray(liveRows) || liveRows.length === 0) {
+function applyLiveStatusOverlayToCards(cards, liveRows = [], rollupRows = []) {
+  if (!Array.isArray(cards) || cards.length === 0) {
     return cards;
   }
-  const liveRowsByID = new Map(liveRows.map((row) => [row?.id, row]).filter(([id]) => id));
-  return cards
-    .map((card) => cardWithLiveStatusOverlay(card, liveRowsByID.get(card.threadID)))
-    .sort((left, right) => String(left.displayOrderKey).localeCompare(String(right.displayOrderKey)));
+  const liveRowsByID = new Map((liveRows || []).map((row) => [row?.id, row]).filter(([id]) => id));
+  const cardsWithLiveStatus = liveRowsByID.size > 0
+    ? cards
+      .map((card) => cardWithLiveStatusOverlay(card, liveRowsByID.get(card.threadID)))
+      .sort((left, right) => String(left.displayOrderKey).localeCompare(String(right.displayOrderKey)))
+    : cards;
+  return applyHiddenActivityRollupsToCards(cardsWithLiveStatus, rollupRows);
 }
 
 class StateReconciler {
@@ -359,7 +371,7 @@ class RelayStateEngine {
         rejectedCounts[rejectedReason] = Number(rejectedCounts[rejectedReason] || 0) + Number(count || 0);
       }
       const appRows = mergeHumanStartedRowsWithSupplements(acceptedRows, supplements.acceptedRows);
-      const orderedRows = orderedDockRows([], appRows, liveRows);
+      const orderedRows = orderedDockRows([], appRows, liveRows, liveProof.rollupRows);
       // Card order is derived only after every row has proven activity from
       // thread/read plus thread/turns/list. Raw thread/list order is input data,
       // not a client-visible ordering contract.
@@ -629,9 +641,10 @@ class RelayStateEngine {
       : (failedThreadReads > 0 ? `live loaded session thread/read failed for ${failedThreadReads}/${live.totalThreadReads || 0} threads` : null);
     return {
       rows: acceptedRows,
+      rollupRows: Array.isArray(live.rollupRows) ? live.rollupRows : [],
       rejectedThreadIDs: Array.isArray(live.privateRejectedThreadIDs)
-        ? live.privateRejectedThreadIDs
-        : [],
+        ? [...new Set([...(live.rejectedThreadIDs || []), ...live.privateRejectedThreadIDs])]
+        : (Array.isArray(live.rejectedThreadIDs) ? live.rejectedThreadIDs : []),
       scope: {
         ...ACTIVE_LIVE_SCOPE,
         complete,
@@ -714,10 +727,12 @@ class RelayStateEngine {
     }
 
     const liveRows = liveRowsFromStatusCache(this.config.liveStatusCache);
-    const allCards = liveRows.length > 0
+    const rollupRows = rollupRowsFromStatusCache(this.config.liveStatusCache);
+    const allCards = liveRows.length > 0 || rollupRows.length > 0
       ? applyLiveStatusOverlayToCards(
         this.store.listDockCards({ hostID: host.id, offset: 0, limit: totalRows }).cards,
         liveRows,
+        rollupRows,
       )
       : null;
 

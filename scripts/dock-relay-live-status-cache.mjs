@@ -68,6 +68,7 @@ class LiveStatusCache {
       endpoints: [],
       failedEndpoints: 0,
       rows: [],
+      rollupRows: [],
       error: null,
     };
   }
@@ -110,6 +111,7 @@ class LiveStatusCache {
           failedEndpoints: live.failedEndpoints || 0,
           failedThreadReads: live.failedThreadReads || 0,
           rows: humanLiveRows(live.rows || []),
+          rollupRows: Array.isArray(live.rollupRows) ? [...live.rollupRows] : [],
           error: null,
         };
         this.statusTracker?.recordLiveDiscovery({
@@ -130,6 +132,7 @@ class LiveStatusCache {
           endpoints: [],
           failedEndpoints: 1,
           rows: [],
+          rollupRows: [],
           error,
         };
         this.statusTracker?.recordLiveDiscovery({
@@ -158,6 +161,7 @@ class LiveStatusCache {
     return {
       ...this.state,
       rows: [...this.state.rows],
+      rollupRows: [...(this.state.rollupRows || [])],
       endpoints: [...this.state.endpoints],
       liveOverlay: liveOverlayForSnapshot(this.state, this.maxAgeMs),
     };

@@ -155,6 +155,34 @@ function normalizedStatus(thread) {
   }
 }
 
+const ACTIVE_PUBLIC_STATUS_PRIORITY = new Map([
+  ["needsApproval", 0],
+  ["needsInput", 1],
+  ["running", 2],
+]);
+
+function activePublicStatus(value) {
+  const status = typeof value === "string" ? value : normalizedStatus(value);
+  return ACTIVE_PUBLIC_STATUS_PRIORITY.has(status) ? status : null;
+}
+
+function activePublicStatusPriority(status) {
+  return ACTIVE_PUBLIC_STATUS_PRIORITY.get(status) ?? Number.POSITIVE_INFINITY;
+}
+
+function publicStatusToThreadStatus(status) {
+  switch (status) {
+  case "needsApproval":
+    return { type: "active", activeFlags: ["waitingOnApproval"] };
+  case "needsInput":
+    return { type: "active", activeFlags: ["waitingOnUserInput"] };
+  case "running":
+    return { type: "active", activeFlags: [] };
+  default:
+    return null;
+  }
+}
+
 function titleForThread(thread) {
   return boundedText(thread?.name, RELAY_STATE_TITLE_MAX_CHARS)
     || boundedText(thread?.preview, RELAY_STATE_TITLE_MAX_CHARS)
@@ -201,6 +229,18 @@ function timestampToISO(value) {
     return new Date(0).toISOString();
   }
   return new Date(ms).toISOString();
+}
+
+function rowActivityAtMs(thread) {
+  return timestampToMs(
+    thread?.activityAtMs
+      ?? thread?.activityAt
+      ?? thread?.updatedAtMs
+      ?? thread?.updatedAt
+      ?? thread?.createdAtMs
+      ?? thread?.createdAt
+      ?? rowTimestamp(thread)
+  );
 }
 
 function displaySummaryForThread(thread) {
@@ -292,9 +332,104 @@ function overlayLiveStatus(storedRow, liveRow) {
   };
 }
 
-function orderedDockRows(primaryRows, interactiveRows, liveRows = []) {
+function preferHiddenActivityRollup(candidate, existing) {
+  if (!candidate) {
+    return existing || null;
+  }
+  if (!existing) {
+    return candidate;
+  }
+  const candidateStatus = activePublicStatus(candidate);
+  const existingStatus = activePublicStatus(existing);
+  const candidatePriority = activePublicStatusPriority(candidateStatus);
+  const existingPriority = activePublicStatusPriority(existingStatus);
+  if (candidatePriority !== existingPriority) {
+    return candidatePriority < existingPriority ? candidate : existing;
+  }
+  return rowActivityAtMs(candidate) >= rowActivityAtMs(existing) ? candidate : existing;
+}
+
+function hiddenActivityRollupsByTargetThreadID(rollupRows = []) {
+  const byTargetThreadID = new Map();
+  for (const row of rollupRows || []) {
+    const targetThreadID = nonEmpty(row?.dockRelayRollupTargetThreadID);
+    if (!targetThreadID || !activePublicStatus(row)) {
+      continue;
+    }
+    byTargetThreadID.set(
+      targetThreadID,
+      preferHiddenActivityRollup(row, byTargetThreadID.get(targetThreadID)),
+    );
+  }
+  return byTargetThreadID;
+}
+
+function strongerPublicStatus(currentStatus, rollupStatus) {
+  if (!rollupStatus) {
+    return currentStatus;
+  }
+  const currentActive = activePublicStatus(currentStatus);
+  if (!currentActive) {
+    return rollupStatus;
+  }
+  return activePublicStatusPriority(rollupStatus) < activePublicStatusPriority(currentActive)
+    ? rollupStatus
+    : currentActive;
+}
+
+function overlayHiddenActivityRollup(storedRow, rollupRow) {
+  const rollupStatus = activePublicStatus(rollupRow);
+  if (!rollupStatus) {
+    return storedRow;
+  }
+  const publicStatus = strongerPublicStatus(normalizedStatus(storedRow), rollupStatus);
+  const status = publicStatusToThreadStatus(publicStatus) || storedRow.status;
+  const activityAtMs = Math.max(rowActivityAtMs(storedRow), rowActivityAtMs(rollupRow));
+  return {
+    ...storedRow,
+    activityAt: timestampToISO(activityAtMs),
+    activityAtMs,
+    status,
+  };
+}
+
+function overlayHiddenActivityRollupOnCard(card, rollupRow) {
+  const rollupStatus = activePublicStatus(rollupRow);
+  if (!rollupStatus) {
+    return card;
+  }
+  const publicStatus = strongerPublicStatus(card?.status, rollupStatus);
+  const activityAtMs = Math.max(Number(card?.activityAtMs || 0), rowActivityAtMs(rollupRow));
+  return {
+    ...card,
+    activityAt: timestampToISO(activityAtMs),
+    activityAtMs,
+    status: publicStatus,
+    displayOrderKey: threadCardDisplayOrderKey({
+      activityAtMs,
+      status: publicStatus,
+      projectionID: card.projectionID,
+    }),
+  };
+}
+
+function applyHiddenActivityRollupsToCards(cards = [], rollupRows = []) {
+  if (!Array.isArray(cards) || cards.length === 0 || !Array.isArray(rollupRows) || rollupRows.length === 0) {
+    return cards;
+  }
+  const rollupsByTargetThreadID = hiddenActivityRollupsByTargetThreadID(rollupRows);
+  if (rollupsByTargetThreadID.size === 0) {
+    return cards;
+  }
+  return cards
+    .map((card) => overlayHiddenActivityRollupOnCard(card, rollupsByTargetThreadID.get(card.threadID)))
+    .sort((left, right) => String(left.displayOrderKey).localeCompare(String(right.displayOrderKey)));
+}
+
+function orderedDockRows(primaryRows, interactiveRows, liveRows = [], rollupRows = []) {
   const byThreadID = new Map();
   const liveRowsByID = new Map(liveRows.map((row) => [row?.id, row]).filter(([id]) => id));
+  const rollupsByTargetThreadID = hiddenActivityRollupsByTargetThreadID(rollupRows);
   const orderedThreadIDs = [];
   const addRow = (row, lane) => {
     if (!row?.id) {
@@ -302,15 +437,19 @@ function orderedDockRows(primaryRows, interactiveRows, liveRows = []) {
     }
     const liveRow = liveRowsByID.get(row.id);
     const rowWithLiveStatus = liveRow ? overlayLiveStatus(row, liveRow) : row;
+    const rollupRow = rollupsByTargetThreadID.get(row.id);
+    const rowWithRollupStatus = rollupRow
+      ? overlayHiddenActivityRollup(rowWithLiveStatus, rollupRow)
+      : rowWithLiveStatus;
     const existing = byThreadID.get(row.id);
     if (!existing) {
       orderedThreadIDs.push(row.id);
-      byThreadID.set(row.id, { lane, row: rowWithLiveStatus });
+      byThreadID.set(row.id, { lane, row: rowWithRollupStatus });
       return;
     }
     byThreadID.set(row.id, {
       lane: existing.lane,
-      row: preferThread(rowWithLiveStatus, existing.row),
+      row: preferThread(rowWithRollupStatus, existing.row),
     });
   };
 
@@ -444,6 +583,7 @@ function estimateJSONBytes(value) {
 export {
   ARCHIVE_VIEW,
   DOCK_VIEW,
+  applyHiddenActivityRollupsToCards,
   buildWindow,
   dockCardID,
   estimateJSONBytes,

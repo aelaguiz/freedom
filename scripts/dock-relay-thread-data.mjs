@@ -258,6 +258,37 @@ function preferThread(candidate, existing) {
   return rowTimestamp(candidate) >= rowTimestamp(existing) ? candidate : existing;
 }
 
+function rollupStatusForRejectedThread(row, classification) {
+  if (!classification?.parentThreadID) {
+    return null;
+  }
+  if (row?.status?.type === "active") {
+    return {
+      type: "active",
+      activeFlags: Array.isArray(row.status.activeFlags) ? [...row.status.activeFlags] : [],
+    };
+  }
+  if (row?.status?.type === "privateUnattachable") {
+    return { type: "active", activeFlags: [] };
+  }
+  return null;
+}
+
+function hiddenActivityRollupRow(row, classification) {
+  const status = rollupStatusForRejectedThread(row, classification);
+  if (!status) {
+    return null;
+  }
+  return {
+    ...row,
+    status,
+    dockRelayRollupTargetThreadID: classification.parentThreadID,
+    dockRelayRollupSource: row?.status?.type === "privateUnattachable"
+      ? "private-owner-presence"
+      : "hidden-child-live",
+  };
+}
+
 function parseLimit(value, fallback) {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) {
@@ -654,6 +685,8 @@ async function readLoadedRows(endpoint, {
       })
     )));
     const rows = [];
+    const rollupRows = [];
+    const rejectedThreadIDs = new Set();
     let failedThreadReads = 0;
     for (let index = 0; index < results.length; index += 1) {
       const result = results[index];
@@ -675,6 +708,11 @@ async function readLoadedRows(endpoint, {
         if (classification.allowed) {
           rows.push(row);
         } else {
+          rejectedThreadIDs.add(String(row.id));
+          const rollupRow = hiddenActivityRollupRow(row, classification);
+          if (rollupRow) {
+            rollupRows.push(rollupRow);
+          }
           logger.debug("live.thread_rejected_by_human_filter", {
             threadId: row.id,
             endpointUrl: endpoint.url,
@@ -685,6 +723,8 @@ async function readLoadedRows(endpoint, {
     }
     return {
       rows,
+      rollupRows,
+      rejectedThreadIDs: [...rejectedThreadIDs],
       totalThreadReads: loadedThreadIDs.length,
       failedThreadReads,
     };
@@ -782,6 +822,8 @@ async function collectLiveRows(options = {}) {
     }),
   );
   const rowsById = new Map();
+  const rollupRowsById = new Map();
+  const rejectedThreadIDs = new Set();
   let failedEndpoints = 0;
   let totalThreadReads = 0;
   let failedThreadReads = 0;
@@ -797,8 +839,17 @@ async function collectLiveRows(options = {}) {
     }
     totalThreadReads += Number(result.value?.totalThreadReads || 0);
     failedThreadReads += Number(result.value?.failedThreadReads || 0);
+    for (const threadId of result.value?.rejectedThreadIDs || []) {
+      rejectedThreadIDs.add(String(threadId));
+    }
     for (const row of result.value?.rows || []) {
       rowsById.set(row.id, preferThread(row, rowsById.get(row.id)));
+    }
+    for (const row of result.value?.rollupRows || []) {
+      if (!row?.id) {
+        continue;
+      }
+      rollupRowsById.set(row.id, preferThread(row, rollupRowsById.get(row.id)));
     }
   }
   return {
@@ -806,7 +857,9 @@ async function collectLiveRows(options = {}) {
     failedEndpoints,
     totalThreadReads,
     failedThreadReads,
+    rejectedThreadIDs: [...rejectedThreadIDs],
     rows: [...rowsById.values()],
+    rollupRows: [...rollupRowsById.values()],
   };
 }
 
@@ -825,8 +878,15 @@ function mergePrivateLiveRows(live = {}, appServerRegistry = null, {
   const metadataByThreadID = sessionMetadataByThreadID
     || readSessionMetadataIndexForCodexHome(codexHome, logger, { threadIDs: privateThreadIDs });
   const rejectedCounts = {};
-  const rejectedThreadIDs = new Set();
+  const privateRejectedThreadIDs = new Set();
+  const rejectedThreadIDs = new Set((live.rejectedThreadIDs || []).map((threadID) => String(threadID)));
   const rowsById = new Map();
+  const rollupRowsById = new Map();
+  for (const row of live.rollupRows || []) {
+    if (row?.id) {
+      rollupRowsById.set(row.id, row);
+    }
+  }
   for (const row of [...(live.rows || []), ...privateRows]) {
     if (!row?.id) {
       continue;
@@ -836,6 +896,11 @@ function mergePrivateLiveRows(live = {}, appServerRegistry = null, {
     if (!classification.allowed) {
       rejectedCounts[classification.reason] = Number(rejectedCounts[classification.reason] || 0) + 1;
       rejectedThreadIDs.add(String(row.id));
+      privateRejectedThreadIDs.add(String(row.id));
+      const rollupRow = hiddenActivityRollupRow(mergedRow, classification);
+      if (rollupRow) {
+        rollupRowsById.set(rollupRow.id, preferThread(rollupRow, rollupRowsById.get(rollupRow.id)));
+      }
       logger.debug("live.private_thread_rejected_by_human_filter", {
         threadId: row.id,
         reason: classification.reason,
@@ -848,8 +913,10 @@ function mergePrivateLiveRows(live = {}, appServerRegistry = null, {
     ...live,
     privateRows: privateRows.length,
     privateRejectedRows: Object.values(rejectedCounts).reduce((sum, count) => sum + Number(count || 0), 0),
-    privateRejectedThreadIDs: [...rejectedThreadIDs],
+    privateRejectedThreadIDs: [...privateRejectedThreadIDs],
+    rejectedThreadIDs: [...rejectedThreadIDs],
     rows: [...rowsById.values()],
+    rollupRows: [...rollupRowsById.values()],
   };
 }
 

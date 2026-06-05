@@ -25,6 +25,7 @@ const DEFAULT_REQUIRED_SCENARIOS = [
   "live-lease-expiry",
   "multi-host-isolation",
   "mutation-ack-projection-refresh-failure",
+  "spawned-private-child-status-rollup",
   "spawn-edge",
   "resync-gap",
   "root-catchup-window-contract",
@@ -122,6 +123,11 @@ const SCENARIO_REQUIREMENTS = {
     minCheckpointSweeps: 1,
   },
   "spawn-edge": {
+    routes: ["dock/subscribe", "dock/update"],
+    minScenarioTransitionChecks: 1,
+    minCheckpointSweeps: 1,
+  },
+  "spawned-private-child-status-rollup": {
     routes: ["dock/subscribe", "dock/update"],
     minScenarioTransitionChecks: 1,
     minCheckpointSweeps: 1,
