@@ -595,7 +595,10 @@ class RelayStateEngine {
       onNotification: this.config.upstreamNotificationHandler || null,
       codexHome: this.config.codexHome || null,
     });
-    const live = mergePrivateLiveRows(collectedLive, this.config.appServerRegistry);
+    const live = mergePrivateLiveRows(collectedLive, this.config.appServerRegistry, {
+      codexHome: this.config.codexHome || null,
+      logger: this.logger,
+    });
     const endpointsByUrl = new Map(endpoints.map((endpoint) => [endpoint.url, endpoint]));
     const acceptedRows = [];
     for (const row of live.rows || []) {

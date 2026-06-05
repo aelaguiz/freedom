@@ -361,6 +361,49 @@ test("dock/subscribe rejects live rows when rollout metadata says they are spawn
   }
 });
 
+test("dock/subscribe rejects private live rows when rollout metadata says they are spawned subagents", async () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-private-session-meta-"));
+  writeSessionMeta(codexHome, {
+    id: "private-only",
+    cwd: "/tmp/codex-client/private-subagent-workspace",
+    source: {
+      subagent: {
+        thread_spawn: {
+          parent_thread_id: "parent-thread",
+          depth: 1,
+          agent_nickname: "Confucius",
+          agent_role: "explorer",
+        },
+      },
+    },
+    git: {
+      branch: "private-subagent-branch",
+      repository_url: "git@example.test:repo/private-subagent.git",
+    },
+  });
+  const appServer = await startCanonicalActivityAppServer();
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.appServerRegistry.refreshNow("test-private-subagent-session-meta");
+      config.appServerRegistry.recordPrivateOwner("private-only", { pid: 3333, transport: "stdio" });
+      await config.relayStateEngine.reconcileDock({ reason: "test-private-subagent-session-meta" });
+      const ws = await openWebSocket(wsURL);
+      try {
+        const response = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(response.error, undefined);
+        assert.equal(response.result.complete, true);
+        assert.deepEqual(response.result.rows.map((card) => card.threadID), ["newer", "older"]);
+        assert.equal(response.result.rows.some((card) => card.threadID === "private-only"), false);
+      } finally {
+        ws.close();
+      }
+    }, { codexHome });
+  } finally {
+    await appServer.close();
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test("dock/subscribe rejects history rows when rollout metadata says they are spawned subagents", async () => {
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-history-session-meta-"));
   writeSessionMeta(codexHome, {
