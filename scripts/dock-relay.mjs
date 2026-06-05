@@ -249,7 +249,7 @@ async function resumeThread(config, params = {}, session, downstreamWs, options 
   }
   const resumeParams = liveResumeParams(params);
   await assertHumanThreadID(config, resumeParams.threadId, {
-    allowAppFacingCardForMissingSource: options.detailSubscription === true,
+    allowAppFacingCardRouteFallback: options.detailSubscription === true,
   });
 
   session.generation += 1;
@@ -312,7 +312,7 @@ async function resumeThread(config, params = {}, session, downstreamWs, options 
 
 async function readAllThreadDetailTurns(config, threadId, {
   allowHistoryForPrivateOwner = false,
-  allowAppFacingCardForMissingSource = false,
+  allowAppFacingCardRouteFallback = false,
 } = {}) {
   const turns = [];
   const seenCursors = new Set();
@@ -327,7 +327,7 @@ async function readAllThreadDetailTurns(config, threadId, {
       itemsView: "full",
     }, {
       allowHistoryForPrivateOwner,
-      allowAppFacingCardForMissingSource,
+      allowAppFacingCardRouteFallback,
     });
     if (Array.isArray(response?.data)) {
       turns.push(...response.data);
@@ -370,11 +370,11 @@ async function readThreadDetailThread(config, params = {}, options = {}) {
     includeTurns: false,
   }, {
     allowHistoryForPrivateOwner: Boolean(options.allowHistoryForPrivateOwner),
-    allowAppFacingCardForMissingSource: true,
+    allowAppFacingCardRouteFallback: true,
   });
   const turns = await readAllThreadDetailTurns(config, params.threadId, {
     allowHistoryForPrivateOwner: Boolean(options.allowHistoryForPrivateOwner),
-    allowAppFacingCardForMissingSource: true,
+    allowAppFacingCardRouteFallback: true,
   });
   return {
     ...(readResponse?.thread || {}),

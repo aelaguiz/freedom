@@ -991,9 +991,9 @@ function assertRouteHumanStartedThread(row, threadId, {
 async function readHumanThreadForRoute(config, threadId, {
   allowHistoryFallbackForRejectedLive = false,
   acceptedHumanRow = null,
-  allowAppFacingCardForMissingSource = false,
+  allowAppFacingCardRouteFallback = false,
 } = {}) {
-  const appFacingCard = allowAppFacingCardForMissingSource
+  const appFacingCard = allowAppFacingCardRouteFallback
     ? appFacingHumanCardForThread(config, threadId)
     : null;
   const liveRow = await sessionRouterForConfig(config).rowForThread(threadId);
@@ -1069,7 +1069,7 @@ async function aggregateThreadRead(config, params = {}, options = {}) {
     includeTurns: Boolean(params.includeTurns),
     allowHistoryForPrivateOwner: Boolean(options.allowHistoryForPrivateOwner),
   });
-  const appFacingCard = options.allowAppFacingCardForMissingSource
+  const appFacingCard = options.allowAppFacingCardRouteFallback
     ? appFacingHumanCardForThread(config, params.threadId)
     : null;
   if (route.source === "live-owner") {
@@ -1089,7 +1089,7 @@ async function listThreadTurns(config, params = {}, options = {}) {
   await assertHumanThreadID(config, params.threadId, {
     allowHistoryFallbackForRejectedLive: Boolean(options.allowHistoryForPrivateOwner),
     acceptedHumanRow: options.acceptedHumanRow || null,
-    allowAppFacingCardForMissingSource: Boolean(options.allowAppFacingCardForMissingSource),
+    allowAppFacingCardRouteFallback: Boolean(options.allowAppFacingCardRouteFallback),
   });
   const endpoint = await endpointForThread(config, params.threadId, "thread/turns/list", {
     allowHistoryForPrivateOwner: Boolean(options.allowHistoryForPrivateOwner),
