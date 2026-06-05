@@ -232,6 +232,35 @@ test("passing proof cannot use thread/detail/read as route evidence", () => {
   assert.match(errors.join("\n"), /must include relay-owned Dock, Archive, or Thread Detail client routes/u);
 });
 
+test("relay sync audit contract accepts live detail config and parity blind spots", () => {
+  const report = structuredClone(
+    sampleProofReports().find((candidate) => candidate.kind === "codex-dock-relay-sync-audit-report")
+  );
+  report.config = {
+    detailLive: false,
+    detailBufferInitialLive: true,
+  };
+  report.samples = [{
+    sampleIndex: 0,
+    ok: true,
+    parity: {
+      included: false,
+      ok: null,
+      findings: [],
+      blindSpots: [],
+    },
+    findings: [],
+  }];
+  report.stream = {
+    notificationCount: 0,
+    resyncCount: 1,
+    closed: true,
+    finalState: null,
+  };
+
+  assertProofReport(report, { sourcePath: "relay-sync-audit-detail-live-sample" });
+});
+
 test("blocked proof can record non-client route counts without counting them as client path proof", () => {
   const report = sampleProofReports().find(
     (candidate) => candidate.kind === "codex-dock-controlled-simulator-scenario-relay-report"

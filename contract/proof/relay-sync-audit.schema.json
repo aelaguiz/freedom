@@ -22,6 +22,7 @@
       "type": "array",
       "items": { "$ref": "#/definitions/proofValue" }
     },
+    "stream": { "$ref": "#/definitions/proofValue" },
     "startedAt": { "type": "string", "minLength": 1 },
     "endedAt": { "type": "string", "minLength": 1 },
     "summary": {

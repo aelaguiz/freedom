@@ -125,6 +125,45 @@ final class DockScreenStoreTests: XCTestCase {
         XCTAssertTrue(json.contains("codexdock.dock.row."))
     }
 
+    func testAutomationSnapshotStoreRetainsStartupRenderBurst() throws {
+        let host = makeHost()
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-dock-snapshot-burst-test-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let store = DockAutomationSnapshotStore(
+            directoryURL: directory,
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+        let snapshot = makeSnapshot(host: host)
+        let projector = DockRenderProjector(now: { Date(timeIntervalSince1970: 2_000) })
+        let options = DockProjectionOptions()
+
+        XCTAssertGreaterThanOrEqual(DockAutomationSnapshotStore.defaultRetainedSnapshotCount, 32)
+        for revision in 1...32 {
+            _ = try store.write(
+                renderSnapshot: projector.render(
+                    snapshot: snapshot,
+                    options: options,
+                    revision: RenderRevision(rawValue: UInt64(revision))
+                ),
+                options: options
+            )
+        }
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent("dock-automation-snapshot-1.json").path
+            )
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent("dock-automation-snapshot-32.json").path
+            )
+        )
+    }
+
     @MainActor
     func testScreenStoreReprojectsWhenOptionsChange() async throws {
         let host = makeHost()

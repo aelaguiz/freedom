@@ -11,6 +11,9 @@ import { NotificationIngestor } from "./dock-relay-state-ingest.mjs";
 import { relayStateStoreForConfig } from "./dock-relay-state-store.mjs";
 import { StateSubscriptionHub } from "./dock-relay-state-subscriptions.mjs";
 import {
+  threadCardDisplayOrderKey,
+} from "./dock-relay-projection-engine.mjs";
+import {
   DOCK_VIEW,
   ARCHIVE_VIEW,
   buildWindow,
@@ -19,6 +22,8 @@ import {
   normalizedStatus,
   orderedDockRows,
   publicHostFromConfig,
+  timestampToISO,
+  timestampToMs,
 } from "./dock-relay-state-views.mjs";
 import { isHumanStartedThread } from "./dock-relay-human-thread-filter.mjs";
 import {
@@ -81,6 +86,55 @@ function liveLeaseFromRow(row, endpoint, maxAgeMs) {
     validationAtMs,
     expiresAtMs: validationAtMs + maxAgeMs,
   };
+}
+
+function cacheHasUsableLiveOverlay(snapshot) {
+  const state = snapshot?.liveOverlay?.state;
+  return state === "ready" || state === "degraded";
+}
+
+function liveRowsFromStatusCache(cache) {
+  const snapshot = cache?.snapshot?.();
+  if (!cacheHasUsableLiveOverlay(snapshot)) {
+    return [];
+  }
+  return Array.isArray(snapshot.rows) ? snapshot.rows : [];
+}
+
+function cardWithLiveStatusOverlay(card, liveRow) {
+  if (!card || !liveRow?.status) {
+    return card;
+  }
+  const status = normalizedStatus(liveRow);
+  const liveActivityAtMs = timestampToMs(
+    liveRow.activityAtMs
+      ?? liveRow.activityAt
+      ?? liveRow.updatedAt
+      ?? liveRow.createdAt
+  );
+  const activityAtMs = liveActivityAtMs > 0 ? liveActivityAtMs : Number(card.activityAtMs || 0);
+  return {
+    ...card,
+    backendSessionID: liveRow.sessionId || card.backendSessionID,
+    activityAt: timestampToISO(activityAtMs),
+    activityAtMs,
+    status,
+    displayOrderKey: threadCardDisplayOrderKey({
+      activityAtMs,
+      status,
+      projectionID: card.projectionID,
+    }),
+  };
+}
+
+function applyLiveStatusOverlayToCards(cards, liveRows = []) {
+  if (!Array.isArray(cards) || cards.length === 0 || !Array.isArray(liveRows) || liveRows.length === 0) {
+    return cards;
+  }
+  const liveRowsByID = new Map(liveRows.map((row) => [row?.id, row]).filter(([id]) => id));
+  return cards
+    .map((card) => cardWithLiveStatusOverlay(card, liveRowsByID.get(card.threadID)))
+    .sort((left, right) => String(left.displayOrderKey).localeCompare(String(right.displayOrderKey)));
 }
 
 class StateReconciler {
@@ -204,6 +258,21 @@ class RelayStateEngine {
 
   scheduleReconciliation(request = {}) {
     return this.reconciler.schedule(request);
+  }
+
+  async refreshLiveStatusCacheForSnapshot(reason) {
+    if (typeof this.config.liveStatusCache?.snapshotForRouting !== "function") {
+      return null;
+    }
+    try {
+      return await this.config.liveStatusCache.snapshotForRouting();
+    } catch (error) {
+      this.logger?.warn?.("state.live_status_snapshot_refresh_failed", {
+        reason,
+        error,
+      });
+      return null;
+    }
   }
 
   cardForThread(threadID) {
@@ -629,8 +698,28 @@ class RelayStateEngine {
       });
     }
 
+    const liveRows = liveRowsFromStatusCache(this.config.liveStatusCache);
+    const allCards = liveRows.length > 0
+      ? applyLiveStatusOverlayToCards(
+        this.store.listDockCards({ hostID: host.id, offset: 0, limit: totalRows }).cards,
+        liveRows,
+      )
+      : null;
+
+    const listDockCards = ({ offset: requestedOffset, limit: requestedLimit }) => {
+      if (!allCards) {
+        return this.store.listDockCards({ hostID: host.id, offset: requestedOffset, limit: requestedLimit });
+      }
+      const safeOffset = Math.max(0, Number(requestedOffset || 0));
+      const safeLimit = Math.max(0, Number(requestedLimit || 0));
+      return {
+        cards: allCards.slice(safeOffset, safeOffset + safeLimit),
+        totalRows: allCards.length,
+      };
+    };
+
     let windowLimit = Math.max(1, Math.min(Number(limit || 1), totalRows));
-    let bounded = this.store.listDockCards({ hostID: host.id, offset, limit: windowLimit });
+    let bounded = listDockCards({ offset, limit: windowLimit });
     let window = buildWindow({
       offset,
       limit: windowLimit,
@@ -649,7 +738,7 @@ class RelayStateEngine {
 
     while (estimateJSONBytes(snapshot) > softLimitBytes && windowLimit > 1) {
       windowLimit = Math.max(1, Math.floor(windowLimit / 2));
-      bounded = this.store.listDockCards({ hostID: host.id, offset, limit: windowLimit });
+      bounded = listDockCards({ offset, limit: windowLimit });
       window = buildWindow({
         offset,
         limit: windowLimit,
@@ -736,6 +825,7 @@ class RelayStateEngine {
   }
 
   async subscribeDock({ session, downstreamWs, sendJson }) {
+    await this.refreshLiveStatusCacheForSnapshot("dock/subscribe");
     return this.subscribeCardView({
       view: DOCK_VIEW,
       updateMethod: "dock/update",
@@ -811,6 +901,7 @@ class RelayStateEngine {
   }
 
   async resyncDock({ downstreamWs = null, sendJson = null } = {}) {
+    await this.refreshLiveStatusCacheForSnapshot("dock/resync");
     return this.resyncCardView({
       view: DOCK_VIEW,
       updateMethod: "dock/update",

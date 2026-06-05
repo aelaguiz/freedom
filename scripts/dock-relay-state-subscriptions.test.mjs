@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { RELAY_STATE_STREAM_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
+import { threadCardDisplayOrderKey } from "./dock-relay-projection-engine.mjs";
 import { RelayStateEngine } from "./dock-relay-state-engine.mjs";
 import { NotificationIngestor } from "./dock-relay-state-ingest.mjs";
 import { StateSubscriptionHub } from "./dock-relay-state-subscriptions.mjs";
@@ -36,6 +37,48 @@ function heartbeatForView(store) {
     },
     freshness: { status: "fresh" },
   });
+}
+
+function testDockCard({
+  hostID = "home",
+  threadID,
+  status,
+  activityAtMs,
+}) {
+  const projectionID = `host:${hostID}/thread:${threadID}/row:threadCard`;
+  return {
+    id: projectionID,
+    schemaVersion: 1,
+    identityVersion: 1,
+    projectionEngineVersion: 1,
+    sourceHostID: hostID,
+    view: "dock",
+    projectionID,
+    sourceRef: `host:${hostID}/thread:${threadID}`,
+    rowRole: "threadCard",
+    displayOrderKey: threadCardDisplayOrderKey({ activityAtMs, status, projectionID }),
+    logicalHostID: hostID,
+    threadID,
+    backendSessionID: threadID,
+    hostDisplayName: "Home",
+    hostEndpoint: null,
+    activityAt: new Date(activityAtMs).toISOString(),
+    activityAtMs,
+    displaySummary: `summary-${threadID}`,
+    title: `title-${threadID}`,
+    status,
+    sourceKind: "human",
+    lane: "human",
+    relationship: "root",
+    forkedFromID: null,
+    archiveState: "active",
+    freshness: "fresh",
+    completeness: "complete",
+    repository: "repo",
+    workingDirectory: "/repo",
+    branch: "main",
+    summarySource: "title",
+  };
 }
 
 test("StateSubscriptionHub emits heartbeat while subscribed and stops when idle", async () => {
@@ -132,6 +175,99 @@ test("StateSubscriptionHub default heartbeat uses per-view sequence", async () =
   assert.ok(archiveUpdates.length > 0);
   assert.equal(dockUpdates.every((update) => update.seq === 7), true);
   assert.equal(archiveUpdates.every((update) => update.seq === 11), true);
+});
+
+test("dock subscribe overlays fresh live cache status before returning the first snapshot", async () => {
+  const dormantLiveCard = testDockCard({
+    threadID: "live-thread",
+    status: "dormant",
+    activityAtMs: 1_000,
+  });
+  const idleCard = testDockCard({
+    threadID: "idle-thread",
+    status: "idle",
+    activityAtMs: 2_000,
+  });
+  let liveCacheRefreshed = false;
+  const engine = new RelayStateEngine(
+    {
+      hostId: "home",
+      hostName: "Home",
+      logger: null,
+      liveStatusCache: {
+        async snapshotForRouting() {
+          liveCacheRefreshed = true;
+          return this.snapshot();
+        },
+        snapshot() {
+          return {
+            checkedAt: "2026-06-04T00:00:00.000Z",
+            checkedAtMs: Date.now(),
+            ok: liveCacheRefreshed,
+            status: liveCacheRefreshed ? "up" : "unknown",
+            endpoints: [{ url: "ws://127.0.0.1:4500" }],
+            failedEndpoints: 0,
+            rows: liveCacheRefreshed ? [{
+              id: "live-thread",
+              sessionId: "live-session",
+              status: { type: "active", activeFlags: [] },
+              updatedAt: "1970-01-01T00:00:03.000Z",
+            }] : [],
+            error: null,
+            liveOverlay: {
+              ok: liveCacheRefreshed,
+              state: liveCacheRefreshed ? "ready" : "disabled",
+              ageMs: 0,
+              endpoints: liveCacheRefreshed ? 1 : 0,
+              failedEndpoints: 0,
+              rows: liveCacheRefreshed ? 1 : 0,
+            },
+          };
+        },
+      },
+    },
+    {
+      store: {
+        currentSeq() {
+          return 1;
+        },
+        currentSeqForView() {
+          return 1;
+        },
+        freshnessForHost(_hostID, { archived }) {
+          assert.equal(archived, false);
+          return { status: "fresh", lastError: null };
+        },
+        cardTruthCompleteForHost(_hostID, { archived }) {
+          assert.equal(archived, false);
+          return true;
+        },
+        listDockCards({ offset = 0, limit = 500 }) {
+          const cards = [dormantLiveCard, idleCard]
+            .sort((left, right) => left.displayOrderKey.localeCompare(right.displayOrderKey));
+          return {
+            cards: cards.slice(offset, offset + limit),
+            totalRows: cards.length,
+          };
+        },
+        close() {},
+      },
+    },
+  );
+  const session = {};
+  const snapshot = await engine.subscribeDock({
+    session,
+    downstreamWs: {},
+    sendJson() {},
+  });
+  session.dockUnsubscribe?.();
+  await engine.close();
+
+  assert.equal(liveCacheRefreshed, true);
+  assert.equal(snapshot.rows[0].threadID, "live-thread");
+  assert.equal(snapshot.rows[0].status, "running");
+  assert.equal(snapshot.rows[0].backendSessionID, "live-session");
+  assert.equal(snapshot.rows[0].activityAtMs, 3_000);
 });
 
 test("archive mutations reconcile and publish dock and archive views", async () => {

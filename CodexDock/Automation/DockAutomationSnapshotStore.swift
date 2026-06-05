@@ -7,6 +7,7 @@ struct DockAutomationSnapshotMetadata: Equatable, Sendable {
 
 struct DockAutomationSnapshotStore: Sendable {
     static let relativeDirectory = "CodexDock/DockAutomationSnapshots"
+    static let defaultRetainedSnapshotCount = 64
 
     private let directoryURL: URL
     private let relativeDirectory: String
@@ -16,7 +17,7 @@ struct DockAutomationSnapshotStore: Sendable {
     init(
         directoryURL: URL,
         relativeDirectory: String = Self.relativeDirectory,
-        retainedSnapshotCount: Int = 5,
+        retainedSnapshotCount: Int = Self.defaultRetainedSnapshotCount,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.directoryURL = directoryURL

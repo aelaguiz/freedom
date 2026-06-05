@@ -460,11 +460,19 @@ extension XCUIApplication {
     ) -> DisplayedUISample {
         let sampledAt = codexDockISO8601Now()
         let dockRoot = displayedUIElement(id: AutomationID.Dock.root.rawValue)
-        let rootValue = dockRoot.exists ? dockRoot.displayedUIStringValue : "not-visible"
-        let dockRootCapturedAt = codexDockISO8601Now()
+        let initialRootValue = dockRoot.exists ? dockRoot.displayedUIStringValue : "not-visible"
         let dockRowsCaptureStartedAt = codexDockISO8601Now()
+        let snapshotRead = dockRowsFromAutomationSnapshot(
+            rootValue: initialRootValue,
+            refreshingRootValue: {
+                let refreshedRoot = displayedUIElement(id: AutomationID.Dock.root.rawValue)
+                return refreshedRoot.exists ? refreshedRoot.displayedUIStringValue : "not-visible"
+            }
+        )
+        let rootValue = snapshotRead.rootValue
+        let dockRootCapturedAt = codexDockISO8601Now()
         let dockRows: [DisplayedUIDockRow]
-        if let rootRows = dockRowsFromAutomationSnapshot(rootValue) {
+        if let rootRows = snapshotRead.rows {
             dockRows = rootRows
         } else {
             // Dock proof is deliberately single-path: rendered rows come from
