@@ -4,7 +4,7 @@ Plan: `docs/CODEX_DOCK_UNIFIED_ATTACHABLE_APP_SERVER_REGISTRY_2026-06-05.md`
 Audit log: `docs/CODEX_DOCK_UNIFIED_ATTACHABLE_APP_SERVER_REGISTRY_2026-06-05_PLAN_AUDIT.md`
 Current plan verdict: ready
 Current implementation code-review verdict: pass
-Last reviewed: 2026-06-05T11:49:27Z
+Last reviewed: 2026-06-05T13:22:13Z
 Scope: whole plan
 
 ## Current Blocking Findings
@@ -17,7 +17,7 @@ None.
 
 ## Current Implementation Findings
 
-None. Thermonuclear implementation review found one duplicate Unix JSON-RPC fixture helper issue, and it was resolved by extracting `startUnixJsonRpcServer` into `scripts/dock-relay-test-helpers.mjs`.
+None. Thermonuclear implementation review found TN-001 duplicate Unix JSON-RPC fixture helper setup and TN-002 stale detail-route option naming after the real-data fallback expansion; both are resolved.
 
 ## Relevant Code Coverage Ledger
 
@@ -121,3 +121,25 @@ Conditional lenses run:
 - Findings carried forward: none
 - Verdict: pass
 - Next audit focus: deployment verification on Mac and home relay servers
+
+### Pass 4 - 2026-06-05T13:22:13Z
+
+- Mode: final implementation/deployment audit
+- Scope: final real-data detail routing fix, naming cleanup, real relay proof, and iPhone 17 simulator proof
+- Review style: thermonuclear implementation review focused on structural drift, hidden second paths, over-broad fallback, stale naming, and proof quality
+- Code areas read: `scripts/dock-relay-thread-data.mjs`, `scripts/dock-relay.mjs`, `scripts/dock-relay-card-contract.test.mjs`, `scripts/dock-relay-human-thread-filter.mjs`, `scripts/dock-relay-state-views.mjs`, `CodexDock/State/ThreadDetailStore.swift`, and `CodexDock/Features/Session/SessionDetailView.swift`
+- Tests/proof accepted:
+  - `rtk node --test --test-name-pattern "visible human|omits source|reports spawn metadata" scripts/dock-relay-card-contract.test.mjs` passed 2/2.
+  - `rtk npm run test:relay` passed 222/222.
+  - Mac relay was restarted and `rtk make dock-relay-status` returned `status=ready` with no app-critical failures.
+  - Home relay pulled `17ca123`, restarted through systemd-user with explicit Linux service settings, and `host-service-status` returned `status=ready` with no app-critical failures.
+  - Real relay probe showed Mac 287 rows with zero false working labels and six real Thread Detail subscribe/resync probes succeeding.
+  - Real relay probe showed exact home failing IDs `019e92de-05eb-7560-867c-f8d5f9c4a026`, `019e92de-1e46-7471-a7e8-3042ee1d9c2e`, `019e97b3-3438-7ef0-9bf1-51f9d3df04a1`, and `019e9227-85dc-7f73-9488-0e08440684d0` as visible human/root rows with detail subscribe/resync succeeding.
+  - iPhone 17 simulator `DEF1631B-7125-43C6-BFA3-4423BF103C91` showed `loaded; rows=1271`, `Online 2/2`, Mac group 287 sessions, Home group 984 sessions, no false working label on visible non-running rows, and working detail drill-in for both a Mac row and exact home failing row `019e92de-05eb-7560-867c-f8d5f9c4a026`.
+- Implementation finding opened: TN-002 stale option name `allowAppFacingCardForMissingSource` after fallback grew from `missing_source` to `missing_source` plus `not_base_level`.
+- Repair made: renamed the option to `allowAppFacingCardRouteFallback`; focused and full relay tests passed after the rename.
+- Deployment finding opened: home Makefile defaults to macOS service settings, so a plain `rtk make host-service-restart` on home attempted `launchctl` and failed with exit 127.
+- Repair made: restarted home with explicit `HOST_SERVICE_PLATFORM=linux`, `CODEX_DOCK_REAL_HOST_ID=home`, `CODEX_DOCK_REAL_HOST_NAME=Home`, `NODE_BIN=/home/aelaguiz/.local/bin/node`, `APP_SERVER_HOST=home.fairy-salmon.ts.net`, and `DOCK_RELAY_WS=ws://home.fairy-salmon.ts.net:4510`.
+- Findings carried forward: none for relay/app behavior. SIM-HARNESS-001 remains a separate strict JSON snapshot oracle issue and is not a product relay blocker.
+- Verdict: pass
+- Next audit focus: none for this goal
