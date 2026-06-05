@@ -415,14 +415,18 @@ function sendFixtureError(ws, id, message) {
   }));
 }
 
-function fixtureThread(id, preview, updatedAt) {
-  return {
+function fixtureThread(id, preview, updatedAt, turnItems = []) {
+  const row = {
     id,
     preview,
     updatedAt,
     source: "cli",
     status: { type: "notLoaded" },
   };
+  if (turnItems.length > 0) {
+    row.turnItems = turnItems;
+  }
+  return row;
 }
 
 function fixtureThreadWithStatus(id, preview, updatedAt, status) {
@@ -433,7 +437,15 @@ function fixtureThreadWithStatus(id, preview, updatedAt, status) {
 }
 
 function activeFixtureRows(message, rows) {
-  return message.params?.archived === true ? [] : rows;
+  return message.params?.archived === true ? [] : rows.map(publicFixtureRow);
+}
+
+function publicFixtureRow(row) {
+  if (!row) {
+    return null;
+  }
+  const { turnItems, ...publicRow } = row;
+  return publicRow;
 }
 
 function writeFixtureSessionMeta(codexHome, {
@@ -497,7 +509,7 @@ function sendFixtureThreadRead(ws, message, row) {
   }
   sendFixtureResult(ws, message.id, {
     thread: {
-      ...row,
+      ...publicFixtureRow(row),
       turns: [],
     },
   });
@@ -505,7 +517,7 @@ function sendFixtureThreadRead(ws, message, row) {
 
 function sendFixtureThreadTurnsList(ws, message, row) {
   sendFixtureResult(ws, message.id, {
-    data: row ? [fixtureTurn(`${row.id}-turn`, row.updatedAt, [])] : [],
+    data: row ? [fixtureTurn(`${row.id}-turn`, row.updatedAt, row.turnItems || [])] : [],
     nextCursor: null,
     backwardsCursor: null,
   });
@@ -1891,8 +1903,11 @@ async function runThreadActivityScenario(options) {
   const movingThreadID = `sim-${scenarioName}-moving`;
   const newThreadID = isCurrentWorkVisible ? `sim-${scenarioName}-loaded-work` : `sim-${scenarioName}-new`;
   const updatedPreview = isCurrentWorkVisible
-    ? "Simulator current work advanced while loaded"
-    : "Simulator fixture existing row after new turn";
+    ? "Simulator current work stale preview before latest turn"
+    : "Simulator fixture existing row stale preview before latest turn";
+  const updatedLatestSummary = isCurrentWorkVisible
+    ? "Simulator current work latest turn summary"
+    : "Simulator fixture latest turn summary from activity proof";
   let sourceRows = [
     fixtureThread(stableThreadID, "Simulator fixture stable row", 200),
     fixtureThread(movingThreadID, "Simulator fixture moving row before update", 100),
@@ -2078,11 +2093,15 @@ async function runThreadActivityScenario(options) {
 
     const turnStartedAtMs = Date.now();
     if (isCurrentWorkVisible) {
-      currentWorkRow = fixtureThread(newThreadID, updatedPreview, 500);
+      currentWorkRow = fixtureThread(newThreadID, updatedPreview, 500, [
+        fixtureAgentMessageItem(`${newThreadID}-latest-summary`, updatedLatestSummary),
+      ]);
       await relayConfig.relayStateEngine.reconcileDock({ reason: "controlled_simulator_current_work_live_advance" });
     } else {
       sourceRows = [
-        fixtureThread(movingThreadID, updatedPreview, 400),
+        fixtureThread(movingThreadID, updatedPreview, 400, [
+          fixtureAgentMessageItem(`${movingThreadID}-latest-summary`, updatedLatestSummary),
+        ]),
         fixtureThread(newThreadID, "Simulator fixture newly created row", 300),
         fixtureThread(stableThreadID, "Simulator fixture stable row", 200),
       ];
@@ -2096,7 +2115,7 @@ async function runThreadActivityScenario(options) {
         const card = dockSnapshotCardForThread(snapshot, targetThreadID);
         return dockSnapshotThreadIndex(snapshot, targetThreadID) === 0
           && (isCurrentWorkVisible || dockSnapshotThreadIndex(snapshot, newThreadID) === 1)
-          && card?.displaySummary === updatedPreview;
+          && card?.displaySummary === updatedLatestSummary;
       },
     });
     const turnLag = scenarioLagSummary({

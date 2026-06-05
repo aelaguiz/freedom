@@ -35,8 +35,11 @@ async function startCanonicalActivityAppServer({
   loadedThreadIDs = [],
   listUpdatedAt = {},
   omitReadSourceFor = new Set(),
+  requestLog = [],
   readSourceFor = {},
   readUpdatedAt = {},
+  turnItemsByThread = {},
+  turnsByThread = {},
 } = {}) {
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   const clients = new Set();
@@ -131,6 +134,10 @@ async function startCanonicalActivityAppServer({
     });
     ws.on("message", (raw) => {
       const message = JSON.parse(raw.toString());
+      requestLog.push({
+        method: message.method,
+        params: message.params || null,
+      });
       if (message.method === "initialize") {
         ws.send(appServerResponse(message.id, {
           userAgent: "test-app-server",
@@ -174,13 +181,24 @@ async function startCanonicalActivityAppServer({
           }));
           return;
         }
+        const threadId = message.params?.threadId;
+        if (Array.isArray(turnsByThread[threadId])) {
+          ws.send(appServerResponse(message.id, {
+            data: turnsByThread[threadId],
+            nextCursor: null,
+          }));
+          return;
+        }
         const startedAt = {
           newer: 3_000,
           older: 2_000,
           "live-only": 5_000,
-        }[message.params?.threadId] ?? 1_000;
+        }[threadId] ?? 1_000;
+        const items = Array.isArray(turnItemsByThread[threadId])
+          ? turnItemsByThread[threadId]
+          : [];
         ws.send(appServerResponse(message.id, {
-          data: [{ id: `${message.params?.threadId}-turn`, startedAt }],
+          data: [{ id: `${threadId}-turn`, startedAt, items }],
           nextCursor: null,
         }));
       } else if (message.method === "thread/resume") {
@@ -309,6 +327,112 @@ test("dock/subscribe orders cards by proven newest turn activity, not raw thread
         assert.deepEqual(response.result.rows.map((card) => card.threadID), ["newer", "older"]);
         assert.ok(response.result.rows.every((card) => card.completeness === "complete"));
         assert.ok(response.result.rows.every((card) => card.freshness === "fresh"));
+      } finally {
+        ws.close();
+      }
+    });
+  } finally {
+    await appServer.close();
+  }
+});
+
+test("dock/subscribe projects latest meaningful turn text without opening thread detail", async () => {
+  const requestLog = [];
+  const appServer = await startCanonicalActivityAppServer({
+    requestLog,
+    turnItemsByThread: {
+      older: [
+        {
+          type: "agentMessage",
+          text: "Older latest turn text",
+          timestamp: "2026-06-05T12:00:00.000Z",
+        },
+      ],
+      newer: [
+        {
+          type: "userMessage",
+          text: "Newer stale prompt",
+          timestamp: "2026-06-05T12:00:00.000Z",
+        },
+        {
+          type: "agentMessage",
+          content: [{ text: "Latest answer from existing turn proof" }],
+          timestamp: "2026-06-05T12:00:05.000Z",
+        },
+      ],
+    },
+  });
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.relayStateEngine.reconcileDock({ reason: "test-latest-summary" });
+      const ws = await openWebSocket(wsURL);
+      try {
+        const response = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(response.error, undefined);
+        assert.deepEqual(response.result.rows.map((card) => card.threadID), ["newer", "older"]);
+        const newer = response.result.rows.find((card) => card.threadID === "newer");
+        assert.equal(newer?.displaySummary, "Latest answer from existing turn proof");
+        assert.equal(newer?.summarySource, "latest_summary");
+
+        const turnListCalls = requestLog.filter((entry) => entry.method === "thread/turns/list");
+        assert.equal(turnListCalls.length, 2);
+        assert.equal(
+          requestLog.some((entry) => entry.method === "thread/detail/subscribe"),
+          false,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+  } finally {
+    await appServer.close();
+  }
+});
+
+test("dock/update projects changed latest turn text from the existing activity proof path", async () => {
+  const turnsByThread = {
+    older: [{
+      id: "older-turn",
+      startedAt: 2_000,
+      items: [{ type: "agentMessage", text: "Older turn text" }],
+    }],
+    newer: [{
+      id: "newer-turn-initial",
+      startedAt: 3_000,
+      items: [{ type: "agentMessage", text: "Initial turn summary" }],
+    }],
+  };
+  const appServer = await startCanonicalActivityAppServer({ turnsByThread });
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.relayStateEngine.reconcileDock({ reason: "test-initial-summary" });
+      const ws = await openWebSocket(wsURL);
+      try {
+        const initial = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(initial.error, undefined);
+        const initialCard = initial.result.rows.find((card) => card.threadID === "newer");
+        assert.equal(initialCard?.displaySummary, "Initial turn summary");
+        assert.equal(initialCard?.summarySource, "latest_summary");
+
+        turnsByThread.newer = [{
+          id: "newer-turn-updated",
+          startedAt: 4_000,
+          items: [{ type: "userMessage", text: "Updated turn summary" }],
+        }];
+        const updatePromise = waitForRelayMessage(ws, (message) => (
+          message.method === "dock/update"
+          && (message.params?.rows || []).some((card) => (
+            card.threadID === "newer"
+            && card.displaySummary === "Updated turn summary"
+            && card.summarySource === "latest_summary"
+          ))
+        ));
+        await config.relayStateEngine.reconcileDock({ reason: "test-updated-summary" });
+        const update = await updatePromise;
+        const updatedCard = update.params.rows.find((card) => card.threadID === "newer");
+
+        assert.equal(updatedCard?.displaySummary, "Updated turn summary");
+        assert.equal(updatedCard?.summarySource, "latest_summary");
       } finally {
         ws.close();
       }

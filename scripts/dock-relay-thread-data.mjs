@@ -13,7 +13,7 @@ import {
 } from "./dock-relay-constants.mjs";
 import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
 import { LiveStatusCache, SessionRouter } from "./dock-relay-live-status-cache.mjs";
-import { ThreadSummaryCache } from "./dock-relay-thread-summary-cache.mjs";
+import { latestMeaningfulMessageFromTurns } from "./dock-relay-thread-summary.mjs";
 import { UpstreamConnectionPool } from "./dock-relay-upstream-pool.mjs";
 import {
   classifyThreadOrigin,
@@ -114,16 +114,6 @@ function sessionRouterForConfig(config) {
     });
   }
   return config.sessionRouter;
-}
-
-function threadSummaryCacheForConfig(config) {
-  if (!config.threadSummaryCache) {
-    config.threadSummaryCache = new ThreadSummaryCache({
-      readThreadTurns: (params) => listThreadTurns(config, params),
-      logger: relayLogger(config),
-    });
-  }
-  return config.threadSummaryCache;
 }
 
 function isHistoryEndpoint(config, endpoint) {
@@ -1385,6 +1375,7 @@ async function readNewestTurnActivity(config, threadId, {
   const seenCursors = new Set();
   let cursor = null;
   let newestTurnActivityAtMs = 0;
+  let latestSummaryMessage = null;
 
   while (true) {
     const response = await listThreadTurns(config, {
@@ -1404,6 +1395,19 @@ async function readNewestTurnActivity(config, threadId, {
     for (const turn of turns) {
       newestTurnActivityAtMs = Math.max(newestTurnActivityAtMs, turnActivityMs(turn));
     }
+    const pageSummaryMessage = latestMeaningfulMessageFromTurns(turns, {
+      pageIndex: pages.length - 1,
+    });
+    if (pageSummaryMessage && (
+      !latestSummaryMessage
+      || latestSummaryMessage.timestampMs < pageSummaryMessage.timestampMs
+      || (
+        latestSummaryMessage.timestampMs === pageSummaryMessage.timestampMs
+        && latestSummaryMessage.pageIndex < pageSummaryMessage.pageIndex
+      )
+    )) {
+      latestSummaryMessage = pageSummaryMessage;
+    }
     const nextCursor = response?.nextCursor || null;
     if (!nextCursor) {
       break;
@@ -1417,6 +1421,8 @@ async function readNewestTurnActivity(config, threadId, {
 
   return {
     newestTurnActivityAtMs,
+    latestSummary: latestSummaryMessage?.text || null,
+    latestSummaryAtMs: latestSummaryMessage?.timestampMs || 0,
     pages,
   };
 }
@@ -1441,8 +1447,16 @@ async function canonicalizeThreadRows(config, rows = [], {
         acceptedHumanRow: row,
       });
       const activityAtMs = Math.max(baseActivityAtMs, turns.newestTurnActivityAtMs);
+      const latestSummary = typeof turns.latestSummary === "string" && turns.latestSummary.trim().length > 0
+        ? turns.latestSummary.trim()
+        : null;
       return {
         ...row,
+        ...(latestSummary ? {
+          latestSummary,
+          displaySummary: latestSummary,
+          summarySource: "latest_summary",
+        } : {}),
         activityAtMs,
         activityAt: timestampToISO(activityAtMs),
         freshness: "fresh",
@@ -1571,7 +1585,6 @@ export {
   liveStatusCacheForConfig,
   sessionRouterForConfig,
   statusPriority,
-  threadSummaryCacheForConfig,
   unarchiveThread,
   upstreamPoolForConfig,
 };
