@@ -271,6 +271,30 @@ async function withRelay(historyUrl, testFn, overrides = {}) {
   }
 }
 
+function writeSessionMeta(codexHome, {
+  id,
+  cwd = "/tmp/codex-client",
+  source = "cli",
+  git = { branch: "main", repository_url: "git@example.test:repo/example.git" },
+} = {}) {
+  const dir = path.join(codexHome, "sessions", "2026", "06", "05");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, `rollout-2026-06-05T12-00-00-${id}.jsonl`),
+    `${JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-06-05T12:00:00.000Z",
+      payload: {
+        id,
+        cwd,
+        source,
+        git,
+      },
+    })}\n`,
+    "utf8",
+  );
+}
+
 test("dock/subscribe orders cards by proven newest turn activity, not raw thread/list order", async () => {
   const appServer = await startCanonicalActivityAppServer();
   try {
@@ -291,6 +315,49 @@ test("dock/subscribe orders cards by proven newest turn activity, not raw thread
     });
   } finally {
     await appServer.close();
+  }
+});
+
+test("dock/subscribe rejects live rows when rollout metadata says they are spawned subagents", async () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-session-meta-"));
+  writeSessionMeta(codexHome, {
+    id: "live-only",
+    cwd: "/tmp/codex-client/subagent-workspace",
+    source: {
+      subagent: {
+        thread_spawn: {
+          parent_thread_id: "parent-thread",
+          depth: 1,
+          agent_nickname: "Arendt",
+          agent_role: "explorer",
+        },
+      },
+    },
+    git: {
+      branch: "subagent-branch",
+      repository_url: "git@example.test:repo/subagent.git",
+    },
+  });
+  const appServer = await startCanonicalActivityAppServer({
+    loadedThreadIDs: ["live-only"],
+  });
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.relayStateEngine.reconcileDock({ reason: "test-subagent-session-meta" });
+      const ws = await openWebSocket(wsURL);
+      try {
+        const response = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(response.error, undefined);
+        assert.equal(response.result.complete, true);
+        assert.deepEqual(response.result.rows.map((card) => card.threadID), ["newer", "older"]);
+        assert.equal(response.result.rows.some((card) => card.threadID === "live-only"), false);
+      } finally {
+        ws.close();
+      }
+    }, { codexHome });
+  } finally {
+    await appServer.close();
+    fs.rmSync(codexHome, { recursive: true, force: true });
   }
 });
 

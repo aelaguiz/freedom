@@ -84,6 +84,7 @@ function liveStatusCacheForConfig(config) {
           excludeURLs: [],
           pool: upstreamPoolForConfig(config),
           onNotification: config.upstreamNotificationHandler || null,
+          codexHome: codexHomeForConfig(config),
         });
         const mergedLive = mergePrivateLiveRows(live, config.appServerRegistry);
         for (const row of mergedLive.rows || []) {
@@ -283,6 +284,160 @@ function codexHomeForConfig(config) {
   return config?.codexHome || process.env.CODEX_HOME || null;
 }
 
+function sessionMetadataGitInfo(git) {
+  if (!git || typeof git !== "object" || Array.isArray(git)) {
+    return null;
+  }
+  const branch = nonEmpty(git.branch);
+  const originUrl = nonEmpty(git.repository_url) || nonEmpty(git.originUrl);
+  const commitHash = nonEmpty(git.commit_hash) || nonEmpty(git.commitHash);
+  if (!branch && !originUrl && !commitHash) {
+    return null;
+  }
+  return {
+    ...(branch ? { branch } : {}),
+    ...(originUrl ? { originUrl } : {}),
+    ...(commitHash ? { commitHash } : {}),
+  };
+}
+
+function threadMetadataFromSessionPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const id = nonEmpty(payload.id);
+  if (!id) {
+    return null;
+  }
+  const gitInfo = sessionMetadataGitInfo(payload.git);
+  const metadata = {
+    id,
+    ...(payload.source !== undefined ? { source: payload.source } : {}),
+    ...(payload.thread_source !== undefined ? { threadSource: payload.thread_source } : {}),
+    ...(payload.forked_from_id !== undefined ? { forkedFromId: payload.forked_from_id } : {}),
+    ...(nonEmpty(payload.cwd) ? { cwd: nonEmpty(payload.cwd) } : {}),
+    ...(gitInfo ? { gitInfo } : {}),
+  };
+  return Object.keys(metadata).length > 1 ? metadata : null;
+}
+
+function firstSessionMetadataFromFile(filePath) {
+  let contents;
+  try {
+    contents = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  for (const line of contents.split(/\r?\n/, 12)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    let event;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (event?.type === "session_meta") {
+      return threadMetadataFromSessionPayload(event.payload);
+    }
+  }
+  return null;
+}
+
+function threadIDSet(values = []) {
+  const set = new Set();
+  for (const value of values || []) {
+    const id = nonEmpty(value);
+    if (id) {
+      set.add(id);
+    }
+  }
+  return set;
+}
+
+function fileNameCouldContainThreadID(fileName, wantedIDs) {
+  if (!wantedIDs || wantedIDs.size === 0) {
+    return true;
+  }
+  for (const id of wantedIDs) {
+    if (fileName.includes(id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function readSessionMetadataIndexForCodexHome(codexHome, logger = defaultRelayLogger, {
+  threadIDs = null,
+} = {}) {
+  const sessionsDir = codexHome ? path.join(codexHome, "sessions") : null;
+  if (!sessionsDir) {
+    return new Map();
+  }
+  const wantedIDs = threadIDs ? threadIDSet(threadIDs) : null;
+  if (wantedIDs && wantedIDs.size === 0) {
+    return new Map();
+  }
+  const byID = new Map();
+  const stack = [sessionsDir];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        logger.warn("human_started_thread.session_metadata_unavailable", {
+          path: dir,
+          error,
+        });
+      }
+      continue;
+    }
+    entries.sort((lhs, rhs) => lhs.name.localeCompare(rhs.name));
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(entryPath);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+        continue;
+      }
+      if (!fileNameCouldContainThreadID(entry.name, wantedIDs)) {
+        continue;
+      }
+      const metadata = firstSessionMetadataFromFile(entryPath);
+      if (metadata?.id && (!wantedIDs || wantedIDs.has(metadata.id))) {
+        byID.set(metadata.id, metadata);
+        if (wantedIDs) {
+          wantedIDs.delete(metadata.id);
+          if (wantedIDs.size === 0) {
+            return byID;
+          }
+        }
+      }
+    }
+  }
+  return byID;
+}
+
+function mergeSessionMetadata(row, metadata) {
+  if (!row || !metadata) {
+    return row;
+  }
+  return {
+    ...row,
+    ...metadata,
+    id: row.id,
+    sessionId: row.sessionId,
+    status: row.status,
+    dockRelaySource: row.dockRelaySource,
+  };
+}
+
 function parseSessionIndexTimestamp(value) {
   const ms = Date.parse(String(value || ""));
   if (!Number.isFinite(ms)) {
@@ -475,6 +630,8 @@ async function readLoadedRows(endpoint, {
   pool = null,
   timeoutMs = undefined,
   onNotification = null,
+  codexHome = null,
+  sessionMetadataByThreadID = null,
 } = {}) {
   return withEndpointClient(endpoint, {
     logger,
@@ -484,7 +641,10 @@ async function readLoadedRows(endpoint, {
     onNotification,
   }, async (client) => {
     const loaded = await client.request("thread/loaded/list", { limit: LIVE_LOADED_LIST_LIMIT });
-    const results = await Promise.allSettled((loaded.data || []).map((threadId) => (
+    const loadedThreadIDs = (loaded.data || []).map(nonEmpty).filter(Boolean);
+    const metadataByThreadID = sessionMetadataByThreadID
+      || readSessionMetadataIndexForCodexHome(codexHome, logger, { threadIDs: loadedThreadIDs });
+    const results = await Promise.allSettled(loadedThreadIDs.map((threadId) => (
       client.request("thread/read", {
         threadId,
         includeTurns: false,
@@ -497,14 +657,17 @@ async function readLoadedRows(endpoint, {
       if (result.status === "rejected") {
         failedThreadReads += 1;
         logger.warn("live.thread_read_failed", {
-          threadId: loaded.data[index],
+          threadId: loadedThreadIDs[index],
           endpointUrl: endpoint.url,
           error: result.reason,
         });
         continue;
       }
       if (result.value?.thread?.id) {
-        const row = { ...result.value.thread, dockRelaySource: endpoint };
+        const row = mergeSessionMetadata(
+          { ...result.value.thread, dockRelaySource: endpoint },
+          metadataByThreadID.get(result.value.thread.id),
+        );
         const classification = classifyThreadOrigin(row);
         if (classification.allowed) {
           rows.push(row);
@@ -519,7 +682,7 @@ async function readLoadedRows(endpoint, {
     }
     return {
       rows,
-      totalThreadReads: (loaded.data || []).length,
+      totalThreadReads: loadedThreadIDs.length,
       failedThreadReads,
     };
   });
@@ -591,6 +754,10 @@ async function collectLiveRows(options = {}) {
     .map(canonicalURLString));
   const endpoints = (typeof options?.warn === "function" ? [] : options.endpoints || [])
     .filter((endpoint) => !excludedURLs.has(canonicalURLString(endpoint.url)));
+  const sessionMetadataByThreadID = typeof options?.warn === "function"
+    ? null
+    : options.sessionMetadataByThreadID || null;
+  const codexHome = typeof options?.warn === "function" ? null : options.codexHome || null;
   const configuredMaxConcurrent = typeof options?.warn === "function"
     ? UPSTREAM_POOL_LIMITS["live-status"]
     : options.maxConcurrent
@@ -607,6 +774,8 @@ async function collectLiveRows(options = {}) {
       pool,
       timeoutMs: LIVE_STATUS_UPSTREAM_TIMEOUT_MS,
       onNotification,
+      codexHome,
+      sessionMetadataByThreadID,
     }),
   );
   const rowsById = new Map();

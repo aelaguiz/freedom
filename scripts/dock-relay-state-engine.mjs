@@ -593,6 +593,7 @@ class RelayStateEngine {
       endpoints,
       excludeURLs: [],
       onNotification: this.config.upstreamNotificationHandler || null,
+      codexHome: this.config.codexHome || null,
     });
     const live = mergePrivateLiveRows(collectedLive, this.config.appServerRegistry);
     const endpointsByUrl = new Map(endpoints.map((endpoint) => [endpoint.url, endpoint]));
