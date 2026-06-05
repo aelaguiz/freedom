@@ -251,3 +251,42 @@ second plan.
   - `rtk node --check scripts/dock-relay-app-server-registry.mjs` passed.
   - `rtk node --check scripts/dock-relay-app-server-discovery.mjs` passed.
   - `rtk npm run test:relay` passed with 212 tests and 0 failures.
+
+## 2026-06-05T03:44:50Z - Post-commit live deployment proof
+
+- Committed and pushed the registry/discovery split:
+  `930da29 Split relay app-server discovery`.
+- Local Mac checkout is at `930da29`; `rtk make services` restarted the
+  launchd relay.
+- Home checkout fast-forwarded to `930da29`; `rtk make services` restarted the
+  systemd user relay with:
+  `HOST_SERVICE_PLATFORM=linux NODE_BIN=/home/aelaguiz/.local/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=home.fairy-salmon.ts.net`.
+- Status checks after deploy:
+  - Local `rtk make dock-relay-status`: `status=ready`,
+    `appEndpoint=amir-m5.fairy-salmon.ts.net:4510`, `snapshotOK=true`,
+    `registryOK=true`, `routesOK=true`.
+  - Home `rtk make dock-relay-status`: `status=ready`,
+    `appEndpoint=home.fairy-salmon.ts.net:4510`, `snapshotOK=true`,
+    `registryOK=true`, `routesOK=true`.
+- Post-deploy live WebSocket probe:
+  - `ws://amir-m5.fairy-salmon.ts.net:4510`: `282` rows, `11` running,
+    `271` dormant.
+  - `ws://home.fairy-salmon.ts.net:4510`: first `250` rows received, `4`
+    running, `246` dormant.
+- Relaunched the `iPhone 17` simulator against both live relays:
+  `SIM_LAUNCH_HOSTS=amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510`.
+- Two-relay simulator screenshot:
+  `/tmp/codex-client/live-badge-post-deploy-sim-20260605T034306Z.png`.
+  It shows `Online 2/2` and visible real `Amir-M5` rows with
+  `Codex is working`.
+- UI dump artifact:
+  `/tmp/codex-client/live-badge-post-deploy-ui-dump-20260605T034306Z/sim-ui-dump.json`.
+  The dump wrapper failed because automation snapshot metadata was missing,
+  but the JSON was written and schema-validated; parsed counts were
+  `Codex is working` x39, `status=running` x8, and `Online 2/2` x6.
+- Relaunched the `iPhone 17` simulator against the home relay only:
+  `SIM_LAUNCH_HOSTS=home.fairy-salmon.ts.net:4510`.
+- Home-only simulator screenshot:
+  `/tmp/codex-client/live-badge-home-only-sim-20260605T034450Z.png`.
+  It shows visible `Home` rows, including `Hand debugging`, with
+  `Codex is working` badges.

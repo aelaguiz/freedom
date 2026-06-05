@@ -62,6 +62,19 @@ diagnostics, or collect physical app logs.
   `/tmp/codex-client/live-badge-current-sim-20260605T033902Z.png`.
 - The current simulator screenshot shows `Online 2/2` and multiple visible
   real relay rows with `Codex is working` badges.
+- Post-deploy two-relay simulator screenshot:
+  `/tmp/codex-client/live-badge-post-deploy-sim-20260605T034306Z.png`.
+  It shows `Online 2/2` and visible real `Amir-M5` rows with
+  `Codex is working`.
+- Post-deploy UI dump artifact:
+  `/tmp/codex-client/live-badge-post-deploy-ui-dump-20260605T034306Z/sim-ui-dump.json`.
+  The dump wrapper failed because automation snapshot metadata was missing, but
+  the JSON was written and schema-validated; parsed counts were
+  `Codex is working` x39, `status=running` x8, and `Online 2/2` x6.
+- Post-deploy home-only simulator screenshot:
+  `/tmp/codex-client/live-badge-home-only-sim-20260605T034450Z.png`.
+  It shows visible `Home` rows, including `Hand debugging`, with
+  `Codex is working` badges.
 - The physical iPhone app metadata reports:
   `Codex Dock com.aelaguiz.CodexDockApp 0.1.0 20260605003015`.
 - Physical config readback now verifies hosts:
