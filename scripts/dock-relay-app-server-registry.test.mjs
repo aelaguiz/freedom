@@ -13,6 +13,7 @@ import {
 } from "./dock-relay-app-server-registry.mjs";
 import {
   collectLiveRows,
+  listThreadTurns,
   mergePrivateLiveRows,
 } from "./dock-relay-thread-data.mjs";
 import {
@@ -582,9 +583,79 @@ test("app-server registry routes supported relay methods through one table", asy
     (error) => error instanceof AppServerRegistryRouteError
       && error.reason === "private_owner_unattachable",
   );
+  const privateReadRoute = registry.routeForThreadMethod("thread/read", "thread-private", {
+    allowHistoryForPrivateOwner: true,
+  });
+  assert.equal(privateReadRoute.source, "history");
+  assert.equal(privateReadRoute.endpoint.label, "daemon-history");
   const privateTurnsRoute = registry.routeForThreadMethod("thread/turns/list", "thread-private", {
     allowHistoryForPrivateOwner: true,
   });
   assert.equal(privateTurnsRoute.source, "history");
   assert.equal(privateTurnsRoute.endpoint.label, "daemon-history");
+});
+
+test("thread turns fall back to history when a private live owner shadows human history", async () => {
+  const threadId = "thread-private-human-history";
+  const history = await startUnixJsonRpcServer((message) => {
+    if (message.method === "initialize") {
+      return { id: message.id, result: { userAgent: "private-owner-history-test" } };
+    }
+    if (message.method === "initialized") {
+      return null;
+    }
+    if (message.method === "thread/read") {
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: threadId,
+            source: "cli",
+            updatedAt: 2_000,
+            status: { type: "idle" },
+          },
+        },
+      };
+    }
+    if (message.method === "thread/turns/list") {
+      return {
+        id: message.id,
+        result: {
+          data: [{ id: "turn-1", startedAt: 3_000 }],
+          nextCursor: null,
+        },
+      };
+    }
+    if (message.method === "thread/list") {
+      return { id: message.id, result: { data: [], nextCursor: null } };
+    }
+    return null;
+  });
+  const registry = new AppServerRegistry({
+    includeDaemonHistory: false,
+    processListProvider: async () => [],
+    fixtureHistoryEndpoints: [
+      { label: "daemon-history", url: `unix://${history.socketPath}` },
+    ],
+  });
+  try {
+    await registry.refreshNow("test");
+    registry.recordPrivateOwner(threadId, { pid: 3333, transport: "stdio" });
+
+    await assert.rejects(
+      () => listThreadTurns({ appServerRegistry: registry }, { threadId }),
+      (error) => error?.reason === "private_owner_unattachable" || error?.code === -32043,
+    );
+
+    const turns = await listThreadTurns(
+      { appServerRegistry: registry },
+      { threadId },
+      { allowHistoryForPrivateOwner: true },
+    );
+    assert.equal(turns.data.length, 1);
+    assert.equal(turns.data[0].id, "turn-1");
+  } finally {
+    registry.stop();
+    await history.close();
+  }
 });

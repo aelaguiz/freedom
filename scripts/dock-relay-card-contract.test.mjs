@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { WebSocketServer } from "ws";
 
@@ -27,6 +30,7 @@ function appServerNotification(method, params) {
 
 async function startCanonicalActivityAppServer({
   emitRenameNotifications = false,
+  failReadsFor = new Set(),
   failTurnsFor = new Set(),
   loadedThreadIDs = [],
   listUpdatedAt = {},
@@ -141,6 +145,13 @@ async function startCanonicalActivityAppServer({
       } else if (message.method === "thread/loaded/list") {
         ws.send(appServerResponse(message.id, { data: loadedThreadIDs }));
       } else if (message.method === "thread/read") {
+        if (failReadsFor.has(message.params?.threadId)) {
+          ws.send(JSON.stringify({
+            id: message.id,
+            error: { code: -32000, message: "thread read unavailable" },
+          }));
+          return;
+        }
         const thread = { ...rows[message.params?.threadId] };
         if (readUpdatedAt[message.params?.threadId] !== undefined) {
           thread.updatedAt = readUpdatedAt[message.params.threadId];
@@ -268,6 +279,40 @@ test("dock/subscribe orders cards by proven newest turn activity, not raw thread
     });
   } finally {
     await appServer.close();
+  }
+});
+
+test("failed optional session-index supplements do not make dock snapshot partial", async () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-session-index-"));
+  fs.writeFileSync(
+    path.join(codexHome, "session_index.jsonl"),
+    `${JSON.stringify({
+      id: "missing-supplement",
+      thread_name: "Missing supplement",
+      updated_at: "2026-06-05T12:00:00.000Z",
+    })}\n`,
+    "utf8",
+  );
+  const appServer = await startCanonicalActivityAppServer({
+    failReadsFor: new Set(["missing-supplement"]),
+  });
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.relayStateEngine.reconcileDock({ reason: "test" });
+      const ws = await openWebSocket(wsURL);
+      try {
+        const response = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(response.error, undefined);
+        assert.equal(response.result.complete, true);
+        assert.equal(response.result.freshness.status, "fresh");
+        assert.deepEqual(response.result.rows.map((card) => card.threadID), ["newer", "older"]);
+      } finally {
+        ws.close();
+      }
+    }, { codexHome });
+  } finally {
+    await appServer.close();
+    fs.rmSync(codexHome, { recursive: true, force: true });
   }
 });
 
@@ -446,6 +491,34 @@ test("thread/name/updated from active detail upstream refreshes dock card title 
         const updatedCard = update.params.rows.find((card) => card.threadID === "newer");
 
         assert.equal(updatedCard?.title, "Detail upstream rename");
+      } finally {
+        ws.close();
+      }
+    });
+  } finally {
+    await appServer.close();
+  }
+});
+
+test("thread/detail/subscribe falls back to history when a private live owner shadows human history", async () => {
+  const appServer = await startCanonicalActivityAppServer();
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.appServerRegistry.refreshNow("test-private-owner-detail");
+      config.appServerRegistry.recordPrivateOwner("newer", { pid: 3333, transport: "stdio" });
+      const ws = await openWebSocket(wsURL);
+      try {
+        const detail = await jsonRpcRequest(ws, "thread/detail/subscribe", { threadId: "newer" });
+        assert.equal(detail.error, undefined);
+        assert.equal(detail.result?.threadID, "newer");
+        assert.equal(detail.result?.view, "thread.detail");
+        assert.equal(appServer.resumedClientCount, 0);
+
+        const resync = await jsonRpcRequest(ws, "thread/detail/resync", { threadId: "newer" });
+        assert.equal(resync.error, undefined);
+        assert.equal(resync.result?.threadID, "newer");
+        assert.equal(resync.result?.view, "thread.detail");
+        assert.equal(appServer.resumedClientCount, 0);
       } finally {
         ws.close();
       }

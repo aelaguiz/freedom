@@ -45,6 +45,7 @@ const ACTIVE_SESSION_ONLY_METHODS = new Set([
   "raw-json-rpc/server-request-response",
 ]);
 const HISTORY_SAFE_PRIVATE_OWNER_METHODS = new Set([
+  "thread/read",
   "thread/turns/list",
 ]);
 

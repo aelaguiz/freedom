@@ -308,7 +308,9 @@ async function resumeThread(config, params = {}, session, downstreamWs, options 
   }
 }
 
-async function readAllThreadDetailTurns(config, threadId) {
+async function readAllThreadDetailTurns(config, threadId, {
+  allowHistoryForPrivateOwner = false,
+} = {}) {
   const turns = [];
   const seenCursors = new Set();
   let cursor = null;
@@ -320,6 +322,8 @@ async function readAllThreadDetailTurns(config, threadId) {
       limit: THREAD_LIST_MAX_LIMIT,
       sortDirection: "desc",
       itemsView: "full",
+    }, {
+      allowHistoryForPrivateOwner,
     });
     if (Array.isArray(response?.data)) {
       turns.push(...response.data);
@@ -342,26 +346,30 @@ async function readAllThreadDetailTurns(config, threadId) {
   return turns;
 }
 
-async function readThreadDetailLedger(config, params = {}) {
+async function readThreadDetailLedger(config, params = {}, options = {}) {
   if (!params.threadId) {
     throw new Error("thread/detail requires threadId");
   }
-  const thread = await readThreadDetailThread(config, params);
+  const thread = await readThreadDetailThread(config, params, options);
   return createThreadDetailLedgerFromThread(thread, {
     sourceHostID: config.hostId,
     threadID: params.threadId,
   });
 }
 
-async function readThreadDetailThread(config, params = {}) {
+async function readThreadDetailThread(config, params = {}, options = {}) {
   if (!params.threadId) {
     throw new Error("thread/detail requires threadId");
   }
   const readResponse = await aggregateThreadRead(config, {
     threadId: params.threadId,
     includeTurns: false,
+  }, {
+    allowHistoryForPrivateOwner: Boolean(options.allowHistoryForPrivateOwner),
   });
-  const turns = await readAllThreadDetailTurns(config, params.threadId);
+  const turns = await readAllThreadDetailTurns(config, params.threadId, {
+    allowHistoryForPrivateOwner: Boolean(options.allowHistoryForPrivateOwner),
+  });
   return {
     ...(readResponse?.thread || {}),
     id: params.threadId,
@@ -630,6 +638,22 @@ function isArchivedProjectionThread(config, threadId) {
   return card?.archiveState === "archived";
 }
 
+function isPrivateOwnerUnattachableError(error) {
+  return error?.reason === "private_owner_unattachable"
+    || error?.upstreamError?.data?.reason === "private_owner_unattachable"
+    || /owned by a private Codex runtime/u.test(error?.message || "");
+}
+
+async function readHistoryBackedThreadDetailSnapshot(config, params = {}, source = "thread/detail/subscribe") {
+  const ledger = await readThreadDetailLedger(config, params, {
+    allowHistoryForPrivateOwner: true,
+  });
+  const snapshot = ledger.snapshot(source);
+  recordCanonicalUserMessageRows(config, snapshot);
+  recordProjectionWitness(config, snapshot);
+  return snapshot;
+}
+
 async function subscribeThreadDetail(config, params = {}, session, downstreamWs) {
   // Archived threads are read-only projection views; upstream thread/resume is
   // only for live command sessions.
@@ -641,7 +665,14 @@ async function subscribeThreadDetail(config, params = {}, session, downstreamWs)
     return snapshot;
   }
 
-  await resumeThread(config, params, session, downstreamWs, { detailSubscription: true });
+  try {
+    await resumeThread(config, params, session, downstreamWs, { detailSubscription: true });
+  } catch (error) {
+    if (isPrivateOwnerUnattachableError(error)) {
+      return readHistoryBackedThreadDetailSnapshot(config, params, "thread/detail/subscribe");
+    }
+    throw error;
+  }
   const detail = session.detailSubscription;
   try {
     const ledger = await readThreadDetailLedger(config, params);
@@ -661,7 +692,9 @@ async function subscribeThreadDetail(config, params = {}, session, downstreamWs)
 }
 
 async function resyncThreadDetail(config, params = {}, session) {
-  const thread = await readThreadDetailThread(config, params);
+  const thread = await readThreadDetailThread(config, params, {
+    allowHistoryForPrivateOwner: true,
+  });
   const detail = session.detailSubscription;
   let ledger;
   if (detail?.threadId === params.threadId && detail.ledger) {

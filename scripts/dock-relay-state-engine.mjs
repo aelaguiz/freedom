@@ -376,9 +376,7 @@ class RelayStateEngine {
           completeness: canonicalByID.get(row.id).completeness,
         }) : null)
         .filter(Boolean);
-      const totalValidationFailures = validationFailures
-        + supplements.validationFailures
-        + canonical.validationFailures;
+      const totalValidationFailures = validationFailures + canonical.validationFailures;
       const complete = defaultScope.complete
         && liveProof.scope.complete
         && totalValidationFailures === 0
@@ -433,6 +431,7 @@ class RelayStateEngine {
           rows: cards.length,
           rejectedCounts,
           validationFailures: totalValidationFailures,
+          supplementValidationFailures: supplements.validationFailures,
           supplementedRows: supplements.acceptedRows.length,
           deletedRejectedCards: cleanup.deleted,
           deletedRejectedLiveLeases: leaseCleanup.deleted,
@@ -446,6 +445,7 @@ class RelayStateEngine {
           seq: result.seq,
           rejectedCounts,
           validationFailures: totalValidationFailures,
+          supplementValidationFailures: supplements.validationFailures,
           supplementedRows: supplements.acceptedRows.length,
           deletedRejectedCards: cleanup.deleted,
           deletedRejectedLiveLeases: leaseCleanup.deleted,
@@ -523,9 +523,7 @@ class RelayStateEngine {
           completeness: row.completeness,
         }))
         .filter(Boolean);
-      const totalValidationFailures = validationFailures
-        + supplements.validationFailures
-        + canonical.validationFailures;
+      const totalValidationFailures = validationFailures + canonical.validationFailures;
       const complete = defaultScope.complete && totalValidationFailures === 0 && canonical.complete;
       const result = this.store.applyArchiveReconciliation({
         host,
@@ -556,6 +554,7 @@ class RelayStateEngine {
         rows: cards.length,
         rejectedCounts,
         validationFailures: totalValidationFailures,
+        supplementValidationFailures: supplements.validationFailures,
         seq: result.seq,
       });
       return result;

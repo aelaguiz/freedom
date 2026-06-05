@@ -952,17 +952,25 @@ function assertRouteHumanStartedThread(row, threadId) {
   return row;
 }
 
-async function readHumanThreadForRoute(config, threadId) {
+async function readHumanThreadForRoute(config, threadId, {
+  allowHistoryFallbackForRejectedLive = false,
+} = {}) {
   const liveRow = await sessionRouterForConfig(config).rowForThread(threadId);
   if (liveRow) {
-    return assertRouteHumanStartedThread(liveRow, threadId);
+    try {
+      return assertRouteHumanStartedThread(liveRow, threadId);
+    } catch (error) {
+      if (!allowHistoryFallbackForRejectedLive) {
+        throw error;
+      }
+    }
   }
   const history = await readHistoryThread(config, { threadId, includeTurns: false });
   return assertRouteHumanStartedThread(history?.thread, threadId);
 }
 
-async function assertHumanThreadID(config, threadId) {
-  return sanitizeRelayFields(await readHumanThreadForRoute(config, threadId));
+async function assertHumanThreadID(config, threadId, options = {}) {
+  return sanitizeRelayFields(await readHumanThreadForRoute(config, threadId, options));
 }
 
 async function aggregateThreadList(config, params = {}) {
@@ -1002,7 +1010,7 @@ async function aggregateThreadList(config, params = {}) {
   };
 }
 
-async function aggregateThreadRead(config, params = {}) {
+async function aggregateThreadRead(config, params = {}, options = {}) {
   if (!params.threadId) {
     throw new Error("thread/read requires threadId");
   }
@@ -1012,6 +1020,7 @@ async function aggregateThreadRead(config, params = {}) {
   await config.appServerRegistry.ensureReady("thread_read_route");
   const route = config.appServerRegistry.routeForThreadMethod("thread/read", params.threadId, {
     includeTurns: Boolean(params.includeTurns),
+    allowHistoryForPrivateOwner: Boolean(options.allowHistoryForPrivateOwner),
   });
   if (route.source === "live-owner") {
     const result = await readThreadFromEndpoint(route.endpoint, params, relayLogger(config));
@@ -1027,7 +1036,9 @@ async function listThreadTurns(config, params = {}, options = {}) {
   if (!params.threadId) {
     throw new Error("thread/turns/list requires threadId");
   }
-  await assertHumanThreadID(config, params.threadId);
+  await assertHumanThreadID(config, params.threadId, {
+    allowHistoryFallbackForRejectedLive: Boolean(options.allowHistoryForPrivateOwner),
+  });
   const endpoint = await endpointForThread(config, params.threadId, "thread/turns/list", {
     allowHistoryForPrivateOwner: Boolean(options.allowHistoryForPrivateOwner),
   });
