@@ -955,9 +955,18 @@ function acceptedHumanRowForThread(row, threadId) {
   return classifyThreadOrigin(row).allowed ? row : null;
 }
 
+const HUMAN_ROUTE_CONTEXT_FALLBACK_REASONS = new Set([
+  "missing_source",
+  "not_base_level",
+]);
+
+function isRouteAuthoritativeHumanCard(card) {
+  return isHumanAppFacingCard(card) && card?.relationship === "root";
+}
+
 function appFacingHumanCardForThread(config, threadId) {
   const card = config?.relayStateEngine?.cardForThread?.(threadId);
-  return isHumanAppFacingCard(card) ? card : null;
+  return isRouteAuthoritativeHumanCard(card) ? card : null;
 }
 
 function assertRouteHumanStartedThread(row, threadId, {
@@ -967,10 +976,11 @@ function assertRouteHumanStartedThread(row, threadId, {
   const classification = classifyThreadOrigin(row);
   if (!classification.allowed) {
     const acceptedFallback = acceptedHumanRowForThread(acceptedHumanRow, threadId);
-    if (classification.reason === "missing_source" && acceptedFallback) {
+    if (HUMAN_ROUTE_CONTEXT_FALLBACK_REASONS.has(classification.reason) && acceptedFallback) {
       return row;
     }
-    if (classification.reason === "missing_source" && isHumanAppFacingCard(appFacingCard)) {
+    if (HUMAN_ROUTE_CONTEXT_FALLBACK_REASONS.has(classification.reason)
+      && isRouteAuthoritativeHumanCard(appFacingCard)) {
       return row;
     }
     throw humanThreadRejectedError(threadId || row?.id || row?.threadId || row?.threadID, classification.reason);

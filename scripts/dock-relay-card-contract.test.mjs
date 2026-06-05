@@ -35,6 +35,7 @@ async function startCanonicalActivityAppServer({
   loadedThreadIDs = [],
   listUpdatedAt = {},
   omitReadSourceFor = new Set(),
+  readSourceFor = {},
   readUpdatedAt = {},
 } = {}) {
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -79,6 +80,7 @@ async function startCanonicalActivityAppServer({
       gitInfo: { branch: "main" },
     },
   };
+  const readSourceOverrides = { ...readSourceFor };
   const renameRequests = [];
   const renameThreadLocally = (threadId, name) => {
     const thread = rows[threadId];
@@ -157,6 +159,9 @@ async function startCanonicalActivityAppServer({
         if (readUpdatedAt[message.params?.threadId] !== undefined) {
           thread.updatedAt = readUpdatedAt[message.params.threadId];
         }
+        if (Object.hasOwn(readSourceOverrides, message.params?.threadId)) {
+          thread.source = readSourceOverrides[message.params.threadId];
+        }
         if (omitReadSourceFor.has(message.params?.threadId)) {
           delete thread.source;
         }
@@ -218,6 +223,9 @@ async function startCanonicalActivityAppServer({
     emitThreadNameUpdated,
     emitThreadStatusChanged,
     renameThreadLocally,
+    setReadSourceFor: (threadId, source) => {
+      readSourceOverrides[threadId] = source;
+    },
     setThreadStatusLocally,
     get initializedClientCount() {
       return initializedClients.size;
@@ -549,6 +557,49 @@ test("thread/detail/subscribe accepts a visible human Dock card when thread/read
         assert.equal(card?.sourceKind, "human");
         assert.equal(card?.freshness, "fresh");
         assert.equal(card?.completeness, "complete");
+
+        const detail = await jsonRpcRequest(ws, "thread/detail/subscribe", { threadId: "newer" });
+        assert.equal(detail.error, undefined);
+        assert.equal(detail.result?.threadID, "newer");
+        assert.equal(detail.result?.view, "thread.detail");
+        assert.ok(Array.isArray(detail.result?.rows));
+
+        const resync = await jsonRpcRequest(ws, "thread/detail/resync", { threadId: "newer" });
+        assert.equal(resync.error, undefined);
+        assert.equal(resync.result?.threadID, "newer");
+        assert.equal(resync.result?.view, "thread.detail");
+        assert.ok(Array.isArray(resync.result?.rows));
+      } finally {
+        ws.close();
+      }
+    });
+  } finally {
+    await appServer.close();
+  }
+});
+
+test("thread/detail/subscribe accepts a visible human root Dock card when thread/read reports spawn metadata", async () => {
+  const appServer = await startCanonicalActivityAppServer();
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.relayStateEngine.reconcileDock({ reason: "test-read-source-spawn" });
+      const ws = await openWebSocket(wsURL);
+      try {
+        const initial = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(initial.error, undefined);
+        assert.equal(initial.result?.complete, true);
+        const card = initial.result.rows.find((row) => row.threadID === "newer");
+        assert.equal(card?.lane, "human");
+        assert.equal(card?.sourceKind, "human");
+        assert.equal(card?.relationship, "root");
+
+        appServer.setReadSourceFor("newer", {
+          subagent: {
+            thread_spawn: {
+              parent_thread_id: "parent-thread",
+            },
+          },
+        });
 
         const detail = await jsonRpcRequest(ws, "thread/detail/subscribe", { threadId: "newer" });
         assert.equal(detail.error, undefined);
