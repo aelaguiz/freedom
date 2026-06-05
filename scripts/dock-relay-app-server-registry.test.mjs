@@ -595,6 +595,37 @@ test("app-server registry routes supported relay methods through one table", asy
   assert.equal(privateTurnsRoute.endpoint.label, "daemon-history");
 });
 
+test("private live rows apply rollout metadata before human filtering", async () => {
+  const registry = new AppServerRegistry({
+    includeDaemonHistory: false,
+    fixtureHistoryEndpoints: [{ label: "daemon-history", url: "ws://127.0.0.1:61001" }],
+    processListProvider: async () => [],
+  });
+  await registry.refreshNow("test");
+  registry.recordPrivateOwner("thread-private-subagent", { pid: 3333, transport: "stdio" });
+
+  const merged = mergePrivateLiveRows({ rows: [] }, registry, {
+    sessionMetadataByThreadID: new Map([[
+      "thread-private-subagent",
+      {
+        id: "thread-private-subagent",
+        source: {
+          subagent: {
+            thread_spawn: {
+              parent_thread_id: "parent-thread",
+              depth: 1,
+            },
+          },
+        },
+      },
+    ]]),
+  });
+
+  assert.equal(merged.privateRows, 1);
+  assert.equal(merged.privateRejectedRows, 1);
+  assert.equal(merged.rows.some((row) => row.id === "thread-private-subagent"), false);
+});
+
 test("thread turns fall back to history when a private live owner shadows human history", async () => {
   const threadId = "thread-private-human-history";
   const history = await startUnixJsonRpcServer((message) => {

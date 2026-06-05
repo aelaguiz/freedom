@@ -86,7 +86,10 @@ function liveStatusCacheForConfig(config) {
           onNotification: config.upstreamNotificationHandler || null,
           codexHome: codexHomeForConfig(config),
         });
-        const mergedLive = mergePrivateLiveRows(live, config.appServerRegistry);
+        const mergedLive = mergePrivateLiveRows(live, config.appServerRegistry, {
+          codexHome: codexHomeForConfig(config),
+          logger: relayLogger(config),
+        });
         for (const row of mergedLive.rows || []) {
           if (row?.dockRelaySource && row.dockRelaySource.endpointType !== "private") {
             config.appServerRegistry.recordLiveRows(row.dockRelaySource, [row]);
@@ -807,23 +810,42 @@ async function collectLiveRows(options = {}) {
   };
 }
 
-function mergePrivateLiveRows(live = {}, appServerRegistry = null) {
+function mergePrivateLiveRows(live = {}, appServerRegistry = null, {
+  codexHome = null,
+  logger = defaultRelayLogger,
+  sessionMetadataByThreadID = null,
+} = {}) {
   const privateRows = typeof appServerRegistry?.privateLiveRows === "function"
     ? appServerRegistry.privateLiveRows()
     : [];
   if (privateRows.length === 0) {
     return live;
   }
+  const privateThreadIDs = privateRows.map((row) => row?.id).filter(Boolean);
+  const metadataByThreadID = sessionMetadataByThreadID
+    || readSessionMetadataIndexForCodexHome(codexHome, logger, { threadIDs: privateThreadIDs });
+  const rejectedCounts = {};
   const rowsById = new Map();
   for (const row of [...(live.rows || []), ...privateRows]) {
     if (!row?.id) {
       continue;
     }
-    rowsById.set(row.id, preferThread(row, rowsById.get(row.id)));
+    const mergedRow = mergeSessionMetadata(row, metadataByThreadID.get(row.id));
+    const classification = classifyThreadOrigin(mergedRow);
+    if (!classification.allowed) {
+      rejectedCounts[classification.reason] = Number(rejectedCounts[classification.reason] || 0) + 1;
+      logger.debug("live.private_thread_rejected_by_human_filter", {
+        threadId: row.id,
+        reason: classification.reason,
+      });
+      continue;
+    }
+    rowsById.set(mergedRow.id, preferThread(mergedRow, rowsById.get(mergedRow.id)));
   }
   return {
     ...live,
     privateRows: privateRows.length,
+    privateRejectedRows: Object.values(rejectedCounts).reduce((sum, count) => sum + Number(count || 0), 0),
     rows: [...rowsById.values()],
   };
 }
