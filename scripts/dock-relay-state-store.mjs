@@ -66,6 +66,15 @@ function comparableProjectionFreshness(freshness) {
   };
 }
 
+function comparableProjectionCard(card) {
+  if (!card || typeof card !== "object") {
+    return card;
+  }
+  const comparable = { ...card };
+  delete comparable.activityProofCheckedAt;
+  return comparable;
+}
+
 function projectionCacheContractFingerprint() {
   return sortedJSONString({
     projectionSchemaVersion: PROJECTION_SCHEMA_VERSION,
@@ -647,7 +656,10 @@ class RelayStateStore {
         }
         nextByID.set(key, cardWithOrder);
         const previous = previousByID.get(key);
-        if (sortedJSONString(previous) !== sortedJSONString(cardWithOrder)) {
+        if (
+          sortedJSONString(comparableProjectionCard(previous))
+          !== sortedJSONString(comparableProjectionCard(cardWithOrder))
+        ) {
           rows.push(cardWithOrder);
         }
         this.upsertThreadCard(host.id, cardWithOrder, {
@@ -735,7 +747,10 @@ class RelayStateStore {
         }
         nextByID.set(key, cardWithOrder);
         const previous = previousByID.get(key);
-        if (sortedJSONString(previous) !== sortedJSONString(cardWithOrder)) {
+        if (
+          sortedJSONString(comparableProjectionCard(previous))
+          !== sortedJSONString(comparableProjectionCard(cardWithOrder))
+        ) {
           rows.push(cardWithOrder);
         }
         this.upsertThreadCard(host.id, cardWithOrder, {

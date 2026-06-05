@@ -84,12 +84,13 @@ function liveStatusCacheForConfig(config) {
           pool: upstreamPoolForConfig(config),
           onNotification: config.upstreamNotificationHandler || null,
         });
-        for (const row of live.rows || []) {
-          if (row?.dockRelaySource) {
+        const mergedLive = mergePrivateLiveRows(live, config.appServerRegistry);
+        for (const row of mergedLive.rows || []) {
+          if (row?.dockRelaySource && row.dockRelaySource.endpointType !== "private") {
             config.appServerRegistry.recordLiveRows(row.dockRelaySource, [row]);
           }
         }
-        return live;
+        return mergedLive;
       },
       logger: relayLogger(config),
       statusTracker: config.statusTracker || null,
@@ -580,13 +581,23 @@ async function enrichRowAttention(row, endpoint, logger = defaultRelayLogger) {
 
 async function collectLiveRows(options = {}) {
   const logger = typeof options?.warn === "function" ? options : options.logger || defaultRelayLogger;
-  const pool = typeof options?.warn === "function" ? null : options.pool || null;
+  const requestedPool = typeof options?.warn === "function" ? null : options.pool || null;
+  // Live-status scans touch many endpoints; pooled clients stay open by label
+  // and can exhaust before later endpoints are queried.
+  const pool = null;
   const onNotification = typeof options?.warn === "function" ? null : options.onNotification || null;
   const excludedURLs = new Set((typeof options?.warn === "function" ? [] : options.excludeURLs || [])
     .map(canonicalURLString));
   const endpoints = (typeof options?.warn === "function" ? [] : options.endpoints || [])
     .filter((endpoint) => !excludedURLs.has(canonicalURLString(endpoint.url)));
-  const maxConcurrent = pool?.labelLimit?.("live-status") || endpoints.length || 1;
+  const configuredMaxConcurrent = typeof options?.warn === "function"
+    ? UPSTREAM_POOL_LIMITS["live-status"]
+    : options.maxConcurrent
+      || requestedPool?.labelLimit?.("live-status")
+      || UPSTREAM_POOL_LIMITS["live-status"]
+      || endpoints.length
+      || 1;
+  const maxConcurrent = Math.max(1, Math.min(endpoints.length || 1, Number(configuredMaxConcurrent) || 1));
   const results = await allSettledInBatches(
     endpoints,
     maxConcurrent,
@@ -622,6 +633,27 @@ async function collectLiveRows(options = {}) {
     failedEndpoints,
     totalThreadReads,
     failedThreadReads,
+    rows: [...rowsById.values()],
+  };
+}
+
+function mergePrivateLiveRows(live = {}, appServerRegistry = null) {
+  const privateRows = typeof appServerRegistry?.privateLiveRows === "function"
+    ? appServerRegistry.privateLiveRows()
+    : [];
+  if (privateRows.length === 0) {
+    return live;
+  }
+  const rowsById = new Map();
+  for (const row of [...(live.rows || []), ...privateRows]) {
+    if (!row?.id) {
+      continue;
+    }
+    rowsById.set(row.id, preferThread(row, rowsById.get(row.id)));
+  }
+  return {
+    ...live,
+    privateRows: privateRows.length,
     rows: [...rowsById.values()],
   };
 }
@@ -991,12 +1023,14 @@ async function aggregateThreadRead(config, params = {}) {
   return result;
 }
 
-async function listThreadTurns(config, params = {}) {
+async function listThreadTurns(config, params = {}, options = {}) {
   if (!params.threadId) {
     throw new Error("thread/turns/list requires threadId");
   }
   await assertHumanThreadID(config, params.threadId);
-  const endpoint = await endpointForThread(config, params.threadId, "thread/turns/list");
+  const endpoint = await endpointForThread(config, params.threadId, "thread/turns/list", {
+    allowHistoryForPrivateOwner: Boolean(options.allowHistoryForPrivateOwner),
+  });
   if (isHistoryEndpoint(config, endpoint)) {
     return historyClientForConfig(config).request("thread/turns/list", params);
   }
@@ -1014,6 +1048,8 @@ async function readNewestTurnActivity(config, threadId) {
       threadId,
       limit: THREAD_LIST_MAX_LIMIT,
       ...(cursor ? { cursor } : {}),
+    }, {
+      allowHistoryForPrivateOwner: true,
     });
     const turns = Array.isArray(response?.data) ? response.data : [];
     pages.push({
@@ -1109,12 +1145,12 @@ async function canonicalizeThreadRows(config, rows = [], {
   };
 }
 
-async function endpointForThread(config, threadId, method = "thread/resume") {
+async function endpointForThread(config, threadId, method = "thread/resume", options = {}) {
   if (!config.appServerRegistry) {
     throw new Error("appServerRegistry is required for relay app-server routing");
   }
   await config.appServerRegistry.ensureReady("thread_route");
-  return config.appServerRegistry.routeForThreadMethod(method, threadId).endpoint;
+  return config.appServerRegistry.routeForThreadMethod(method, threadId, options).endpoint;
 }
 
 async function archiveThread(config, params = {}) {
@@ -1174,6 +1210,7 @@ export {
   initializeClient,
   listThreadTurns,
   mergeHumanStartedRowsWithSupplements,
+  mergePrivateLiveRows,
   mergeActiveFlags,
   parseLimit,
   clampThreadListParams,

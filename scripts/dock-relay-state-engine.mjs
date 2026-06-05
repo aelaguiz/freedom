@@ -32,6 +32,7 @@ import {
   drainThreadListRows,
   enrichHumanStartedRows,
   mergeHumanStartedRowsWithSupplements,
+  mergePrivateLiveRows,
   readSessionIndexHumanStartedSupplements,
 } from "./dock-relay-thread-data.mjs";
 
@@ -587,13 +588,14 @@ class RelayStateEngine {
     }
     await this.config.appServerRegistry.ensureReady("state_live_leases");
     const endpoints = this.config.appServerRegistry.liveEndpoints();
-    const live = await collectLiveRows({
+    const collectedLive = await collectLiveRows({
       logger: this.logger,
       pool: this.config.upstreamPool || null,
       endpoints,
       excludeURLs: [],
       onNotification: this.config.upstreamNotificationHandler || null,
     });
+    const live = mergePrivateLiveRows(collectedLive, this.config.appServerRegistry);
     const endpointsByUrl = new Map(endpoints.map((endpoint) => [endpoint.url, endpoint]));
     const acceptedRows = [];
     for (const row of live.rows || []) {
@@ -609,7 +611,9 @@ class RelayStateEngine {
       if (lease) {
         this.store.upsertLiveLease(host.id, lease);
         acceptedRows.push(row);
-        this.config.appServerRegistry?.recordLiveRows(endpoint, [row]);
+        if (endpoint?.endpointType !== "private") {
+          this.config.appServerRegistry?.recordLiveRows(endpoint, [row]);
+        }
       }
     }
     this.store.deleteRejectedLiveLeases(host.id);

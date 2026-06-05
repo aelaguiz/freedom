@@ -24,6 +24,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_DAEMON_SOCKET_RELATIVE_PATH = "app-server-control/app-server-control.sock";
+const CODEX_THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const HISTORY_ROUTE_METHODS = new Set([
   "thread/list",
   "thread/unarchive",
@@ -43,6 +44,9 @@ const LIVE_OWNER_PREFERRED_METHODS = new Set([
 const ACTIVE_SESSION_ONLY_METHODS = new Set([
   "turn/interrupt",
   "raw-json-rpc/server-request-response",
+]);
+const HISTORY_SAFE_PRIVATE_OWNER_METHODS = new Set([
+  "thread/turns/list",
 ]);
 
 class AppServerRegistryRouteError extends Error {
@@ -272,6 +276,40 @@ function processLooksLikeCodexAppServer(tokens, command) {
   return path.basename(tokens[appServerIndex - 1]) === "codex";
 }
 
+function codexExecutableIndex(tokens) {
+  return tokens.findIndex((token, index) => (
+    index <= 3
+    && path.basename(String(token || "")) === "codex"
+  ));
+}
+
+function activeCodexThreadIDFromTokens(tokens) {
+  const codexIndex = codexExecutableIndex(tokens);
+  if (codexIndex < 0) {
+    return null;
+  }
+  const args = tokens.slice(codexIndex + 1);
+  if (args.includes("app-server")) {
+    return null;
+  }
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "resume") {
+      const threadId = args.slice(index + 1).find((candidate) => CODEX_THREAD_ID_PATTERN.test(candidate));
+      return threadId || null;
+    }
+    if (token === "--resume") {
+      const threadId = args[index + 1];
+      return CODEX_THREAD_ID_PATTERN.test(threadId || "") ? threadId : null;
+    }
+    if (token.startsWith("--resume=")) {
+      const threadId = token.slice("--resume=".length);
+      return CODEX_THREAD_ID_PATTERN.test(threadId) ? threadId : null;
+    }
+  }
+  return null;
+}
+
 function readBearerTokenFile(tokenFilePath) {
   if (!tokenFilePath) {
     return null;
@@ -347,13 +385,25 @@ function discoverAppServerEndpointsFromProcesses(processes = [], {
 } = {}) {
   const endpoints = [];
   const observations = [];
+  const privateThreadOwnersById = new Map();
   for (const processInfo of processes) {
-    if (!Array.isArray(processInfo.args) && !commandLooksLikeCodexAppServerCommand(processInfo.command || "")) {
-      continue;
-    }
     const tokens = Array.isArray(processInfo.args)
       ? processInfo.args.map(String)
       : tokenizeCommandLine(processInfo.command || "");
+    const activeThreadId = activeCodexThreadIDFromTokens(tokens);
+    if (activeThreadId) {
+      privateThreadOwnersById.set(activeThreadId, {
+        threadId: activeThreadId,
+        source: "process",
+        transport: "stdio",
+        pid: processInfo.pid ?? null,
+        ppid: processInfo.ppid ?? null,
+        ownerKind: "codex-cli-resume",
+      });
+    }
+    if (!Array.isArray(processInfo.args) && !commandLooksLikeCodexAppServerCommand(processInfo.command || "")) {
+      continue;
+    }
     if (!processLooksLikeCodexAppServer(tokens, processInfo.command || "")) {
       continue;
     }
@@ -391,7 +441,11 @@ function discoverAppServerEndpointsFromProcesses(processes = [], {
       endpoints.push(descriptor);
     }
   }
-  return { endpoints, observations };
+  return {
+    endpoints,
+    observations,
+    privateThreadOwners: [...privateThreadOwnersById.values()],
+  };
 }
 
 function sanitizedEndpoint(endpoint) {
@@ -506,6 +560,8 @@ class AppServerRegistry {
     const endpoints = [];
     const observations = [];
     const failedEndpoints = [];
+    const privateThreadOwners = [];
+    let privateOwnerRefreshReliable = !this.discoveryProvider && !this.processListProvider;
 
     if (this.includeDaemonHistory) {
       endpoints.push({
@@ -536,7 +592,9 @@ class AppServerRegistry {
         } else if (discovered && typeof discovered === "object") {
           endpoints.push(...(discovered.endpoints || []));
           observations.push(...(discovered.observations || []));
+          privateThreadOwners.push(...(discovered.privateThreadOwners || []));
         }
+        privateOwnerRefreshReliable = true;
       } else if (this.processListProvider) {
         const processList = await this.processListProvider();
         const discovered = discoverAppServerEndpointsFromProcesses(processList, {
@@ -545,6 +603,8 @@ class AppServerRegistry {
         });
         endpoints.push(...discovered.endpoints);
         observations.push(...discovered.observations);
+        privateThreadOwners.push(...discovered.privateThreadOwners);
+        privateOwnerRefreshReliable = true;
       }
     } catch (error) {
       failedEndpoints.push({
@@ -602,6 +662,10 @@ class AppServerRegistry {
       .slice(0, APP_SERVER_REGISTRY_LIVE_ENDPOINT_LIMIT);
 
     this.evictExpiredOwners(observedAtMs);
+    this.evictExpiredPrivateOwners(observedAtMs);
+    if (privateOwnerRefreshReliable) {
+      this.replaceProcessPrivateOwners(privateThreadOwners, observedAt, observedAtMs);
+    }
     this.state = {
       lastRefreshAt: observedAt,
       lastRefreshAtMs: observedAtMs,
@@ -734,11 +798,81 @@ class AppServerRegistry {
     if (!threadId) {
       return;
     }
+    const checkedAt = nowISOString(this.clock);
+    const checkedAtMs = nowMs(this.clock);
     this.privateOwnerByThreadId.set(String(threadId), {
       threadId: String(threadId),
-      observedAt: nowISOString(this.clock),
-      observation,
+      observedAt: checkedAt,
+      checkedAt,
+      checkedAtMs,
+      observation: {
+        source: observation.source || "manual",
+        transport: observation.transport || "stdio",
+        pid: observation.pid ?? null,
+        ppid: observation.ppid ?? null,
+        ownerKind: observation.ownerKind || null,
+      },
     });
+  }
+
+  replaceProcessPrivateOwners(owners = [], observedAt = nowISOString(this.clock), checkedAtMs = nowMs(this.clock)) {
+    const observedThreadIds = new Set();
+    for (const owner of owners) {
+      if (!owner?.threadId) {
+        continue;
+      }
+      const threadId = String(owner.threadId);
+      observedThreadIds.add(threadId);
+      this.privateOwnerByThreadId.set(threadId, {
+        threadId,
+        observedAt,
+        checkedAt: observedAt,
+        checkedAtMs,
+        observation: {
+          source: "process",
+          transport: owner.transport || "stdio",
+          pid: owner.pid ?? null,
+          ppid: owner.ppid ?? null,
+          ownerKind: owner.ownerKind || "codex-cli-resume",
+        },
+      });
+    }
+    for (const [threadId, owner] of this.privateOwnerByThreadId.entries()) {
+      if (owner?.observation?.source === "process" && !observedThreadIds.has(threadId)) {
+        this.privateOwnerByThreadId.delete(threadId);
+      }
+    }
+  }
+
+  privateLiveRows() {
+    const now = nowMs(this.clock);
+    return [...this.privateOwnerByThreadId.values()]
+      .filter((owner) => !owner?.checkedAtMs || now - owner.checkedAtMs <= this.endpointTtlMs)
+      .map((owner) => ({
+        id: owner.threadId,
+        sessionId: owner.threadId,
+        source: "cli",
+        updatedAt: owner.checkedAt || owner.observedAt,
+        activityAt: owner.checkedAt || owner.observedAt,
+        status: {
+          type: "active",
+          activeFlags: [],
+        },
+        dockRelaySource: {
+          id: stableID(["private", "stdio", owner.threadId]),
+          label: `codex-private:${owner.observation?.pid || owner.threadId.slice(0, 8)}`,
+          source: owner.observation?.source || "process",
+          endpointType: "private",
+          transport: owner.observation?.transport || "stdio",
+          url: "stdio://",
+          pid: owner.observation?.pid ?? null,
+          ppid: owner.observation?.ppid ?? null,
+          failure: {
+            reason: "private_transport",
+            message: "stdio app-server transport is private to its parent process",
+          },
+        },
+      }));
   }
 
   async historyClient() {
@@ -889,6 +1023,14 @@ class AppServerRegistry {
     }
   }
 
+  evictExpiredPrivateOwners(now = nowMs(this.clock)) {
+    for (const [threadId, owner] of this.privateOwnerByThreadId.entries()) {
+      if (owner?.checkedAtMs && now - owner.checkedAtMs > this.endpointTtlMs) {
+        this.privateOwnerByThreadId.delete(threadId);
+      }
+    }
+  }
+
   routeForThreadMethod(method, threadId, options = {}) {
     if (options.activeSessionEndpoint) {
       return {
@@ -906,7 +1048,10 @@ class AppServerRegistry {
       });
     }
     const privateOwner = this.privateOwnerByThreadId.get(String(threadId || ""));
-    if (privateOwner) {
+    if (
+      privateOwner
+      && !(options.allowHistoryForPrivateOwner && HISTORY_SAFE_PRIVATE_OWNER_METHODS.has(method))
+    ) {
       throw new AppServerRegistryRouteError(`thread ${threadId} is owned by a private Codex runtime`, {
         reason: "private_owner_unattachable",
         method,

@@ -12,6 +12,9 @@ import {
   discoverAppServerEndpointsFromProcesses,
 } from "./dock-relay-app-server-registry.mjs";
 import {
+  collectLiveRows,
+} from "./dock-relay-thread-data.mjs";
+import {
   closeWebSocketServer,
   onceListening,
 } from "./dock-relay-test-helpers.mjs";
@@ -228,6 +231,97 @@ test("app-server registry records private stdio app-servers as unreachable diagn
   );
 });
 
+test("app-server registry discovers active codex resume commands as private live owners", async () => {
+  const threadId = "019e94e2-1111-4222-8333-0123456789ab";
+  const processList = [{
+    pid: 2300,
+    ppid: 1,
+    command: `node /Users/aelaguiz/.local/bin/codex -p yolo resume ${threadId}`,
+  }, {
+    pid: 2301,
+    ppid: 2300,
+    command: `/Applications/Codex.app/Contents/Resources/codex -p yolo resume ${threadId}`,
+  }, {
+    pid: 2302,
+    ppid: 1,
+    command: "/Applications/Codex.app/Contents/Resources/node_repl prompt '{\"text\":\"please inspect codex resume 019e94e2-aaaa-4bbb-8ccc-0123456789ab\"}'",
+  }];
+  const discovered = discoverAppServerEndpointsFromProcesses(processList);
+  assert.equal(discovered.privateThreadOwners.length, 1);
+  assert.equal(discovered.privateThreadOwners[0].threadId, threadId);
+  assert.equal(discovered.privateThreadOwners[0].transport, "stdio");
+
+  let currentProcessList = processList;
+  const registry = new AppServerRegistry({
+    includeDaemonHistory: false,
+    processListProvider: async () => currentProcessList,
+  });
+  await registry.refreshNow("test");
+  assert.equal(registry.snapshot().counts.privateOwners, 1);
+
+  const privateRows = registry.privateLiveRows();
+  assert.equal(privateRows.length, 1);
+  assert.equal(privateRows[0].id, threadId);
+  assert.equal(privateRows[0].source, "cli");
+  assert.equal(privateRows[0].status.type, "active");
+  assert.equal(privateRows[0].dockRelaySource.endpointType, "private");
+
+  assert.throws(
+    () => registry.routeForThreadMethod("thread/read", threadId),
+    (error) => error instanceof AppServerRegistryRouteError
+      && error.reason === "private_owner_unattachable",
+  );
+
+  currentProcessList = [];
+  await registry.refreshNow("test-missing");
+  assert.equal(registry.snapshot().counts.privateOwners, 0);
+});
+
+test("collectLiveRows uses one-shot live-status sockets instead of exhausting the upstream pool", async () => {
+  const first = await startLoopbackAppServer({
+    loadedThreadIDs: ["thread-live-a"],
+    rows: {
+      "thread-live-a": {
+        id: "thread-live-a",
+        source: "cli",
+        updatedAt: 2_000,
+        status: { type: "active", activeFlags: [] },
+      },
+    },
+  });
+  const second = await startLoopbackAppServer({
+    loadedThreadIDs: ["thread-live-b"],
+    rows: {
+      "thread-live-b": {
+        id: "thread-live-b",
+        source: "cli",
+        updatedAt: 3_000,
+        status: { type: "active", activeFlags: [] },
+      },
+    },
+  });
+  try {
+    const pool = {
+      labelLimit: () => 1,
+      clientFor: async () => {
+        throw new Error("live-status should use one-shot clients");
+      },
+    };
+    const result = await collectLiveRows({
+      endpoints: [
+        { label: "first", url: first.url },
+        { label: "second", url: second.url },
+      ],
+      pool,
+    });
+    assert.equal(result.failedEndpoints, 0);
+    assert.deepEqual(result.rows.map((row) => row.id).sort(), ["thread-live-a", "thread-live-b"]);
+  } finally {
+    await first.close();
+    await second.close();
+  }
+});
+
 test("app-server registry resolves bare unix history to the default control socket", async () => {
   const tempDir = fs.mkdtempSync("/tmp/cdr-default-unix-");
   const codexHome = path.join(tempDir, "codex-home");
@@ -360,4 +454,9 @@ test("app-server registry routes supported relay methods through one table", asy
     (error) => error instanceof AppServerRegistryRouteError
       && error.reason === "private_owner_unattachable",
   );
+  const privateTurnsRoute = registry.routeForThreadMethod("thread/turns/list", "thread-private", {
+    allowHistoryForPrivateOwner: true,
+  });
+  assert.equal(privateTurnsRoute.source, "history");
+  assert.equal(privateTurnsRoute.endpoint.label, "daemon-history");
 });
