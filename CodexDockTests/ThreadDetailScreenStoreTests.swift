@@ -45,6 +45,56 @@ final class ThreadDetailScreenStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testScreenStorePublishesLatestSnapshotAfterStopAndRestart() async {
+        let store = ThreadDetailScreenStore(header: makeHeader())
+        let initialSnapshot = ThreadDetailSnapshot(
+            header: makeHeader(),
+            liveState: .live,
+            events: [
+                ThreadEvent(
+                    id: "message-1",
+                    kind: .agentMessage,
+                    visibilityCategory: .message,
+                    title: "Agent",
+                    body: "Initial",
+                    date: Date(timeIntervalSince1970: 1_000),
+                    displayOrderKey: "0000000000000000000|message-1"
+                ),
+            ]
+        )
+        let updatedSnapshot = ThreadDetailSnapshot(
+            header: makeHeader(),
+            liveState: .updating,
+            events: [
+                ThreadEvent(
+                    id: "message-2",
+                    kind: .agentMessage,
+                    visibilityCategory: .message,
+                    title: "Agent",
+                    body: "Updated",
+                    date: Date(timeIntervalSince1970: 2_000),
+                    displayOrderKey: "0000000000000000000|message-2"
+                ),
+            ]
+        )
+
+        store.start()
+        store.publish(snapshot: initialSnapshot)
+        let initialRender = await waitForLoadedRender(in: store)
+        XCTAssertEqual(initialRender?.rows.map(\.event.body), ["Initial"])
+
+        store.stop()
+        store.publish(snapshot: updatedSnapshot)
+        store.start()
+
+        let restartedRender = await waitForLoadedRender(
+            in: store,
+            where: { $0.liveState == .updating && $0.rows.map(\.event.body) == ["Updated"] }
+        )
+        XCTAssertEqual(restartedRender?.liveState, .updating)
+    }
+
+    @MainActor
     private func waitForLoadedRender(
         in store: ThreadDetailScreenStore,
         where predicate: @escaping (ThreadDetailRenderSnapshot) -> Bool = { _ in true },

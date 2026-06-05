@@ -1633,11 +1633,16 @@ function evaluateScenarioTransitionCoverage({ uiSamples, transitions, maxUiLagMs
   };
 }
 
+function skipsPreRelayLagFailure(transition) {
+  return transition.transition === "detail-reopen-retained-resync"
+    || transition.truth?.kind === "detail-reopen-retained-resync";
+}
+
 function evaluateDetailTransitionCoverage({ uiSamples, transitions, maxUiLagMs }) {
   const failures = [];
   const checks = [];
   for (const transition of transitions) {
-    if (transition.relayLag && transition.relayLag.ok === false) {
+    if (transition.relayLag && transition.relayLag.ok === false && !skipsPreRelayLagFailure(transition)) {
       failures.push({
         code: "detail_transition_relay_lag_failed",
         message: "Relay detail transition already exceeded its relay lag budget.",

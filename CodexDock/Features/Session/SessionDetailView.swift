@@ -54,7 +54,7 @@ public struct SessionDetailView: View {
             await store.load()
         }
         .onDisappear {
-            store.close()
+            store.detachView()
         }
         .accessibilityElement(children: .contain)
         .codexAutomationID(AutomationID.Session.root(threadID: store.row.threadID))
@@ -287,6 +287,8 @@ private struct DetailHeaderView: View {
         switch liveState {
         case .connecting:
             return "antenna.radiowaves.left.and.right"
+        case .updating:
+            return "arrow.triangle.2.circlepath"
         case .reconnecting:
             return "arrow.triangle.2.circlepath"
         case .live:
@@ -302,6 +304,8 @@ private struct DetailHeaderView: View {
         switch liveState {
         case .connecting:
             return .secondary
+        case .updating:
+            return .blue
         case .reconnecting:
             return .orange
         case .live:

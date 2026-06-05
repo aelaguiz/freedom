@@ -48,6 +48,7 @@ public struct ArchiveView: View {
     @State private var dateFilter: DateFilter = .all
     @State private var selectedDetailRow: DockRowViewModel?
     @State private var selectedDetailStore: ThreadDetailStore?
+    @StateObject private var detailStoreCache = ThreadDetailStoreCache()
     @State private var isSelectionMode = false
     @State private var selectedRowIDs: Set<HostScopedThreadID> = []
     @State private var isBatchRestoring = false
@@ -365,7 +366,9 @@ public struct ArchiveView: View {
             selectedDetailStore = nil
             return
         }
-        selectedDetailStore = makeThreadDetailStore(host: host, row: row)
+        selectedDetailStore = detailStoreCache.store(for: row) {
+            makeThreadDetailStore(host: host, row: row)
+        }
     }
 
     private func syncSelectedDetail(with state: ArchiveStoreState) {

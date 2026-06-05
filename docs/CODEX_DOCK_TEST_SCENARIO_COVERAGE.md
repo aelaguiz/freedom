@@ -81,6 +81,7 @@ scenario currently supported by
 - `archive-toggle`
 - `current-work-visible`
 - `detail-reconnect`
+- `detail-reopen-retains-content`
 - `detail-history-request`
 - `detail-replay-pressure`
 - `file-change-review`
@@ -123,6 +124,7 @@ not implementation logs, plan audits, or architecture-plan companions.
 | `archive-toggle` | current default matrix | Archive/unarchive transitions must update Dock and Archive through relay-owned routes. | `rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'` |
 | `current-work-visible` | current default matrix | Current work must appear as current work, not old stored history. | `rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'` |
 | `detail-reconnect` | current default matrix | Thread Detail must recover through `thread/detail/resync` after reconnect. | `rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'` |
+| `detail-reopen-retains-content` | current default matrix | Reopening an already-loaded Thread Detail must keep rows visible, show `Updating`, and refresh through `thread/detail/resync` instead of a second subscribe. | `rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'` |
 | `detail-history-request` | current default matrix | Historical detail rows, live updates, and request cards must remain visible and ordered. | `rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'` |
 | `detail-replay-pressure` | current default matrix | Thread Detail replay pressure must not drop messages or request state. | `rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'` |
 | `file-change-review` | fixture-only-gap | File-change review visibility and approval flow are fixture-supported but not default-matrix-gated. | Focused fixture only today; future `test-overtime` must gate it or the fixture support should be deleted. |

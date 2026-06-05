@@ -36,6 +36,7 @@ const SUPPORTED_SCENARIOS = new Set([
   "archive-toggle",
   "current-work-visible",
   "detail-reconnect",
+  "detail-reopen-retains-content",
   "file-change-review",
   "detail-history-request",
   "detail-replay-pressure",
@@ -87,7 +88,7 @@ const FORBIDDEN_SIMULATOR_DETAIL_SIDE_DOOR_ROUTES = new Set([
 function usage() {
   return [
     "Usage:",
-    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <archive-toggle|current-work-visible|detail-reconnect|detail-history-request|detail-replay-pressure|file-change-review|foreground-resume-all-surfaces|large-list-checkpoint|live-lease-expiry|multi-host-isolation|mutation-ack-projection-refresh-failure|rapid-mutations|resync-gap|root-catchup-window-contract|server-request|server-rename-notification|server-status-notification|source-refresh|spawned-private-child-status-rollup|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
+    "  node scripts/dock-relay-controlled-simulator-fixture.mjs --scenario <archive-toggle|current-work-visible|detail-reconnect|detail-reopen-retains-content|detail-history-request|detail-replay-pressure|file-change-review|foreground-resume-all-surfaces|large-list-checkpoint|live-lease-expiry|multi-host-isolation|mutation-ack-projection-refresh-failure|rapid-mutations|resync-gap|root-catchup-window-contract|server-request|server-rename-notification|server-status-notification|source-refresh|spawned-private-child-status-rollup|spawn-edge|thread-activity> --ready-out <path> --ui-ready-in <path> --stop-in <path> --json-out <path> [options]",
     "",
     "Options:",
     "  --summary-out <path>                 Write Markdown summary.",
@@ -5457,6 +5458,7 @@ async function runDetailReconnectScenario(options) {
 async function runDetailHistoryRequestScenario(options) {
   const scenarioName = options.scenario;
   const isReplayPressure = scenarioName === "detail-replay-pressure";
+  const isReopenRetainsContent = scenarioName === "detail-reopen-retains-content";
   const routeEvents = [];
   const simulatorRouteEvents = [];
   const findings = [];
@@ -5498,6 +5500,7 @@ async function runDetailHistoryRequestScenario(options) {
   let resolutionSentAtMs = null;
   let forwardedResponse = null;
   let turnsListCallCount = 0;
+  let delayedRetainedReopenReadCount = 0;
   let resolveDetailLoaded;
   let resolveLiveUpdateSent;
   let resolveRequestSent;
@@ -5547,13 +5550,21 @@ async function runDetailHistoryRequestScenario(options) {
           threadID: message.params?.threadId || threadID,
           includeTurns: message.params?.includeTurns ?? null,
         });
-        sendFixtureResult(ws, message.id, {
+        const result = {
           thread: {
             ...threadRow,
             id: message.params?.threadId || threadID,
             turns: [],
           },
-        });
+        };
+        if (isReopenRetainsContent && detailLoadedAtMs !== null && delayedRetainedReopenReadCount === 0) {
+          delayedRetainedReopenReadCount += 1;
+          setTimeout(() => {
+            sendFixtureResult(ws, message.id, result);
+          }, Math.max(1_250, Math.min(options.scenarioHoldMs, 2_500)));
+          return;
+        }
+        sendFixtureResult(ws, message.id, result);
       } else if (message.method === "thread/turns/list") {
         turnsListCallCount += 1;
         const cursor = message.params?.cursor || null;
@@ -5744,6 +5755,7 @@ async function runDetailHistoryRequestScenario(options) {
         requestAction: "approve",
         detailFilter: "all",
         detailCheckpointSweep: true,
+        reopenThreadDetailBeforeReady: isReopenRetainsContent,
       },
       at: new Date().toISOString(),
     });
@@ -5764,6 +5776,24 @@ async function runDetailHistoryRequestScenario(options) {
         findings,
         "scenario_detail_history_detail_subscribe_missing",
         "simulator app did not open the controlled detail session through thread/detail/subscribe",
+        { threadID, timeoutMs: detailWaitTimeoutMs }
+      );
+    }
+    const retainedReopenResyncWait = isReopenRetainsContent
+      ? await waitForRecordedRouteEvent({
+        events: simulatorRouteEvents,
+        route: "thread/detail/resync",
+        source: "simulatorAppProxy",
+        boundary: "simulatorAppToRelay",
+        afterMs: detailSubscribeWait.observedAtMs || startedAtMs,
+        timeoutMs: detailWaitTimeoutMs,
+      })
+      : null;
+    if (isReopenRetainsContent && !retainedReopenResyncWait?.ok) {
+      transitionFailure(
+        findings,
+        "scenario_detail_reopen_resync_missing",
+        "simulator app did not reopen retained Thread Detail through thread/detail/resync",
         { threadID, timeoutMs: detailWaitTimeoutMs }
       );
     }
@@ -6012,6 +6042,33 @@ async function runDetailHistoryRequestScenario(options) {
       );
     }
 
+    if (isReopenRetainsContent) {
+      transitions.push({
+        name: "detail-reopen-retained-resync",
+        kind: "detail-reopen-retained-resync",
+        iteration: 1,
+        route: "thread/detail/resync",
+        wait: {
+          ok: retainedReopenResyncWait?.ok === true,
+          observedAt: retainedReopenResyncWait?.observedAt || null,
+          observedAtMs: retainedReopenResyncWait?.observedAtMs || null,
+        },
+        lag: scenarioLagSummary({
+          transition: "detail-reopen-retained-resync",
+          startedAtMs: detailLoadedAtMs || startedAtMs,
+          acknowledgedAtMs: detailLoadedAtMs || startedAtMs,
+          observedAtMs: retainedReopenResyncWait?.observedAtMs || null,
+          maxStreamLagMs: options.maxStreamLagMs,
+        }),
+        detailTruth: detailTruthFromWitness({
+          kind: "detail-reopen-retained-resync",
+          sourceHostID: hostID,
+          detailHostID: simulatorProxy.endpoint,
+          threadID,
+          witness: initialProjectionWitness,
+        }),
+      });
+    }
     transitions.push({
       name: "detail-history-live-update",
       kind: "detail-history-live-update",
@@ -6108,9 +6165,23 @@ async function runDetailHistoryRequestScenario(options) {
     });
 
     const simulatorClientPathEvidence = summarizeClientPathEvents(simulatorRouteEvents);
+    if (isReopenRetainsContent && simulatorClientPathEvidence.routeCounts?.["thread/detail/subscribe"] !== 1) {
+      transitionFailure(
+        findings,
+        "scenario_detail_reopen_subscribe_count_wrong",
+        "retained Thread Detail reopen must not create a second thread/detail/subscribe",
+        {
+          expectedSubscribeCount: 1,
+          actualSubscribeCount: simulatorClientPathEvidence.routeCounts?.["thread/detail/subscribe"] || 0,
+          routeCounts: simulatorClientPathEvidence.routeCounts,
+        }
+      );
+    }
     findings.push(...requiredRouteFindings(
       simulatorClientPathEvidence,
-      ["thread/detail/subscribe", "thread/detail/update"]
+      isReopenRetainsContent
+        ? ["thread/detail/subscribe", "thread/detail/resync", "thread/detail/update"]
+        : ["thread/detail/subscribe", "thread/detail/update"]
     ));
     findings.push(...forbiddenSimulatorDetailRouteFindings(simulatorClientPathEvidence));
     const clientPathEvidence = summarizeClientPathEvents([
@@ -7232,7 +7303,7 @@ async function main() {
     report = await runArchiveToggleScenario(options);
   } else if (options.scenario === "detail-reconnect" || options.scenario === "foreground-resume-all-surfaces") {
     report = await runDetailReconnectScenario(options);
-  } else if (options.scenario === "detail-history-request" || options.scenario === "detail-replay-pressure") {
+  } else if (options.scenario === "detail-history-request" || options.scenario === "detail-replay-pressure" || options.scenario === "detail-reopen-retains-content") {
     report = await runDetailHistoryRequestScenario(options);
   } else if (options.scenario === "large-list-checkpoint" || options.scenario === "root-catchup-window-contract") {
     report = await runLargeListCheckpointScenario(options);

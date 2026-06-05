@@ -15,7 +15,7 @@ final class ThreadDetailScreenStore: ObservableObject {
     @Published private(set) var composer: ComposerState
     @Published private(set) var composerRenderState: ComposerRenderState
 
-    private let coalescer: RenderCoalescer<ThreadDetailRenderSnapshot>
+    private var coalescer: RenderCoalescer<ThreadDetailRenderSnapshot>
     private var renderTask: Task<Void, Never>?
     private var latestRevision = RenderRevision.zero
     private var latestSnapshot: ThreadDetailSnapshot?
@@ -43,6 +43,8 @@ final class ThreadDetailScreenStore: ObservableObject {
             return
         }
 
+        let coalescer = RenderCoalescer<ThreadDetailRenderSnapshot>()
+        self.coalescer = coalescer
         renderTask = Task { [weak self, coalescer] in
             let stream = await coalescer.stream()
             for await renderSnapshot in stream {
@@ -50,6 +52,13 @@ final class ThreadDetailScreenStore: ObservableObject {
                     self?.state = .loaded(renderSnapshot)
                 }
             }
+        }
+
+        if let latestSnapshot {
+            publish(
+                snapshot: latestSnapshot,
+                requestCardPresentation: latestRequestCardPresentation
+            )
         }
     }
 

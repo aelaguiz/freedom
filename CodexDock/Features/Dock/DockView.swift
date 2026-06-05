@@ -324,6 +324,7 @@ public struct DockView: View {
     @State private var isFilterSurfacePresented = false
     @State private var selectedDetailRow: DockRowViewModel?
     @State private var selectedDetailStore: ThreadDetailStore?
+    @StateObject private var detailStoreCache = ThreadDetailStoreCache()
     @State private var renameDraft: DockRenameDraft?
     @FocusState private var isSearchFocused: Bool
 
@@ -662,11 +663,13 @@ public struct DockView: View {
             selectedDetailStore = nil
             return
         }
-        selectedDetailStore = makeThreadDetailStore(
-            host: host,
-            row: row,
-            hostIdentityResolver: currentSnapshot?.hostIdentityResolver
-        )
+        selectedDetailStore = detailStoreCache.store(for: row) {
+            makeThreadDetailStore(
+                host: host,
+                row: row,
+                hostIdentityResolver: currentSnapshot?.hostIdentityResolver
+            )
+        }
     }
 
     private func presentRenameSheet(for row: DockRowViewModel) {

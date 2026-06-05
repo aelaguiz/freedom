@@ -86,6 +86,62 @@ final class CodexDockDisplayedSyncProofTests: XCTestCase {
             sampleIndex += 1
             waitUntilNextSample(startedAt: detailReadySampleStartedAt, sampleMS: config.sampleMS)
 
+            if config.reopenThreadDetailBeforeReady == true {
+                guard let initialDetail = detailReadySample.detail,
+                      let initialProjections = codexDockAutomationField("projections", in: initialDetail.messageListValue),
+                      !initialProjections.isEmpty else {
+                    XCTFail("Displayed sync proof could not capture initial detail projections before retained reopen.")
+                    return
+                }
+                guard let backButton = app.navigationBars.buttons.firstMatchIfExists else {
+                    XCTFail("Displayed sync proof could not find a navigation back button before retained reopen.")
+                    return
+                }
+                backButton.tap()
+                XCTAssertTrue(
+                    root.waitForDisplayedUIStringValue(matching: { value in
+                        value.contains("loaded") && !value.contains("Partial")
+                    }, timeout: 10),
+                    "Displayed sync proof did not return to Dock before retained reopen. Root value: \(root.displayedUIStringValue)"
+                )
+                guard let reopenedRow = app.visibleDockRow(hostID: config.openHostID, threadID: openThreadID, timeout: 15) else {
+                    XCTFail("Displayed sync proof could not find target Dock row for retained reopen host=\(config.openHostID ?? "*") thread=\(openThreadID).\n\nAccessibility tree:\n\(app.debugDescription)")
+                    return
+                }
+                reopenedRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                guard let reopenedRoot = app.displayedUIWaitForElement(identifierPrefix: AutomationID.Session.root(threadID: openThreadID).rawValue, timeout: 15) else {
+                    XCTFail("Displayed sync proof did not reach target thread detail during retained reopen for \(openThreadID).")
+                    return
+                }
+                XCTAssertTrue(
+                    reopenedRoot.waitForDisplayedUIStringValue(matching: { value in
+                        value.contains("loaded") && value.contains("live=Updating")
+                    }, timeout: 5),
+                    "Retained reopen did not show loaded Updating state. Root value: \(reopenedRoot.displayedUIStringValue)"
+                )
+                XCTAssertFalse(
+                    app.displayedUIElement(id: AutomationID.Session.state(.loading).rawValue).exists,
+                    "Retained reopen exposed the Thread Detail loading state."
+                )
+                let reopenSample = captureSample(index: sampleIndex)
+                guard let reopenedDetail = reopenSample.detail else {
+                    XCTFail("Displayed sync proof did not capture Thread Detail after retained reopen.")
+                    return
+                }
+                XCTAssertTrue(
+                    reopenedDetail.headerValue.contains("live=Updating"),
+                    "Retained reopen header did not show Updating. Header value: \(reopenedDetail.headerValue)"
+                )
+                XCTAssertEqual(
+                    codexDockAutomationField("projections", in: reopenedDetail.messageListValue),
+                    initialProjections,
+                    "Retained reopen did not keep the previous visible detail projections while updating."
+                )
+                try record(reopenSample)
+                sampleIndex += 1
+                waitUntilNextSample(startedAt: Date(), sampleMS: config.sampleMS)
+            }
+
             if config.foregroundCycleBeforeReady == true {
                 XCUIDevice.shared.press(.home)
                 RunLoop.current.run(until: Date().addingTimeInterval(0.75))
@@ -254,6 +310,7 @@ struct DisplayedUISyncConfig: Codable {
     var requestCardID: String?
     var requestAction: String?
     var detailFilter: String?
+    var reopenThreadDetailBeforeReady: Bool?
     var dockLenses: [String]?
     var foregroundCycleBeforeReady: Bool?
     var foregroundResumeDelayMS: Int?

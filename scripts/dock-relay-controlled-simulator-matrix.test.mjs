@@ -139,6 +139,7 @@ test("controlled simulator matrix parses report dirs and defaults", () => {
   assert.equal(options.minPasses, 2);
   assert.ok(options.requiredScenarios.includes("archive-toggle"));
   assert.ok(options.requiredScenarios.includes("detail-reconnect"));
+  assert.ok(options.requiredScenarios.includes("detail-reopen-retains-content"));
   assert.ok(options.requiredScenarios.includes("detail-history-request"));
   assert.ok(options.requiredScenarios.includes("large-list-checkpoint"));
   assert.ok(options.requiredScenarios.includes("rapid-mutations"));

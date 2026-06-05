@@ -340,6 +340,8 @@ public final class AppConnectivityStore: ObservableObject, AppConnectivityReport
         switch liveState {
         case .connecting:
             record(host: hostViewModel, source: .threadDetail, phase: .checking)
+        case .updating:
+            record(host: hostViewModel, source: .threadDetail, phase: .checking)
         case .reconnecting(let message):
             record(host: hostViewModel, source: .threadDetail, phase: .reconnecting(message))
         case .live:

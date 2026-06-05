@@ -56,9 +56,11 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
     private let threadMessageSendResult: Result<ThreadMessageSendResponseDTO, any Error>
     private let turnStartResult: Result<TurnStartResponseDTO, any Error>
     private let turnSteerResult: Result<TurnSteerResponseDTO, any Error>
-    private let projectionDelay: Duration?
+    private let detailSubscribeDelay: Duration?
+    private let detailResyncDelay: Duration?
     private var detailSubscribeParams: [ThreadDetailParams] = []
     private var detailResyncParams: [ThreadDetailParams] = []
+    private var disconnectCallCount = 0
     private var threadMessageSendParams: [ThreadMessageSendParams] = []
     private var turnStartParams: [TurnStartParams] = []
     private var turnSteerParams: [TurnSteerParams] = []
@@ -93,6 +95,8 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
             TurnSteerResponseDTO(turnId: "turn-started")
         ),
         projectionDelay: Duration? = nil,
+        detailSubscribeDelay: Duration? = nil,
+        detailResyncDelay: Duration? = nil,
         detailSubscribeResults: [Result<ThreadDetailProjectionSeed, any Error>]? = nil,
         projectionRowsResults: [Result<[ThreadDetailEventDTO], any Error>]? = nil,
         detailResyncResults: [Result<ThreadDetailProjectionSeed, any Error>]? = nil,
@@ -114,7 +118,8 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         self.threadMessageSendResult = threadMessageSendResult
         self.turnStartResult = turnStartResult
         self.turnSteerResult = turnSteerResult
-        self.projectionDelay = projectionDelay
+        self.detailSubscribeDelay = detailSubscribeDelay ?? projectionDelay
+        self.detailResyncDelay = detailResyncDelay ?? projectionDelay
     }
 
     func connectAndInitialize(
@@ -136,8 +141,8 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         timeout: Duration
     ) async throws -> ThreadDetailSnapshotDTO {
         detailSubscribeParams.append(params)
-        if let projectionDelay {
-            try await Task.sleep(for: projectionDelay)
+        if let detailSubscribeDelay {
+            try await Task.sleep(for: detailSubscribeDelay)
         }
         return try makeNextDetailSnapshot(
             seed: nextProjectionSeed(from: &detailSubscribeResults),
@@ -151,8 +156,8 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
         timeout: Duration
     ) async throws -> ThreadDetailSnapshotDTO {
         detailResyncParams.append(params)
-        if let projectionDelay {
-            try await Task.sleep(for: projectionDelay)
+        if let detailResyncDelay {
+            try await Task.sleep(for: detailResyncDelay)
         }
         return try makeNextDetailSnapshot(
             seed: nextProjectionSeed(from: &detailResyncResults),
@@ -200,6 +205,7 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
     }
 
     func disconnect() async {
+        disconnectCallCount += 1
         connectionStateContinuation.yield(.closed(reason: "client disconnected"))
         connectionStateContinuation.finish()
         notificationContinuation.finish()
@@ -302,6 +308,10 @@ final class FakeThreadDetailSession: @unchecked Sendable, ThreadDetailSession {
 
     func detailResyncParamsSnapshot() -> [ThreadDetailParams] {
         detailResyncParams
+    }
+
+    func disconnectCallCountSnapshot() -> Int {
+        disconnectCallCount
     }
 
     func threadMessageSendParamsSnapshot() -> [ThreadMessageSendParams] {

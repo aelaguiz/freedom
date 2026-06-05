@@ -25,6 +25,11 @@ public enum CodexDockConstants {
         public static let bonjourResolveTimeout: TimeInterval = 4
     }
 
+    public enum ThreadDetail {
+        public static let retainedStoreCapacity = 24
+        public static let retainedRefreshMinimumUpdatingMilliseconds = 750
+    }
+
     public enum ArchiveCleanup {
         public static let archiveBatchConcurrency = 1
         public static let restoreBatchConcurrency = 1

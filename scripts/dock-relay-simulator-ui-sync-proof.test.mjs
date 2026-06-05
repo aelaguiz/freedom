@@ -1683,6 +1683,36 @@ test("simulator UI proof scores opened-thread history through a detail sweep", (
   assert.equal(report.summary.detailTransitionFailures, 0);
 });
 
+test("simulator UI proof does not score user-driven retained reopen wait as relay lag", () => {
+  const relay = detailHistoryRelayReport();
+  const [transition] = relay.scenarios[0].transitions;
+  transition.name = "detail-reopen-retained-resync";
+  transition.kind = "detail-reopen-retained-resync";
+  transition.lag = {
+    relaySeenAt: "2026-05-31T00:00:03.000Z",
+    lag_change_to_relay_ms: 11_000,
+    maxStreamLagMs: 2_000,
+    ok: false,
+  };
+  transition.detailTruth.kind = "detail-reopen-retained-resync";
+
+  const report = buildRenderedUIReport({
+    relayReport: relay,
+    uiSamples: [
+      uiSample({ sampledAt: "2026-05-31T00:00:01.200Z" }),
+      detailHistoryUISample({ sampledAt: "2026-05-31T00:00:03.250Z" }),
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.equal(report.summary.detailTransitionFailures, 0);
+  assert.deepEqual(
+    report.detailTransitionCoverage.checks.map((check) => [check.transition, check.observedLagMs]),
+    [["detail-reopen-retained-resync", 250]],
+  );
+});
+
 test("simulator UI proof fails opened-thread detail rows rendered out of newest-first order", () => {
   const sample = detailHistoryUISample({ sampledAt: "2026-05-31T00:00:03.250Z" });
   const projectionIDs = detailHistoryProjectionIDs();

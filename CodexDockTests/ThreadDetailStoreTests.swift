@@ -1,7 +1,96 @@
+import Combine
 import XCTest
 @testable import CodexDock
 
 final class ThreadDetailStoreTests: XCTestCase {
+    @MainActor
+    func testReloadingLoadedDetailUpdatesInPlaceWithoutLoading() async throws {
+        let host = makeDetailHost()
+        let row = makeDetailRow(hostID: host.id, threadID: "thread-1")
+        let session = FakeThreadDetailSession(
+            detailSubscribeResult: .success(.thread("thread-1")),
+            detailResyncResult: .success(.thread("thread-1")),
+            detailResyncDelay: .milliseconds(100),
+            projectionRowsResults: [
+                .success([
+                    makeProjectedDetailEvent(turnID: "turn-initial", startedAt: 1_000, text: "Initial turn"),
+                ]),
+                .success([
+                    makeProjectedDetailEvent(turnID: "turn-updated", startedAt: 2_000, text: "Updated turn"),
+                    makeProjectedDetailEvent(turnID: "turn-initial", startedAt: 1_000, text: "Initial turn"),
+                ]),
+            ]
+        )
+        let store = ThreadDetailStore(
+            host: host,
+            row: row,
+            factory: FakeThreadDetailSessionFactory(session: session)
+        )
+
+        await store.load()
+        store.updateDraft("Keep this draft")
+        store.screenStore.setFilter(ThreadDetailMessageFilter.all)
+        store.detachView()
+
+        var observedStates: [ThreadDetailStoreState] = []
+        let cancellable = store.$state.sink { state in
+            observedStates.append(state)
+        }
+        let reloadTask = Task {
+            await store.load()
+        }
+
+        try await waitForDetailStore {
+            session.detailResyncParamsSnapshot().count == 1
+        }
+
+        guard case let .loaded(updatingSnapshot) = store.state else {
+            cancellable.cancel()
+            return XCTFail("Expected loaded updating state, got \(store.state)")
+        }
+        XCTAssertEqual(updatingSnapshot.liveState, ThreadDetailLiveState.updating)
+        XCTAssertEqual(updatingSnapshot.events.map { $0.body }, ["Initial turn"])
+        try await waitForDetailStore {
+            guard case let .loaded(renderSnapshot) = store.screenStore.state else {
+                return false
+            }
+            return renderSnapshot.liveState == .updating
+                && renderSnapshot.rows.map { $0.event.body } == ["Initial turn"]
+        }
+        XCTAssertEqual(store.composer.draft, "Keep this draft")
+        XCTAssertEqual(store.screenStore.options.filter, ThreadDetailMessageFilter.all)
+        XCTAssertFalse(observedStates.contains { state in
+            if case .loading = state {
+                return true
+            }
+            return false
+        })
+
+        await reloadTask.value
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.liveState == .live
+                && snapshot.events.map { $0.body } == ["Updated turn", "Initial turn"]
+        }
+        try await waitForDetailStore {
+            guard case let .loaded(renderSnapshot) = store.screenStore.state else {
+                return false
+            }
+            return renderSnapshot.liveState == .live
+                && renderSnapshot.rows.map { $0.event.body } == ["Updated turn", "Initial turn"]
+        }
+
+        cancellable.cancel()
+        XCTAssertEqual(session.detailSubscribeParamsSnapshot(), [
+            ThreadDetailParams(threadId: "thread-1"),
+        ])
+        XCTAssertEqual(session.detailResyncParamsSnapshot(), [
+            ThreadDetailParams(threadId: "thread-1"),
+        ])
+    }
+
     @MainActor
     func testLoadSubscribesToProjectedThreadRows() async throws {
         let host = makeDetailHost()
@@ -151,7 +240,13 @@ final class ThreadDetailStoreTests: XCTestCase {
         try await waitForDetailStoreAsync {
             session.detailResyncParamsSnapshot().count == 1
         }
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.events.map(\.body) == ["Initial turn"]
+                && snapshot.liveState == .live
+        }
 
         guard case let .loaded(snapshot) = store.state else {
             return XCTFail("Expected loaded state, got \(store.state)")
@@ -235,7 +330,13 @@ final class ThreadDetailStoreTests: XCTestCase {
             return XCTFail("Expected immediate canonical reread to preserve live-ahead event, got \(store.state)")
         }
 
-        try await Task.sleep(for: .milliseconds(150))
+        try await waitForDetailStore {
+            guard case let .loaded(snapshot) = store.state else {
+                return false
+            }
+            return snapshot.events.map(\.body) == ["Live ahead", "Initial turn"]
+                && snapshot.liveState == .live
+        }
         guard case let .loaded(snapshot) = store.state else {
             return XCTFail("Expected loaded state after row advance, got \(store.state)")
         }

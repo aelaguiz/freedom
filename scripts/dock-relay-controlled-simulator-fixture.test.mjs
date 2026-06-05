@@ -161,6 +161,29 @@ test("controlled simulator fixture parses detail-reconnect options", () => {
   assert.equal(options.jsonOut, "/tmp/report.json");
 });
 
+test("controlled simulator fixture parses detail-reopen-retains-content options", () => {
+  const options = parseArgs([
+    "--scenario",
+    "detail-reopen-retains-content",
+    "--ready-out",
+    "/tmp/ready.json",
+    "--ui-ready-in",
+    "/tmp/ui-ready.json",
+    "--stop-in",
+    "/tmp/stop",
+    "--json-out",
+    "/tmp/report.json",
+  ]);
+
+  validateOptions(options);
+
+  assert.equal(options.scenario, "detail-reopen-retains-content");
+  assert.equal(options.readyOut, "/tmp/ready.json");
+  assert.equal(options.uiReadyIn, "/tmp/ui-ready.json");
+  assert.equal(options.stopIn, "/tmp/stop");
+  assert.equal(options.jsonOut, "/tmp/report.json");
+});
+
 test("controlled simulator fixture parses large-list-checkpoint options", () => {
   const options = parseArgs([
     "--scenario",
