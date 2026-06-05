@@ -99,3 +99,23 @@ second plan.
   schemas and 5 canonical samples validated.
 - Relay proof passed: 209 tests, 0 failures.
 - Host-service proof passed: 36 tests, 0 failures.
+
+## 2026-06-05T02:14:34Z - Deploy cleanup fix for stale raw app-server service
+
+- Real deploy proof found the rendered relay plist had been updated, but
+  launchd was still running the old relay process with `--history-url
+  ws://127.0.0.1:4500/`.
+- After `rtk make dock-relay-restart`, the new relay was ready and registry
+  backed, but the old Dock-owned raw app-server launchd job was still running
+  on `127.0.0.1:4500`.
+- Fixed `scripts/codex-dock-host-service.mjs` so install/start/restart/stop
+  remove stale generated raw app-server service files and stop/disable the
+  obsolete raw app-server job:
+  - macOS launchd label: `com.aelaguiz.codex-dock.app-server`.
+  - Linux systemd user unit: `codex-dock-app-server.service`.
+- Command: `rtk node --test scripts/codex-dock-host-service.test.mjs`.
+  Result: 28 tests, 0 failures.
+- Command: `rtk npm test`.
+  Result: projection contract fixtures/DTO current, 5 proof schemas and 5
+  canonical samples validated; relay 209 tests, 0 failures; host/device
+  service 37 tests, 0 failures.

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -25,6 +26,8 @@ import {
 
 const DEFAULT_RUNTIME_DIR = ".codex-dock";
 const DEFAULT_RELAY_LABEL = "com.aelaguiz.codex-dock.relay";
+const LEGACY_RAW_APP_SERVER_LABEL = "com.aelaguiz.codex-dock.app-server";
+const LEGACY_RAW_APP_SERVER_UNIT = "codex-dock-app-server.service";
 const VALUE_OPTIONS = new Set([
   "codex-home",
   "command",
@@ -491,6 +494,19 @@ function serviceEntries(config) {
   ];
 }
 
+function legacyRawAppServerEntries(config) {
+  return [
+    {
+      role: "legacy-raw-app-server",
+      label: LEGACY_RAW_APP_SERVER_LABEL,
+      unit: LEGACY_RAW_APP_SERVER_UNIT,
+      path: config.platform === "macos"
+        ? path.join(config.servicesDir, `${LEGACY_RAW_APP_SERVER_LABEL}.plist`)
+        : path.join(config.servicesDir, LEGACY_RAW_APP_SERVER_UNIT),
+    },
+  ];
+}
+
 function appConfigJSON(config) {
   return {
     version: 1,
@@ -596,6 +612,10 @@ function launchdPrintShowsReusablePath(result, servicePath) {
   return result.exitCode === 0 && String(result.stdout || "").includes(`path = ${servicePath}`) && String(result.stdout || "").includes("state = running");
 }
 
+function launchdPrintShowsServiceLabel(result, label) {
+  return result.exitCode === 0 && String(result.stdout || "").includes(label);
+}
+
 function delay(runtime = {}, ms = 1000) {
   return runtime.sleep ? runtime.sleep(ms) : new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -620,9 +640,32 @@ async function bootstrapLaunchdService(config, runtime, domain, servicePath) {
   return [first, await runServiceCommand(config, runtime, "launchctl", ["bootstrap", domain, servicePath])];
 }
 
+async function stopLegacyRawAppServerServices(config, runtime = {}) {
+  const commands = [];
+  if (config.platform === "macos") {
+    for (const service of legacyRawAppServerEntries(config)) {
+      const current = await inspectLaunchdService(config, runtime, service);
+      if (launchdPrintShowsServiceLabel(current, service.label)) {
+        commands.push({ command: "launchctl", args: ["print", serviceTarget(config, service, runtime)], exitCode: current.exitCode });
+        commands.push(await runServiceCommand(config, runtime, "launchctl", ["bootout", serviceTarget(config, service, runtime)], { allowFailure: true }));
+        await delay(runtime);
+      }
+    }
+    return commands;
+  }
+
+  for (const service of legacyRawAppServerEntries(config)) {
+    commands.push(await runServiceCommand(config, runtime, "systemctl", ["--user", "stop", service.unit], { allowFailure: true }));
+    commands.push(await runServiceCommand(config, runtime, "systemctl", ["--user", "disable", service.unit], { allowFailure: true }));
+  }
+  return commands;
+}
+
 async function runServiceManagerAction(config, action, runtime = {}) {
   const services = serviceEntries(config);
   const commands = [];
+  commands.push(...await stopLegacyRawAppServerServices(config, runtime));
+
   if (config.platform === "macos") {
     const domain = launchdDomain(runtime);
     if (action === "install") {
@@ -681,6 +724,9 @@ function writeRenderedServiceFiles(config) {
   ensureDirectory(config.runtimeDir);
   ensureDirectory(config.logsDir);
   ensureDirectory(config.servicesDir);
+  for (const service of legacyRawAppServerEntries(config)) {
+    fs.rmSync(service.path, { force: true });
+  }
   const files = renderHostServices(config);
   for (const file of files) {
     writeFileAtomic(file.path, file.contents, 0o600);

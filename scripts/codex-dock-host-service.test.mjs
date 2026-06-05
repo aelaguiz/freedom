@@ -344,10 +344,43 @@ test("install writes only relay service files and calls launchd through an injec
   assert.equal(fs.existsSync(path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.app-server.plist")), false);
   assert.equal(fs.existsSync(path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.relay.plist")), true);
   assert.deepEqual(runner.calls.map((call) => [call.command, call.args[0], call.args[1]]), [
+    ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.app-server"],
     ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.relay"],
     ["launchctl", "bootout", "gui/501/com.aelaguiz.codex-dock.relay"],
     ["launchctl", "bootstrap", "gui/501"],
   ]);
+});
+
+test("install removes stale legacy raw app-server service files and stops loaded launchd job", async () => {
+  const cwd = tempDir();
+  const runtimeDir = path.join(cwd, ".codex-dock-test");
+  const servicesDir = path.join(runtimeDir, "services");
+  const legacyPath = path.join(servicesDir, "com.aelaguiz.codex-dock.app-server.plist");
+  fs.mkdirSync(servicesDir, { recursive: true });
+  fs.writeFileSync(legacyPath, "old raw app-server plist");
+  const runner = fakeRunner((command, args) => {
+    if (command === "launchctl" && args[0] === "print" && args[1].includes("app-server")) {
+      return { exitCode: 0, stdout: `gui/501/com.aelaguiz.codex-dock.app-server = {\npath = ${legacyPath}\nstate = running\n}`, stderr: "" };
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  });
+
+  await main([
+    "install",
+    "--platform",
+    "macos",
+    "--runtime-dir",
+    ".codex-dock-test",
+    "--host-id",
+    "home",
+    "--host-name",
+    "Home",
+    "--public-host",
+    "home.local",
+  ], captureIO().io, { cwd, platform: "macos", uid: 501, runCommand: runner.runCommand });
+
+  assert.equal(fs.existsSync(legacyPath), false);
+  assert.equal(runner.calls.some((call) => call.command === "launchctl" && call.args[0] === "bootout" && call.args[1] === "gui/501/com.aelaguiz.codex-dock.app-server"), true);
 });
 
 test("install writes two-host app env from app-safe service env keys only", async () => {
@@ -459,6 +492,7 @@ test("install reuses loaded launchd services when they already point at rendered
   ], captureIO().io, { cwd, platform: "macos", uid: 501, runCommand: runner.runCommand });
 
   assert.deepEqual(runner.calls.map((call) => [call.command, call.args[0], call.args[1]]), [
+    ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.app-server"],
     ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.relay"],
   ]);
 });
@@ -488,17 +522,19 @@ test("systemd install links and enables only the relay service without starting 
   assert.equal("appServerAuth" in parsed, false);
   assert.equal(fs.existsSync(path.join(cwd, ".codex-dock-test", "app-server.token")), false);
   assert.deepEqual(runner.calls.map((call) => call.args.slice(0, 3)), [
+    ["--user", "stop", "codex-dock-app-server.service"],
+    ["--user", "disable", "codex-dock-app-server.service"],
     ["--user", "link", "--force"],
     ["--user", "daemon-reload"],
     ["--user", "enable", "codex-dock-relay.service"],
   ]);
-  assert.equal(runner.calls[0].args.includes(path.join(cwd, ".codex-dock-test", "services", "codex-dock-app-server.service")), false);
-  assert.equal(runner.calls[0].args.includes(path.join(cwd, ".codex-dock-test", "services", "codex-dock-relay.service")), true);
+  assert.equal(runner.calls[2].args.includes(path.join(cwd, ".codex-dock-test", "services", "codex-dock-app-server.service")), false);
+  assert.equal(runner.calls[2].args.includes(path.join(cwd, ".codex-dock-test", "services", "codex-dock-relay.service")), true);
   assert.equal(JSON.stringify(runner.calls).includes("--now"), false);
   assert.equal(JSON.stringify(runner.calls).includes('"start"'), false);
 });
 
-test("systemd start and stop target only the relay service", async () => {
+test("systemd start and stop target the relay service and clean legacy raw app-server", async () => {
   const cwd = tempDir();
   const startRunner = fakeRunner();
   const stopRunner = fakeRunner();
@@ -532,9 +568,13 @@ test("systemd start and stop target only the relay service", async () => {
   ], captureIO().io, { cwd, platform: "linux", runCommand: stopRunner.runCommand });
 
   assert.deepEqual(startRunner.calls.map((call) => call.args.slice(0, 3)), [
+    ["--user", "stop", "codex-dock-app-server.service"],
+    ["--user", "disable", "codex-dock-app-server.service"],
     ["--user", "start", "codex-dock-relay.service"],
   ]);
   assert.deepEqual(stopRunner.calls.map((call) => call.args.slice(0, 3)), [
+    ["--user", "stop", "codex-dock-app-server.service"],
+    ["--user", "disable", "codex-dock-app-server.service"],
     ["--user", "stop", "codex-dock-relay.service"],
   ]);
 });
@@ -564,6 +604,7 @@ test("macOS start reuses loaded launchd services without kickstarting them", asy
   ], captureIO().io, { cwd, platform: "macos", uid: 501, runCommand: runner.runCommand });
 
   assert.deepEqual(runner.calls.map((call) => [call.command, call.args[0], call.args[1]]), [
+    ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.app-server"],
     ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.relay"],
   ]);
 });
@@ -593,6 +634,7 @@ test("macOS start re-bootstraps loaded launchd services that are not running", a
   ], captureIO().io, { cwd, platform: "macos", uid: 501, runCommand: runner.runCommand });
 
   assert.deepEqual(runner.calls.map((call) => [call.command, call.args[0], call.args[1]]), [
+    ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.app-server"],
     ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.relay"],
     ["launchctl", "bootout", "gui/501/com.aelaguiz.codex-dock.relay"],
     ["launchctl", "bootstrap", "gui/501"],
