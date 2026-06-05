@@ -137,3 +137,117 @@ second plan.
   Result: projection contract fixtures/DTO current, 5 proof schemas and 5
   canonical samples validated; relay 209 tests, 0 failures; host/device
   service 37 tests, 0 failures.
+
+## 2026-06-05T03:03:57Z - Plain private Codex CLI session detection
+
+- Root cause found after live-phone mismatch report: plain private Codex CLI
+  sessions such as `codex -p yolo` do not expose the thread id in process
+  arguments. The thread id is present in the open
+  `~/.codex/sessions/**/*.jsonl` file.
+- Fixed `scripts/dock-relay-app-server-registry.mjs` to scan open session files
+  for Codex runtime PIDs with `lsof -w -Fpn -p <pid list>`, extract the session
+  JSONL filename, and record those private owners as
+  `ownerKind: "codex-cli-session-file"`.
+- Added `APP_SERVER_REGISTRY_OPEN_SESSION_FILE_SCAN_LIMIT` in
+  `scripts/dock-relay-constants.mjs`.
+- Added regression coverage in
+  `scripts/dock-relay-app-server-registry.test.mjs` for the exact
+  plain-private-session shape.
+- Command: `rtk npm run test:relay`.
+  Result: 212 tests, 0 failures.
+- Commit pushed:
+  `1ee6a2c Detect plain Codex CLI private sessions`.
+
+## 2026-06-05T03:16:00Z - Local and home live relay deploy proof
+
+- Local Mac relay deployed and healthy at
+  `ws://amir-m5.fairy-salmon.ts.net:4510`.
+- Home relay pulled the pushed branch to `1ee6a2c` and restarted with
+  `CODEX_DOCK_REAL_HOST_ID=home`, `CODEX_DOCK_REAL_HOST_NAME=Home`, and
+  `APP_SERVER_HOST=home.fairy-salmon.ts.net`.
+- Home relay healthy at `ws://home.fairy-salmon.ts.net:4510`.
+- Live client-path probe:
+  - `ws://amir-m5.fairy-salmon.ts.net:4510`: `281` rows, `10` running,
+    `271` dormant.
+  - `ws://home.fairy-salmon.ts.net:4510`: `981` total rows, first `250`
+    received, `4` running, `246` dormant.
+
+## 2026-06-05T03:20:19Z - Live relay simulator badge proof
+
+- Relaunched the `iPhone 17` simulator against the two live relay hosts:
+  `SIM_LAUNCH_HOSTS=amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510`.
+- Simulator installed build: `20260605031906`.
+- The simulator UI showed `Online 2/2` and visible Dock rows with
+  `Codex is working` badges.
+- Accessibility dump artifact:
+  `/tmp/codex-client/live-badge-ui-dump-20260605T031918Z/sim-ui-dump.json`.
+- Screenshot artifact:
+  `/tmp/codex-client/live-badge-sim-screenshot-20260605T032019Z.png`.
+- The dump target reported blocked metadata because
+  `CODEX_DOCK_AUTOMATION_SNAPSHOTS=1` was not set, but the written
+  accessibility payload still contained visible row values with
+  `status=running` and visible `Codex is working` labels.
+
+## 2026-06-05T03:22:00Z - Physical iPhone blocker
+
+- Physical iPhone app metadata reports installed build
+  `20260605003015`, which does not match the simulator proof build
+  `20260605031906`.
+- Physical config readback command hung and was stopped:
+  `rtk make device-config-verify DEVICE=CB9FFF0E-89AD-57B5-9C00-6552D814875E`.
+- Physical log collection failed with the exact blocker:
+  `log: Must be root to collect logs from attached device`.
+- Added focused bug note:
+  `docs/bugs/codex-working-badge-phone-missing-2026-06-05.md`.
+
+## 2026-06-05T03:31:10Z - Thermonuclear maintainability review fix
+
+- Strict maintainability pass found that
+  `scripts/dock-relay-app-server-registry.mjs` had grown to `1253` lines and
+  mixed process discovery/session-file scanning with registry routing/state.
+- Extracted Codex process discovery, endpoint normalization, daemon socket
+  helpers, and status sanitization into
+  `scripts/dock-relay-app-server-discovery.mjs`.
+- Kept `scripts/dock-relay-app-server-registry.mjs` focused on registry
+  refresh, owner leases, routing, live-row collection, and route errors.
+- Resulting file sizes:
+  - `scripts/dock-relay-app-server-registry.mjs`: `750` lines.
+  - `scripts/dock-relay-app-server-discovery.mjs`: `537` lines.
+- Focused proof:
+  `rtk node --test scripts/dock-relay-app-server-registry.test.mjs scripts/dock-relay-json-rpc-client.test.mjs`
+  passed with 10 tests and 0 failures.
+- Full Node proof: `rtk npm test` passed.
+  - Projection contract fixtures and generated Dock DTO are current.
+  - Proof contracts: 5 schemas and 5 canonical samples validated.
+  - Relay tests: 212 passed, 0 failed.
+  - Host/device service tests: 37 passed, 0 failed.
+
+## 2026-06-05T03:39:02Z - Current badge root-cause boundary
+
+- Rechecked the current live relay client path:
+  - `ws://amir-m5.fairy-salmon.ts.net:4510`: `282` rows, `11` running,
+    `271` dormant.
+  - `ws://home.fairy-salmon.ts.net:4510`: first `250` rows received, `4`
+    running, `246` dormant.
+- Verified iPhone 17 Pro saved relay config:
+  `amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510`.
+- Re-ran the `iPhone 17` simulator against those exact live hosts:
+  `SIM_LAUNCH_HOSTS=amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510`.
+- Current simulator screenshot:
+  `/tmp/codex-client/live-badge-current-sim-20260605T033902Z.png`.
+- The screenshot shows `Online 2/2` and multiple visible real relay rows with
+  `Codex is working` badges.
+- Physical iPhone remains the only failing surface:
+  - Installed build: `20260605003015`.
+  - `rtk make device-launch DEVICE=CB9FFF0E-89AD-57B5-9C00-6552D814875E`
+    hung in `devicectl` and was stopped.
+  - `rtk make device-debug-bundle DEVICE=CB9FFF0E-89AD-57B5-9C00-6552D814875E DEVICE_DEBUG_BUNDLE_DIR=/tmp/codex-client/device-debug-badge-20260605T034000Z`
+    hung in `devicectl` and was stopped.
+- Current root-cause boundary: not relay data, not saved phone host config, and
+  not current Swift badge rendering. Remaining likely cause is physical
+  phone-specific stale runtime/build state, but physical launch/log/diagnostic
+  access is blocked from this session.
+- Current relay refactor proof before commit:
+  - `rtk node --check scripts/dock-relay-app-server-registry.mjs` passed.
+  - `rtk node --check scripts/dock-relay-app-server-discovery.mjs` passed.
+  - `rtk npm run test:relay` passed with 212 tests and 0 failures.

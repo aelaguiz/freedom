@@ -109,15 +109,16 @@ manual test when the build is ready.
 ## Service Path
 
 `rtk make services` is the canonical local service entrypoint. It starts or
-reuses:
+reuses one phone-facing service:
 
-- Raw Codex app-server: `ws://127.0.0.1:4500`
 - Dock relay: `ws://<APP_SERVER_HOST>:4510`; `APP_SERVER_HOST` prefers the
   Mac's Tailscale MagicDNS name and falls back to the LAN address/hostname
 
-The app and phone normally connect to the Dock relay on `:4510`, not directly
-to the raw authenticated app-server on `:4500`. The relay owns the raw bearer
-token and forwards to Mac-side app-server/session owners.
+Codex owns app-server and session runtimes. Dock does not start a special raw
+Codex app-server on `:4500`. The app and phone connect only to the Dock relay on
+`:4510`; the relay owns an `AppServerRegistry` that discovers Codex daemon
+history, attachable loopback live owners, and private runtime diagnostics on the
+Mac side.
 
 Physical iPhone endpoint expectations:
 
@@ -135,11 +136,13 @@ Physical iPhone endpoint expectations:
   `CODEX_DOCK_REAL_HOST_ID`; do not persist or launch phone-side
   `relayInstanceID` / `CODEX_DOCK_RELAY_INSTANCE_ID`.
 
-Loopback WebSockets such as `ws://127.0.0.1:4500`, Unix sockets, mocks, and
-scripted transports are local development tools. They are not physical-phone
+Loopback WebSockets, Unix sockets, mocks, and scripted transports are local
+development or relay-side discovery tools. They are not physical-phone
 completion evidence. A real phone-path pass means the installed app connects to
-the relay-backed host path, renders real `DockThreadCard` rows, and shows
-offline/error UI when that same host path is unavailable.
+the relay-backed host path on `:4510`, renders real `DockThreadCard` rows, and
+shows offline/error UI when that same host path is unavailable. The old
+Dock-owned raw `ws://127.0.0.1:4500` path is legacy/diagnostic-only and must not
+be restored as a normal service path.
 
 Prefer status checks during normal verification:
 
