@@ -269,13 +269,19 @@ function hiddenActivityRollupRow(row, classification) {
   if (!status) {
     return null;
   }
+  const privateOwnerPresence = row?.status?.type === "privateUnattachable";
   return {
     ...row,
     status,
     dockRelayRollupTargetThreadID: classification.parentThreadID,
-    dockRelayRollupSource: row?.status?.type === "privateUnattachable"
+    dockRelayRollupSource: privateOwnerPresence
       ? "private-owner-presence"
       : "hidden-child-live",
+    ...(privateOwnerPresence ? {
+      dockRelayActivitySource: "private-owner-presence",
+      activityProofStatus: "status_only",
+      activityProofSource: "private-owner-presence",
+    } : {}),
   };
 }
 
@@ -1537,7 +1543,9 @@ async function setThreadName(config, params = {}) {
     throw new Error("thread/name/set requires name");
   }
   await assertHumanThreadID(config, params.threadId);
-  const endpoint = await endpointForThread(config, params.threadId, "thread/name/set");
+  const endpoint = await endpointForThread(config, params.threadId, "thread/name/set", {
+    allowHistoryForPrivateOwner: true,
+  });
   if (isHistoryEndpoint(config, endpoint)) {
     return historyClientForConfig(config).request("thread/name/set", params);
   }

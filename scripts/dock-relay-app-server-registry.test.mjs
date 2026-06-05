@@ -12,13 +12,18 @@ import {
   normalizeAppServerEndpoint,
 } from "./dock-relay-app-server-registry.mjs";
 import {
+  setThreadName,
   collectLiveRows,
   listThreadTurns,
   mergePrivateLiveRows,
 } from "./dock-relay-thread-data.mjs";
 import {
+  applyHiddenActivityRollupsToCards,
   normalizedStatus,
 } from "./dock-relay-state-views.mjs";
+import {
+  threadCardDisplayOrderKey,
+} from "./dock-relay-projection-engine.mjs";
 import {
   closeWebSocketServer,
   onceListening,
@@ -290,6 +295,10 @@ test("app-server registry discovers active codex resume commands as private live
   assert.equal(privateRows[0].status.type, "privateUnattachable");
   assert.equal(normalizedStatus(privateRows[0]), "unknown");
   assert.equal(privateRows[0].dockRelaySource.endpointType, "private");
+  assert.equal("updatedAt" in privateRows[0], false);
+  assert.equal("activityAt" in privateRows[0], false);
+  assert.equal(privateRows[0].dockRelayActivitySource, "private-owner-presence");
+  assert.equal(privateRows[0].activityProofStatus, "status_only");
 
   assert.throws(
     () => registry.routeForThreadMethod("thread/read", threadId),
@@ -593,6 +602,109 @@ test("app-server registry routes supported relay methods through one table", asy
   });
   assert.equal(privateTurnsRoute.source, "history");
   assert.equal(privateTurnsRoute.endpoint.label, "daemon-history");
+  const privateNameRoute = registry.routeForThreadMethod("thread/name/set", "thread-private", {
+    allowHistoryForPrivateOwner: true,
+  });
+  assert.equal(privateNameRoute.source, "history");
+  assert.equal(privateNameRoute.endpoint.label, "daemon-history");
+});
+
+test("thread name set falls back to history when a private live owner shadows human history", async () => {
+  const threadId = "thread-private-human-rename";
+  const newName = "Private owner rename proof";
+  let receivedNameSet = null;
+  const history = await startUnixJsonRpcServer((message) => {
+    if (message.method === "initialize") {
+      return { id: message.id, result: { userAgent: "private-owner-rename-test" } };
+    }
+    if (message.method === "initialized") {
+      return null;
+    }
+    if (message.method === "thread/name/set") {
+      receivedNameSet = message.params;
+      return { id: message.id, result: { ok: true } };
+    }
+    if (message.method === "thread/loaded/list") {
+      return { id: message.id, result: { data: [] } };
+    }
+    if (message.method === "thread/list") {
+      return { id: message.id, result: { data: [], nextCursor: null } };
+    }
+    return null;
+  });
+  const registry = new AppServerRegistry({
+    includeDaemonHistory: false,
+    processListProvider: async () => [],
+    fixtureHistoryEndpoints: [
+      { label: "daemon-history", url: `unix://${history.socketPath}` },
+    ],
+  });
+  try {
+    await registry.refreshNow("test");
+    registry.recordPrivateOwner(threadId, { pid: 3333, transport: "stdio" });
+
+    const result = await setThreadName(
+      { appServerRegistry: registry },
+      { threadId, name: newName },
+    );
+
+    assert.deepEqual(result, { ok: true });
+    assert.deepEqual(receivedNameSet, { threadId, name: newName });
+  } finally {
+    registry.stop();
+    await history.close();
+  }
+});
+
+function testDockCard({
+  threadID = "parent-thread",
+  status = "idle",
+  activityAtMs = 1_000,
+} = {}) {
+  const projectionID = `host:home/thread:${threadID}/row:threadCard`;
+  return {
+    id: projectionID,
+    projectionID,
+    threadID,
+    activityAt: new Date(activityAtMs).toISOString(),
+    activityAtMs,
+    status,
+    displayOrderKey: threadCardDisplayOrderKey({ activityAtMs, status, projectionID }),
+  };
+}
+
+test("private-owner rollups update status without replacing proven activity time", () => {
+  const cardActivityAtMs = 1_800_000_001_000;
+  const card = testDockCard({ status: "idle", activityAtMs: cardActivityAtMs });
+  const [updated] = applyHiddenActivityRollupsToCards([card], [{
+    id: "private-child",
+    dockRelayRollupTargetThreadID: "parent-thread",
+    dockRelayRollupSource: "private-owner-presence",
+    dockRelayActivitySource: "private-owner-presence",
+    activityProofStatus: "status_only",
+    activityAtMs: 1_800_000_009_000,
+    status: { type: "active", activeFlags: [] },
+  }]);
+
+  assert.equal(updated.status, "running");
+  assert.equal(updated.activityAtMs, cardActivityAtMs);
+  assert.equal(updated.activityAt, new Date(cardActivityAtMs).toISOString());
+});
+
+test("hidden live child rollups still carry real activity time", () => {
+  const rollupActivityAtMs = 1_800_000_009_000;
+  const card = testDockCard({ status: "idle", activityAtMs: 1_800_000_001_000 });
+  const [updated] = applyHiddenActivityRollupsToCards([card], [{
+    id: "live-child",
+    dockRelayRollupTargetThreadID: "parent-thread",
+    dockRelayRollupSource: "hidden-child-live",
+    activityAtMs: rollupActivityAtMs,
+    status: { type: "active", activeFlags: [] },
+  }]);
+
+  assert.equal(updated.status, "running");
+  assert.equal(updated.activityAtMs, rollupActivityAtMs);
+  assert.equal(updated.activityAt, new Date(rollupActivityAtMs).toISOString());
 });
 
 test("private live rows apply rollout metadata before human filtering", async () => {

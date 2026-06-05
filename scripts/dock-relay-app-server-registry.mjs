@@ -47,6 +47,7 @@ const ACTIVE_SESSION_ONLY_METHODS = new Set([
 const HISTORY_SAFE_PRIVATE_OWNER_METHODS = new Set([
   "thread/read",
   "thread/turns/list",
+  "thread/name/set",
 ]);
 
 class AppServerRegistryRouteError extends Error {
@@ -519,8 +520,9 @@ class AppServerRegistry {
         id: owner.threadId,
         sessionId: owner.threadId,
         source: "cli",
-        updatedAt: owner.checkedAt || owner.observedAt,
-        activityAt: owner.checkedAt || owner.observedAt,
+        dockRelayActivitySource: "private-owner-presence",
+        activityProofStatus: "status_only",
+        activityProofSource: "private-owner-presence",
         status: {
           type: "privateUnattachable",
         },

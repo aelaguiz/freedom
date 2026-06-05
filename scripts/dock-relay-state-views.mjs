@@ -243,6 +243,12 @@ function rowActivityAtMs(thread) {
   );
 }
 
+function relayRowCarriesActivitySignal(row) {
+  return row?.dockRelayActivitySource !== "private-owner-presence"
+    && row?.dockRelayRollupSource !== "private-owner-presence"
+    && row?.activityProofStatus !== "status_only";
+}
+
 function displaySummaryForThread(thread) {
   return firstBoundedText([
     thread?.displaySummary,
@@ -384,7 +390,9 @@ function overlayHiddenActivityRollup(storedRow, rollupRow) {
   }
   const publicStatus = strongerPublicStatus(normalizedStatus(storedRow), rollupStatus);
   const status = publicStatusToThreadStatus(publicStatus) || storedRow.status;
-  const activityAtMs = Math.max(rowActivityAtMs(storedRow), rowActivityAtMs(rollupRow));
+  const activityAtMs = relayRowCarriesActivitySignal(rollupRow)
+    ? Math.max(rowActivityAtMs(storedRow), rowActivityAtMs(rollupRow))
+    : rowActivityAtMs(storedRow);
   return {
     ...storedRow,
     activityAt: timestampToISO(activityAtMs),
@@ -399,7 +407,9 @@ function overlayHiddenActivityRollupOnCard(card, rollupRow) {
     return card;
   }
   const publicStatus = strongerPublicStatus(card?.status, rollupStatus);
-  const activityAtMs = Math.max(Number(card?.activityAtMs || 0), rowActivityAtMs(rollupRow));
+  const activityAtMs = relayRowCarriesActivitySignal(rollupRow)
+    ? Math.max(Number(card?.activityAtMs || 0), rowActivityAtMs(rollupRow))
+    : Number(card?.activityAtMs || 0);
   return {
     ...card,
     activityAt: timestampToISO(activityAtMs),
@@ -592,6 +602,7 @@ export {
   normalizeThread,
   orderedDockRows,
   publicHostFromConfig,
+  relayRowCarriesActivitySignal,
   timestampToISO,
   timestampToMs,
 };

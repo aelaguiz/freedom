@@ -23,6 +23,7 @@ import {
   normalizedStatus,
   orderedDockRows,
   publicHostFromConfig,
+  relayRowCarriesActivitySignal,
   timestampToISO,
   timestampToMs,
 } from "./dock-relay-state-views.mjs";
@@ -121,7 +122,10 @@ function cardWithLiveStatusOverlay(card, liveRow) {
       ?? liveRow.updatedAt
       ?? liveRow.createdAt
   );
-  const activityAtMs = Math.max(Number(card.activityAtMs || 0), liveActivityAtMs);
+  const storedActivityAtMs = Number(card.activityAtMs || 0);
+  const activityAtMs = relayRowCarriesActivitySignal(liveRow)
+    ? Math.max(storedActivityAtMs, liveActivityAtMs)
+    : storedActivityAtMs;
   return {
     ...card,
     backendSessionID: liveRow.sessionId || card.backendSessionID,
