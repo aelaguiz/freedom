@@ -7,6 +7,60 @@ import {
   UPSTREAM_REQUEST_TIMEOUT_MS,
 } from "./dock-relay-constants.mjs";
 
+function unixSocketPathFromURL(value) {
+  const raw = String(value || "");
+  if (!raw.startsWith("unix://")) {
+    throw new Error(`not a unix app-server URL: ${raw}`);
+  }
+  let socketPath = raw.slice("unix://".length);
+  const queryIndex = socketPath.search(/[?#]/u);
+  if (queryIndex >= 0) {
+    socketPath = socketPath.slice(0, queryIndex);
+  }
+  if (!socketPath.startsWith("/")) {
+    socketPath = `/${socketPath}`;
+  }
+  if (!socketPath || socketPath === "/") {
+    throw new Error(`unix app-server URL is missing a socket path: ${raw}`);
+  }
+  return socketPath;
+}
+
+function webSocketURLForEndpoint(value) {
+  const raw = typeof value === "object" && value !== null ? value.url : value;
+  const url = String(raw || "");
+  if (url.startsWith("unix://")) {
+    // The `ws` package accepts IPC sockets as `ws+unix:<socketPath>:<requestPath>`.
+    return `ws+unix:${unixSocketPathFromURL(url)}:/`;
+  }
+  return url;
+}
+
+function transportForEndpointURL(value) {
+  const url = String(value || "");
+  const match = url.match(/^([A-Za-z][A-Za-z0-9+.-]*):/u);
+  return match ? match[1].toLowerCase() : "unknown";
+}
+
+function normalizeJsonRpcWebSocketEndpoint(value) {
+  if (typeof value === "object" && value !== null) {
+    if (!value.url) {
+      throw new Error("JSON-RPC endpoint descriptor is missing url");
+    }
+    return {
+      ...value,
+      url: String(value.url),
+      transport: value.transport || transportForEndpointURL(value.url),
+      webSocketURL: webSocketURLForEndpoint(value.url),
+    };
+  }
+  return {
+    url: String(value || ""),
+    transport: transportForEndpointURL(value),
+    webSocketURL: webSocketURLForEndpoint(value),
+  };
+}
+
 class JsonRpcUpstreamError extends Error {
   constructor(method, upstreamError) {
     const message = upstreamError?.message || "upstream JSON-RPC error";
@@ -21,7 +75,7 @@ class JsonRpcUpstreamError extends Error {
 
 class JsonRpcWebSocketClient {
   constructor(
-    url,
+    endpoint,
     {
       bearerToken = null,
       timeoutMs = undefined,
@@ -31,9 +85,13 @@ class JsonRpcWebSocketClient {
       onRequest = null,
       onClose = null,
       logger = null,
+      perMessageDeflate = false,
     } = {},
     ) {
-    this.url = url;
+    const normalizedEndpoint = normalizeJsonRpcWebSocketEndpoint(endpoint);
+    this.url = normalizedEndpoint.url;
+    this.webSocketURL = normalizedEndpoint.webSocketURL;
+    this.transport = normalizedEndpoint.transport;
     this.bearerToken = bearerToken;
     this.connectTimeoutMs = connectTimeoutMs;
     this.requestTimeoutMs = requestTimeoutMs;
@@ -41,6 +99,7 @@ class JsonRpcWebSocketClient {
     this.onRequest = onRequest;
     this.onClose = onClose;
     this.logger = logger;
+    this.perMessageDeflate = perMessageDeflate;
     this.nextId = 1;
     this.pending = new Map();
     this.ws = null;
@@ -62,13 +121,15 @@ class JsonRpcWebSocketClient {
     const startedAt = Date.now();
     this.logger?.info("upstream.connect_start", {
       url: this.url,
+      transport: this.transport,
       bearerConfigured: Boolean(this.bearerToken),
     });
     this.unhealthy = false;
     this.connectPromise = new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.url, {
+      const ws = new WebSocket(this.webSocketURL, {
         headers,
         maxPayload: JSON_RPC_MAX_MESSAGE_BYTES,
+        perMessageDeflate: this.perMessageDeflate,
       });
       const timer = setTimeout(() => {
         this.logger?.warn("upstream.connect_timeout", {
@@ -84,6 +145,7 @@ class JsonRpcWebSocketClient {
         this.ws = ws;
         this.logger?.info("upstream.connect_open", {
           url: this.url,
+          transport: this.transport,
           durationMs: Date.now() - startedAt,
         });
         resolve();
@@ -316,4 +378,8 @@ class JsonRpcWebSocketClient {
 export {
   JsonRpcUpstreamError,
   JsonRpcWebSocketClient,
+  normalizeJsonRpcWebSocketEndpoint,
+  transportForEndpointURL,
+  unixSocketPathFromURL,
+  webSocketURLForEndpoint,
 };

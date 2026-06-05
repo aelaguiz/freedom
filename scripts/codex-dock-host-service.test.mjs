@@ -94,7 +94,6 @@ function makeConfig(overrides = {}) {
       "host-name": "Home",
       "runtime-dir": ".codex-dock-home",
       "service-env-file": "/tmp/codex-client-host-service-test/service.env",
-      "codex-bin": "/usr/local/bin/codex",
       "node-bin": "/usr/bin/node",
       "network-profile": "lan",
       "public-host": "home.local",
@@ -103,22 +102,19 @@ function makeConfig(overrides = {}) {
   });
 }
 
-test("macOS render emits launchd services with raw app-server loopback by default", () => {
+test("macOS render emits a single relay launchd service by default", () => {
   const config = makeConfig({ platform: "macos" });
   const files = renderHostServices(config);
-  const appServer = files.find((file) => file.role === "raw-app-server");
   const relay = files.find((file) => file.role === "dock-relay");
 
-  assert.equal(files.length, 2);
-  assert.equal(appServer.serviceManager, "launchd");
+  assert.equal(files.length, 1);
   assert.equal(relay.serviceManager, "launchd");
-  assert.equal(config.appServer.listenURL, "ws://127.0.0.1:4500");
-  assert.match(appServer.path, /com\.aelaguiz\.codex-dock\.app-server\.plist$/);
-  assert.match(appServer.contents, /<string>app-server<\/string>/);
-  assert.match(appServer.contents, /<string>ws:\/\/127\.0\.0\.1:4500<\/string>/);
-  assert.match(appServer.contents, /<string>capability-token<\/string>/);
-  assert.match(relay.contents, /<string>--history-url<\/string>/);
-  assert.match(relay.contents, /<string>ws:\/\/127\.0\.0\.1:4500\/<\/string>/);
+  assert.equal(files.some((file) => file.role === "raw-app-server"), false);
+  assert.equal("appServer" in config, false);
+  assert.match(relay.path, /com\.aelaguiz\.codex-dock\.relay\.plist$/);
+  assert.equal(relay.contents.includes("app-server"), false);
+  assert.equal(relay.contents.includes("--history-url"), false);
+  assert.equal(relay.contents.includes("--history-auth-token-file"), false);
   assert.match(relay.contents, /<string>--phone-auth<\/string>/);
   assert.match(relay.contents, /<string>none<\/string>/);
   assert.match(relay.contents, /<string>--host-id<\/string>/);
@@ -131,18 +127,17 @@ test("macOS render emits launchd services with raw app-server loopback by defaul
   assert.match(relay.contents, /<string>\/tmp\/codex-client-host-service-test\/\.codex-dock-home\/relay-state\.sqlite<\/string>/);
 });
 
-test("render can point both services at an explicit Codex home", () => {
+test("render can point the relay at an explicit Codex home", () => {
   const config = makeConfig({
     options: {
       "codex-home": "/tmp/codex-client/isolated-home",
     },
   });
   const files = renderHostServices(config);
-  const appServer = files.find((file) => file.role === "raw-app-server");
   const relay = files.find((file) => file.role === "dock-relay");
 
+  assert.equal(files.length, 1);
   assert.equal(config.codexHome, "/tmp/codex-client/isolated-home");
-  assert.match(appServer.contents, /<key>CODEX_HOME<\/key>\n    <string>\/tmp\/codex-client\/isolated-home<\/string>/);
   assert.match(relay.contents, /<key>CODEX_HOME<\/key>\n    <string>\/tmp\/codex-client\/isolated-home<\/string>/);
   assert.equal(config.relay.stateDatabasePath, "/tmp/codex-client-host-service-test/.codex-dock-home/relay-state.sqlite");
 });
@@ -160,7 +155,7 @@ test("render can isolate relay state under an explicit database path", () => {
   assert.match(relay.contents, /<string>\/tmp\/codex-client\/isolated-service\/relay-state\.sqlite<\/string>/);
 });
 
-test("Linux render emits systemd user services without requiring systemd to run", () => {
+test("Linux render emits one systemd user relay service without requiring systemd to run", () => {
   const config = makeConfig({
     platform: "linux",
     options: {
@@ -169,23 +164,21 @@ test("Linux render emits systemd user services without requiring systemd to run"
     },
   });
   const files = renderHostServices(config);
-  const appServer = files.find((file) => file.role === "raw-app-server");
   const relay = files.find((file) => file.role === "dock-relay");
 
   assert.equal(config.serviceManager, "systemd-user");
-  assert.equal(appServer.path.endsWith("codex-dock-app-server.service"), true);
+  assert.equal(files.length, 1);
   assert.equal(relay.path.endsWith("codex-dock-relay.service"), true);
-  assert.match(appServer.contents, /\[Service\]/);
-  assert.match(appServer.contents, /ExecStart=\/usr\/local\/bin\/codex app-server --listen ws:\/\/127\.0\.0\.1:4500/);
-  assert.match(relay.contents, /After=codex-dock-app-server\.service/);
-  assert.match(relay.contents, /--history-auth-token-file/);
+  assert.match(relay.contents, /\[Service\]/);
+  assert.equal(relay.contents.includes("codex-dock-app-server.service"), false);
+  assert.equal(relay.contents.includes("--history-auth-token-file"), false);
+  assert.equal(relay.contents.includes("--history-url"), false);
   assert.match(relay.contents, /Restart=always/);
 });
 
 test("app-config output is app-facing and non-secret", () => {
   const config = makeConfig({
     options: {
-      "raw-token-file": "/tmp/secret/app-server.token",
       "service-env-file": "/tmp/secret/service.env",
       "relay-public-url": "ws://home.local:4510",
       "phone-auth": "none",
@@ -313,7 +306,7 @@ test("dry-run status does not pretend services are installed or ready", () => {
   assert.equal(text.includes("OPENAI_API_KEY"), false);
 });
 
-test("install writes service files creates a token and calls launchd through an injected runner", async () => {
+test("install writes only relay service files and calls launchd through an injected runner", async () => {
   const cwd = tempDir();
   fs.writeFileSync(path.join(cwd, ".env"), "OPENAI_API_KEY=sk-testtesttesttesttest\n");
   const runner = fakeRunner();
@@ -334,15 +327,9 @@ test("install writes service files creates a token and calls launchd through an 
   ], output.io, { cwd, platform: "macos", uid: 501, runCommand: runner.runCommand });
 
   const parsed = JSON.parse(output.stdout());
-  const tokenPath = path.join(cwd, ".codex-dock-test", "app-server.token");
-  const tokenText = fs.readFileSync(tokenPath, "utf8").trim();
-  const mode = fs.statSync(tokenPath).mode & 0o777;
 
   assert.equal(parsed.status, "installed");
-  assert.equal(parsed.appServerAuth.created, true);
-  assert.equal(mode, 0o600);
-  assert.equal(tokenText.length > 20, true);
-  assert.equal(output.stdout().includes(tokenText), false);
+  assert.equal("appServerAuth" in parsed, false);
   assert.equal(output.stdout().includes("app-server.token"), false);
   assert.match(fs.readFileSync(path.join(cwd, ".codex-dock-test", "service.env"), "utf8"), /OPENAI_API_KEY=sk-testtesttesttesttest/);
   assert.match(fs.readFileSync(path.join(cwd, ".codex-dock-test", "service.env"), "utf8"), /CODEX_DOCK_HOSTS=home\.local:4510/);
@@ -353,11 +340,10 @@ test("install writes service files creates a token and calls launchd through an 
   assert.equal(generatedHostEnv.includes("CODEX_DOCK_HOST_HOME_AUTH_MODE"), false);
   assert.equal(generatedHostEnv.includes("CODEX_DOCK_PHONE_REACHABLE_APP_SERVER_WS"), false);
   assert.equal(generatedHostEnv.includes("OPENAI_API_KEY"), false);
-  assert.equal(fs.existsSync(path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.app-server.plist")), true);
+  assert.equal(fs.existsSync(path.join(cwd, ".codex-dock-test", "app-server.token")), false);
+  assert.equal(fs.existsSync(path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.app-server.plist")), false);
+  assert.equal(fs.existsSync(path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.relay.plist")), true);
   assert.deepEqual(runner.calls.map((call) => [call.command, call.args[0], call.args[1]]), [
-    ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.app-server"],
-    ["launchctl", "bootout", "gui/501/com.aelaguiz.codex-dock.app-server"],
-    ["launchctl", "bootstrap", "gui/501"],
     ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.relay"],
     ["launchctl", "bootout", "gui/501/com.aelaguiz.codex-dock.relay"],
     ["launchctl", "bootstrap", "gui/501"],
@@ -450,12 +436,8 @@ test("install rejects stale raw app-server endpoint in app-facing host env", asy
 
 test("install reuses loaded launchd services when they already point at rendered paths", async () => {
   const cwd = tempDir();
-  const appServerPath = path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.app-server.plist");
   const relayPath = path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.relay.plist");
   const runner = fakeRunner((command, args) => {
-    if (command === "launchctl" && args[0] === "print" && args[1].includes("app-server")) {
-      return { exitCode: 0, stdout: `path = ${appServerPath}\nstate = running\n`, stderr: "" };
-    }
     if (command === "launchctl" && args[0] === "print" && args[1].includes("relay")) {
       return { exitCode: 0, stdout: `path = ${relayPath}\nstate = running\n`, stderr: "" };
     }
@@ -477,16 +459,12 @@ test("install reuses loaded launchd services when they already point at rendered
   ], captureIO().io, { cwd, platform: "macos", uid: 501, runCommand: runner.runCommand });
 
   assert.deepEqual(runner.calls.map((call) => [call.command, call.args[0], call.args[1]]), [
-    ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.app-server"],
     ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.relay"],
   ]);
 });
 
-test("install reuses an existing token and systemd install does not start services", async () => {
+test("systemd install links and enables only the relay service without starting it", async () => {
   const cwd = tempDir();
-  const tokenPath = path.join(cwd, ".codex-dock-test", "app-server.token");
-  fs.mkdirSync(path.dirname(tokenPath), { recursive: true });
-  fs.writeFileSync(tokenPath, "existing-token\n", { mode: 0o644 });
   const runner = fakeRunner();
   const output = captureIO();
 
@@ -505,24 +483,22 @@ test("install reuses an existing token and systemd install does not start servic
   ], output.io, { cwd, platform: "linux", runCommand: runner.runCommand });
 
   const parsed = JSON.parse(output.stdout());
-  const mode = fs.statSync(tokenPath).mode & 0o777;
 
   assert.equal(parsed.status, "installed");
-  assert.equal(parsed.appServerAuth.created, false);
-  assert.equal(fs.readFileSync(tokenPath, "utf8"), "existing-token\n");
-  assert.equal(mode, 0o600);
+  assert.equal("appServerAuth" in parsed, false);
+  assert.equal(fs.existsSync(path.join(cwd, ".codex-dock-test", "app-server.token")), false);
   assert.deepEqual(runner.calls.map((call) => call.args.slice(0, 3)), [
     ["--user", "link", "--force"],
     ["--user", "daemon-reload"],
-    ["--user", "enable", "codex-dock-app-server.service"],
+    ["--user", "enable", "codex-dock-relay.service"],
   ]);
-  assert.equal(runner.calls[0].args.includes(path.join(cwd, ".codex-dock-test", "services", "codex-dock-app-server.service")), true);
+  assert.equal(runner.calls[0].args.includes(path.join(cwd, ".codex-dock-test", "services", "codex-dock-app-server.service")), false);
   assert.equal(runner.calls[0].args.includes(path.join(cwd, ".codex-dock-test", "services", "codex-dock-relay.service")), true);
   assert.equal(JSON.stringify(runner.calls).includes("--now"), false);
   assert.equal(JSON.stringify(runner.calls).includes('"start"'), false);
 });
 
-test("systemd start and stop respect app-server before relay dependency order", async () => {
+test("systemd start and stop target only the relay service", async () => {
   const cwd = tempDir();
   const startRunner = fakeRunner();
   const stopRunner = fakeRunner();
@@ -556,12 +532,10 @@ test("systemd start and stop respect app-server before relay dependency order", 
   ], captureIO().io, { cwd, platform: "linux", runCommand: stopRunner.runCommand });
 
   assert.deepEqual(startRunner.calls.map((call) => call.args.slice(0, 3)), [
-    ["--user", "start", "codex-dock-app-server.service"],
     ["--user", "start", "codex-dock-relay.service"],
   ]);
   assert.deepEqual(stopRunner.calls.map((call) => call.args.slice(0, 3)), [
     ["--user", "stop", "codex-dock-relay.service"],
-    ["--user", "stop", "codex-dock-app-server.service"],
   ]);
 });
 
@@ -569,9 +543,7 @@ test("macOS start reuses loaded launchd services without kickstarting them", asy
   const cwd = tempDir();
   const runner = fakeRunner((command, args) => {
     if (command === "launchctl" && args[0] === "print") {
-      const servicePath = args[1].endsWith(".app-server")
-        ? path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.app-server.plist")
-        : path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.relay.plist");
+      const servicePath = path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.relay.plist");
       return { exitCode: 0, stdout: `path = ${servicePath}\nstate = running\n`, stderr: "" };
     }
     return { exitCode: 0, stdout: "", stderr: "" };
@@ -592,7 +564,6 @@ test("macOS start reuses loaded launchd services without kickstarting them", asy
   ], captureIO().io, { cwd, platform: "macos", uid: 501, runCommand: runner.runCommand });
 
   assert.deepEqual(runner.calls.map((call) => [call.command, call.args[0], call.args[1]]), [
-    ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.app-server"],
     ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.relay"],
   ]);
 });
@@ -601,9 +572,7 @@ test("macOS start re-bootstraps loaded launchd services that are not running", a
   const cwd = tempDir();
   const runner = fakeRunner((command, args) => {
     if (command === "launchctl" && args[0] === "print") {
-      const servicePath = args[1].endsWith(".app-server")
-        ? path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.app-server.plist")
-        : path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.relay.plist");
+      const servicePath = path.join(cwd, ".codex-dock-test", "services", "com.aelaguiz.codex-dock.relay.plist");
       return { exitCode: 0, stdout: `path = ${servicePath}\nstate = waiting\n`, stderr: "" };
     }
     return { exitCode: 0, stdout: "", stderr: "" };
@@ -624,10 +593,6 @@ test("macOS start re-bootstraps loaded launchd services that are not running", a
   ], captureIO().io, { cwd, platform: "macos", uid: 501, runCommand: runner.runCommand });
 
   assert.deepEqual(runner.calls.map((call) => [call.command, call.args[0], call.args[1]]), [
-    ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.app-server"],
-    ["launchctl", "bootout", "gui/501/com.aelaguiz.codex-dock.app-server"],
-    ["launchctl", "bootstrap", "gui/501"],
-    ["launchctl", "kickstart", "gui/501/com.aelaguiz.codex-dock.app-server"],
     ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.relay"],
     ["launchctl", "bootout", "gui/501/com.aelaguiz.codex-dock.relay"],
     ["launchctl", "bootstrap", "gui/501"],
@@ -695,7 +660,7 @@ test("service-manager failures are redacted and child environments are secret-fr
 test("status checks systemd services and local health without leaking token output", async () => {
   const runner = fakeRunner((command, args) => {
     assert.equal(command, "systemctl");
-    if (args.includes("codex-dock-app-server.service") || args.includes("codex-dock-relay.service")) {
+    if (args.includes("codex-dock-relay.service")) {
       return { exitCode: 0, stdout: "active\n", stderr: "--ws-token-file /tmp/secret/app-server.token" };
     }
     return { exitCode: 1, stdout: "inactive\n", stderr: "missing token /tmp/secret/app-server.token" };
@@ -723,9 +688,21 @@ test("status checks systemd services and local health without leaking token outp
       statusCode: 200,
       body: url.includes("statusz") ? {
         ok: true,
-        history: {
-          url: "ws://user:pass@127.0.0.1:4500?token=secret",
-          lastHealth: { ok: true, status: "up" },
+        appServerRegistry: {
+          ok: true,
+          status: "ready",
+          history: {
+            url: "unix://<socket>",
+            authConfigured: false,
+          },
+          counts: {
+            endpoints: 1,
+            liveEndpoints: 2,
+            unreachableObserved: 1,
+            failedEndpoints: 0,
+            threadOwners: 4,
+            privateOwners: 1,
+          },
         },
         headers: { cookie: "sid=abc123", "set-cookie": "sessionid=def456" },
         params: { text: "private user request" },
@@ -740,13 +717,14 @@ test("status checks systemd services and local health without leaking token outp
   const parsed = JSON.parse(output.stdout());
   const text = output.stdout();
   assert.equal(parsed.status, "ready");
-  assert.equal(parsed.services.length, 2);
-  assert.equal(parsed.health.length, 4);
+  assert.equal(parsed.services.length, 1);
+  assert.equal(parsed.services[0].role, "dock-relay");
+  assert.equal(parsed.health.length, 3);
   assert.equal(text.includes("app-server.token"), false);
   assert.equal(text.includes("user:pass"), false);
   assert.equal(text.includes("token=secret"), false);
   assertNoForbiddenSecrets(text);
-  assert.equal(parsed.health[2].body, "<redacted-payload>");
+  assert.equal(parsed.health[1].body, "<redacted-payload>");
 });
 
 test("status and doctor return nonzero codes when services are not ready", async () => {
@@ -785,7 +763,7 @@ test("logs and doctor redact service-manager and service output", async () => {
   const cwd = tempDir();
   const logDir = path.join(cwd, ".codex-dock-test", "logs");
   fs.mkdirSync(logDir, { recursive: true });
-  fs.writeFileSync(path.join(logDir, "app-server.log"), `Bearer app-server-secret-token\ntranscript private transcript\n${secretLogFixture}\n`);
+  fs.writeFileSync(path.join(logDir, "dock-relay.log"), `Bearer app-server-secret-token\ntranscript private transcript\n${secretLogFixture}\n`);
   fs.writeFileSync(path.join(logDir, "dock-relay.err.log"), `OPENAI_API_KEY=plain-secret-token\n${secretLogFixture}\n`);
   const output = captureIO();
 
@@ -834,7 +812,7 @@ test("macOS logs read bounded tail bytes from large service logs", async () => {
   const cwd = tempDir();
   const logDir = path.join(cwd, ".codex-dock-test", "logs");
   fs.mkdirSync(logDir, { recursive: true });
-  fs.writeFileSync(path.join(logDir, "app-server.log"), `old-line\n${"x".repeat(1_100_000)}\nrecent-line\n`);
+  fs.writeFileSync(path.join(logDir, "dock-relay.log"), `old-line\n${"x".repeat(1_100_000)}\nrecent-line\n`);
   fs.writeFileSync(path.join(logDir, "dock-relay.err.log"), `old-relay-line\n${"y".repeat(1_100_000)}\nrecent-relay-line\n`);
   const output = captureIO();
 
@@ -880,7 +858,7 @@ test("linux logs redact JSON-RPC payloads cookies and provider secrets", async (
   const text = output.stdout();
   assertNoForbiddenSecrets(text);
   assert.equal(text.includes("<redacted-payload>"), true);
-  assert.equal(runner.calls.length, 2);
+  assert.equal(runner.calls.length, 1);
 });
 
 test("CLI rejects missing option values and unknown options", async () => {

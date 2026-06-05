@@ -5,6 +5,7 @@ import { WebSocketServer } from "ws";
 
 import { startServer } from "./dock-relay.mjs";
 import {
+  appServerRegistryFixtureConfig,
   closeWebSocketServer,
   onceListening,
 } from "./dock-relay-test-helpers.mjs";
@@ -295,14 +296,15 @@ async function main() {
     listenHost: "127.0.0.1",
     port: 0,
     phoneAuth: "none",
-    historyBearerToken: "test-token",
-    historyUrl: appServer.url,
-    liveEndpoints: [],
+    ...appServerRegistryFixtureConfig({
+      historyUrl: appServer.url,
+      historyBearerToken: "test-token",
+      codexHome: "/tmp/codex-client-user-message-proof",
+    }),
     advertiseBonjour: false,
     relayStateDatabasePath: ":memory:",
     hostId: hostID,
     hostName: "User Message Latency Fixture",
-    codexHome: "/tmp/codex-client-user-message-proof",
   };
   const relay = startServer(relayConfig);
   await relay.listening;

@@ -29,7 +29,6 @@ import { isHumanStartedThread } from "./dock-relay-human-thread-filter.mjs";
 import {
   canonicalizeThreadRows,
   collectLiveRows,
-  configuredLiveEndpointsForConfig,
   drainThreadListRows,
   enrichHumanStartedRows,
   mergeHumanStartedRowsWithSupplements,
@@ -112,7 +111,7 @@ function cardWithLiveStatusOverlay(card, liveRow) {
       ?? liveRow.updatedAt
       ?? liveRow.createdAt
   );
-  const activityAtMs = liveActivityAtMs > 0 ? liveActivityAtMs : Number(card.activityAtMs || 0);
+  const activityAtMs = Math.max(Number(card.activityAtMs || 0), liveActivityAtMs);
   return {
     ...card,
     backendSessionID: liveRow.sessionId || card.backendSessionID,
@@ -583,7 +582,11 @@ class RelayStateEngine {
 
   async refreshLiveLeases() {
     const host = publicHostFromConfig(this.config);
-    const endpoints = configuredLiveEndpointsForConfig(this.config, { includeHistory: true });
+    if (!this.config.appServerRegistry) {
+      throw new Error("appServerRegistry is required for state live lease refresh");
+    }
+    await this.config.appServerRegistry.ensureReady("state_live_leases");
+    const endpoints = this.config.appServerRegistry.liveEndpoints();
     const live = await collectLiveRows({
       logger: this.logger,
       pool: this.config.upstreamPool || null,
@@ -606,6 +609,7 @@ class RelayStateEngine {
       if (lease) {
         this.store.upsertLiveLease(host.id, lease);
         acceptedRows.push(row);
+        this.config.appServerRegistry?.recordLiveRows(endpoint, [row]);
       }
     }
     this.store.deleteRejectedLiveLeases(host.id);

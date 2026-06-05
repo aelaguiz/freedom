@@ -4,6 +4,7 @@ import { WebSocketServer } from "ws";
 
 import { startServer } from "./dock-relay.mjs";
 import {
+  appServerRegistryFixtureConfig,
   closeWebSocketServer,
   jsonRpcRequest,
   onceListening,
@@ -155,14 +156,14 @@ async function withRelay(historyUrl, testFn) {
     listenHost: "127.0.0.1",
     port: 0,
     phoneAuth: "none",
-    historyBearerToken: "test-token",
-    historyUrl,
-    liveEndpoints: [],
+    ...appServerRegistryFixtureConfig({
+      historyUrl,
+      historyBearerToken: "test-token",
+    }),
     advertiseBonjour: false,
     relayStateDatabasePath: ":memory:",
     hostId: "home",
     hostName: "Home",
-    codexHome: "/tmp/codex-client-test",
   };
   const server = startServer(config);
   await server.listening;

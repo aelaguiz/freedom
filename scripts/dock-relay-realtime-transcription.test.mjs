@@ -7,6 +7,7 @@ import { startServer } from "./dock-relay.mjs";
 import { createRelayLogger } from "./dock-relay-logger.mjs";
 import { RealtimeTranscriptionManager } from "./dock-relay-realtime-transcription.mjs";
 import {
+  appServerRegistryFixtureConfig,
   closeWebSocketServer,
   jsonRpcRequest,
   onceListening,
@@ -91,8 +92,10 @@ async function startRealtimeRelay(config = {}) {
     listenHost: "127.0.0.1",
     port: 0,
     phoneAuth: "none",
-    historyUrl: "ws://127.0.0.1:1",
-    historyBearerToken: "history-token",
+    ...appServerRegistryFixtureConfig({
+      historyUrl: "ws://127.0.0.1:1",
+      historyBearerToken: "history-token",
+    }),
     advertiseBonjour: false,
     openAIAPIKey: "relay-openai-key",
     openAIRealtimeTranscriptionEndpoint: "wss://api.openai.com/v1/realtime",
@@ -401,8 +404,10 @@ test("realtime transcription rejects phone provider config and invalid chunks", 
     listenHost: "127.0.0.1",
     port: 0,
     phoneAuth: "none",
-    historyUrl: "ws://127.0.0.1:1",
-    historyBearerToken: "history-token",
+    ...appServerRegistryFixtureConfig({
+      historyUrl: "ws://127.0.0.1:1",
+      historyBearerToken: "history-token",
+    }),
     advertiseBonjour: false,
   });
   await missingKeyRelay.listening;
@@ -442,8 +447,10 @@ test("realtime transcription rejects phone provider config and invalid chunks", 
     listenHost: "127.0.0.1",
     port: 0,
     phoneAuth: "none",
-    historyUrl: "ws://127.0.0.1:1",
-    historyBearerToken: "history-token",
+    ...appServerRegistryFixtureConfig({
+      historyUrl: "ws://127.0.0.1:1",
+      historyBearerToken: "history-token",
+    }),
     advertiseBonjour: false,
     openAIAPIKey: "relay-openai-key",
     openAIRealtimeTranscriptionEndpoint: "ws://127.0.0.1:1/v1/realtime",

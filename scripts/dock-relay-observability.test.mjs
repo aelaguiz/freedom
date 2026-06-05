@@ -15,6 +15,7 @@ import {
 import { resolveSourceHostID, startServer } from "./dock-relay.mjs";
 import { createRelayObservability } from "./dock-relay-observability.mjs";
 import {
+  appServerRegistryFixtureConfig,
   jsonRpcRequest,
   openWebSocket,
 } from "./dock-relay-test-helpers.mjs";
@@ -37,9 +38,10 @@ async function withRelayConfig(overrides, testFn) {
     listenHost: "127.0.0.1",
     port: 0,
     phoneAuth: "none",
-    historyBearerToken: "test-token",
-    historyUrl: "ws://127.0.0.1:1/",
-    liveEndpoints: [],
+    ...appServerRegistryFixtureConfig({
+      historyUrl: "ws://127.0.0.1:1/",
+      historyBearerToken: "test-token",
+    }),
     advertiseBonjour: false,
     relayStateDatabasePath: ":memory:",
     hostId: "home",

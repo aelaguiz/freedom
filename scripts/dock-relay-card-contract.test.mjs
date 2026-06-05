@@ -4,6 +4,7 @@ import { WebSocketServer } from "ws";
 
 import { startServer } from "./dock-relay.mjs";
 import {
+  appServerRegistryFixtureConfig,
   closeWebSocketServer,
   jsonRpcRequest,
   onceListening,
@@ -219,19 +220,24 @@ async function startCanonicalActivityAppServer({
 }
 
 async function withRelay(historyUrl, testFn, overrides = {}) {
+  const {
+    liveEndpoints = [],
+    ...restOverrides
+  } = overrides;
   const config = {
     listenHost: "127.0.0.1",
     port: 0,
     phoneAuth: "none",
-    historyBearerToken: "test-token",
-    historyUrl,
-    liveEndpoints: overrides.liveEndpoints || [],
+    ...appServerRegistryFixtureConfig({
+      historyUrl,
+      historyBearerToken: "test-token",
+      liveEndpoints,
+    }),
     advertiseBonjour: false,
     relayStateDatabasePath: ":memory:",
     hostId: "home",
     hostName: "Home",
-    codexHome: "/tmp/codex-client-test",
-    ...overrides,
+    ...restOverrides,
   };
   const server = startServer(config);
   await server.listening;
@@ -298,7 +304,7 @@ test("thread/name/set forwards to app-server and refreshes dock card title from 
       } finally {
         ws.close();
       }
-    });
+    }, { liveEndpoints: [{ label: "canonical-live", url: appServer.url }] });
   } finally {
     await appServer.close();
   }
@@ -565,26 +571,30 @@ test("thread/detail/read is not a callable projection side door", async () => {
 test("dock/subscribe includes live-only rows absent from raw thread/list", async () => {
   const appServer = await startCanonicalActivityAppServer({ loadedThreadIDs: ["live-only"] });
   try {
-    await withRelay(appServer.url, async ({ config, wsURL }) => {
-      await config.relayStateEngine.reconcileDock({ reason: "test" });
-      const ws = await openWebSocket(wsURL);
-      try {
-        const response = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
-        assert.equal(response.error, undefined);
-        assert.equal(response.result.complete, true);
-        assert.equal(response.result.freshness.status, "fresh");
-        assert.deepEqual(response.result.rows.map((card) => card.threadID), [
-          "live-only",
-          "newer",
-          "older",
-        ]);
-        const liveOnly = response.result.rows.find((card) => card.threadID === "live-only");
-        assert.equal(liveOnly?.completeness, "complete");
-        assert.equal(liveOnly?.freshness, "fresh");
-      } finally {
-        ws.close();
-      }
-    });
+    await withRelay(
+      appServer.url,
+      async ({ config, wsURL }) => {
+        await config.relayStateEngine.reconcileDock({ reason: "test" });
+        const ws = await openWebSocket(wsURL);
+        try {
+          const response = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+          assert.equal(response.error, undefined);
+          assert.equal(response.result.complete, true);
+          assert.equal(response.result.freshness.status, "fresh");
+          assert.deepEqual(response.result.rows.map((card) => card.threadID), [
+            "live-only",
+            "newer",
+            "older",
+          ]);
+          const liveOnly = response.result.rows.find((card) => card.threadID === "live-only");
+          assert.equal(liveOnly?.completeness, "complete");
+          assert.equal(liveOnly?.freshness, "fresh");
+        } finally {
+          ws.close();
+        }
+      },
+      { liveEndpoints: [{ label: "canonical-live", url: appServer.url }] },
+    );
   } finally {
     await appServer.close();
   }

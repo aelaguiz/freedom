@@ -5,7 +5,6 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
   ensureDirectory,
-  ensureTokenFile,
   getJSON,
   readTailTextIfExists,
   redactValue,
@@ -21,17 +20,13 @@ import {
   DEFAULT_PHONE_AUTH,
   DEFAULT_RELAY_LISTEN_HOST,
   DOCK_RELAY_PORT as DEFAULT_RELAY_PORT,
-  RAW_APP_SERVER_LISTEN as DEFAULT_RAW_APP_SERVER_LISTEN,
   RAW_APP_SERVER_PORT as DEFAULT_RAW_APP_SERVER_PORT,
 } from "./dock-relay-constants.mjs";
 
 const DEFAULT_RUNTIME_DIR = ".codex-dock";
-const DEFAULT_APP_SERVER_LABEL = "com.aelaguiz.codex-dock.app-server";
 const DEFAULT_RELAY_LABEL = "com.aelaguiz.codex-dock.relay";
 const VALUE_OPTIONS = new Set([
-  "app-server-label",
   "codex-home",
-  "codex-bin",
   "command",
   "format",
   "host-env-file",
@@ -42,9 +37,6 @@ const VALUE_OPTIONS = new Set([
   "phone-auth",
   "platform",
   "public-host",
-  "raw-app-server-listen",
-  "raw-token-file",
-  "relay-history-url",
   "relay-label",
   "relay-listen-host",
   "relay-port",
@@ -65,7 +57,7 @@ function usage() {
 
 Commands:
   render      Render local-sensitive launchd/systemd service file contents without installing them.
-  install     Write service files, create/reuse the raw app-server token, and enable services.
+  install     Write service files and enable the Dock relay.
   start       Start already installed services.
   stop        Stop services.
   restart     Restart services.
@@ -79,9 +71,7 @@ Common options:
 	  --host-name <name>
 	  --runtime-dir <path>
 	  --service-env-file <path>
-	  --codex-bin <path>
 	  --node-bin <path>
-  --raw-app-server-listen <ws-url>
   --relay-listen-host <host>
   --relay-port <port>
   --relay-public-url <ws-url>
@@ -258,17 +248,6 @@ function createHostServiceConfig({
   const hostName = String(optionValue(options, "host-name", env, "CODEX_DOCK_REAL_HOST_NAME", hostID)).trim();
   const codexHomeValue = optionValue(options, "codex-home", env, "CODEX_HOME", null);
   const codexHome = codexHomeValue ? path.resolve(cwd, String(codexHomeValue)) : null;
-  const rawAppServerListen = validateWebSocketURL(
-    optionValue(options, "raw-app-server-listen", env, "APP_SERVER_LISTEN", DEFAULT_RAW_APP_SERVER_LISTEN),
-    "raw app-server listen URL",
-    { cliListen: true },
-  );
-  const rawAppServerURL = new URL(rawAppServerListen);
-  const rawAppServerPort = rawAppServerURL.port || DEFAULT_RAW_APP_SERVER_PORT;
-  const relayHistoryURL = validateWebSocketURL(
-    optionValue(options, "relay-history-url", env, "DOCK_RELAY_HISTORY_WS", `ws://127.0.0.1:${rawAppServerPort}`),
-    "relay history URL",
-  );
   const networkProfile = optionValue(options, "network-profile", env, "CODEX_DOCK_NETWORK_PROFILE", "lan");
   const relayPublicURL = resolveRelayPublicURL({
     networkProfile,
@@ -283,12 +262,7 @@ function createHostServiceConfig({
     throw new Error("phone auth must be none or bearer");
   }
 
-  const appServerLabel = String(optionValue(options, "app-server-label", env, "APP_SERVER_LABEL", DEFAULT_APP_SERVER_LABEL));
   const relayLabel = String(optionValue(options, "relay-label", env, "DOCK_RELAY_LABEL", DEFAULT_RELAY_LABEL));
-  const tokenFile = path.resolve(
-    cwd,
-    optionValue(options, "raw-token-file", env, "CODEX_DOCK_APP_SERVER_BEARER_TOKEN_FILE", path.join(runtimeDir, "app-server.token")),
-  );
   const envFile = path.resolve(
     cwd,
     optionValue(options, "service-env-file", env, "CODEX_DOCK_SERVICE_ENV_FILE", path.join(runtimeDir, "service.env")),
@@ -318,25 +292,13 @@ function createHostServiceConfig({
     logsDir,
     servicesDir,
     binaries: {
-      codex: optionValue(options, "codex-bin", env, "CODEX_BIN", "codex"),
       node: optionValue(options, "node-bin", env, "NODE_BIN", process.execPath),
-    },
-    appServer: {
-      label: appServerLabel,
-      listenURL: rawAppServerListen,
-      tokenFile,
-      stdoutLog: path.join(logsDir, "app-server.log"),
-      stderrLog: path.join(logsDir, "app-server.err.log"),
-      servicePath: normalizedPlatform === "macos"
-        ? path.join(servicesDir, `${appServerLabel}.plist`)
-        : path.join(servicesDir, "codex-dock-app-server.service"),
     },
     relay: {
       label: relayLabel,
       script: relayScript,
       listenHost: optionValue(options, "relay-listen-host", env, "DOCK_RELAY_LISTEN_HOST", DEFAULT_RELAY_LISTEN_HOST),
       port: relayPort,
-      historyURL: relayHistoryURL,
       publicURL: relayPublicURL,
       appEndpoint,
       phoneAuth,
@@ -454,19 +416,6 @@ function commonEnvironment(config = {}) {
   return environment;
 }
 
-function appServerArgs(config) {
-  return [
-    config.binaries.codex,
-    "app-server",
-    "--listen",
-    config.appServer.listenURL,
-    "--ws-auth",
-    "capability-token",
-    "--ws-token-file",
-    config.appServer.tokenFile,
-  ];
-}
-
 function relayArgs(config) {
   return [
     config.binaries.node,
@@ -489,10 +438,6 @@ function relayArgs(config) {
     config.relay.appEndpoint.serialized,
     "--relay-state-db",
     config.relay.stateDatabasePath,
-    "--history-url",
-    config.relay.historyURL,
-    "--history-auth-token-file",
-    config.appServer.tokenFile,
   ];
 }
 
@@ -500,19 +445,6 @@ function renderHostServices(config) {
   const environment = commonEnvironment(config);
   if (config.platform === "macos") {
     return [
-      {
-        role: "raw-app-server",
-        serviceManager: "launchd",
-        path: config.appServer.servicePath,
-        contents: launchdPlist({
-          label: config.appServer.label,
-          programArguments: appServerArgs(config),
-          workingDirectory: config.cwd,
-          environment,
-          stdoutPath: config.appServer.stdoutLog,
-          stderrPath: config.appServer.stderrLog,
-        }),
-      },
       {
         role: "dock-relay",
         serviceManager: "launchd",
@@ -531,25 +463,11 @@ function renderHostServices(config) {
 
   return [
     {
-      role: "raw-app-server",
-      serviceManager: "systemd-user",
-      path: config.appServer.servicePath,
-      contents: systemdUnit({
-        description: "Codex Dock raw app-server",
-        programArguments: appServerArgs(config),
-        workingDirectory: config.cwd,
-        environment,
-        stdoutPath: config.appServer.stdoutLog,
-        stderrPath: config.appServer.stderrLog,
-      }),
-    },
-    {
       role: "dock-relay",
       serviceManager: "systemd-user",
       path: config.relay.servicePath,
       contents: systemdUnit({
         description: "Codex Dock relay",
-        after: ["codex-dock-app-server.service"],
         programArguments: relayArgs(config),
         workingDirectory: config.cwd,
         environment,
@@ -562,14 +480,6 @@ function renderHostServices(config) {
 
 function serviceEntries(config) {
   return [
-    {
-      role: "raw-app-server",
-      label: config.appServer.label,
-      unit: "codex-dock-app-server.service",
-      path: config.appServer.servicePath,
-      stdoutLog: config.appServer.stdoutLog,
-      stderrLog: config.appServer.stderrLog,
-    },
     {
       role: "dock-relay",
       label: config.relay.label,
@@ -616,11 +526,6 @@ function dryRunStatus(config) {
       port: config.relay.appEndpoint.port,
     },
     renderedServices: [
-      {
-        role: "raw-app-server",
-        serviceManager: config.serviceManager,
-        path: config.appServer.servicePath,
-      },
       {
         role: "dock-relay",
         serviceManager: config.serviceManager,
@@ -788,14 +693,12 @@ function writeRenderedServiceFiles(config) {
 }
 
 async function installHostServices(config, runtime = {}) {
-  const token = ensureTokenFile(config.appServer.tokenFile);
   const envFiles = writeGeneratedEnvFiles(config, runtime);
   const files = writeRenderedServiceFiles(config);
   const commands = await runServiceManagerAction(config, "install", runtime);
   return redactValue({
     version: 1,
     status: "installed",
-    appServerAuth: { created: token.created },
     serviceManager: config.serviceManager,
     envFiles,
     files,
@@ -844,7 +747,7 @@ async function checkRelayStatusz(name, url, runtime = {}) {
   try {
     const result = await (runtime.getJSON || getJSON)(url);
     const snapshotOK = result.body?.ok === true;
-    const historyOK = result.body?.history?.lastHealth?.ok === true;
+    const registryOK = result.body?.appServerRegistry?.ok === true;
     const appCriticalFailures = Array.isArray(result.body?.appCriticalFailures)
       ? result.body.appCriticalFailures.map((route) => ({
         route: route.route,
@@ -856,23 +759,22 @@ async function checkRelayStatusz(name, url, runtime = {}) {
     return redactValue({
       name,
       url,
-      ok: result.ok && snapshotOK && historyOK && routesOK,
+      ok: result.ok && snapshotOK && registryOK && routesOK,
       statusCode: result.statusCode,
       snapshotOK,
-      historyOK,
+      registryOK,
       routesOK,
       appCriticalFailures,
       body: result.body,
     });
   } catch (error) {
-    return redactValue({ name, url, ok: false, snapshotOK: false, historyOK: false, routesOK: false, error });
+    return redactValue({ name, url, ok: false, snapshotOK: false, registryOK: false, routesOK: false, error });
   }
 }
 
 async function statusHostServices(config, runtime = {}) {
   const services = await serviceState(config, runtime);
   const health = [
-    await checkHealth("raw-app-server-readyz", httpURLForWebSocket(config.appServer.listenURL, "/readyz"), runtime),
     await checkHealth("relay-readyz", localRelayHTTPURL(config, "/readyz"), runtime),
     await checkRelayStatusz("relay-statusz", localRelayHTTPURL(config, "/statusz"), runtime),
   ];

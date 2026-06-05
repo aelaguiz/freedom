@@ -14,7 +14,7 @@ import {
 import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
 import { LiveStatusCache, SessionRouter } from "./dock-relay-live-status-cache.mjs";
 import { ThreadSummaryCache } from "./dock-relay-thread-summary-cache.mjs";
-import { HistoryClient, UpstreamConnectionPool } from "./dock-relay-upstream-pool.mjs";
+import { UpstreamConnectionPool } from "./dock-relay-upstream-pool.mjs";
 import {
   classifyThreadOrigin,
   humanThreadRejectedError,
@@ -47,32 +47,50 @@ function upstreamPoolForConfig(config) {
 }
 
 function historyClientForConfig(config) {
-  if (!config.historyClient) {
-    config.historyClient = new HistoryClient({
-      pool: upstreamPoolForConfig(config),
-      url: config.historyUrl,
-      bearerToken: config.historyBearerToken,
-      logger: relayLogger(config),
-      initializer: initializeClient,
-      onNotification: upstreamNotificationCallback(config, {
-        label: "history",
-        url: config.historyUrl,
-      }),
-    });
+  if (!config.appServerRegistry) {
+    throw new Error("appServerRegistry is required for relay app-server routing");
   }
-  return config.historyClient;
+  if (!config.registryHistoryClient) {
+    config.registryHistoryClient = {
+      request: async (method, params = undefined) => {
+        await config.appServerRegistry.ensureReady("history_request");
+        const endpoint = config.appServerRegistry.historyEndpoint({ required: true });
+        return upstreamPoolForConfig(config).request(endpoint, method, params, {
+          label: "history",
+          initializer: initializeClient,
+          onNotification: upstreamNotificationCallback(config, {
+            label: endpoint.label || "history",
+            url: endpoint.url,
+          }),
+        });
+      },
+    };
+  }
+  return config.registryHistoryClient;
 }
 
 function liveStatusCacheForConfig(config) {
   if (!config.liveStatusCache) {
     config.liveStatusCache = new LiveStatusCache({
-      collectLiveRows: () => collectLiveRows({
-        logger: relayLogger(config),
-        endpoints: configuredLiveEndpointsForConfig(config, { includeHistory: false }),
-        excludeURLs: [],
-        pool: upstreamPoolForConfig(config),
-        onNotification: config.upstreamNotificationHandler || null,
-      }),
+      collectLiveRows: async () => {
+        if (!config.appServerRegistry) {
+          throw new Error("appServerRegistry is required for live app-server discovery");
+        }
+        await config.appServerRegistry.ensureReady("live_status");
+        const live = await collectLiveRows({
+          logger: relayLogger(config),
+          endpoints: config.appServerRegistry.liveEndpoints(),
+          excludeURLs: [],
+          pool: upstreamPoolForConfig(config),
+          onNotification: config.upstreamNotificationHandler || null,
+        });
+        for (const row of live.rows || []) {
+          if (row?.dockRelaySource) {
+            config.appServerRegistry.recordLiveRows(row.dockRelaySource, [row]);
+          }
+        }
+        return live;
+      },
       logger: relayLogger(config),
       statusTracker: config.statusTracker || null,
       refreshIntervalMs: config.liveStatusRefreshIntervalMs,
@@ -86,10 +104,7 @@ function sessionRouterForConfig(config) {
   if (!config.sessionRouter) {
     config.sessionRouter = new SessionRouter({
       liveStatusCache: liveStatusCacheForConfig(config),
-      historyEndpoint: {
-        url: config.historyUrl,
-        bearerToken: config.historyBearerToken,
-      },
+      appServerRegistry: config.appServerRegistry,
     });
   }
   return config.sessionRouter;
@@ -105,39 +120,11 @@ function threadSummaryCacheForConfig(config) {
   return config.threadSummaryCache;
 }
 
-function configuredLiveEndpointsForConfig(config, { includeHistory = false } = {}) {
-  const endpoints = [];
-  if (includeHistory && config.historyUrl) {
-    endpoints.push({
-      label: "history",
-      url: config.historyUrl,
-      bearerToken: config.historyBearerToken || null,
-    });
-  }
-  for (const endpoint of config.liveEndpoints || []) {
-    if (!endpoint?.url) {
-      continue;
-    }
-    endpoints.push({
-      label: endpoint.label || endpoint.url,
-      url: endpoint.url,
-      bearerToken: endpoint.bearerToken || config.historyBearerToken || null,
-    });
-  }
-  const seen = new Set();
-  return endpoints.filter((endpoint) => {
-    const key = canonicalURLString(endpoint.url);
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
-
 function isHistoryEndpoint(config, endpoint) {
-  return endpoint?.url === config.historyUrl
-    && (endpoint.bearerToken || null) === (config.historyBearerToken || null);
+  if (!config.appServerRegistry) {
+    throw new Error("appServerRegistry is required for relay app-server routing");
+  }
+  return config.appServerRegistry.isHistoryEndpoint(endpoint);
 }
 
 function statusPriority(thread) {
@@ -987,15 +974,17 @@ async function aggregateThreadRead(config, params = {}) {
   if (!params.threadId) {
     throw new Error("thread/read requires threadId");
   }
-  const liveRow = await sessionRouterForConfig(config).rowForThread(params.threadId);
-  if (liveRow) {
-    assertRouteHumanStartedThread(liveRow, params.threadId);
-    if (params.includeTurns) {
-      const result = await readThreadFromEndpoint(liveRow.dockRelaySource, params, relayLogger(config));
-      assertRouteHumanStartedThread(result?.thread, params.threadId);
-      return result;
-    }
-    return { thread: sanitizeRelayFields(liveRow) };
+  if (!config.appServerRegistry) {
+    throw new Error("appServerRegistry is required for thread/read");
+  }
+  await config.appServerRegistry.ensureReady("thread_read_route");
+  const route = config.appServerRegistry.routeForThreadMethod("thread/read", params.threadId, {
+    includeTurns: Boolean(params.includeTurns),
+  });
+  if (route.source === "live-owner") {
+    const result = await readThreadFromEndpoint(route.endpoint, params, relayLogger(config));
+    assertRouteHumanStartedThread(result?.thread, params.threadId);
+    return result;
   }
   const result = await readHistoryThread(config, params);
   assertRouteHumanStartedThread(result?.thread, params.threadId);
@@ -1007,7 +996,7 @@ async function listThreadTurns(config, params = {}) {
     throw new Error("thread/turns/list requires threadId");
   }
   await assertHumanThreadID(config, params.threadId);
-  const endpoint = await endpointForThread(config, params.threadId);
+  const endpoint = await endpointForThread(config, params.threadId, "thread/turns/list");
   if (isHistoryEndpoint(config, endpoint)) {
     return historyClientForConfig(config).request("thread/turns/list", params);
   }
@@ -1120,8 +1109,12 @@ async function canonicalizeThreadRows(config, rows = [], {
   };
 }
 
-async function endpointForThread(config, threadId) {
-  return sessionRouterForConfig(config).endpointForThread(threadId);
+async function endpointForThread(config, threadId, method = "thread/resume") {
+  if (!config.appServerRegistry) {
+    throw new Error("appServerRegistry is required for relay app-server routing");
+  }
+  await config.appServerRegistry.ensureReady("thread_route");
+  return config.appServerRegistry.routeForThreadMethod(method, threadId).endpoint;
 }
 
 async function archiveThread(config, params = {}) {
@@ -1129,7 +1122,7 @@ async function archiveThread(config, params = {}) {
     throw new Error("thread/archive requires threadId");
   }
   await assertHumanThreadID(config, params.threadId);
-  const endpoint = await endpointForThread(config, params.threadId);
+  const endpoint = await endpointForThread(config, params.threadId, "thread/archive");
   if (isHistoryEndpoint(config, endpoint)) {
     return historyClientForConfig(config).request("thread/archive", params);
   }
@@ -1148,7 +1141,7 @@ async function setThreadName(config, params = {}) {
     throw new Error("thread/name/set requires name");
   }
   await assertHumanThreadID(config, params.threadId);
-  const endpoint = await endpointForThread(config, params.threadId);
+  const endpoint = await endpointForThread(config, params.threadId, "thread/name/set");
   if (isHistoryEndpoint(config, endpoint)) {
     return historyClientForConfig(config).request("thread/name/set", params);
   }
@@ -1175,7 +1168,6 @@ export {
   attentionFlagsForServerRequest,
   canonicalizeThreadRows,
   collectLiveRows,
-  configuredLiveEndpointsForConfig,
   drainThreadListRows,
   endpointForThread,
   enrichHumanStartedRows,

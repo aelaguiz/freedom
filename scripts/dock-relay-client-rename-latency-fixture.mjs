@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 
 import { startServer } from "./dock-relay.mjs";
 import {
+  appServerRegistryFixtureConfig,
   closeWebSocketServer,
   jsonRpcRequest,
   onceListening,
@@ -456,14 +457,15 @@ async function run(options) {
     listenHost: "127.0.0.1",
     port: 0,
     phoneAuth: "none",
-    historyBearerToken: "test-token",
-    historyUrl: appServer.url,
-    liveEndpoints: [],
+    ...appServerRegistryFixtureConfig({
+      historyUrl: appServer.url,
+      historyBearerToken: "test-token",
+      codexHome: "/tmp/codex-client-rename-latency",
+    }),
     advertiseBonjour: false,
     relayStateDatabasePath: ":memory:",
     hostId: HOST_ID,
     hostName: HOST_NAME,
-    codexHome: "/tmp/codex-client-rename-latency",
   };
   const relay = startServer(relayConfig);
   let probeWs = null;

@@ -171,19 +171,28 @@ class LiveStatusCache {
 class SessionRouter {
   constructor({
     liveStatusCache,
-    historyEndpoint,
+    appServerRegistry,
   }) {
     this.liveStatusCache = liveStatusCache;
-    this.historyEndpoint = historyEndpoint;
+    this.appServerRegistry = appServerRegistry;
   }
 
   async endpointForThread(threadId) {
-    const snapshot = await this.liveStatusCache.snapshotForRouting();
-    const liveRow = humanLiveRows(snapshot.rows).find((row) => row.id === threadId);
-    return liveRow?.dockRelaySource || this.historyEndpoint;
+    if (!this.appServerRegistry) {
+      throw new Error("appServerRegistry is required for session routing");
+    }
+    await this.appServerRegistry.ensureReady("session_route");
+    return this.appServerRegistry.routeForThreadMethod("thread/resume", threadId).endpoint;
   }
 
   async rowForThread(threadId) {
+    if (!this.appServerRegistry) {
+      throw new Error("appServerRegistry is required for session routing");
+    }
+    const owner = this.appServerRegistry.ownerForThread(threadId);
+    if (owner?.row) {
+      return owner.row;
+    }
     const snapshot = await this.liveStatusCache.snapshotForRouting();
     return humanLiveRows(snapshot.rows).find((row) => row.id === threadId) || null;
   }

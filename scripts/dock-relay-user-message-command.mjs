@@ -142,7 +142,13 @@ async function submitToCodex({
       };
     }
 
-    const endpoint = await endpointForThread(config, threadId);
+    let endpoint;
+    if (config.appServerRegistry) {
+      await config.appServerRegistry.ensureReady("user_message_route");
+      endpoint = config.appServerRegistry.routeForThreadMethod(method, threadId).endpoint;
+    } else {
+      endpoint = await endpointForThread(config, threadId);
+    }
     return {
       method,
       endpointUrl: endpoint.url || null,

@@ -13,8 +13,8 @@ import {
   buildBonjourAdvertisementArgs,
   startBonjourAdvertisement,
 } from "./dock-relay-bonjour.mjs";
+import { AppServerRegistry } from "./dock-relay-app-server-registry.mjs";
 import {
-  DEFAULT_HISTORY_APP_SERVER_WS,
   DEFAULT_PHONE_AUTH,
   DEFAULT_RELAY_LISTEN_HOST,
   DOCK_RELAY_PORT,
@@ -45,7 +45,6 @@ import {
   RealtimeTranscriptionManager,
 } from "./dock-relay-realtime-transcription.mjs";
 import {
-  checkRawAppServerHealth,
   classifyRelayRequestError,
   createRelayStatusTracker,
 } from "./dock-relay-status.mjs";
@@ -111,30 +110,6 @@ function parseArgs(argv) {
     index += 1;
   }
   return result;
-}
-
-function parseLiveEndpoints(value) {
-  if (!value) {
-    return [];
-  }
-  return String(value)
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const separator = entry.indexOf("=");
-      if (separator > 0) {
-        return {
-          label: entry.slice(0, separator).trim(),
-          url: entry.slice(separator + 1).trim(),
-        };
-      }
-      return {
-        label: entry,
-        url: entry,
-      };
-    })
-    .filter((endpoint) => endpoint.url);
 }
 
 function relayLogger(config) {
@@ -1059,7 +1034,6 @@ function stableGeneratedSourceHostID(config) {
     os.platform(),
     os.userInfo?.().username || "",
     codexHome,
-    config.historyUrl || "",
   ].join("|");
   return `local-${crypto.createHash("sha256").update(input).digest("hex").slice(0, 12)}`;
 }
@@ -1092,6 +1066,25 @@ function resolveSourceHostID(config) {
   fs.mkdirSync(path.dirname(idPath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(idPath, `${generated}\n`, { mode: 0o600 });
   return generated;
+}
+
+function appServerRegistryForConfig(config) {
+  if (config.appServerRegistry) {
+    return config.appServerRegistry;
+  }
+  const fixtureHistoryEndpoints = [...(config.registryFixtureHistoryEndpoints || [])];
+  const fixtureLiveEndpoints = [...(config.registryFixtureLiveEndpoints || [])];
+  const hasFixtureConfig = fixtureHistoryEndpoints.length > 0 || fixtureLiveEndpoints.length > 0;
+
+  return new AppServerRegistry({
+    codexHome: config.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), ".codex"),
+    includeDaemonHistory: config.registryIncludeDaemonHistory ?? true,
+    fixtureHistoryEndpoints,
+    fixtureLiveEndpoints,
+    processListProvider: config.registryProcessListProvider ?? (hasFixtureConfig ? async () => [] : undefined),
+    discoveryProvider: config.registryDiscoveryProvider || null,
+    logger: relayLogger(config),
+  });
 }
 
 function startServer(config) {
@@ -1133,6 +1126,11 @@ function startServer(config) {
     logger,
     maxOpenByLabel: UPSTREAM_POOL_LIMITS,
   });
+  config.appServerRegistry = appServerRegistryForConfig(config);
+  const appServerRegistryReady = config.appServerRegistry.start().catch((error) => {
+    logger.warn("app_server_registry.start_failed", { error });
+    return null;
+  });
   config.liveStatusCache = liveStatusCacheForConfig(config);
   config.sessionRouter = sessionRouterForConfig(config);
   config.liveStatusCache.start();
@@ -1149,7 +1147,6 @@ function startServer(config) {
     hostId: config.hostId,
     listenHost: config.listenHost,
     port: config.port,
-    historyUrl: config.historyUrl,
     phoneAuth: config.phoneAuth,
     advertiseBonjour: config.advertiseBonjour !== false,
   });
@@ -1158,7 +1155,7 @@ function startServer(config) {
   const downstreamSockets = new Set();
 
   async function writeStatusResponse(response) {
-    await checkRawAppServerHealth(config, config.statusTracker);
+    await config.appServerRegistry.ensureReady("statusz");
     const runtime = runtimeSnapshot(config, sessions, downstreamSockets);
     writeJSONResponse(response, config.statusTracker.snapshot(config, runtime));
   }
@@ -1209,7 +1206,7 @@ function startServer(config) {
         routeHealth: false,
         staticConfig: {
           ok: true,
-          historyConfigured: Boolean(config.historyUrl),
+          appServerRegistryConfigured: Boolean(config.appServerRegistry),
           transcriptionConfigured: Boolean(config.openAIRealtimeTranscriptionModel),
         },
       });
@@ -1455,7 +1452,8 @@ function startServer(config) {
   });
 
   const listening = new Promise((resolve) => {
-    server.listen(config.port, config.listenHost, () => {
+    server.listen(config.port, config.listenHost, async () => {
+      await appServerRegistryReady;
       const address = server.address();
       if (address && typeof address === "object") {
         config.port = address.port;
@@ -1466,7 +1464,6 @@ function startServer(config) {
         subsystem: "relay",
         hostId: config.hostId,
         endpointUrl: `ws://${config.listenHost}:${config.port}`,
-        historyUrl: config.historyUrl,
         phoneAuth: config.phoneAuth,
       });
     });
@@ -1503,6 +1500,7 @@ function startServer(config) {
           } else {
             try {
               await config.relayStateEngine?.close?.();
+              config.appServerRegistry?.stop?.();
               await config.upstreamPool?.closeAll?.({ reason: "relay_close" });
               logger.info("relay.closed");
               resolve();
@@ -1547,12 +1545,8 @@ function main() {
   const phoneAuth = parsePhoneAuthMode(
     args["phone-auth"] || process.env.CODEX_DOCK_PHONE_AUTH || (relayTokenFile ? "bearer" : DEFAULT_PHONE_AUTH),
   );
-  const historyTokenFile = args["history-auth-token-file"] || process.env.CODEX_DOCK_HISTORY_TOKEN_FILE || relayTokenFile;
   if (phoneAuth === "bearer" && !relayTokenFile) {
     throw new Error("--auth-token-file is required when --phone-auth bearer");
-  }
-  if (!historyTokenFile) {
-    throw new Error("--history-auth-token-file is required");
   }
 
   const serverHandle = startServer({
@@ -1560,9 +1554,6 @@ function main() {
     port: parseLimit(args.port || process.env.CODEX_DOCK_RELAY_PORT, DOCK_RELAY_PORT),
     phoneAuth,
     relayBearerToken: relayTokenFile ? readToken(relayTokenFile) : null,
-    historyBearerToken: readToken(historyTokenFile),
-    historyUrl: args["history-url"] || process.env.CODEX_DOCK_HISTORY_APP_SERVER_WS || DEFAULT_HISTORY_APP_SERVER_WS,
-    liveEndpoints: parseLiveEndpoints(args["live-endpoints"] || process.env.CODEX_DOCK_LIVE_APP_SERVER_WS || process.env.CODEX_DOCK_LIVE_ENDPOINTS),
     hostId: args["host-id"] || process.env.CODEX_DOCK_REAL_HOST_ID || null,
     hostName: args["host-name"] || process.env.CODEX_DOCK_REAL_HOST_NAME || args["bonjour-name"],
     hostEndpoint: args["host-endpoint"] || process.env.CODEX_DOCK_HOST_ENDPOINT || null,

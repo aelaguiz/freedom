@@ -94,6 +94,34 @@ function closeWebSocketServer(server) {
   });
 }
 
+function appServerRegistryFixtureConfig({
+  historyUrl = null,
+  historyBearerToken = "test-token",
+  liveEndpoints = [],
+  codexHome = "/tmp/codex-client-test",
+  includeDaemonHistory = false,
+} = {}) {
+  return {
+    codexHome,
+    registryIncludeDaemonHistory: includeDaemonHistory,
+    registryProcessListProvider: async () => [],
+    registryFixtureHistoryEndpoints: historyUrl
+      ? [{
+          label: "fixture-history",
+          url: historyUrl,
+          bearerToken: historyBearerToken || null,
+        }]
+      : [],
+    registryFixtureLiveEndpoints: liveEndpoints
+      .filter((endpoint) => endpoint?.url)
+      .map((endpoint) => ({
+        ...endpoint,
+        label: endpoint.label || endpoint.url,
+        bearerToken: endpoint.bearerToken || historyBearerToken || null,
+      })),
+  };
+}
+
 function spawnLoopbackAppServerMarker(url) {
   return spawn(
     process.execPath,
@@ -131,6 +159,7 @@ function closeProcess(child) {
 }
 
 export {
+  appServerRegistryFixtureConfig,
   closeProcess,
   closeWebSocketServer,
   httpGetJson,

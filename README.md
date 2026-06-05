@@ -4,66 +4,23 @@ This repo is the Swift client for the Codex Dock MVP.
 
 ## App-Server Runbook
 
-There are two different app-server modes we need to keep separate.
+Codex owns app-server/session processes. Dock owns one phone-facing relay that
+discovers those existing Codex endpoints and aggregates them.
 
-### 1. Normal daemon mode
-
-The Codex daemon is the normal local background service:
-
-```sh
-rtk codex app-server daemon restart
-rtk codex app-server daemon version
-```
-
-Today, this daemon always starts its managed app-server on a Unix socket:
-
-```sh
-app-server --remote-control --listen unix://
-```
-
-That socket is:
+The normal Codex daemon provides durable history on this Unix socket:
 
 ```text
-/Users/aelaguiz/.codex/app-server-control/app-server-control.sock
+~/.codex/app-server-control/app-server-control.sock
 ```
 
-This is fine for local Codex tooling, but it is not reachable from an iPhone.
+Running Codex clients can also create live app-server/session owners. The relay
+discovers attachable loopback WebSocket owners from the local process table,
+records private stdio owners as diagnostics, and prefers the live owner for
+thread-specific methods when it has a current lease.
 
-### 2. Loopback WebSocket mode
-
-For local WebSocket development, start a direct app-server process in loopback
-mode:
-
-```sh
-rtk codex app-server --listen ws://127.0.0.1:4500
-```
-
-Then the Swift test can point at:
-
-```sh
-rtk env CODEX_DOCK_LOOPBACK_APP_SERVER_WS=ws://127.0.0.1:4500 swift test
-```
-
-Important: loopback is only a local development step. It is not Phase 1
-completion evidence, because an iPhone cannot use the Mac's `127.0.0.1`. The
-phone-reachable acceptance test intentionally rejects loopback endpoints.
-
-After a loopback smoke run, stop the direct `codex app-server --listen
-ws://127.0.0.1:4500` process and restart the normal daemon:
-
-```sh
-rtk codex app-server daemon restart
-```
-
-That restart restores the daemon's normal Unix-socket service. It does not move
-the daemon itself into loopback WebSocket mode; current Codex daemon startup
-does not expose that setting.
-
-### 3. Phone-reachable relay mode
-
-The raw Codex app-server still runs with bearer auth on the Mac. The iPhone does
-not connect to that raw server directly. It connects to the Dock relay on the
-Mac, and the relay uses the raw app-server token behind the scenes.
+Dock no longer starts a special raw `:4500` app-server. The iPhone never connects
+directly to a Codex app-server. It connects to the Dock relay on `:4510`, and
+the relay chooses the right Codex endpoint for each request.
 
 ```sh
 rtk make services
@@ -113,20 +70,19 @@ stopping host services:
 rtk make services
 ```
 
-It starts/reuses two real services and leaves them running:
+It starts/reuses one real service and leaves it running:
 
-- Raw Codex app-server on loopback `ws://127.0.0.1:4500`
 - Dock relay on `ws://<APP_SERVER_HOST>:4510`
 
-The raw app-server provides stored history. The relay is the app endpoint. Dock
-Home subscribes to relay-owned `dock/*` methods: `dock/subscribe` returns the
-first normalized snapshot, `dock/update` pushes deltas and heartbeats, and
-`dock/resync` returns a replacement snapshot if the client detects a sequence
-gap. The relay materializes app-server thread projections in SQLite at
-`.codex-dock/relay-state.sqlite`, serves Dock Home from that state store, and
-keeps stale rows visible when a source refresh fails.
+Codex daemon history and live session owners provide upstream data. The relay is
+the app endpoint. Dock Home subscribes to relay-owned `dock/*` methods:
+`dock/subscribe` returns the first normalized snapshot, `dock/update` pushes
+deltas and heartbeats, and `dock/resync` returns a replacement snapshot if the
+client detects a sequence gap. The relay materializes app-server thread
+projections in SQLite at `.codex-dock/relay-state.sqlite`, serves Dock Home from
+that state store, and keeps stale rows visible when a source refresh fails.
 
-Card truth has one path. The relay may inspect raw app-server facts such as
+Card truth has one path. The relay may inspect Codex app-server facts such as
 `thread/list`, `thread/read`, `thread/turns/list`, live events, and live loaded
 IDs internally, but Swift never uses those raw routes to prove Dock or Archive
 cards. Swift renders card truth only from `dock/*` and `archive/*` streams.
@@ -189,15 +145,10 @@ The service targets install per-repo launchd files on macOS and systemd user
 files on Linux, with runtime files under `.codex-dock/`:
 
 ```text
-.codex-dock/services/com.aelaguiz.codex-dock.app-server.plist
 .codex-dock/services/com.aelaguiz.codex-dock.relay.plist
-.codex-dock/services/codex-dock-app-server.service
 .codex-dock/services/codex-dock-relay.service
-.codex-dock/app-server.token
 .codex-dock/service.env
 .codex-dock/host.env
-.codex-dock/logs/app-server.log
-.codex-dock/logs/app-server.err.log
 .codex-dock/logs/dock-relay.log
 .codex-dock/logs/dock-relay.err.log
 ```
@@ -233,7 +184,7 @@ Automatic probes only use auto-probe-safe routes; archive, turn, and
 transcription routes are passive evidence from real app traffic. HTTP
 diagnostics intentionally do not expose card rows or stored card state.
 
-Print the app-safe host config plus raw dev smoke helpers:
+Print the app-safe relay host config:
 
 ```sh
 rtk make app-server-env
@@ -253,9 +204,9 @@ services.
 ## Cross-Platform Host Services
 
 The same host-service wrapper is used on macOS and Linux. `rtk make services`
-installs, starts, and waits for the raw app-server plus Dock relay bundle. The
-relay is always the app-facing endpoint; the raw app-server stays host-side and
-loopback by default.
+installs, starts, and waits for the Dock relay service. Codex app-server
+instances are discovered by the relay; they are not launched by the Dock service
+wrapper.
 
 Mac local service:
 
@@ -270,14 +221,14 @@ rtk make relay-doctor
 Linux `home` service over Tailscale:
 
 ```sh
-rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make services HOST_SERVICE_PLATFORM=linux CODEX_BIN=/home/aelaguiz/.local/bin/codex NODE_BIN=/home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510 APP_SERVER_LISTEN=ws://127.0.0.1:4500 DOCK_RELAY_HISTORY_WS=ws://127.0.0.1:4500'
+rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make services HOST_SERVICE_PLATFORM=linux NODE_BIN=/home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510'
 ```
 
 Check `home` after start with the same overrides:
 
 ```sh
-rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-status HOST_SERVICE_PLATFORM=linux CODEX_BIN=/home/aelaguiz/.local/bin/codex NODE_BIN=/home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510 APP_SERVER_LISTEN=ws://127.0.0.1:4500 DOCK_RELAY_HISTORY_WS=ws://127.0.0.1:4500'
-rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-doctor HOST_SERVICE_PLATFORM=linux CODEX_BIN=/home/aelaguiz/.local/bin/codex NODE_BIN=/home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510 APP_SERVER_LISTEN=ws://127.0.0.1:4500 DOCK_RELAY_HISTORY_WS=ws://127.0.0.1:4500'
+rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-status HOST_SERVICE_PLATFORM=linux NODE_BIN=/home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510'
+rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-doctor HOST_SERVICE_PLATFORM=linux NODE_BIN=/home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510'
 ```
 
 From the Mac, the app-facing `home` relay should answer:
@@ -368,7 +319,7 @@ Or use a simulator ID:
 rtk make app SIM=DEF1631B-7125-43C6-BFA3-4423BF103C91
 ```
 
-That command starts/reuses the persistent services and boots the simulator in
+That command starts/reuses the persistent relay service and boots the simulator in
 the background. If `com.aelaguiz.CodexDockApp` is already running on that
 simulator, it leaves the app alone and skips build/install/launch so Simulator
 does not keep stealing focus.
@@ -380,7 +331,7 @@ FORCE_LAUNCH=1 rtk make app SIM=DEF1631B-7125-43C6-BFA3-4423BF103C91
 ```
 
 When it does launch, it uses generated app config from `.codex-dock/host.env`.
-It does not pass an OpenAI key or app-server bearer token into the app.
+It does not pass an OpenAI key or Codex app-server credential into the app.
 
 Run the generated-project app tests through the same Makefile-owned path:
 
@@ -403,10 +354,9 @@ Start all local services the app currently needs:
 rtk make services
 ```
 
-Today that means the authenticated raw loopback app-server plus the
-no-client-auth Dock relay. If another local service becomes required later, add
-it behind this target so `rtk make app SIM=...` keeps doing the whole setup
-idempotently.
+Today that means the no-client-auth Dock relay. If another local service becomes
+required later, add it behind this target so `rtk make app SIM=...` keeps doing
+the whole setup idempotently.
 
 The service targets write host-side settings to `.codex-dock/service.env`,
 write app-safe settings to `.codex-dock/host.env`, and leave the user-owned

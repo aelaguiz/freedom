@@ -14,6 +14,7 @@ import {
   THREAD_LIST_MAX_LIMIT,
 } from "./dock-relay-constants.mjs";
 import { JsonRpcWebSocketClient } from "./dock-relay-json-rpc-client.mjs";
+import { appServerRegistryFixtureConfig } from "./dock-relay-test-helpers.mjs";
 import {
   PROJECTION_ENGINE_VERSION,
   PROJECTION_IDENTITY_VERSION,
@@ -3161,8 +3162,10 @@ async function runThreadActivityScenario(options) {
     hostId: host.id,
     hostName: host.displayName,
     hostEndpoint: host.endpoint,
-    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
-    historyBearerToken: "history-token",
+    ...appServerRegistryFixtureConfig({
+      historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+      historyBearerToken: "history-token",
+    }),
     advertiseBonjour: false,
     observabilityDir: false,
     relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
@@ -3429,8 +3432,10 @@ async function runSpawnEdgeScenario(options) {
     hostId: host.id,
     hostName: host.displayName,
     hostEndpoint: host.endpoint,
-    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
-    historyBearerToken: "history-token",
+    ...appServerRegistryFixtureConfig({
+      historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+      historyBearerToken: "history-token",
+    }),
     advertiseBonjour: false,
     observabilityDir: false,
     relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
@@ -3689,9 +3694,11 @@ async function runLiveLeaseExpiryScenario(options) {
     hostId: host.id,
     hostName: host.displayName,
     hostEndpoint: host.endpoint,
-    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
-    historyBearerToken: "history-token",
-    liveEndpoints: [{ label: "live-lease-fixture", url: `ws://127.0.0.1:${liveServer.address().port}` }],
+    ...appServerRegistryFixtureConfig({
+      historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+      historyBearerToken: "history-token",
+      liveEndpoints: [{ label: "live-lease-fixture", url: `ws://127.0.0.1:${liveServer.address().port}` }],
+    }),
     liveStatusMaxAgeMs,
     advertiseBonjour: false,
     observabilityDir: false,
@@ -3856,8 +3863,10 @@ async function createMultiHostFixture({ options, tempDir, host, getRows }) {
     hostId: host.id,
     hostName: host.displayName,
     hostEndpoint: host.endpoint,
-    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
-    historyBearerToken: "history-token",
+    ...appServerRegistryFixtureConfig({
+      historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+      historyBearerToken: "history-token",
+    }),
     advertiseBonjour: false,
     observabilityDir: false,
     relayStateDatabasePath: path.join(tempDir, `${host.id}-relay-state.sqlite`),
@@ -4300,8 +4309,10 @@ async function runServerRequestScenario(options) {
     hostId: host.id,
     hostName: host.displayName,
     hostEndpoint: host.endpoint,
-    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
-    historyBearerToken: "history-token",
+    ...appServerRegistryFixtureConfig({
+      historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+      historyBearerToken: "history-token",
+    }),
     advertiseBonjour: false,
     observabilityDir: false,
     relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
@@ -4665,8 +4676,10 @@ async function runSourceRefreshScenario(options) {
     hostId: host.id,
     hostName: host.displayName,
     hostEndpoint: host.endpoint,
-    historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
-    historyBearerToken: "history-token",
+    ...appServerRegistryFixtureConfig({
+      historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
+      historyBearerToken: "history-token",
+    }),
     advertiseBonjour: false,
     observabilityDir: false,
     relayStateDatabasePath: path.join(tempDir, "relay-state.sqlite"),
