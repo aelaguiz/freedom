@@ -18,6 +18,7 @@ import { UpstreamConnectionPool } from "./dock-relay-upstream-pool.mjs";
 import {
   classifyThreadOrigin,
   humanThreadRejectedError,
+  isHumanAppFacingCard,
   isHumanStartedThread,
 } from "./dock-relay-human-thread-filter.mjs";
 import {
@@ -944,9 +945,34 @@ function mergeHumanStartedRowsWithSupplements(rows = [], supplements = []) {
   });
 }
 
-function assertRouteHumanStartedThread(row, threadId) {
+function acceptedHumanRowForThread(row, threadId) {
+  if (!row || typeof row !== "object") {
+    return null;
+  }
+  if (row.id !== threadId && row.threadId !== threadId && row.threadID !== threadId) {
+    return null;
+  }
+  return classifyThreadOrigin(row).allowed ? row : null;
+}
+
+function appFacingHumanCardForThread(config, threadId) {
+  const card = config?.relayStateEngine?.cardForThread?.(threadId);
+  return isHumanAppFacingCard(card) ? card : null;
+}
+
+function assertRouteHumanStartedThread(row, threadId, {
+  acceptedHumanRow = null,
+  appFacingCard = null,
+} = {}) {
   const classification = classifyThreadOrigin(row);
   if (!classification.allowed) {
+    const acceptedFallback = acceptedHumanRowForThread(acceptedHumanRow, threadId);
+    if (classification.reason === "missing_source" && acceptedFallback) {
+      return row;
+    }
+    if (classification.reason === "missing_source" && isHumanAppFacingCard(appFacingCard)) {
+      return row;
+    }
     throw humanThreadRejectedError(threadId || row?.id || row?.threadId || row?.threadID, classification.reason);
   }
   return row;
@@ -954,11 +980,19 @@ function assertRouteHumanStartedThread(row, threadId) {
 
 async function readHumanThreadForRoute(config, threadId, {
   allowHistoryFallbackForRejectedLive = false,
+  acceptedHumanRow = null,
+  allowAppFacingCardForMissingSource = false,
 } = {}) {
+  const appFacingCard = allowAppFacingCardForMissingSource
+    ? appFacingHumanCardForThread(config, threadId)
+    : null;
   const liveRow = await sessionRouterForConfig(config).rowForThread(threadId);
   if (liveRow) {
     try {
-      return assertRouteHumanStartedThread(liveRow, threadId);
+      return assertRouteHumanStartedThread(liveRow, threadId, {
+        acceptedHumanRow,
+        appFacingCard,
+      });
     } catch (error) {
       if (!allowHistoryFallbackForRejectedLive) {
         throw error;
@@ -966,7 +1000,10 @@ async function readHumanThreadForRoute(config, threadId, {
     }
   }
   const history = await readHistoryThread(config, { threadId, includeTurns: false });
-  return assertRouteHumanStartedThread(history?.thread, threadId);
+  return assertRouteHumanStartedThread(history?.thread, threadId, {
+    acceptedHumanRow,
+    appFacingCard,
+  });
 }
 
 async function assertHumanThreadID(config, threadId, options = {}) {
@@ -1022,13 +1059,16 @@ async function aggregateThreadRead(config, params = {}, options = {}) {
     includeTurns: Boolean(params.includeTurns),
     allowHistoryForPrivateOwner: Boolean(options.allowHistoryForPrivateOwner),
   });
+  const appFacingCard = options.allowAppFacingCardForMissingSource
+    ? appFacingHumanCardForThread(config, params.threadId)
+    : null;
   if (route.source === "live-owner") {
     const result = await readThreadFromEndpoint(route.endpoint, params, relayLogger(config));
-    assertRouteHumanStartedThread(result?.thread, params.threadId);
+    assertRouteHumanStartedThread(result?.thread, params.threadId, { appFacingCard });
     return result;
   }
   const result = await readHistoryThread(config, params);
-  assertRouteHumanStartedThread(result?.thread, params.threadId);
+  assertRouteHumanStartedThread(result?.thread, params.threadId, { appFacingCard });
   return result;
 }
 
@@ -1038,6 +1078,8 @@ async function listThreadTurns(config, params = {}, options = {}) {
   }
   await assertHumanThreadID(config, params.threadId, {
     allowHistoryFallbackForRejectedLive: Boolean(options.allowHistoryForPrivateOwner),
+    acceptedHumanRow: options.acceptedHumanRow || null,
+    allowAppFacingCardForMissingSource: Boolean(options.allowAppFacingCardForMissingSource),
   });
   const endpoint = await endpointForThread(config, params.threadId, "thread/turns/list", {
     allowHistoryForPrivateOwner: Boolean(options.allowHistoryForPrivateOwner),
@@ -1048,7 +1090,9 @@ async function listThreadTurns(config, params = {}, options = {}) {
   return readThreadTurnsFromEndpoint(endpoint, params, undefined, relayLogger(config));
 }
 
-async function readNewestTurnActivity(config, threadId) {
+async function readNewestTurnActivity(config, threadId, {
+  acceptedHumanRow = null,
+} = {}) {
   const pages = [];
   const seenCursors = new Set();
   let cursor = null;
@@ -1061,6 +1105,7 @@ async function readNewestTurnActivity(config, threadId) {
       ...(cursor ? { cursor } : {}),
     }, {
       allowHistoryForPrivateOwner: true,
+      acceptedHumanRow,
     });
     const turns = Array.isArray(response?.data) ? response.data : [];
     pages.push({
@@ -1104,7 +1149,9 @@ async function canonicalizeThreadRows(config, rows = [], {
         throw new Error("thread row missing id");
       }
       const baseActivityAtMs = threadActivityMs(row);
-      const turns = await readNewestTurnActivity(config, row.id);
+      const turns = await readNewestTurnActivity(config, row.id, {
+        acceptedHumanRow: row,
+      });
       const activityAtMs = Math.max(baseActivityAtMs, turns.newestTurnActivityAtMs);
       return {
         ...row,

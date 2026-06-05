@@ -34,6 +34,7 @@ async function startCanonicalActivityAppServer({
   failTurnsFor = new Set(),
   loadedThreadIDs = [],
   listUpdatedAt = {},
+  omitReadSourceFor = new Set(),
   readUpdatedAt = {},
 } = {}) {
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -155,6 +156,9 @@ async function startCanonicalActivityAppServer({
         const thread = { ...rows[message.params?.threadId] };
         if (readUpdatedAt[message.params?.threadId] !== undefined) {
           thread.updatedAt = readUpdatedAt[message.params.threadId];
+        }
+        if (omitReadSourceFor.has(message.params?.threadId)) {
+          delete thread.source;
         }
         ws.send(appServerResponse(message.id, { thread }));
       } else if (message.method === "thread/turns/list") {
@@ -519,6 +523,44 @@ test("thread/detail/subscribe falls back to history when a private live owner sh
         assert.equal(resync.result?.threadID, "newer");
         assert.equal(resync.result?.view, "thread.detail");
         assert.equal(appServer.resumedClientCount, 0);
+      } finally {
+        ws.close();
+      }
+    });
+  } finally {
+    await appServer.close();
+  }
+});
+
+test("thread/detail/subscribe accepts a visible human Dock card when thread/read omits source metadata", async () => {
+  const appServer = await startCanonicalActivityAppServer({
+    omitReadSourceFor: new Set(["newer"]),
+  });
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.relayStateEngine.reconcileDock({ reason: "test-missing-read-source" });
+      const ws = await openWebSocket(wsURL);
+      try {
+        const initial = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(initial.error, undefined);
+        assert.equal(initial.result?.complete, true);
+        const card = initial.result.rows.find((row) => row.threadID === "newer");
+        assert.equal(card?.lane, "human");
+        assert.equal(card?.sourceKind, "human");
+        assert.equal(card?.freshness, "fresh");
+        assert.equal(card?.completeness, "complete");
+
+        const detail = await jsonRpcRequest(ws, "thread/detail/subscribe", { threadId: "newer" });
+        assert.equal(detail.error, undefined);
+        assert.equal(detail.result?.threadID, "newer");
+        assert.equal(detail.result?.view, "thread.detail");
+        assert.ok(Array.isArray(detail.result?.rows));
+
+        const resync = await jsonRpcRequest(ws, "thread/detail/resync", { threadId: "newer" });
+        assert.equal(resync.error, undefined);
+        assert.equal(resync.result?.threadID, "newer");
+        assert.equal(resync.result?.view, "thread.detail");
+        assert.ok(Array.isArray(resync.result?.rows));
       } finally {
         ws.close();
       }

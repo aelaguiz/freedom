@@ -248,7 +248,9 @@ async function resumeThread(config, params = {}, session, downstreamWs, options 
     throw new Error("thread/resume requires threadId");
   }
   const resumeParams = liveResumeParams(params);
-  await assertHumanThreadID(config, resumeParams.threadId);
+  await assertHumanThreadID(config, resumeParams.threadId, {
+    allowAppFacingCardForMissingSource: options.detailSubscription === true,
+  });
 
   session.generation += 1;
   const generation = session.generation;
@@ -310,6 +312,7 @@ async function resumeThread(config, params = {}, session, downstreamWs, options 
 
 async function readAllThreadDetailTurns(config, threadId, {
   allowHistoryForPrivateOwner = false,
+  allowAppFacingCardForMissingSource = false,
 } = {}) {
   const turns = [];
   const seenCursors = new Set();
@@ -324,6 +327,7 @@ async function readAllThreadDetailTurns(config, threadId, {
       itemsView: "full",
     }, {
       allowHistoryForPrivateOwner,
+      allowAppFacingCardForMissingSource,
     });
     if (Array.isArray(response?.data)) {
       turns.push(...response.data);
@@ -366,9 +370,11 @@ async function readThreadDetailThread(config, params = {}, options = {}) {
     includeTurns: false,
   }, {
     allowHistoryForPrivateOwner: Boolean(options.allowHistoryForPrivateOwner),
+    allowAppFacingCardForMissingSource: true,
   });
   const turns = await readAllThreadDetailTurns(config, params.threadId, {
     allowHistoryForPrivateOwner: Boolean(options.allowHistoryForPrivateOwner),
+    allowAppFacingCardForMissingSource: true,
   });
   return {
     ...(readResponse?.thread || {}),
