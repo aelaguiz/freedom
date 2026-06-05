@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import {
   APP_SERVER_REGISTRY_ENDPOINT_TTL_MS,
   APP_SERVER_REGISTRY_LIVE_ENDPOINT_LIMIT,
+  APP_SERVER_REGISTRY_OPEN_SESSION_FILE_SCAN_LIMIT,
   APP_SERVER_REGISTRY_REFRESH_INTERVAL_MS,
   APP_SERVER_REGISTRY_STATUS_ENDPOINT_LIMIT,
   LIVE_LOADED_LIST_LIMIT,
@@ -24,7 +25,9 @@ import {
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_DAEMON_SOCKET_RELATIVE_PATH = "app-server-control/app-server-control.sock";
-const CODEX_THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const CODEX_THREAD_ID_SOURCE = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const CODEX_THREAD_ID_PATTERN = new RegExp(`^${CODEX_THREAD_ID_SOURCE}$`, "iu");
+const CODEX_SESSION_FILE_THREAD_ID_PATTERN = new RegExp(`(?:^|-)(${CODEX_THREAD_ID_SOURCE})\\.jsonl$`, "iu");
 const HISTORY_ROUTE_METHODS = new Set([
   "thread/list",
   "thread/unarchive",
@@ -89,6 +92,30 @@ function daemonSocketPathForCodexHome(codexHome = defaultCodexHome()) {
 
 function daemonUnixURLForCodexHome(codexHome = defaultCodexHome()) {
   return `unix://${daemonSocketPathForCodexHome(codexHome)}`;
+}
+
+function codexSessionsRoot(codexHome = defaultCodexHome()) {
+  return path.join(codexHome, "sessions");
+}
+
+function pathIsInside(parentPath, childPath) {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function threadIDFromCodexSessionPath(filePath, { codexHome = defaultCodexHome() } = {}) {
+  const rawPath = String(filePath || "");
+  if (!rawPath) {
+    return null;
+  }
+  const match = path.basename(rawPath).match(CODEX_SESSION_FILE_THREAD_ID_PATTERN);
+  if (!match) {
+    return null;
+  }
+  if (!pathIsInside(codexSessionsRoot(codexHome), rawPath)) {
+    return null;
+  }
+  return match[1];
 }
 
 function unixSocketPathForEndpointURL(value, codexHome = defaultCodexHome()) {
@@ -283,6 +310,14 @@ function codexExecutableIndex(tokens) {
   ));
 }
 
+function processLooksLikeCodexRuntime(tokens) {
+  const codexIndex = codexExecutableIndex(tokens);
+  if (codexIndex < 0) {
+    return false;
+  }
+  return !tokens.slice(codexIndex + 1).includes("app-server");
+}
+
 function activeCodexThreadIDFromTokens(tokens) {
   const codexIndex = codexExecutableIndex(tokens);
   if (codexIndex < 0) {
@@ -308,6 +343,32 @@ function activeCodexThreadIDFromTokens(tokens) {
     }
   }
   return null;
+}
+
+function openSessionThreadIDsFromProcessInfo(processInfo, { codexHome = defaultCodexHome() } = {}) {
+  const threadIds = new Set();
+  if (CODEX_THREAD_ID_PATTERN.test(String(processInfo.openSessionThreadID || ""))) {
+    threadIds.add(String(processInfo.openSessionThreadID));
+  }
+  for (const threadId of processInfo.openSessionThreadIDs || []) {
+    if (CODEX_THREAD_ID_PATTERN.test(String(threadId || ""))) {
+      threadIds.add(String(threadId));
+    }
+  }
+  const paths = [];
+  if (processInfo.openSessionPath) {
+    paths.push(processInfo.openSessionPath);
+  }
+  if (Array.isArray(processInfo.openSessionPaths)) {
+    paths.push(...processInfo.openSessionPaths);
+  }
+  for (const filePath of paths) {
+    const threadId = threadIDFromCodexSessionPath(filePath, { codexHome });
+    if (threadId) {
+      threadIds.add(threadId);
+    }
+  }
+  return [...threadIds];
 }
 
 function readBearerTokenFile(tokenFilePath) {
@@ -359,11 +420,89 @@ function normalizeAppServerEndpoint(input, defaults = {}) {
   return endpoint;
 }
 
-async function defaultProcessListProvider() {
+function codexRuntimeProcessesForOpenFileScan(processes) {
+  return processes
+    .filter((processInfo) => {
+      const tokens = Array.isArray(processInfo.args)
+        ? processInfo.args.map(String)
+        : tokenizeCommandLine(processInfo.command || "");
+      return processLooksLikeCodexRuntime(tokens);
+    })
+    .filter((processInfo) => Number.isInteger(processInfo.pid) && processInfo.pid > 0)
+    .slice(0, APP_SERVER_REGISTRY_OPEN_SESSION_FILE_SCAN_LIMIT);
+}
+
+function parseLsofOpenSessionThreadIDs(stdout, { codexHome = defaultCodexHome() } = {}) {
+  const byPid = new Map();
+  let currentPid = null;
+  for (const line of String(stdout || "").split(/\r?\n/u)) {
+    if (!line) {
+      continue;
+    }
+    if (line.startsWith("p")) {
+      const pid = Number(line.slice(1));
+      currentPid = Number.isInteger(pid) ? pid : null;
+      continue;
+    }
+    if (!currentPid || !line.startsWith("n")) {
+      continue;
+    }
+    const threadId = threadIDFromCodexSessionPath(line.slice(1), { codexHome });
+    if (!threadId) {
+      continue;
+    }
+    if (!byPid.has(currentPid)) {
+      byPid.set(currentPid, new Set());
+    }
+    byPid.get(currentPid).add(threadId);
+  }
+  return byPid;
+}
+
+async function annotateOpenSessionThreadIDs(processes, {
+  codexHome = defaultCodexHome(),
+  logger = defaultRelayLogger,
+} = {}) {
+  const candidates = codexRuntimeProcessesForOpenFileScan(processes);
+  if (candidates.length === 0) {
+    return;
+  }
+  const pids = candidates.map((processInfo) => String(processInfo.pid));
+  let stdout = "";
+  try {
+    ({ stdout } = await execFileAsync("lsof", ["-w", "-Fpn", "-p", pids.join(",")], {
+      maxBuffer: 2 * 1024 * 1024,
+    }));
+  } catch (error) {
+    stdout = typeof error?.stdout === "string" ? error.stdout : "";
+    if (!stdout) {
+      logger.debug?.("app_server_registry.open_session_scan_failed", {
+        processCount: candidates.length,
+        error: error?.message || String(error),
+      });
+      return;
+    }
+  }
+  const byPid = parseLsofOpenSessionThreadIDs(stdout, { codexHome });
+  for (const processInfo of candidates) {
+    const threadIds = [...(byPid.get(processInfo.pid) || [])];
+    if (threadIds.length === 0) {
+      continue;
+    }
+    processInfo.openSessionThreadIDs = [
+      ...new Set([
+        ...(processInfo.openSessionThreadIDs || []),
+        ...threadIds,
+      ]),
+    ];
+  }
+}
+
+async function defaultProcessListProvider({ codexHome = defaultCodexHome(), logger = defaultRelayLogger } = {}) {
   const { stdout } = await execFileAsync("ps", ["-axo", "pid=,ppid=,command="], {
     maxBuffer: 1024 * 1024,
   });
-  return stdout
+  const processes = stdout
     .split(/\r?\n/u)
     .map((line) => {
       const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/u);
@@ -377,6 +516,8 @@ async function defaultProcessListProvider() {
       };
     })
     .filter(Boolean);
+  await annotateOpenSessionThreadIDs(processes, { codexHome, logger });
+  return processes;
 }
 
 function discoverAppServerEndpointsFromProcesses(processes = [], {
@@ -390,16 +531,30 @@ function discoverAppServerEndpointsFromProcesses(processes = [], {
     const tokens = Array.isArray(processInfo.args)
       ? processInfo.args.map(String)
       : tokenizeCommandLine(processInfo.command || "");
-    const activeThreadId = activeCodexThreadIDFromTokens(tokens);
-    if (activeThreadId) {
-      privateThreadOwnersById.set(activeThreadId, {
-        threadId: activeThreadId,
-        source: "process",
-        transport: "stdio",
-        pid: processInfo.pid ?? null,
-        ppid: processInfo.ppid ?? null,
-        ownerKind: "codex-cli-resume",
-      });
+    if (processLooksLikeCodexRuntime(tokens)) {
+      const activeThreadId = activeCodexThreadIDFromTokens(tokens);
+      if (activeThreadId) {
+        privateThreadOwnersById.set(activeThreadId, {
+          threadId: activeThreadId,
+          source: "process",
+          transport: "stdio",
+          pid: processInfo.pid ?? null,
+          ppid: processInfo.ppid ?? null,
+          ownerKind: "codex-cli-resume",
+        });
+      }
+      for (const openSessionThreadId of openSessionThreadIDsFromProcessInfo(processInfo, { codexHome })) {
+        if (!privateThreadOwnersById.has(openSessionThreadId)) {
+          privateThreadOwnersById.set(openSessionThreadId, {
+            threadId: openSessionThreadId,
+            source: "process",
+            transport: "stdio",
+            pid: processInfo.pid ?? null,
+            ppid: processInfo.ppid ?? null,
+            ownerKind: "codex-cli-session-file",
+          });
+        }
+      }
     }
     if (!Array.isArray(processInfo.args) && !commandLooksLikeCodexAppServerCommand(processInfo.command || "")) {
       continue;
@@ -596,7 +751,11 @@ class AppServerRegistry {
         }
         privateOwnerRefreshReliable = true;
       } else if (this.processListProvider) {
-        const processList = await this.processListProvider();
+        const processList = await this.processListProvider({
+          codexHome: this.codexHome,
+          logger: this.logger,
+          reason,
+        });
         const discovered = discoverAppServerEndpointsFromProcesses(processList, {
           codexHome: this.codexHome,
           logger: this.logger,

@@ -277,6 +277,51 @@ test("app-server registry discovers active codex resume commands as private live
   assert.equal(registry.snapshot().counts.privateOwners, 0);
 });
 
+test("app-server registry discovers plain codex CLI owners from open session files", async () => {
+  const codexHome = "/Users/aelaguiz/.codex";
+  const threadId = "019e95a4-4810-7612-818e-22475bcf0874";
+  const sessionPath = path.join(
+    codexHome,
+    "sessions/2026/06/04/rollout-2026-06-04T21-37-12-019e95a4-4810-7612-818e-22475bcf0874.jsonl",
+  );
+  const discovered = discoverAppServerEndpointsFromProcesses([{
+    pid: 52467,
+    ppid: 52466,
+    command: "/opt/homebrew/lib/node_modules/@openai/codex/vendor/bin/codex -p yolo",
+    openSessionPaths: [
+      sessionPath,
+      "/tmp/rollout-2026-06-04T21-37-12-019e95a4-4810-7612-818e-22475bcf0874.jsonl",
+    ],
+  }], { codexHome });
+
+  assert.equal(discovered.privateThreadOwners.length, 1);
+  assert.deepEqual(discovered.privateThreadOwners[0], {
+    threadId,
+    source: "process",
+    transport: "stdio",
+    pid: 52467,
+    ppid: 52466,
+    ownerKind: "codex-cli-session-file",
+  });
+
+  const registry = new AppServerRegistry({
+    codexHome,
+    includeDaemonHistory: false,
+    processListProvider: async () => [{
+      pid: 52467,
+      ppid: 52466,
+      command: "/opt/homebrew/lib/node_modules/@openai/codex/vendor/bin/codex -p yolo",
+      openSessionPath: sessionPath,
+    }],
+  });
+  await registry.refreshNow("test");
+  assert.equal(registry.snapshot().counts.privateOwners, 1);
+  const privateRows = registry.privateLiveRows();
+  assert.equal(privateRows.length, 1);
+  assert.equal(privateRows[0].id, threadId);
+  assert.equal(privateRows[0].dockRelaySource.pid, 52467);
+});
+
 test("collectLiveRows uses one-shot live-status sockets instead of exhausting the upstream pool", async () => {
   const first = await startLoopbackAppServer({
     loadedThreadIDs: ["thread-live-a"],
