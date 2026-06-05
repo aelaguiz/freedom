@@ -954,10 +954,16 @@ async function enrichHumanStartedRows(config, rows = [], {
   readThread = (threadId) => readHistoryThread(config, { threadId, includeTurns: false }),
 } = {}) {
   const logger = relayLogger(config);
+  const sessionMetadataByThreadID = readSessionMetadataIndexForCodexHome(
+    codexHomeForConfig(config),
+    logger,
+    { threadIDs: rows.map((row) => row?.id).filter(Boolean) },
+  );
   const candidates = [];
   const rejectedCounts = {};
 
-  for (const row of rows) {
+  for (const inputRow of rows) {
+    const row = mergeSessionMetadata(inputRow, sessionMetadataByThreadID.get(inputRow?.id));
     const classification = classifyThreadOrigin(row);
     if (classification.allowed) {
       candidates.push(row);
@@ -977,7 +983,10 @@ async function enrichHumanStartedRows(config, rows = [], {
       if (!response?.thread || typeof response.thread !== "object") {
         throw new Error("thread/read returned no thread");
       }
-      const authoritative = mergeAuthoritativeThreadRead(row, response?.thread);
+      const authoritative = mergeSessionMetadata(
+        mergeAuthoritativeThreadRead(row, response?.thread),
+        sessionMetadataByThreadID.get(row.id),
+      );
       const classification = classifyThreadOrigin(authoritative);
       return { row, authoritative, classification };
     },
@@ -1031,6 +1040,11 @@ async function readSessionIndexHumanStartedSupplements(config, existingRows = []
       candidateRows: 0,
     };
   }
+  const sessionMetadataByThreadID = readSessionMetadataIndexForCodexHome(
+    codexHomeForConfig(config),
+    logger,
+    { threadIDs: candidates.map((candidate) => candidate?.id).filter(Boolean) },
+  );
 
   const rejectedCounts = {};
   const results = await allSettledInBatches(
@@ -1038,7 +1052,10 @@ async function readSessionIndexHumanStartedSupplements(config, existingRows = []
     HUMAN_THREAD_READ_ENRICHMENT_CONCURRENCY,
     async (candidate) => {
       const response = await readThread(candidate.id);
-      const thread = mergeSessionIndexCandidate(candidate, response?.thread);
+      const thread = mergeSessionMetadata(
+        mergeSessionIndexCandidate(candidate, response?.thread),
+        sessionMetadataByThreadID.get(candidate.id),
+      );
       if (!threadArchiveMatchesParams(thread, params)) {
         return { accepted: false, reason: "archive_scope_mismatch" };
       }

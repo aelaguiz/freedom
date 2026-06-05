@@ -1150,7 +1150,30 @@ class RelayStateEngine {
     if (!mutation) {
       return null;
     }
-    return this.handleThreadNameMutation(mutation);
+    const threadName = typeof message?.params?.threadName === "string"
+      ? message.params.threadName
+      : null;
+    return this.queueMutationReconciliation(async () => {
+      if (threadName && typeof this.store.cardForThread === "function") {
+        const card = this.cardForThread(mutation.threadId);
+        if (card?.title === threadName) {
+          this.logger?.debug?.("state.thread_name_notification_skipped", {
+            reason: mutation.reason,
+          });
+          return {
+            reason: mutation.reason,
+            dock: null,
+            archive: null,
+            skipped: true,
+          };
+        }
+      }
+      return this.reconcileDockAndArchiveAfterMutation({
+        reason: mutation.reason,
+        logEvent: "state.thread_name_mutation_reconcile_failed",
+        failureMessage: "thread name mutation reconcile failed",
+      });
+    });
   }
 
   async handleThreadStatusNotification(message) {
