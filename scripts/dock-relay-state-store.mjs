@@ -617,7 +617,15 @@ class RelayStateStore {
     };
   }
 
-  applyDockReconciliation({ host, cards, scopes = [], complete = true, error = null, previousCards = null }) {
+  applyDockReconciliation({
+    host,
+    cards,
+    scopes = [],
+    complete = true,
+    error = null,
+    previousCards = null,
+    explicitRejectedThreadIDs = [],
+  }) {
     const atMs = nowMs();
     const at = new Date(atMs).toISOString();
     return this.transaction(() => {
@@ -639,6 +647,9 @@ class RelayStateStore {
       const nextByID = new Map();
       const rows = [];
       const projectionIDs = [];
+      const rejectedThreadIDs = new Set((Array.isArray(explicitRejectedThreadIDs) ? explicitRejectedThreadIDs : [])
+        .map((threadID) => String(threadID || "").trim())
+        .filter(Boolean));
 
       cards.forEach((card) => {
         requireProjectionCard(card, DOCK_VIEW);
@@ -669,10 +680,11 @@ class RelayStateStore {
         });
       });
 
-      if (complete) {
+      if (complete || rejectedThreadIDs.size > 0) {
         for (const previous of previousRows) {
           const key = cardProjectionKey(previous);
-          if (key && !nextByID.has(key)) {
+          const explicitlyRejected = rejectedThreadIDs.has(previous.threadID);
+          if (key && !nextByID.has(key) && (complete || explicitlyRejected)) {
             projectionIDs.push(key);
             this.markThreadInactive(host.id, previous.threadID, at);
           }

@@ -825,6 +825,7 @@ function mergePrivateLiveRows(live = {}, appServerRegistry = null, {
   const metadataByThreadID = sessionMetadataByThreadID
     || readSessionMetadataIndexForCodexHome(codexHome, logger, { threadIDs: privateThreadIDs });
   const rejectedCounts = {};
+  const rejectedThreadIDs = new Set();
   const rowsById = new Map();
   for (const row of [...(live.rows || []), ...privateRows]) {
     if (!row?.id) {
@@ -834,6 +835,7 @@ function mergePrivateLiveRows(live = {}, appServerRegistry = null, {
     const classification = classifyThreadOrigin(mergedRow);
     if (!classification.allowed) {
       rejectedCounts[classification.reason] = Number(rejectedCounts[classification.reason] || 0) + 1;
+      rejectedThreadIDs.add(String(row.id));
       logger.debug("live.private_thread_rejected_by_human_filter", {
         threadId: row.id,
         reason: classification.reason,
@@ -846,6 +848,7 @@ function mergePrivateLiveRows(live = {}, appServerRegistry = null, {
     ...live,
     privateRows: privateRows.length,
     privateRejectedRows: Object.values(rejectedCounts).reduce((sum, count) => sum + Number(count || 0), 0),
+    privateRejectedThreadIDs: [...rejectedThreadIDs],
     rows: [...rowsById.values()],
   };
 }

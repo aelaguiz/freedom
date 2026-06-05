@@ -404,6 +404,64 @@ test("dock/subscribe rejects private live rows when rollout metadata says they a
   }
 });
 
+test("dock/subscribe removes stale private subagent cards even when live proof is partial", async () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-private-partial-session-meta-"));
+  const appServer = await startCanonicalActivityAppServer();
+  try {
+    await withRelay(appServer.url, async ({ config, wsURL }) => {
+      await config.appServerRegistry.refreshNow("test-private-partial-initial");
+      config.appServerRegistry.recordPrivateOwner("private-only", { pid: 3333, transport: "stdio" });
+      await config.relayStateEngine.reconcileDock({ reason: "test-private-partial-initial" });
+
+      let ws = await openWebSocket(wsURL);
+      try {
+        const initial = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(initial.error, undefined);
+        assert.equal(initial.result.complete, false);
+        assert.equal(initial.result.rows.some((card) => card.threadID === "private-only"), true);
+      } finally {
+        ws.close();
+      }
+
+      writeSessionMeta(codexHome, {
+        id: "private-only",
+        cwd: "/tmp/codex-client/private-subagent-workspace",
+        source: {
+          subagent: {
+            thread_spawn: {
+              parent_thread_id: "parent-thread",
+              depth: 1,
+              agent_nickname: "Confucius",
+              agent_role: "explorer",
+            },
+          },
+        },
+        git: {
+          branch: "private-subagent-branch",
+          repository_url: "git@example.test:repo/private-subagent.git",
+        },
+      });
+
+      await config.relayStateEngine.reconcileDock({ reason: "test-private-partial-rejected" });
+      ws = await openWebSocket(wsURL);
+      try {
+        const updated = await jsonRpcRequest(ws, "dock/subscribe", { offset: 0, limit: 10 });
+        assert.equal(updated.error, undefined);
+        assert.equal(updated.result.complete, false);
+        assert.equal(updated.result.rows.some((card) => card.threadID === "private-only"), false);
+      } finally {
+        ws.close();
+      }
+    }, {
+      codexHome,
+      liveEndpoints: [{ label: "unreachable-live", url: "ws://127.0.0.1:1" }],
+    });
+  } finally {
+    await appServer.close();
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test("dock/subscribe rejects history rows when rollout metadata says they are spawned subagents", async () => {
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-history-session-meta-"));
   writeSessionMeta(codexHome, {

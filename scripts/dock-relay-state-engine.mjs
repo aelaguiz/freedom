@@ -400,6 +400,7 @@ class RelayStateEngine {
         scopes: proofScopes,
         complete,
         error: firstScopeError(proofScopes, canonical.complete ? null : "card activity proof incomplete"),
+        explicitRejectedThreadIDs: liveProof.rejectedThreadIDs,
         previousCards: previousDockCards,
       });
       const failureReason = firstScopeError(proofScopes, canonical.complete ? null : "card activity proof incomplete");
@@ -628,6 +629,9 @@ class RelayStateEngine {
       : (failedThreadReads > 0 ? `live loaded session thread/read failed for ${failedThreadReads}/${live.totalThreadReads || 0} threads` : null);
     return {
       rows: acceptedRows,
+      rejectedThreadIDs: Array.isArray(live.privateRejectedThreadIDs)
+        ? live.privateRejectedThreadIDs
+        : [],
       scope: {
         ...ACTIVE_LIVE_SCOPE,
         complete,

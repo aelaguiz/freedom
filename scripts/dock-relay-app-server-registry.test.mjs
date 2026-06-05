@@ -623,6 +623,7 @@ test("private live rows apply rollout metadata before human filtering", async ()
 
   assert.equal(merged.privateRows, 1);
   assert.equal(merged.privateRejectedRows, 1);
+  assert.deepEqual(merged.privateRejectedThreadIDs, ["thread-private-subagent"]);
   assert.equal(merged.rows.some((row) => row.id === "thread-private-subagent"), false);
 });
 
