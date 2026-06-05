@@ -534,7 +534,7 @@ test("systemd install links and enables only the relay service without starting 
   assert.equal(JSON.stringify(runner.calls).includes('"start"'), false);
 });
 
-test("systemd start and stop target the relay service and clean legacy raw app-server", async () => {
+test("systemd start restarts the relay service and cleans legacy raw app-server", async () => {
   const cwd = tempDir();
   const startRunner = fakeRunner();
   const stopRunner = fakeRunner();
@@ -570,7 +570,7 @@ test("systemd start and stop target the relay service and clean legacy raw app-s
   assert.deepEqual(startRunner.calls.map((call) => call.args.slice(0, 3)), [
     ["--user", "stop", "codex-dock-app-server.service"],
     ["--user", "disable", "codex-dock-app-server.service"],
-    ["--user", "start", "codex-dock-relay.service"],
+    ["--user", "restart", "codex-dock-relay.service"],
   ]);
   assert.deepEqual(stopRunner.calls.map((call) => call.args.slice(0, 3)), [
     ["--user", "stop", "codex-dock-app-server.service"],
@@ -579,7 +579,7 @@ test("systemd start and stop target the relay service and clean legacy raw app-s
   ]);
 });
 
-test("macOS start reuses loaded launchd services without kickstarting them", async () => {
+test("macOS start force-kickstarts loaded launchd services so new arguments take effect", async () => {
   const cwd = tempDir();
   const runner = fakeRunner((command, args) => {
     if (command === "launchctl" && args[0] === "print") {
@@ -606,7 +606,9 @@ test("macOS start reuses loaded launchd services without kickstarting them", asy
   assert.deepEqual(runner.calls.map((call) => [call.command, call.args[0], call.args[1]]), [
     ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.app-server"],
     ["launchctl", "print", "gui/501/com.aelaguiz.codex-dock.relay"],
+    ["launchctl", "kickstart", "-k"],
   ]);
+  assert.equal(runner.calls[2].args[2], "gui/501/com.aelaguiz.codex-dock.relay");
 });
 
 test("macOS start re-bootstraps loaded launchd services that are not running", async () => {

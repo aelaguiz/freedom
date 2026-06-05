@@ -693,6 +693,8 @@ async function runServiceManagerAction(config, action, runtime = {}) {
           await delay(runtime);
           commands.push(...await bootstrapLaunchdService(config, runtime, domain, service.path));
           commands.push(await runServiceCommand(config, runtime, "launchctl", ["kickstart", serviceTarget(config, service, runtime)]));
+        } else {
+          commands.push(await runServiceCommand(config, runtime, "launchctl", ["kickstart", "-k", serviceTarget(config, service, runtime)]));
         }
       }
     } else if (action === "stop") {
@@ -710,7 +712,7 @@ async function runServiceManagerAction(config, action, runtime = {}) {
     commands.push(await runServiceCommand(config, runtime, "systemctl", ["--user", "enable", ...units]));
   } else if (action === "start") {
     for (const unit of units) {
-      commands.push(await runServiceCommand(config, runtime, "systemctl", ["--user", "start", unit]));
+      commands.push(await runServiceCommand(config, runtime, "systemctl", ["--user", "restart", unit]));
     }
   } else if (action === "stop") {
     for (const unit of [...units].reverse()) {

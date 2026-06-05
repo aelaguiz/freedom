@@ -119,3 +119,21 @@ second plan.
   Result: projection contract fixtures/DTO current, 5 proof schemas and 5
   canonical samples validated; relay 209 tests, 0 failures; host/device
   service 37 tests, 0 failures.
+
+## 2026-06-05T02:17:34Z - Force relay restart during service deploy
+
+- Home deploy found the same stale-process shape on systemd: the unit file was
+  updated, but `systemctl --user start codex-dock-relay.service` left the
+  already-running old relay PID active.
+- Fixed `scripts/codex-dock-host-service.mjs` so `host-service-start` makes the
+  running relay process current:
+  - macOS uses `launchctl kickstart -k` when the loaded launchd job already
+    points at the rendered relay plist.
+  - Linux uses `systemctl --user restart codex-dock-relay.service` instead of
+    `start`.
+- Command: `rtk node --test scripts/codex-dock-host-service.test.mjs`.
+  Result: 28 tests, 0 failures.
+- Command: `rtk npm test`.
+  Result: projection contract fixtures/DTO current, 5 proof schemas and 5
+  canonical samples validated; relay 209 tests, 0 failures; host/device
+  service 37 tests, 0 failures.
