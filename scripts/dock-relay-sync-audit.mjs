@@ -1773,7 +1773,7 @@ function selectDetailTargets(dockSnapshot, options) {
       logicalHostID: card?.logicalHostID || null,
       status: card?.status || null,
     }))
-    .filter((target) => nonEmpty(target.threadID));
+    .filter((target) => nonEmpty(target.threadID) && target.status !== "unknown");
   if (options.detail === "sampled") {
     return targets.slice(0, options.detailLimit);
   }

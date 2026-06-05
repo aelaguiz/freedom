@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import WebSocket from "ws";
 
 import {
@@ -7,7 +9,7 @@ import {
   UPSTREAM_REQUEST_TIMEOUT_MS,
 } from "./dock-relay-constants.mjs";
 
-function unixSocketPathFromURL(value) {
+function unixSocketPathFromURL(value, { basePath = process.cwd() } = {}) {
   const raw = String(value || "");
   if (!raw.startsWith("unix://")) {
     throw new Error(`not a unix app-server URL: ${raw}`);
@@ -17,8 +19,11 @@ function unixSocketPathFromURL(value) {
   if (queryIndex >= 0) {
     socketPath = socketPath.slice(0, queryIndex);
   }
-  if (!socketPath.startsWith("/")) {
-    socketPath = `/${socketPath}`;
+  if (!socketPath) {
+    throw new Error(`unix app-server URL is missing a socket path: ${raw}`);
+  }
+  if (!path.isAbsolute(socketPath)) {
+    socketPath = path.resolve(basePath, socketPath);
   }
   if (!socketPath || socketPath === "/") {
     throw new Error(`unix app-server URL is missing a socket path: ${raw}`);

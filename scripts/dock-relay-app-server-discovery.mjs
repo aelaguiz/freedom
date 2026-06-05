@@ -12,7 +12,6 @@ import {
 import { defaultRelayLogger } from "./dock-relay-logger.mjs";
 import {
   transportForEndpointURL,
-  unixSocketPathFromURL,
 } from "./dock-relay-json-rpc-client.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -61,20 +60,59 @@ function threadIDFromCodexSessionPath(filePath, { codexHome = defaultCodexHome()
   return match[1];
 }
 
-function unixSocketPathForEndpointURL(value, codexHome = defaultCodexHome()) {
+function rawUnixSocketPathFromURL(value) {
+  const raw = String(value || "");
+  if (!raw.startsWith("unix://")) {
+    throw new Error(`not a unix app-server URL: ${raw}`);
+  }
+  let socketPath = raw.slice("unix://".length);
+  const queryIndex = socketPath.search(/[?#]/u);
+  if (queryIndex >= 0) {
+    socketPath = socketPath.slice(0, queryIndex);
+  }
+  return socketPath;
+}
+
+function unixSocketPathForEndpointURL(value, codexHome = defaultCodexHome(), { processCwd = null } = {}) {
   const raw = String(value || "");
   if (raw === "unix://") {
     return daemonSocketPathForCodexHome(codexHome);
   }
-  return unixSocketPathFromURL(raw);
+  const socketPath = rawUnixSocketPathFromURL(raw);
+  if (!socketPath) {
+    throw new Error(`unix app-server URL is missing a socket path: ${raw}`);
+  }
+  if (path.isAbsolute(socketPath)) {
+    return socketPath;
+  }
+  if (processCwd) {
+    return path.resolve(processCwd, socketPath);
+  }
+  const error = new Error(`relative Unix app-server endpoint requires process cwd: ${raw}`);
+  error.reason = "unix_socket_relative_cwd_unknown";
+  throw error;
 }
 
-function canonicalEndpointURL(value) {
+function unixEndpointURLForSocketPath(socketPath) {
+  return `unix://${socketPath}`;
+}
+
+function canonicalEndpointURL(value, {
+  codexHome = defaultCodexHome(),
+  processCwd = null,
+} = {}) {
   const raw = String(value || "");
   if (raw === "unix://") {
-    return daemonUnixURLForCodexHome();
+    return daemonUnixURLForCodexHome(codexHome);
   }
-  if (raw.startsWith("unix://") || raw.startsWith("stdio://")) {
+  if (raw.startsWith("unix://")) {
+    try {
+      return unixEndpointURLForSocketPath(unixSocketPathForEndpointURL(raw, codexHome, { processCwd }));
+    } catch {
+      return raw;
+    }
+  }
+  if (raw.startsWith("stdio://")) {
     return raw;
   }
   try {
@@ -278,17 +316,23 @@ function normalizeAppServerEndpoint(input, defaults = {}) {
   const url = String(input?.url || "");
   const transport = input?.transport || transportForEndpointURL(url);
   const codexHome = input?.codexHome || defaults.codexHome || null;
-  const canonicalURL = url === "unix://"
-    ? daemonUnixURLForCodexHome(codexHome || defaultCodexHome())
-    : canonicalEndpointURL(url);
+  const processCwd = input?.processCwd || input?.cwd || defaults.processCwd || null;
   let socketPath = null;
+  let socketFailure = null;
   if (transport === "unix") {
     try {
-      socketPath = unixSocketPathForEndpointURL(url, codexHome || defaultCodexHome());
-    } catch {
+      socketPath = unixSocketPathForEndpointURL(url, codexHome || defaultCodexHome(), { processCwd });
+    } catch (error) {
       socketPath = null;
+      socketFailure = {
+        reason: error?.reason || "unix_socket_path_invalid",
+        message: error?.message || "Unix app-server endpoint has an invalid socket path",
+      };
     }
   }
+  const canonicalURL = transport === "unix" && socketPath
+    ? unixEndpointURLForSocketPath(socketPath)
+    : canonicalEndpointURL(url, { codexHome: codexHome || defaultCodexHome(), processCwd });
   const endpoint = {
     id: input?.id || stableID([endpointType, transport, canonicalURL, input?.bearerToken ? "auth" : "none"]),
     label: input?.label || `${source}:${endpointType}:${transport}`,
@@ -300,6 +344,7 @@ function normalizeAppServerEndpoint(input, defaults = {}) {
     bearerToken: input?.bearerToken || null,
     authSource: input?.authSource || (input?.bearerToken ? "token-file" : "none"),
     codexHome,
+    processCwd,
     pid: input?.pid ?? null,
     ppid: input?.ppid ?? null,
     userAgent: input?.userAgent || null,
@@ -307,7 +352,7 @@ function normalizeAppServerEndpoint(input, defaults = {}) {
     discoveredAt: input?.discoveredAt || null,
     lastSeenAt: input?.lastSeenAt || null,
     lastOkAt: input?.lastOkAt || null,
-    failure: input?.failure || null,
+    failure: input?.failure || socketFailure || null,
   };
   endpoint.dockOwnedRaw = isDockOwnedRawEndpoint(endpoint);
   return endpoint;
@@ -480,6 +525,7 @@ function discoverAppServerEndpointsFromProcesses(processes = [], {
       bearerToken,
       authSource,
       codexHome,
+      processCwd: processInfo.cwd || processInfo.processCwd || null,
       pid: processInfo.pid ?? null,
       ppid: processInfo.ppid ?? null,
     };

@@ -112,6 +112,19 @@ function preferLiveOwner(candidate, existing) {
   return updatedAtMs(candidate.row) >= updatedAtMs(existing.row) ? candidate : existing;
 }
 
+function isAttachableOwnerProbeEndpoint(endpoint) {
+  const supportedTransport = endpoint?.transport === "unix"
+    || endpoint?.transport === "ws"
+    || endpoint?.transport === "wss";
+  return Boolean(
+    endpoint
+    && !endpoint.failure
+    && !endpoint.dockOwnedRaw
+    && supportedTransport
+    && (endpoint.transport === "unix" || endpoint.endpointType === "live")
+  );
+}
+
 function allSettledInBatches(values, batchSize, mapper) {
   const size = Math.max(1, Math.floor(Number(batchSize) || 1));
   return (async () => {
@@ -276,7 +289,7 @@ class AppServerRegistry {
       const endpoint = normalizeAppServerEndpoint(rawEndpoint, { codexHome: this.codexHome });
       endpoint.discoveredAt = endpoint.discoveredAt || observedAt;
       endpoint.lastSeenAt = observedAt;
-      const failure = this.failureForEndpoint(endpoint);
+      const failure = endpoint.failure || this.failureForEndpoint(endpoint);
       if (failure) {
         endpoint.failure = failure;
         unreachableObserved.push(endpoint);
@@ -311,10 +324,7 @@ class AppServerRegistry {
     const endpointList = [...endpointMap.values()];
     const selectedHistoryEndpoint = this.selectHistoryEndpoint(endpointList);
     const liveEndpoints = endpointList
-      .filter((endpoint) => !endpoint.failure)
-      .filter((endpoint) => endpoint.endpointType === "live")
-      .filter((endpoint) => endpoint.transport === "ws" || endpoint.transport === "wss")
-      .filter((endpoint) => !endpoint.dockOwnedRaw)
+      .filter(isAttachableOwnerProbeEndpoint)
       .slice(0, APP_SERVER_REGISTRY_LIVE_ENDPOINT_LIMIT);
 
     this.evictExpiredOwners(observedAtMs);
@@ -511,8 +521,7 @@ class AppServerRegistry {
         updatedAt: owner.checkedAt || owner.observedAt,
         activityAt: owner.checkedAt || owner.observedAt,
         status: {
-          type: "active",
-          activeFlags: [],
+          type: "privateUnattachable",
         },
         dockRelaySource: {
           id: stableID(["private", "stdio", owner.threadId]),
@@ -703,17 +712,6 @@ class AppServerRegistry {
         threadId,
       });
     }
-    const privateOwner = this.privateOwnerByThreadId.get(String(threadId || ""));
-    if (
-      privateOwner
-      && !(options.allowHistoryForPrivateOwner && HISTORY_SAFE_PRIVATE_OWNER_METHODS.has(method))
-    ) {
-      throw new AppServerRegistryRouteError(`thread ${threadId} is owned by a private Codex runtime`, {
-        reason: "private_owner_unattachable",
-        method,
-        threadId,
-      });
-    }
     const owner = this.ownerForThread(threadId);
     if (owner && LIVE_OWNER_PREFERRED_METHODS.has(method)) {
       return {
@@ -722,6 +720,18 @@ class AppServerRegistry {
         method,
         threadId,
       };
+    }
+    const privateOwner = this.privateOwnerByThreadId.get(String(threadId || ""));
+    if (
+      privateOwner
+      && !owner
+      && !(options.allowHistoryForPrivateOwner && HISTORY_SAFE_PRIVATE_OWNER_METHODS.has(method))
+    ) {
+      throw new AppServerRegistryRouteError(`thread ${threadId} is owned by a private Codex runtime`, {
+        reason: "private_owner_unattachable",
+        method,
+        threadId,
+      });
     }
     if (HISTORY_ROUTE_METHODS.has(method) || LIVE_OWNER_PREFERRED_METHODS.has(method)) {
       return {

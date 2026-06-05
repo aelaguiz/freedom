@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 import process from "node:process";
-import WebSocket from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 
 function onceListening(server) {
   if (server.address()) {
@@ -94,6 +96,100 @@ function closeWebSocketServer(server) {
   });
 }
 
+async function startUnixJsonRpcServer(handler, {
+  socketPath = null,
+  socketName = "app-server.sock",
+  onUpgrade = null,
+} = {}) {
+  const baseDir = "/tmp/codex-client";
+  fs.mkdirSync(baseDir, { recursive: true });
+  const dir = socketPath ? null : fs.mkdtempSync(path.join(baseDir, "codex-dock-jsonrpc-unix-"));
+  const resolvedSocketPath = socketPath || path.join(dir, socketName);
+  fs.rmSync(resolvedSocketPath, { force: true });
+
+  const httpServer = http.createServer();
+  const wss = new WebSocketServer({ noServer: true });
+  const clients = new Set();
+
+  httpServer.on("upgrade", (request, socket, head) => {
+    onUpgrade?.(request);
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      clients.add(ws);
+      ws.on("close", () => clients.delete(ws));
+      ws.on("message", (raw) => {
+        const message = JSON.parse(raw.toString());
+        const response = handler(message, ws);
+        if (response) {
+          ws.send(JSON.stringify(response));
+        }
+      });
+    });
+  });
+
+  await new Promise((resolve, reject) => {
+    const onError = (error) => {
+      httpServer.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      httpServer.off("error", onError);
+      resolve();
+    };
+    httpServer.once("error", onError);
+    httpServer.once("listening", onListening);
+    httpServer.listen(resolvedSocketPath);
+  });
+
+  return {
+    socketPath: resolvedSocketPath,
+    url: `unix://${resolvedSocketPath}`,
+    close: async () => {
+      for (const ws of clients) {
+        try {
+          ws.close();
+        } catch {
+          // Test cleanup should not mask the result being asserted.
+        }
+      }
+      await new Promise((resolve) => {
+        let finished = false;
+        const finish = () => {
+          if (finished) {
+            return;
+          }
+          finished = true;
+          clearTimeout(forceTimer);
+          resolve();
+        };
+        const forceTimer = setTimeout(() => {
+          for (const ws of clients) {
+            try {
+              ws.terminate();
+            } catch {
+              // Test cleanup should not mask the result being asserted.
+            }
+          }
+          finish();
+        }, 500);
+        try {
+          httpServer.close(() => finish());
+        } catch {
+          finish();
+        }
+      });
+      try {
+        await new Promise((resolve) => wss.close(() => resolve()));
+      } catch {
+        // Closing the HTTP server already closed the IPC listener.
+      }
+      fs.rmSync(resolvedSocketPath, { force: true });
+      if (dir) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  };
+}
+
 function appServerRegistryFixtureConfig({
   historyUrl = null,
   historyBearerToken = "test-token",
@@ -168,6 +264,7 @@ export {
   openWebSocket,
   sleepMs,
   spawnLoopbackAppServerMarker,
+  startUnixJsonRpcServer,
   waitForRelayMessage,
   waitForWebSocketClose,
 };

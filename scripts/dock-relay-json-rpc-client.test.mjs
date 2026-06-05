@@ -1,59 +1,17 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { WebSocketServer } from "ws";
 
 import {
   JsonRpcWebSocketClient,
   unixSocketPathFromURL,
   webSocketURLForEndpoint,
 } from "./dock-relay-json-rpc-client.mjs";
-
-async function startUnixJsonRpcServer(handler, { onUpgrade = null } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-jsonrpc-unix-"));
-  const socketPath = path.join(dir, "app-server.sock");
-  const httpServer = http.createServer();
-  const wss = new WebSocketServer({ noServer: true });
-  const clients = new Set();
-  httpServer.on("upgrade", (request, socket, head) => {
-    onUpgrade?.(request);
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      clients.add(ws);
-      ws.on("close", () => clients.delete(ws));
-      ws.on("message", (raw) => {
-        const message = JSON.parse(raw.toString());
-        const response = handler(message);
-        if (response) {
-          ws.send(JSON.stringify(response));
-        }
-      });
-    });
-  });
-  await new Promise((resolve) => {
-    httpServer.listen(socketPath, resolve);
-  });
-  return {
-    socketPath,
-    close: async () => {
-      for (const ws of clients) {
-        ws.close();
-      }
-      await new Promise((resolve, reject) => {
-        httpServer.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        });
-      });
-      fs.rmSync(dir, { recursive: true, force: true });
-    },
-  };
-}
+import {
+  startUnixJsonRpcServer,
+} from "./dock-relay-test-helpers.mjs";
 
 test("JsonRpcWebSocketClient adapts Codex unix:// app-server endpoints to ws+unix", async () => {
   let extensionHeader = null;
@@ -86,4 +44,28 @@ test("JsonRpcWebSocketClient adapts Codex unix:// app-server endpoints to ws+uni
     await client.close();
     await server.close();
   }
+});
+
+test("JsonRpcWebSocketClient resolves relative unix:// paths against a base path", () => {
+  const basePath = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-jsonrpc-relative-"));
+  try {
+    const socketPath = path.join(basePath, "relative.sock");
+    assert.equal(
+      unixSocketPathFromURL("unix://relative.sock", { basePath }),
+      socketPath,
+    );
+    assert.equal(
+      webSocketURLForEndpoint(`unix://${socketPath}`),
+      `ws+unix:${socketPath}:/`,
+    );
+  } finally {
+    fs.rmSync(basePath, { recursive: true, force: true });
+  }
+});
+
+test("JsonRpcWebSocketClient rejects bare unix:// URLs without a socket path", () => {
+  assert.throws(
+    () => unixSocketPathFromURL("unix://"),
+    /missing a socket path/u,
+  );
 });

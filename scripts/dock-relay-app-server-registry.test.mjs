@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,61 +9,23 @@ import {
   AppServerRegistry,
   AppServerRegistryRouteError,
   discoverAppServerEndpointsFromProcesses,
+  normalizeAppServerEndpoint,
 } from "./dock-relay-app-server-registry.mjs";
 import {
   collectLiveRows,
+  mergePrivateLiveRows,
 } from "./dock-relay-thread-data.mjs";
+import {
+  normalizedStatus,
+} from "./dock-relay-state-views.mjs";
 import {
   closeWebSocketServer,
   onceListening,
+  startUnixJsonRpcServer,
 } from "./dock-relay-test-helpers.mjs";
 
 function jsonRpcResponse(id, result) {
   return JSON.stringify({ id, result });
-}
-
-async function startUnixAppServer(handler, { socketPath = null } = {}) {
-  const dir = socketPath ? null : fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-registry-unix-"));
-  const resolvedSocketPath = socketPath || path.join(dir, "app-server.sock");
-  const httpServer = http.createServer();
-  const wss = new WebSocketServer({ noServer: true });
-  const clients = new Set();
-  httpServer.on("upgrade", (request, socket, head) => {
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      clients.add(ws);
-      ws.on("close", () => clients.delete(ws));
-      ws.on("message", (raw) => {
-        const message = JSON.parse(raw.toString());
-        const response = handler(message);
-        if (response) {
-          ws.send(JSON.stringify(response));
-        }
-      });
-    });
-  });
-  await new Promise((resolve) => {
-    httpServer.listen(resolvedSocketPath, resolve);
-  });
-  return {
-    socketPath: resolvedSocketPath,
-    close: async () => {
-      for (const ws of clients) {
-        ws.close();
-      }
-      await new Promise((resolve, reject) => {
-        httpServer.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        });
-      });
-      if (dir) {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-    },
-  };
 }
 
 async function startLoopbackAppServer({
@@ -110,7 +71,7 @@ async function startLoopbackAppServer({
 }
 
 test("app-server registry selects daemon history over Dock-owned raw endpoints", async () => {
-  const daemon = await startUnixAppServer((message) => {
+  const daemon = await startUnixJsonRpcServer((message) => {
     if (message.method === "initialize") {
       return { id: message.id, result: { userAgent: "daemon-history-test" } };
     }
@@ -195,6 +156,68 @@ test("app-server registry discovers loopback live endpoints and records owner le
   }
 });
 
+test("app-server registry probes unix process endpoints as attachable owners", async () => {
+  const threadId = "thread-unix-live";
+  const unixServer = await startUnixJsonRpcServer((message) => {
+    if (message.method === "initialize") {
+      return { id: message.id, result: { userAgent: "unix-live-test" } };
+    }
+    if (message.method === "initialized") {
+      return null;
+    }
+    if (message.method === "thread/loaded/list") {
+      return { id: message.id, result: { data: [threadId] } };
+    }
+    if (message.method === "thread/read") {
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: threadId,
+            source: "cli",
+            updatedAt: 2_500,
+            status: { type: "active", activeFlags: [] },
+          },
+        },
+      };
+    }
+    if (message.method === "thread/list") {
+      return { id: message.id, result: { data: [], nextCursor: null } };
+    }
+    return null;
+  });
+  const registry = new AppServerRegistry({
+    includeDaemonHistory: false,
+    processListProvider: async () => [{
+      pid: 4321,
+      ppid: 1,
+      command: `/usr/local/bin/codex app-server --listen unix://${unixServer.socketPath}`,
+    }],
+  });
+  try {
+    await registry.refreshNow("test");
+    const liveEndpoints = registry.liveEndpoints();
+    assert.equal(liveEndpoints.length, 1);
+    assert.equal(liveEndpoints[0].transport, "unix");
+    assert.equal(liveEndpoints[0].socketPath, unixServer.socketPath);
+
+    const collected = await registry.collectLiveRows();
+    assert.equal(collected.rows.length, 1);
+    assert.equal(collected.rows[0].id, threadId);
+
+    const owner = registry.ownerForThread(threadId);
+    assert.equal(owner.endpoint.transport, "unix");
+    assert.equal(owner.endpoint.socketPath, unixServer.socketPath);
+
+    const route = registry.routeForThreadMethod("thread/detail/subscribe", threadId);
+    assert.equal(route.source, "live-owner");
+    assert.equal(route.endpoint.transport, "unix");
+  } finally {
+    registry.stop();
+    await unixServer.close();
+  }
+});
+
 test("app-server registry records private stdio app-servers as unreachable diagnostics", async () => {
   const discovered = discoverAppServerEndpointsFromProcesses([{
     pid: 2222,
@@ -263,7 +286,8 @@ test("app-server registry discovers active codex resume commands as private live
   assert.equal(privateRows.length, 1);
   assert.equal(privateRows[0].id, threadId);
   assert.equal(privateRows[0].source, "cli");
-  assert.equal(privateRows[0].status.type, "active");
+  assert.equal(privateRows[0].status.type, "privateUnattachable");
+  assert.equal(normalizedStatus(privateRows[0]), "unknown");
   assert.equal(privateRows[0].dockRelaySource.endpointType, "private");
 
   assert.throws(
@@ -367,18 +391,58 @@ test("collectLiveRows uses one-shot live-status sockets instead of exhausting th
   }
 });
 
+test("app-server registry resolves relative unix paths only when process cwd is known", () => {
+  const processCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dock-registry-cwd-"));
+  try {
+    const relative = normalizeAppServerEndpoint({
+      url: "unix://relative.sock",
+      processCwd,
+    });
+    assert.equal(relative.socketPath, path.join(processCwd, "relative.sock"));
+    assert.equal(relative.url, `unix://${path.join(processCwd, "relative.sock")}`);
+    assert.equal(relative.failure, null);
+
+    const unknownCwd = normalizeAppServerEndpoint({
+      url: "unix://relative.sock",
+    });
+    assert.equal(unknownCwd.socketPath, null);
+    assert.equal(unknownCwd.failure.reason, "unix_socket_relative_cwd_unknown");
+  } finally {
+    fs.rmSync(processCwd, { recursive: true, force: true });
+  }
+});
+
 test("app-server registry resolves bare unix history to the default control socket", async () => {
   const tempDir = fs.mkdtempSync("/tmp/cdr-default-unix-");
   const codexHome = path.join(tempDir, "codex-home");
   const socketDir = path.join(codexHome, "app-server-control");
   fs.mkdirSync(socketDir, { recursive: true });
   const socketPath = path.join(socketDir, "app-server-control.sock");
-  const daemon = await startUnixAppServer((message) => {
+  const daemon = await startUnixJsonRpcServer((message) => {
     if (message.method === "initialize") {
       return { id: message.id, result: { userAgent: "default-unix-history-test" } };
     }
+    if (message.method === "initialized") {
+      return null;
+    }
     if (message.method === "thread/list") {
       return { id: message.id, result: { data: [], nextCursor: null } };
+    }
+    if (message.method === "thread/loaded/list") {
+      return { id: message.id, result: { data: ["thread-daemon-live"] } };
+    }
+    if (message.method === "thread/read") {
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-daemon-live",
+            source: "cli",
+            updatedAt: 3_000,
+            status: { type: "active", activeFlags: [] },
+          },
+        },
+      };
     }
     return null;
   }, { socketPath });
@@ -391,6 +455,7 @@ test("app-server registry resolves bare unix history to the default control sock
     await registry.refreshNow("test");
     const snapshot = registry.snapshot();
     assert.equal(snapshot.history.transport, "unix");
+    assert.equal(registry.liveEndpoints().length, 1);
 
     const client = await registry.historyClient();
     try {
@@ -399,6 +464,10 @@ test("app-server registry resolves bare unix history to the default control sock
     } finally {
       await client.close();
     }
+
+    const collected = await registry.collectLiveRows();
+    assert.equal(collected.rows.length, 1);
+    assert.equal(registry.ownerForThread("thread-daemon-live").endpoint.transport, "unix");
   } finally {
     registry.stop();
     await daemon.close();
@@ -440,13 +509,27 @@ test("app-server registry routes supported relay methods through one table", asy
     processListProvider: async () => [],
   });
   await registry.refreshNow("test");
-  registry.recordLiveRows(registry.liveEndpoints()[0], [{
+  assert.deepEqual(registry.liveEndpoints().map((endpoint) => endpoint.label), ["live-owner"]);
+  const ownerEndpoint = registry.liveEndpoints().find((endpoint) => endpoint.label === "live-owner");
+  registry.recordLiveRows(ownerEndpoint, [{
     id: "thread-live",
     source: "cli",
     updatedAt: 10_000,
     status: { type: "active", activeFlags: [] },
   }]);
+  registry.recordPrivateOwner("thread-live", { pid: 4444, transport: "stdio" });
   registry.recordPrivateOwner("thread-private", { pid: 3333, transport: "stdio" });
+
+  const merged = mergePrivateLiveRows({
+    rows: [{
+      id: "thread-live",
+      source: "cli",
+      updatedAt: 10_000,
+      status: { type: "active", activeFlags: [] },
+    }],
+  }, registry);
+  assert.equal(merged.rows.find((row) => row.id === "thread-live").status.type, "active");
+  assert.equal(normalizedStatus(merged.rows.find((row) => row.id === "thread-live")), "running");
 
   for (const method of [
     "thread/read",

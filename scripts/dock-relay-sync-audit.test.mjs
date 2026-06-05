@@ -7,6 +7,7 @@ import {
   emptyDockStreamState,
   parseArgs,
   sanitizeDockSnapshotForReport,
+  selectDetailTargets,
   summarizeClientPathEvents,
 } from "./dock-relay-sync-audit.mjs";
 import { RELAY_STATE_STREAM_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
@@ -88,6 +89,28 @@ test("sync audit applies heartbeat as stream state instead of requiring resync",
   assert.equal(state.lastPayloadKind, "heartbeat");
   assert.equal(state.complete, false);
   assert.deepEqual(state.freshness, { status: "stale", lastError: "fixture stale" });
+});
+
+test("sync audit skips unknown rows when selecting detail proof targets", () => {
+  const dockSnapshot = snapshot({
+    rows: [
+      threadCard("thread-private", "001", { status: "unknown" }),
+      threadCard("thread-running", "002", { status: "running" }),
+      threadCard("thread-idle", "003", { status: "idle" }),
+    ],
+  });
+
+  const sampled = selectDetailTargets(dockSnapshot, {
+    detail: "sampled",
+    detailLimit: 5,
+  });
+  assert.deepEqual(sampled.map((target) => target.threadID), ["thread-running", "thread-idle"]);
+
+  const all = selectDetailTargets(dockSnapshot, {
+    detail: "all",
+    detailLimit: 5,
+  });
+  assert.deepEqual(all.map((target) => target.threadID), ["thread-running", "thread-idle"]);
 });
 
 test("sync audit flags heartbeat sequence gaps", () => {

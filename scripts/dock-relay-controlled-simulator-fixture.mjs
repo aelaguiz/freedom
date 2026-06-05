@@ -9,7 +9,10 @@ import WebSocket, { WebSocketServer } from "ws";
 
 import { startServer } from "./dock-relay.mjs";
 import { RELAY_STATE_STREAM_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
-import { appServerRegistryFixtureConfig } from "./dock-relay-test-helpers.mjs";
+import {
+  appServerRegistryFixtureConfig,
+  startUnixJsonRpcServer,
+} from "./dock-relay-test-helpers.mjs";
 import { threadMatchesSourceKinds } from "./dock-relay-source-filter.mjs";
 import {
   projectionIDForThreadCard,
@@ -3459,35 +3462,33 @@ async function runLiveLeaseExpiryScenario(options) {
   };
   const storedThreadRow = fixtureThread(threadID, "Simulator stored row after lease expiry", 100);
 
-  const liveServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  await Promise.all([
-    new Promise((resolve) => liveServer.once("listening", resolve)),
-    new Promise((resolve) => historyServer.once("listening", resolve)),
-  ]);
-
-  liveServer.on("connection", (ws) => {
-    ws.on("message", (data) => {
-      const message = JSON.parse(data.toString());
-      if (message.method === "initialize") {
-        sendFixtureResult(ws, message.id, {
-          userAgent: "codex-sim-live-lease-fixture",
-          codexHome: tempDir,
-          platformFamily: "unix",
-          platformOs: "macos",
-        });
-      } else if (message.method === "thread/loaded/list") {
-        sendFixtureResult(ws, message.id, {
-          data: liveRowsEnabled ? [threadID] : [],
-          nextCursor: null,
-        });
-      } else if (message.method === "thread/read") {
-        sendFixtureThreadRead(ws, message, liveThreadRow);
-      } else if (message.method === "thread/turns/list") {
-        sendFixtureThreadTurnsList(ws, message, liveThreadRow);
-      }
-    });
+  const liveSocketDir = "/tmp/codex-client";
+  fs.mkdirSync(liveSocketDir, { recursive: true });
+  const liveSocketPath = path.join(liveSocketDir, `cdrlive-${process.pid}-${Date.now()}.sock`);
+  const liveServer = await startUnixJsonRpcServer((message, ws) => {
+    if (message.method === "initialize") {
+      sendFixtureResult(ws, message.id, {
+        userAgent: "codex-sim-live-lease-fixture",
+        codexHome: tempDir,
+        platformFamily: "unix",
+        platformOs: "macos",
+      });
+    } else if (message.method === "thread/loaded/list") {
+      sendFixtureResult(ws, message.id, {
+        data: liveRowsEnabled ? [threadID] : [],
+        nextCursor: null,
+      });
+    } else if (message.method === "thread/read") {
+      sendFixtureThreadRead(ws, message, liveThreadRow);
+    } else if (message.method === "thread/turns/list") {
+      sendFixtureThreadTurnsList(ws, message, liveThreadRow);
+    }
+    return null;
+  }, {
+    socketPath: liveSocketPath,
   });
+  const historyServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise((resolve) => historyServer.once("listening", resolve));
 
   historyServer.on("connection", (ws) => {
     ws.on("message", (data) => {
@@ -3525,7 +3526,7 @@ async function runLiveLeaseExpiryScenario(options) {
     ...appServerRegistryFixtureConfig({
       historyUrl: `ws://127.0.0.1:${historyServer.address().port}`,
       historyBearerToken: "history-token",
-      liveEndpoints: [{ label: "sim-live-lease-fixture", url: `ws://127.0.0.1:${liveServer.address().port}` }],
+      liveEndpoints: [{ label: "sim-live-lease-fixture", url: liveServer.url }],
     }),
     liveStatusMaxAgeMs: startupLiveStatusMaxAgeMs,
     advertiseBonjour: false,
@@ -3713,7 +3714,7 @@ async function runLiveLeaseExpiryScenario(options) {
           startupLiveStatusMaxAgeMs,
           controlledLiveStatusMaxAgeMs,
           liveRunningHoldMs,
-          note: "The fixture keeps the row live until the simulator UI sampler is connected, then refreshes the real live lease with the controlled max age and waits for expiry to publish through Dock routes.",
+          note: "The fixture keeps the row live through a unix:// app-server owner until the simulator UI sampler is connected, then refreshes the real live lease with the controlled max age and waits for expiry to publish through Dock routes.",
         },
         target: {
           sourceHostID: hostID,
@@ -3745,7 +3746,7 @@ async function runLiveLeaseExpiryScenario(options) {
   } finally {
     await streamProbe.close().catch(() => null);
     await relay.close().catch(() => null);
-    await closeWebSocketServer(liveServer).catch(() => null);
+    await liveServer.close().catch(() => null);
     await closeWebSocketServer(historyServer).catch(() => null);
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
