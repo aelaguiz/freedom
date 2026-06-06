@@ -1,7 +1,7 @@
 APP_SERVER_DIR ?= .codex-dock
 CODEX_HOME ?=
 APP_SERVER_HOST ?= $(shell tailscale status --json 2>/dev/null | python3 -c 'import json, sys; dns = json.load(sys.stdin).get("Self", {}).get("DNSName", "").rstrip("."); print(dns) if dns else sys.exit(1)' 2>/dev/null || ipconfig getifaddr en0 2>/dev/null || hostname)
-NODE_BIN ?= /opt/homebrew/bin/node
+NODE_BIN ?= $(shell if command -v node >/dev/null 2>&1; then command -v node; elif [ -x /opt/homebrew/bin/node ]; then printf "%s\n" /opt/homebrew/bin/node; elif [ -x /home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node ]; then printf "%s\n" /home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node; else printf "%s\n" node; fi)
 APP_SERVER_ABS_DIR := $(abspath $(APP_SERVER_DIR))
 DOCK_RELAY_PORT ?= 4510
 DOCK_RELAY_LISTEN_HOST ?= 0.0.0.0
@@ -19,7 +19,7 @@ USER_ENV_FILE ?= .env
 ENV_FILE_ABS := $(abspath $(ENV_FILE))
 HOST_ENV_FILE_ABS := $(abspath $(HOST_ENV_FILE))
 HOST_SERVICE_SCRIPT ?= scripts/codex-dock-host-service.mjs
-HOST_SERVICE_PLATFORM ?= macos
+HOST_SERVICE_PLATFORM ?= $(shell uname -s 2>/dev/null | awk '{ if ($$1 == "Linux") print "linux"; else print "macos" }')
 HOST_SERVICE_NETWORK_PROFILE ?= lan
 HOST_SERVICE_WAIT_ATTEMPTS ?= 10
 HOST_SERVICE_STATUS_FILE := $(APP_SERVER_ABS_DIR)/host-service.status.json
@@ -46,8 +46,8 @@ IPHONE_17_PRO_RELAY_HOSTS ?= amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.
 IPHONE_14_DEVICE ?= 0A4EFF8B-54D8-58FB-B3FB-63263265B9CC
 IPHONE_14_RELAY_HOSTS ?= Amir-M5.local:4510,192.168.50.74:4510
 SIM_RELAY_HOSTS ?= $(IPHONE_17_PRO_RELAY_HOSTS)
-CODEX_DOCK_REAL_HOST_ID ?= Amir-M5
-CODEX_DOCK_REAL_HOST_NAME ?= Amir-M5
+CODEX_DOCK_REAL_HOST_ID ?=
+CODEX_DOCK_REAL_HOST_NAME ?=
 CODEX_DOCK_HOSTS ?= $(SIM_RELAY_HOSTS)
 CODEX_DOCK_UI_TEST_HOSTS ?= $(CODEX_DOCK_HOSTS)
 CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL ?= gpt-realtime-whisper
@@ -143,7 +143,9 @@ SIM_UI_ISOLATED_RELAY_PORT ?= 4521
 SIM_UI_ISOLATED_RELAY_LABEL ?= com.aelaguiz.codex-dock.relay.isolated.$(SIM_UI_ISOLATED_RUN_ID)
 APP_BUILD_LOG_DIR := $(APP_SERVER_ABS_DIR)/logs
 HOST_SERVICE_CODEX_HOME_ARG = $(if $(CODEX_HOME),--codex-home "$(CODEX_HOME)",)
-HOST_SERVICE_ARGS = --platform "$(HOST_SERVICE_PLATFORM)" --runtime-dir "$(APP_SERVER_DIR)" $(HOST_SERVICE_CODEX_HOME_ARG) --host-id "$(CODEX_DOCK_REAL_HOST_ID)" --host-name "$(CODEX_DOCK_REAL_HOST_NAME)" --network-profile "$(HOST_SERVICE_NETWORK_PROFILE)" --public-host "$(APP_SERVER_HOST)" --relay-public-url "$(DOCK_RELAY_WS)" --relay-listen-host "$(DOCK_RELAY_LISTEN_HOST)" --relay-port "$(DOCK_RELAY_PORT)" --phone-auth "none" --service-env-file "$(ENV_FILE_ABS)" --host-env-file "$(HOST_ENV_FILE_ABS)" --node-bin "$(NODE_BIN)" --relay-label "$(DOCK_RELAY_LABEL)" --relay-script "$(CURDIR)/scripts/dock-relay.mjs"
+HOST_SERVICE_HOST_ID_ARG = $(if $(CODEX_DOCK_REAL_HOST_ID),--host-id "$(CODEX_DOCK_REAL_HOST_ID)",)
+HOST_SERVICE_HOST_NAME_ARG = $(if $(CODEX_DOCK_REAL_HOST_NAME),--host-name "$(CODEX_DOCK_REAL_HOST_NAME)",)
+HOST_SERVICE_ARGS = --platform "$(HOST_SERVICE_PLATFORM)" --runtime-dir "$(APP_SERVER_DIR)" $(HOST_SERVICE_CODEX_HOME_ARG) $(HOST_SERVICE_HOST_ID_ARG) $(HOST_SERVICE_HOST_NAME_ARG) --network-profile "$(HOST_SERVICE_NETWORK_PROFILE)" --public-host "$(APP_SERVER_HOST)" --relay-public-url "$(DOCK_RELAY_WS)" --relay-listen-host "$(DOCK_RELAY_LISTEN_HOST)" --relay-port "$(DOCK_RELAY_PORT)" --phone-auth "none" --service-env-file "$(ENV_FILE_ABS)" --host-env-file "$(HOST_ENV_FILE_ABS)" --node-bin "$(NODE_BIN)" --relay-label "$(DOCK_RELAY_LABEL)" --relay-script "$(CURDIR)/scripts/dock-relay.mjs"
 SIM_UI_SYNC_CODEX_HOME_ARG = $(if $(SIM_UI_SYNC_CODEX_HOME),--codex-home "$(SIM_UI_SYNC_CODEX_HOME)",)
 SIM_UI_SYNC_SCENARIO_THREAD_ARG = $(if $(SIM_UI_SYNC_SCENARIO_THREAD_ID),--scenario-thread-id "$(SIM_UI_SYNC_SCENARIO_THREAD_ID)",)
 
@@ -209,12 +211,12 @@ contract-check:
 services: host-service-install host-service-start host-service-wait
 
 env-file:
-	@rtk sh -c 'set -eu; case "$(ENV_FILE)" in .env|./.env) echo "refusing to overwrite user-owned .env; set ENV_FILE to a generated path under $(APP_SERVER_DIR)" >&2; exit 2;; esac; openai_key="$${OPENAI_API_KEY:-}"; if [ -z "$$openai_key" ] && [ -f "$(USER_ENV_FILE)" ]; then openai_key="$$(awk -F= '\''$$1=="OPENAI_API_KEY"{sub(/^[^=]*=/,""); print; exit}'\'' "$(USER_ENV_FILE)")"; fi; dir="$$(dirname "$(ENV_FILE)")"; mkdir -p "$$dir"; umask 077; tmp="$$(mktemp "$$dir/.service-env.XXXXXX")"; trap '\''rm -f "$$tmp"'\'' EXIT; { echo "CODEX_DOCK_HOSTS=$(CODEX_DOCK_HOSTS)"; echo "CODEX_DOCK_REAL_HOST_ID=$(CODEX_DOCK_REAL_HOST_ID)"; echo "CODEX_DOCK_REAL_HOST_NAME=$(CODEX_DOCK_REAL_HOST_NAME)"; echo "CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL=$(CODEX_DOCK_OPENAI_REALTIME_TRANSCRIPTION_MODEL)"; echo "CODEX_DOCK_REALTIME_TRANSCRIPTION_DELAY=$(CODEX_DOCK_REALTIME_TRANSCRIPTION_DELAY)"; if [ -n "$$openai_key" ]; then echo "OPENAI_API_KEY=$$openai_key"; fi; } > "$$tmp"; mv "$$tmp" "$(ENV_FILE)"; trap - EXIT; echo "wrote generated service env $(ENV_FILE); left $(USER_ENV_FILE) untouched"'
+	@rtk node -- "$(HOST_SERVICE_SCRIPT)" write-env $(HOST_SERVICE_ARGS)
 
 node-deps:
 	@rtk sh -c 'set -eu; if [ ! -d node_modules/ws ]; then npm ci; else echo "node dependencies already installed"; fi'
 
-host-service-install: env-file node-deps
+host-service-install: node-deps
 	@rtk node -- "$(HOST_SERVICE_SCRIPT)" install $(HOST_SERVICE_ARGS)
 
 host-service-start:

@@ -241,14 +241,14 @@ rtk make relay-doctor
 Linux `home` service over Tailscale:
 
 ```sh
-rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make services HOST_SERVICE_PLATFORM=linux NODE_BIN=/home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510'
+rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make services'
 ```
 
-Check `home` after start with the same overrides:
+Check `home` after start:
 
 ```sh
-rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-status HOST_SERVICE_PLATFORM=linux NODE_BIN=/home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510'
-rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-doctor HOST_SERVICE_PLATFORM=linux NODE_BIN=/home/aelaguiz/.local/node-v24.16.0-linux-x64/bin/node CODEX_DOCK_REAL_HOST_ID=home CODEX_DOCK_REAL_HOST_NAME=Home APP_SERVER_HOST=100.66.11.7 DOCK_RELAY_WS=ws://100.66.11.7:4510'
+rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-status'
+rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-doctor'
 ```
 
 From the Mac, the app-facing `home` relay should answer:
@@ -261,7 +261,8 @@ curl -fsS --max-time 5 http://100.66.11.7:4510/routesz
 
 Use `readyz` only as process proof. Use `statusz` or `routesz` for route proof;
 an app-critical route failure should make `relay-doctor` report a problem even
-when `readyz` succeeds.
+when `readyz` succeeds. `home` status should report relay identity `home` /
+`Home`; if it reports `Amir-M5`, the host-service status check should fail.
 
 `home` Realtime transcription is not claimed unless `OPENAI_API_KEY` is
 configured on `home`. The current safe state is that the `home` relay reports
@@ -381,7 +382,10 @@ the whole setup idempotently.
 The service targets write host-side settings to `.codex-dock/service.env`,
 write app-safe settings to `.codex-dock/host.env`, and leave the user-owned
 `.env` untouched. They may read `OPENAI_API_KEY` from the shell or `.env`, but
-they must not rewrite `.env`.
+they must not rewrite `.env`. Host identity is derived by the host-service
+wrapper when `CODEX_DOCK_REAL_HOST_ID` and `CODEX_DOCK_REAL_HOST_NAME` are not
+set, so `rtk make services` derives `Amir-M5` on the Mac and `home` / `Home` on
+the Linux `home` host.
 
 `.codex-dock/service.env` may contain host-side secrets and relay provider
 settings:

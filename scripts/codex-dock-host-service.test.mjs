@@ -89,6 +89,7 @@ function makeConfig(overrides = {}) {
     cwd: "/tmp/codex-client-host-service-test",
     platform: overrides.platform || "macos",
     env: baseEnv,
+    hostname: overrides.hostname || "test-host",
     options: {
       "host-id": "home",
       "host-name": "Home",
@@ -101,6 +102,61 @@ function makeConfig(overrides = {}) {
     },
   });
 }
+
+test("host identity auto-derives home when explicit overrides are omitted", () => {
+  const config = createHostServiceConfig({
+    cwd: "/tmp/codex-client-host-service-test",
+    platform: "linux",
+    env: baseEnv,
+    hostname: "home",
+    options: {
+      "runtime-dir": ".codex-dock-home",
+      "network-profile": "lan",
+      "public-host": "100.66.11.7",
+    },
+  });
+
+  assert.equal(config.host.id, "home");
+  assert.equal(config.host.displayName, "Home");
+  assert.equal(config.relay.appEndpoint.serialized, "100.66.11.7:4510");
+});
+
+test("host identity auto-derives Amir-M5 from tailnet host", () => {
+  const config = createHostServiceConfig({
+    cwd: "/tmp/codex-client-host-service-test",
+    platform: "macos",
+    env: baseEnv,
+    hostname: "amir-m5.fairy-salmon.ts.net",
+    options: {
+      "runtime-dir": ".codex-dock",
+      "network-profile": "lan",
+      "public-host": "amir-m5.fairy-salmon.ts.net",
+    },
+  });
+
+  assert.equal(config.host.id, "Amir-M5");
+  assert.equal(config.host.displayName, "Amir-M5");
+  assert.equal(config.relay.appEndpoint.serialized, "amir-m5.fairy-salmon.ts.net:4510");
+});
+
+test("explicit host identity still wins over auto-derived identity", () => {
+  const config = createHostServiceConfig({
+    cwd: "/tmp/codex-client-host-service-test",
+    platform: "linux",
+    env: baseEnv,
+    hostname: "home",
+    options: {
+      "host-id": "fixture-host",
+      "host-name": "Fixture Host",
+      "runtime-dir": ".codex-dock-fixture",
+      "network-profile": "lan",
+      "public-host": "100.66.11.7",
+    },
+  });
+
+  assert.equal(config.host.id, "fixture-host");
+  assert.equal(config.host.displayName, "Fixture Host");
+});
 
 test("macOS render emits a single relay launchd service by default", () => {
   const config = makeConfig({ platform: "macos" });
@@ -207,6 +263,62 @@ test("app-config output is app-facing and non-secret", () => {
   assert.equal(combined.includes("app-server.token"), false);
   assert.equal(combined.includes("service.env"), false);
   assert.equal(combined.includes("secret"), false);
+});
+
+test("write-env writes generated env with auto-derived home identity", async () => {
+  const cwd = tempDir();
+  const runtimeDir = path.join(cwd, ".codex-dock-test");
+  const output = captureIO();
+
+  const code = await main([
+    "write-env",
+    "--platform",
+    "linux",
+    "--runtime-dir",
+    ".codex-dock-test",
+    "--network-profile",
+    "lan",
+    "--public-host",
+    "100.66.11.7",
+  ], output.io, { cwd, platform: "linux", hostname: "home" });
+
+  assert.equal(code, 0);
+  const result = JSON.parse(output.stdout());
+  assert.equal(result.status, "wrote-env");
+  assert.deepEqual(result.host, {
+    id: "home",
+    displayName: "Home",
+    envSuffix: "HOME",
+  });
+
+  const serviceEnv = fs.readFileSync(path.join(runtimeDir, "service.env"), "utf8");
+  const hostEnv = fs.readFileSync(path.join(runtimeDir, "host.env"), "utf8");
+  assert.match(serviceEnv, /CODEX_DOCK_REAL_HOST_ID=home/);
+  assert.match(serviceEnv, /CODEX_DOCK_REAL_HOST_NAME=Home/);
+  assert.match(serviceEnv, /CODEX_DOCK_HOSTS=100\.66\.11\.7:4510/);
+  assert.match(hostEnv, /CODEX_DOCK_HOSTS=100\.66\.11\.7:4510/);
+  assert.equal(hostEnv.includes("CODEX_DOCK_REAL_HOST_ID"), false);
+  assert.equal(hostEnv.includes("OPENAI_API_KEY"), false);
+});
+
+test("write-env refuses to overwrite user-owned .env", async () => {
+  const cwd = tempDir();
+  await assert.rejects(
+    () => main([
+      "write-env",
+      "--platform",
+      "linux",
+      "--runtime-dir",
+      ".codex-dock-test",
+      "--service-env-file",
+      ".env",
+      "--network-profile",
+      "lan",
+      "--public-host",
+      "100.66.11.7",
+    ], captureIO().io, { cwd, platform: "linux", hostname: "home" }),
+    /refusing to overwrite user-owned \.env/,
+  );
 });
 
 test("app-config rejects raw app-server port as relay public URL", () => {
@@ -732,6 +844,11 @@ test("status checks systemd services and local health without leaking token outp
       statusCode: 200,
       body: url.includes("statusz") ? {
         ok: true,
+        host: {
+          id: "home",
+          relayInstanceID: "home",
+          displayName: "Home",
+        },
         appServerRegistry: {
           ok: true,
           status: "ready",
@@ -764,11 +881,64 @@ test("status checks systemd services and local health without leaking token outp
   assert.equal(parsed.services.length, 1);
   assert.equal(parsed.services[0].role, "dock-relay");
   assert.equal(parsed.health.length, 3);
+  assert.equal(parsed.health[1].identity.ok, true);
   assert.equal(text.includes("app-server.token"), false);
   assert.equal(text.includes("user:pass"), false);
   assert.equal(text.includes("token=secret"), false);
   assertNoForbiddenSecrets(text);
   assert.equal(parsed.health[1].body, "<redacted-payload>");
+});
+
+test("status fails when running relay reports the wrong host identity", async () => {
+  const runner = fakeRunner((command, args) => {
+    assert.equal(command, "systemctl");
+    if (args.includes("codex-dock-relay.service")) {
+      return { exitCode: 0, stdout: "active\n", stderr: "" };
+    }
+    return { exitCode: 1, stdout: "inactive\n", stderr: "" };
+  });
+  const output = captureIO();
+
+  const code = await main([
+    "status",
+    "--platform",
+    "linux",
+    "--runtime-dir",
+    ".codex-dock-test",
+    "--public-host",
+    "100.66.11.7",
+  ], output.io, {
+    cwd: tempDir(),
+    platform: "linux",
+    hostname: "home",
+    runCommand: runner.runCommand,
+    getJSON: async (url) => ({
+      ok: true,
+      statusCode: 200,
+      body: url.includes("statusz") ? {
+        ok: true,
+        host: {
+          id: "Amir-M5",
+          relayInstanceID: "Amir-M5",
+          displayName: "Amir-M5",
+        },
+        appServerRegistry: {
+          ok: true,
+          status: "ready",
+        },
+        appCriticalFailures: [],
+      } : { ok: true },
+    }),
+  });
+
+  const parsed = JSON.parse(output.stdout());
+  assert.equal(code, 1);
+  assert.equal(parsed.status, "not-ready");
+  assert.equal(parsed.host.id, "home");
+  assert.equal(parsed.host.displayName, "Home");
+  assert.equal(parsed.health[1].identity.ok, false);
+  assert.match(parsed.health[1].identity.problems.join("\n"), /expected host id home but statusz reported Amir-M5/);
+  assert.match(parsed.health[1].identity.problems.join("\n"), /expected host display name Home but statusz reported Amir-M5/);
 });
 
 test("status and doctor return nonzero codes when services are not ready", async () => {

@@ -196,7 +196,15 @@ function generatedHostEnvValues(config, serviceValues) {
   return values;
 }
 
+function assertGeneratedEnvTarget(config, filePath, name) {
+  if (path.resolve(filePath) === path.resolve(config.cwd, ".env")) {
+    throw new Error(`refusing to overwrite user-owned .env; set ${name} to a generated path under ${config.runtimeDir}`);
+  }
+}
+
 function writeGeneratedEnvFiles(config, runtime = {}) {
+  assertGeneratedEnvTarget(config, config.relay.envFile, "service env file");
+  assertGeneratedEnvTarget(config, config.relay.hostEnvFile, "host env file");
   const serviceValues = generatedServiceEnvValues(config, runtime);
   const serviceOrder = [
     "CODEX_DOCK_HOSTS",

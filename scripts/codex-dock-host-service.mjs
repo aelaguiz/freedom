@@ -50,17 +50,19 @@ const VALUE_OPTIONS = new Set([
   "service-env-file",
 ]);
 const BOOLEAN_OPTIONS = new Set(["help"]);
-const COMMANDS = new Set(["app-config", "doctor", "install", "logs", "render", "restart", "start", "status", "stop"]);
+const COMMANDS = new Set(["app-config", "doctor", "install", "logs", "render", "restart", "start", "status", "stop", "write-env"]);
 function usage() {
   return `Usage:
   node scripts/codex-dock-host-service.mjs render --platform <macos|linux> [--format json|text]
   node scripts/codex-dock-host-service.mjs install --platform <macos|linux>
   node scripts/codex-dock-host-service.mjs start|stop|restart|status|logs|doctor
+  node scripts/codex-dock-host-service.mjs write-env
   node scripts/codex-dock-host-service.mjs app-config [--format json|env]
 
 Commands:
   render      Render local-sensitive launchd/systemd service file contents without installing them.
   install     Write service files and enable the Dock relay.
+  write-env   Write generated relay/app env files without installing services.
   start       Start already installed services.
   stop        Stop services.
   restart     Restart services.
@@ -236,26 +238,141 @@ function appEndpointFromWebSocketURL(webSocketURL) {
   };
 }
 
+function nonEmptyString(value) {
+  const trimmed = value === undefined || value === null ? "" : String(value).trim();
+  return trimmed || null;
+}
+
+function endpointHostCandidate(value) {
+  const raw = nonEmptyString(value);
+  if (!raw) {
+    return null;
+  }
+  try {
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(raw)) {
+      return new URL(raw).hostname;
+    }
+    if (raw.includes(":")) {
+      return new URL(`ws://${raw}`).hostname;
+    }
+  } catch {
+    return raw;
+  }
+  return raw;
+}
+
+function normalizedHostCandidate(value) {
+  const host = nonEmptyString(endpointHostCandidate(value));
+  if (!host) {
+    return null;
+  }
+  return host.replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
+}
+
+function knownHostIdentity(host) {
+  const normalized = normalizedHostCandidate(host);
+  if (!normalized) {
+    return null;
+  }
+  const lower = normalized.toLowerCase();
+  if (lower === "home" || lower.startsWith("home.") || lower === "100.66.11.7") {
+    return { id: "home", displayName: "Home" };
+  }
+  if (lower === "amir-m5" || lower === "amir-m5.local" || lower.startsWith("amir-m5.")) {
+    return { id: "Amir-M5", displayName: "Amir-M5" };
+  }
+  return null;
+}
+
+function fallbackHostIdentity(host) {
+  const normalized = normalizedHostCandidate(host);
+  if (!normalized) {
+    return null;
+  }
+  const label = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalized)
+    ? normalized
+    : normalized.split(".")[0];
+  const id = label
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^[^A-Za-z0-9]+/, "")
+    .replace(/[^A-Za-z0-9]+$/, "");
+  if (!id) {
+    return null;
+  }
+  return { id, displayName: id };
+}
+
+function autoHostIdentity({ hostname, publicHost, relayPublicURL, appServerHost } = {}) {
+  const candidates = [
+    hostname,
+    publicHost,
+    appServerHost,
+    relayPublicURL,
+  ];
+  for (const candidate of candidates) {
+    const identity = knownHostIdentity(candidate);
+    if (identity) {
+      return identity;
+    }
+  }
+  for (const candidate of candidates) {
+    const identity = fallbackHostIdentity(candidate);
+    if (identity) {
+      return identity;
+    }
+  }
+  return { id: "codex-dock-host", displayName: "codex-dock-host" };
+}
+
+function resolveHostIdentity({ options, env, hostname, publicHost, relayPublicURL }) {
+  const explicitID = nonEmptyString(optionValue(options, "host-id", env, "CODEX_DOCK_REAL_HOST_ID", null));
+  const explicitName = nonEmptyString(optionValue(options, "host-name", env, "CODEX_DOCK_REAL_HOST_NAME", null));
+  if (explicitID) {
+    return {
+      id: explicitID,
+      displayName: explicitName || explicitID,
+    };
+  }
+  const identity = autoHostIdentity({
+    hostname,
+    publicHost,
+    relayPublicURL,
+    appServerHost: env.APP_SERVER_HOST,
+  });
+  return {
+    id: identity.id,
+    displayName: explicitName || identity.displayName,
+  };
+}
+
 function createHostServiceConfig({
   options = {},
   env = process.env,
   cwd = process.cwd(),
   platform = process.platform,
+  hostname = os.hostname(),
 } = {}) {
   const normalizedPlatform = normalizePlatform(optionValue(options, "platform", env, null, platform));
   const relayPort = ensureNumber(optionValue(options, "relay-port", env, "DOCK_RELAY_PORT", DEFAULT_RELAY_PORT), "relay port");
   const runtimeDir = path.resolve(cwd, optionValue(options, "runtime-dir", env, "CODEX_DOCK_RUNTIME_DIR", DEFAULT_RUNTIME_DIR));
   const logsDir = path.join(runtimeDir, "logs");
   const servicesDir = path.join(runtimeDir, "services");
-  const hostID = String(optionValue(options, "host-id", env, "CODEX_DOCK_REAL_HOST_ID", os.hostname())).trim();
-  const hostName = String(optionValue(options, "host-name", env, "CODEX_DOCK_REAL_HOST_NAME", hostID)).trim();
   const codexHomeValue = optionValue(options, "codex-home", env, "CODEX_HOME", null);
   const codexHome = codexHomeValue ? path.resolve(cwd, String(codexHomeValue)) : null;
   const networkProfile = optionValue(options, "network-profile", env, "CODEX_DOCK_NETWORK_PROFILE", "lan");
+  const configuredPublicHost = optionValue(options, "public-host", env, null, null);
+  const configuredRelayPublicURL = optionValue(options, "relay-public-url", env, "DOCK_RELAY_WS", null);
+  const hostIdentity = resolveHostIdentity({
+    options,
+    env,
+    hostname,
+    publicHost: configuredPublicHost,
+    relayPublicURL: configuredRelayPublicURL,
+  });
   const relayPublicURL = resolveRelayPublicURL({
     networkProfile,
-    relayPublicURL: optionValue(options, "relay-public-url", env, "DOCK_RELAY_WS", null),
-    publicHost: optionValue(options, "public-host", env, null, null),
+    relayPublicURL: configuredRelayPublicURL,
+    publicHost: configuredPublicHost,
     relayPort,
     env,
   });
@@ -285,9 +402,9 @@ function createHostServiceConfig({
     platform: normalizedPlatform,
     serviceManager: serviceManagerForPlatform(normalizedPlatform),
     host: {
-      id: hostID,
-      displayName: hostName,
-      envSuffix: hostIDToEnvSuffix(hostID),
+      id: hostIdentity.id,
+      displayName: hostIdentity.displayName,
+      envSuffix: hostIDToEnvSuffix(hostIdentity.id),
     },
     codexHome,
     cwd,
@@ -791,7 +908,38 @@ async function checkHealth(name, url, runtime = {}) {
   }
 }
 
-async function checkRelayStatusz(name, url, runtime = {}) {
+function relayIdentityCheck(expectedHost, body = {}) {
+  const actualHost = body?.host || {};
+  const actualID = nonEmptyString(actualHost.relayInstanceID || actualHost.id);
+  const actualDisplayName = nonEmptyString(actualHost.displayName);
+  const expectedID = nonEmptyString(expectedHost?.id);
+  const expectedDisplayName = nonEmptyString(expectedHost?.displayName);
+  const problems = [];
+  if (!actualID) {
+    problems.push(`expected host id ${expectedID || "<unknown>"} but statusz did not report a host id`);
+  } else if (expectedID && actualID !== expectedID) {
+    problems.push(`expected host id ${expectedID} but statusz reported ${actualID}`);
+  }
+  if (!actualDisplayName) {
+    problems.push(`expected host display name ${expectedDisplayName || "<unknown>"} but statusz did not report a display name`);
+  } else if (expectedDisplayName && actualDisplayName !== expectedDisplayName) {
+    problems.push(`expected host display name ${expectedDisplayName} but statusz reported ${actualDisplayName}`);
+  }
+  return {
+    ok: problems.length === 0,
+    expected: {
+      id: expectedID || null,
+      displayName: expectedDisplayName || null,
+    },
+    actual: {
+      id: actualID || null,
+      displayName: actualDisplayName || null,
+    },
+    problems,
+  };
+}
+
+async function checkRelayStatusz(name, url, config, runtime = {}) {
   try {
     const result = await (runtime.getJSON || getJSON)(url);
     const snapshotOK = result.body?.ok === true;
@@ -804,19 +952,21 @@ async function checkRelayStatusz(name, url, runtime = {}) {
       }))
       : [];
     const routesOK = appCriticalFailures.length === 0;
+    const identity = relayIdentityCheck(config.host, result.body);
     return redactValue({
       name,
       url,
-      ok: result.ok && snapshotOK && registryOK && routesOK,
+      ok: result.ok && snapshotOK && registryOK && routesOK && identity.ok,
       statusCode: result.statusCode,
       snapshotOK,
       registryOK,
       routesOK,
+      identity,
       appCriticalFailures,
       body: result.body,
     });
   } catch (error) {
-    return redactValue({ name, url, ok: false, snapshotOK: false, registryOK: false, routesOK: false, error });
+    return redactValue({ name, url, ok: false, snapshotOK: false, registryOK: false, routesOK: false, identity: { ok: false, problems: ["statusz identity check did not run"] }, error });
   }
 }
 
@@ -824,7 +974,7 @@ async function statusHostServices(config, runtime = {}) {
   const services = await serviceState(config, runtime);
   const health = [
     await checkHealth("relay-readyz", localRelayHTTPURL(config, "/readyz"), runtime),
-    await checkRelayStatusz("relay-statusz", localRelayHTTPURL(config, "/statusz"), runtime),
+    await checkRelayStatusz("relay-statusz", localRelayHTTPURL(config, "/statusz"), config, runtime),
   ];
   if (config.network.profile !== "simulator-local") {
     health.push(await checkHealth("relay-app-facing-readyz", httpURLForWebSocket(config.relay.publicURL, "/readyz"), runtime));
@@ -885,6 +1035,9 @@ async function doctorHostServices(config, runtime = {}) {
     if (!health.ok) {
       problems.push(`${health.name} is not healthy`);
     }
+    for (const problem of health.identity?.problems || []) {
+      problems.push(`${health.name} identity mismatch: ${problem}`);
+    }
     for (const failure of health.appCriticalFailures || []) {
       problems.push(`${health.name} app-critical route ${failure.route} is ${failure.routeStatus}`);
     }
@@ -920,6 +1073,7 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     env: runtime.env || process.env,
     cwd: runtime.cwd || process.cwd(),
     platform: runtime.platform || process.platform,
+    hostname: runtime.hostname || os.hostname(),
   });
   switch (command) {
   case "render": {
@@ -951,6 +1105,14 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     io.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
     return status.status === "ready" ? 0 : 1;
   }
+  case "write-env":
+    io.stdout.write(`${JSON.stringify(redactValue({
+      version: 1,
+      status: "wrote-env",
+      host: config.host,
+      envFiles: writeGeneratedEnvFiles(config, runtime),
+    }), null, 2)}\n`);
+    return 0;
   case "install":
     io.stdout.write(`${JSON.stringify(await installHostServices(config, runtime), null, 2)}\n`);
     return 0;
