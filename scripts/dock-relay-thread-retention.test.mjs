@@ -277,7 +277,8 @@ test("old direct routes reject before thread turns or archive mutation requests"
 
 test("activity proof uses retained list row when route thread/read has stale activity", async () => {
   const requests = [];
-  const recentListRow = humanThread("recent-proof", CUTOFF_MS + 1_000);
+  const retainedActivityMs = Date.now() - RELAY_THREAD_RETENTION_WINDOW_MS + 60_000;
+  const recentListRow = humanThread("recent-proof", retainedActivityMs);
   const staleReadRow = humanThread("recent-proof", VERY_OLD_MS);
   const config = fakeRelayConfig(async (method, params = {}) => {
     requests.push({ method, params });
@@ -297,19 +298,20 @@ test("activity proof uses retained list row when route thread/read has stale act
   assert.equal(proof.complete, true);
   assert.equal(proof.validationFailures, 0);
   assert.equal(proof.rows[0].activityProofStatus, "proven");
-  assert.equal(proof.rows[0].activityAtMs, CUTOFF_MS + 1_000);
+  assert.equal(proof.rows[0].activityAtMs, retainedActivityMs);
   assert.deepEqual(requests.map((request) => request.method), ["thread/read", "thread/turns/list"]);
 });
 
 test("visible retained Dock card allows rename when route thread/read has stale activity", async () => {
   const requests = [];
-  const retainedThread = humanThread("visible-retained", CUTOFF_MS + 1_000);
+  const retainedActivityMs = Date.now() - RELAY_THREAD_RETENTION_WINDOW_MS + 60_000;
+  const retainedThread = humanThread("visible-retained", retainedActivityMs);
   const staleReadRow = humanThread("visible-retained", VERY_OLD_MS);
   const host = { id: "home", displayName: "Home", endpoint: null };
   const appFacingCard = normalizeThread({
     ...retainedThread,
-    activityAtMs: CUTOFF_MS + 1_000,
-    activityAt: new Date(CUTOFF_MS + 1_000).toISOString(),
+    activityAtMs: retainedActivityMs,
+    activityAt: new Date(retainedActivityMs).toISOString(),
     freshness: "fresh",
     completeness: "complete",
   }, host, "human", {

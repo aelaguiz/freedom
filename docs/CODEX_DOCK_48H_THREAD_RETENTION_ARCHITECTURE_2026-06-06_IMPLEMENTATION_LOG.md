@@ -135,6 +135,11 @@ Findings:
   real-data row churn. Fixed `Makefile` defaults so the canonical
   `rtk make sim-ui-sync-proof SIM='iPhone 17'` command now uses the same
   `45000` ms UI sampling and `75000` ms relay sampling that passed reliably.
+- Completion audit found two route-fallback tests that used a fixed
+  `2026-06-06T12:00:00Z` "recent" fixture. As wall-clock time passed, those
+  fixtures aged out of the 48-hour window. Fixed the tests to build retained
+  fallback rows relative to `Date.now()` while keeping the production retention
+  policy unchanged.
 
 ### IMP-005 Live Relay Deploy
 
