@@ -25,6 +25,14 @@ import {
   timestampToISO,
   timestampToMs,
 } from "./dock-relay-state-views.mjs";
+import {
+  THREAD_RETENTION_REJECTION_REASON,
+  filterThreadsByRetention,
+  resolveThreadRetentionCutoffMs,
+  threadRetentionCutoffMs,
+  threadRetentionDecision,
+  threadRetentionRejectedError,
+} from "./dock-relay-thread-retention.mjs";
 
 function relayLogger(config) {
   return config?.logger || defaultRelayLogger;
@@ -308,6 +316,13 @@ function humanOnlyThreadListParams(params = {}) {
 function nonEmpty(value) {
   const text = String(value ?? "").trim();
   return text.length > 0 ? text : null;
+}
+
+function mergeRejectedCounts(target, source) {
+  for (const [reason, count] of Object.entries(source || {})) {
+    target[reason] = Number(target[reason] || 0) + Number(count || 0);
+  }
+  return target;
 }
 
 function codexHomeForConfig(config) {
@@ -921,17 +936,28 @@ async function readHistoryThreadList(config, params) {
 }
 
 async function drainThreadListRows(config, params = {}, {
+  bypassThreadIDs = [],
+  cutoffMs = null,
   name = "active:interactiveDefault",
+  retention = true,
   sourceScope = "interactiveDefault",
 } = {}) {
   const pages = [];
   const rows = [];
   const seenCursors = new Set();
   const historyParams = humanOnlyThreadListParams(params);
+  const retentionCutoffMs = retention ? resolveThreadRetentionCutoffMs(config, { cutoffMs }) : null;
+  const canStopAtRetentionBoundary = retention
+    && historyParams.sortKey === "updated_at"
+    && historyParams.sortDirection === "desc";
+  const rejectedCounts = {};
   let cursor = historyParams.cursor || null;
   let complete = true;
   let error = null;
   let ordinal = 0;
+  let rawRowCount = 0;
+  let retentionBoundaryHit = false;
+  let retentionRejectedRows = 0;
 
   try {
     while (true) {
@@ -941,20 +967,50 @@ async function drainThreadListRows(config, params = {}, {
       };
       const response = await readHistoryThreadList(config, request);
       const data = Array.isArray(response?.data) ? response.data : [];
+      rawRowCount += data.length;
+      const retainedPageRows = [];
+      let pageRetentionRejectedRows = 0;
+      for (const thread of data) {
+        if (!retention) {
+          retainedPageRows.push(thread);
+          continue;
+        }
+        const decision = threadRetentionDecision(thread, {
+          bypassThreadIDs,
+          cutoffMs: retentionCutoffMs,
+        });
+        if (decision.retained) {
+          retainedPageRows.push(decision.reason === "live_bypass"
+            ? { ...thread, dockRelayRetentionBypass: "live_bypass" }
+            : thread);
+          continue;
+        }
+        retentionRejectedRows += 1;
+        pageRetentionRejectedRows += 1;
+        rejectedCounts[decision.reason] = Number(rejectedCounts[decision.reason] || 0) + 1;
+        if (canStopAtRetentionBoundary) {
+          retentionBoundaryHit = true;
+        }
+      }
       pages.push({
         cursor,
         nextCursor: response?.nextCursor || null,
         backwardsCursor: response?.backwardsCursor || null,
         rowCount: data.length,
+        retainedRowCount: retainedPageRows.length,
+        retentionRejectedRows: pageRetentionRejectedRows,
       });
-      for (let index = 0; index < data.length; index += 1) {
+      for (let index = 0; index < retainedPageRows.length; index += 1) {
         rows.push({
           ordinal,
           pageIndex: pages.length - 1,
           rowIndex: index,
-          thread: data[index],
+          thread: retainedPageRows[index],
         });
         ordinal += 1;
+      }
+      if (retentionBoundaryHit) {
+        break;
       }
       const nextCursor = response?.nextCursor || null;
       if (!nextCursor) {
@@ -980,6 +1036,11 @@ async function drainThreadListRows(config, params = {}, {
     complete,
     error,
     pages,
+    rawRowCount,
+    rejectedCounts,
+    retentionBoundaryHit,
+    retentionCutoffMs,
+    retentionRejectedRows,
     rowCount: rows.length,
     rows,
   };
@@ -1112,20 +1173,53 @@ async function enrichHumanStartedRows(config, rows = [], {
 }
 
 async function readSessionIndexHumanStartedSupplements(config, existingRows = [], {
+  bypassThreadIDs = [],
+  cutoffMs = null,
   route = "thread_list",
   params = {},
   limit = HUMAN_THREAD_INDEX_SUPPLEMENT_LIMIT,
   readThread = (threadId) => readHistoryThread(config, { threadId, includeTurns: false }),
+  retention = true,
 } = {}) {
   const logger = relayLogger(config);
   const existingThreadIDs = new Set(existingRows.map((row) => row?.id).filter(Boolean));
-  const candidates = readSessionIndexCandidates(config, { existingThreadIDs, limit });
-  if (candidates.length === 0) {
+  const allCandidates = readSessionIndexCandidates(config, { existingThreadIDs, limit });
+  const retentionCutoffMs = retention ? resolveThreadRetentionCutoffMs(config, { cutoffMs }) : null;
+  const retentionFilter = retention
+    ? filterThreadsByRetention(allCandidates, {
+        bypassThreadIDs,
+        cutoffMs: retentionCutoffMs,
+      })
+    : {
+      retainedRows: allCandidates,
+      rejectedCounts: {},
+      retentionRejectedRows: 0,
+    };
+  const candidates = retentionFilter.retainedRows;
+  if (allCandidates.length === 0) {
     return {
       acceptedRows: [],
       rejectedCounts: {},
       validationFailures: 0,
       candidateRows: 0,
+      retentionRejectedRows: 0,
+    };
+  }
+  if (candidates.length === 0) {
+    logger.info("human_started_thread.session_index_supplement", {
+      route,
+      candidates: allCandidates.length,
+      acceptedRows: 0,
+      rejectedCounts: retentionFilter.rejectedCounts,
+      retentionRejectedRows: retentionFilter.retentionRejectedRows,
+      validationFailures: 0,
+    });
+    return {
+      acceptedRows: [],
+      rejectedCounts: retentionFilter.rejectedCounts,
+      validationFailures: 0,
+      candidateRows: allCandidates.length,
+      retentionRejectedRows: retentionFilter.retentionRejectedRows,
     };
   }
   const sessionMetadataByThreadID = readSessionMetadataIndexForCodexHome(
@@ -1134,7 +1228,7 @@ async function readSessionIndexHumanStartedSupplements(config, existingRows = []
     { threadIDs: candidates.map((candidate) => candidate?.id).filter(Boolean) },
   );
 
-  const rejectedCounts = {};
+  const rejectedCounts = { ...retentionFilter.rejectedCounts };
   const results = await allSettledInBatches(
     candidates,
     HUMAN_THREAD_READ_ENRICHMENT_CONCURRENCY,
@@ -1151,7 +1245,21 @@ async function readSessionIndexHumanStartedSupplements(config, existingRows = []
       if (!classification.allowed) {
         return { accepted: false, reason: classification.reason };
       }
-      return { accepted: true, row: thread };
+      const retentionDecision = retention
+        ? threadRetentionDecision(thread, {
+            bypassThreadIDs,
+            cutoffMs: retentionCutoffMs,
+          })
+        : { retained: true };
+      if (!retentionDecision.retained) {
+        return { accepted: false, reason: retentionDecision.reason };
+      }
+      return {
+        accepted: true,
+        row: retentionDecision.reason === "live_bypass"
+          ? { ...thread, dockRelayRetentionBypass: "live_bypass" }
+          : thread,
+      };
     },
   );
 
@@ -1176,7 +1284,89 @@ async function readSessionIndexHumanStartedSupplements(config, existingRows = []
 
   logger.info("human_started_thread.session_index_supplement", {
     route,
-    candidates: candidates.length,
+    candidates: allCandidates.length,
+    acceptedRows: acceptedRows.length,
+    rejectedCounts,
+    retentionRejectedRows: Number(rejectedCounts[THREAD_RETENTION_REJECTION_REASON] || 0),
+    validationFailures,
+  });
+
+  return {
+    acceptedRows,
+    rejectedCounts,
+    validationFailures,
+    candidateRows: allCandidates.length,
+    retentionRejectedRows: Number(rejectedCounts[THREAD_RETENTION_REJECTION_REASON] || 0),
+  };
+}
+
+async function readHumanThreadRetentionBypassRows(config, threadIDs = [], {
+  params = {},
+  route = "retention_bypass",
+  readThread = (threadId) => readHistoryThread(config, { threadId, includeTurns: false }),
+} = {}) {
+  const logger = relayLogger(config);
+  const uniqueThreadIDs = [...new Set((threadIDs || []).map(nonEmpty).filter(Boolean))];
+  if (uniqueThreadIDs.length === 0) {
+    return {
+      acceptedRows: [],
+      rejectedCounts: {},
+      validationFailures: 0,
+      candidateRows: 0,
+    };
+  }
+
+  const sessionMetadataByThreadID = readSessionMetadataIndexForCodexHome(
+    codexHomeForConfig(config),
+    logger,
+    { threadIDs: uniqueThreadIDs },
+  );
+  const rejectedCounts = {};
+  const results = await allSettledInBatches(
+    uniqueThreadIDs,
+    HUMAN_THREAD_READ_ENRICHMENT_CONCURRENCY,
+    async (threadId) => {
+      const response = await readThread(threadId);
+      const thread = mergeSessionMetadata(response?.thread, sessionMetadataByThreadID.get(threadId));
+      if (!thread?.id) {
+        throw new Error("thread/read returned no thread");
+      }
+      if (!threadArchiveMatchesParams(thread, params)) {
+        return { accepted: false, reason: "archive_scope_mismatch" };
+      }
+      const classification = classifyThreadOrigin(thread);
+      if (!classification.allowed) {
+        return { accepted: false, reason: classification.reason };
+      }
+      return { accepted: true, row: thread };
+    },
+  );
+
+  const acceptedRows = [];
+  let validationFailures = 0;
+  for (const result of results) {
+    if (result.status === "rejected") {
+      validationFailures += 1;
+      logger.warn("human_started_thread.retention_bypass_validation_failed", {
+        route,
+        error: result.reason,
+      });
+      continue;
+    }
+    if (result.value?.accepted) {
+      acceptedRows.push({
+        ...result.value.row,
+        dockRelayRetentionBypass: "live_bypass",
+      });
+      continue;
+    }
+    const reason = result.value?.reason || "unknown";
+    rejectedCounts[reason] = Number(rejectedCounts[reason] || 0) + 1;
+  }
+
+  logger.info("human_started_thread.retention_bypass_supplement", {
+    route,
+    candidates: uniqueThreadIDs.length,
     acceptedRows: acceptedRows.length,
     rejectedCounts,
     validationFailures,
@@ -1186,7 +1376,7 @@ async function readSessionIndexHumanStartedSupplements(config, existingRows = []
     acceptedRows,
     rejectedCounts,
     validationFailures,
-    candidateRows: candidates.length,
+    candidateRows: uniqueThreadIDs.length,
   };
 }
 
@@ -1240,7 +1430,11 @@ function isRouteAuthoritativeHumanCard(card) {
 
 function appFacingHumanCardForThread(config, threadId) {
   const card = config?.relayStateEngine?.cardForThread?.(threadId);
-  return isRouteAuthoritativeHumanCard(card) ? card : null;
+  if (!isRouteAuthoritativeHumanCard(card)) {
+    return null;
+  }
+  const decision = threadRetentionDecision(card, { config });
+  return decision.retained ? card : null;
 }
 
 function assertRouteHumanStartedThread(row, threadId, {
@@ -1262,10 +1456,46 @@ function assertRouteHumanStartedThread(row, threadId, {
   return row;
 }
 
+function assertRouteThreadRetained(config, row, threadId, {
+  appFacingCard = null,
+  acceptedHumanRow = null,
+  liveBypass = false,
+} = {}) {
+  if (liveBypass) {
+    return row;
+  }
+  const acceptedFallback = acceptedHumanRowForThread(acceptedHumanRow, threadId);
+  const appFacingFallback = isRouteAuthoritativeHumanCard(appFacingCard) ? appFacingCard : null;
+  const bypassThreadIDs = new Set();
+  if (acceptedFallback?.dockRelayRetentionBypass === "live_bypass") {
+    bypassThreadIDs.add(threadId);
+  }
+  const decision = threadRetentionDecision(row, {
+    config,
+    bypassThreadIDs,
+  });
+  if (!decision.retained) {
+    for (const fallbackRow of [acceptedFallback, appFacingFallback]) {
+      if (!fallbackRow) {
+        continue;
+      }
+      const fallbackDecision = threadRetentionDecision(fallbackRow, {
+        config,
+        bypassThreadIDs,
+      });
+      if (fallbackDecision.retained) {
+        return row;
+      }
+    }
+    throw threadRetentionRejectedError(threadId || row?.id || row?.threadId || row?.threadID, decision);
+  }
+  return row;
+}
+
 async function readHumanThreadForRoute(config, threadId, {
   allowHistoryFallbackForRejectedLive = false,
   acceptedHumanRow = null,
-  allowAppFacingCardRouteFallback = false,
+  allowAppFacingCardRouteFallback = true,
 } = {}) {
   const appFacingCard = allowAppFacingCardRouteFallback
     ? appFacingHumanCardForThread(config, threadId)
@@ -1273,9 +1503,14 @@ async function readHumanThreadForRoute(config, threadId, {
   const liveRow = await sessionRouterForConfig(config).rowForThread(threadId);
   if (liveRow) {
     try {
-      return assertRouteHumanStartedThread(liveRow, threadId, {
+      const accepted = assertRouteHumanStartedThread(liveRow, threadId, {
         acceptedHumanRow,
         appFacingCard,
+      });
+      return assertRouteThreadRetained(config, accepted, threadId, {
+        appFacingCard,
+        acceptedHumanRow,
+        liveBypass: true,
       });
     } catch (error) {
       if (!allowHistoryFallbackForRejectedLive) {
@@ -1284,7 +1519,11 @@ async function readHumanThreadForRoute(config, threadId, {
     }
   }
   const history = await readHistoryThread(config, { threadId, includeTurns: false });
-  return assertRouteHumanStartedThread(history?.thread, threadId, {
+  const accepted = assertRouteHumanStartedThread(history?.thread, threadId, {
+    acceptedHumanRow,
+    appFacingCard,
+  });
+  return assertRouteThreadRetained(config, accepted, threadId, {
     acceptedHumanRow,
     appFacingCard,
   });
@@ -1299,19 +1538,24 @@ async function aggregateThreadList(config, params = {}) {
   const historyParams = humanOnlyThreadListParams(params);
   const history = await readHistoryThreadList(config, historyParams);
   const data = Array.isArray(history.data) ? history.data : [];
-  const { acceptedRows, rejectedCounts, validationFailures } = await enrichHumanStartedRows(
+  const retentionCutoffMs = threadRetentionCutoffMs(config);
+  const retentionFilter = filterThreadsByRetention(data, {
+    cutoffMs: retentionCutoffMs,
+  });
+  const rejectedCounts = { ...retentionFilter.rejectedCounts };
+  const { acceptedRows, rejectedCounts: humanRejectedCounts, validationFailures } = await enrichHumanStartedRows(
     config,
-    data,
+    retentionFilter.retainedRows,
     { route: "thread_list" },
   );
+  mergeRejectedCounts(rejectedCounts, humanRejectedCounts);
   const supplements = await readSessionIndexHumanStartedSupplements(config, acceptedRows, {
+    cutoffMs: retentionCutoffMs,
     route: "thread_list",
     params: historyParams,
     limit: historyParams.limit,
   });
-  for (const [reason, count] of Object.entries(supplements.rejectedCounts)) {
-    rejectedCounts[reason] = Number(rejectedCounts[reason] || 0) + Number(count || 0);
-  }
+  mergeRejectedCounts(rejectedCounts, supplements.rejectedCounts);
   const returnedRows = mergeHumanStartedRowsWithSupplements(acceptedRows, supplements.acceptedRows);
   const liveOverlay = history.liveOverlay || liveStatusCacheForConfig(config).liveOverlay();
   logger.info("thread_list.loaded", {
@@ -1320,6 +1564,7 @@ async function aggregateThreadList(config, params = {}) {
     effectiveLimit: historyParams.limit,
     returnedRows: returnedRows.length,
     supplementedRows: supplements.acceptedRows.length,
+    retentionRejectedRows: retentionFilter.retentionRejectedRows + supplements.retentionRejectedRows,
     rejectedCounts,
     validationFailures: validationFailures + supplements.validationFailures,
     liveOverlayState: liveOverlay?.state || (liveOverlay?.ok ? "healthy" : "unknown"),
@@ -1327,6 +1572,11 @@ async function aggregateThreadList(config, params = {}) {
   return {
     ...history,
     data: returnedRows,
+    nextCursor: retentionFilter.retentionRejectedRows > 0
+      && historyParams.sortKey === "updated_at"
+      && historyParams.sortDirection === "desc"
+      ? null
+      : history.nextCursor,
     liveOverlay,
   };
 }
@@ -1348,11 +1598,16 @@ async function aggregateThreadRead(config, params = {}, options = {}) {
     : null;
   if (route.source === "live-owner") {
     const result = await readThreadFromEndpoint(route.endpoint, params, relayLogger(config));
-    assertRouteHumanStartedThread(result?.thread, params.threadId, { appFacingCard });
+    const accepted = assertRouteHumanStartedThread(result?.thread, params.threadId, { appFacingCard });
+    assertRouteThreadRetained(config, accepted, params.threadId, {
+      appFacingCard,
+      liveBypass: true,
+    });
     return result;
   }
   const result = await readHistoryThread(config, params);
-  assertRouteHumanStartedThread(result?.thread, params.threadId, { appFacingCard });
+  const accepted = assertRouteHumanStartedThread(result?.thread, params.threadId, { appFacingCard });
+  assertRouteThreadRetained(config, accepted, params.threadId, { appFacingCard });
   return result;
 }
 
@@ -1552,7 +1807,9 @@ async function archiveThread(config, params = {}) {
   if (!params.threadId) {
     throw new Error("thread/archive requires threadId");
   }
-  await assertHumanThreadID(config, params.threadId);
+  await assertHumanThreadID(config, params.threadId, {
+    allowAppFacingCardRouteFallback: true,
+  });
   const endpoint = await endpointForThread(config, params.threadId, "thread/archive");
   if (isHistoryEndpoint(config, endpoint)) {
     return historyClientForConfig(config).request("thread/archive", params);
@@ -1571,7 +1828,9 @@ async function setThreadName(config, params = {}) {
   if (typeof params.name !== "string" || params.name.trim().length === 0) {
     throw new Error("thread/name/set requires name");
   }
-  await assertHumanThreadID(config, params.threadId);
+  await assertHumanThreadID(config, params.threadId, {
+    allowAppFacingCardRouteFallback: true,
+  });
   const endpoint = await endpointForThread(config, params.threadId, "thread/name/set", {
     allowHistoryForPrivateOwner: true,
   });
@@ -1589,7 +1848,9 @@ async function unarchiveThread(config, params = {}) {
   if (!params.threadId) {
     throw new Error("thread/unarchive requires threadId");
   }
-  await assertHumanThreadID(config, params.threadId);
+  await assertHumanThreadID(config, params.threadId, {
+    allowAppFacingCardRouteFallback: true,
+  });
   return historyClientForConfig(config).request("thread/unarchive", params);
 }
 
@@ -1618,6 +1879,7 @@ export {
   readHistoryThread,
   readHistoryThreadList,
   readCanonicalThreadForProjection,
+  readHumanThreadRetentionBypassRows,
   readSessionIndexHumanStartedSupplements,
   sanitizeRelayFields,
   setThreadName,

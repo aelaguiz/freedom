@@ -603,6 +603,7 @@ export {
   orderedDockRows,
   publicHostFromConfig,
   relayRowCarriesActivitySignal,
+  rowActivityAtMs,
   timestampToISO,
   timestampToMs,
 };

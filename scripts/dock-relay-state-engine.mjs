@@ -29,9 +29,16 @@ import {
   enrichHumanStartedRows,
   mergeHumanStartedRowsWithSupplements,
   mergePrivateLiveRows,
+  readHumanThreadRetentionBypassRows,
   readCanonicalThreadForProjection,
   readSessionIndexHumanStartedSupplements,
 } from "./dock-relay-thread-data.mjs";
+import {
+  THREAD_RETENTION_REJECTION_REASON,
+  retentionBypassThreadIDsFromLive,
+  threadRetentionCutoffMs,
+  threadRetentionDecision,
+} from "./dock-relay-thread-retention.mjs";
 
 function nowISOString() {
   return new Date().toISOString();
@@ -63,6 +70,13 @@ const ACTIVE_LIVE_SCOPE = {
 function firstScopeError(scopes, fallback) {
   const scope = scopes.find((candidate) => candidate?.complete === false && candidate?.error);
   return scope?.error || fallback;
+}
+
+function mergeRejectedCounts(target, source) {
+  for (const [reason, count] of Object.entries(source || {})) {
+    target[reason] = Number(target[reason] || 0) + Number(count || 0);
+  }
+  return target;
 }
 
 function liveLeaseFromRow(row, endpoint, maxAgeMs) {
@@ -378,10 +392,33 @@ class RelayStateEngine {
     let row = eventThread;
     let canonical = null;
     if (row?.id) {
+      const decision = threadRetentionDecision(row, { config: this.config });
+      if (!decision.retained) {
+        const removed = this.store.applyTargetedCardRemoval({
+          host,
+          threadID: row.id,
+          reason: `${reason}:retention-filter`,
+        });
+        await this.publishTargetedCardResult(removed, { view: removed.view, reason });
+        return removed;
+      }
       canonical = await canonicalizeThreadRows(this.config, [row], { route: reason });
       row = canonical.rows[0] || null;
     } else {
-      canonical = await readCanonicalThreadForProjection(this.config, threadId, { route: reason });
+      try {
+        canonical = await readCanonicalThreadForProjection(this.config, threadId, { route: reason });
+      } catch (error) {
+        if (error?.data?.reason === THREAD_RETENTION_REJECTION_REASON) {
+          const removed = this.store.applyTargetedCardRemoval({
+            host,
+            threadID: threadId,
+            reason: `${reason}:retention-filter`,
+          });
+          await this.publishTargetedCardResult(removed, { view: removed.view, reason });
+          return removed;
+        }
+        throw error;
+      }
       row = canonical.row;
     }
     if (!row?.id) {
@@ -484,30 +521,50 @@ class RelayStateEngine {
         sortDirection: "desc",
         modelProviders: [],
       };
+      const retentionCutoffMs = threadRetentionCutoffMs(this.config);
       const previousDockCards = this.store.listDockCards({ hostID: host.id }).cards;
-      const [liveProof, defaultScope] = await Promise.all([
-        this.refreshLiveLeases(),
-        drainThreadListRows(this.config, baseParams, {
-          name: `${ACTIVE_ARCHIVE_SCOPE.name}:${ACTIVE_DEFAULT_SCOPE.name}`,
-          sourceScope: ACTIVE_DEFAULT_SCOPE.name,
-        }),
-      ]);
+      const liveProof = await this.refreshLiveLeases();
       const liveRows = liveProof.rows;
+      const bypassThreadIDs = retentionBypassThreadIDsFromLive(liveRows, liveProof.rollupRows);
+      const defaultScope = await drainThreadListRows(this.config, baseParams, {
+        bypassThreadIDs,
+        cutoffMs: retentionCutoffMs,
+        name: `${ACTIVE_ARCHIVE_SCOPE.name}:${ACTIVE_DEFAULT_SCOPE.name}`,
+        sourceScope: ACTIVE_DEFAULT_SCOPE.name,
+      });
       const interactiveRows = defaultScope.rows.map((row) => row.thread).filter(Boolean);
       const { acceptedRows, rejectedCounts, validationFailures } = await enrichHumanStartedRows(
         this.config,
         interactiveRows,
         { route: "dock_reconcile" },
       );
-      const supplements = await readSessionIndexHumanStartedSupplements(this.config, acceptedRows, {
+      mergeRejectedCounts(rejectedCounts, defaultScope.rejectedCounts);
+      const knownBypassThreadIDs = new Set([
+        ...acceptedRows.map((row) => row?.id).filter(Boolean),
+        ...liveRows.map((row) => row?.id).filter(Boolean),
+      ]);
+      const missingBypassThreadIDs = [...bypassThreadIDs].filter((threadID) => !knownBypassThreadIDs.has(threadID));
+      const bypassSupplements = await readHumanThreadRetentionBypassRows(this.config, missingBypassThreadIDs, {
+        route: "dock_reconcile:live_bypass",
+        params: baseParams,
+      });
+      mergeRejectedCounts(rejectedCounts, bypassSupplements.rejectedCounts);
+      const rowsWithLiveBypassSupplements = mergeHumanStartedRowsWithSupplements(
+        acceptedRows,
+        bypassSupplements.acceptedRows,
+      );
+      const supplements = await readSessionIndexHumanStartedSupplements(this.config, rowsWithLiveBypassSupplements, {
+        bypassThreadIDs,
+        cutoffMs: retentionCutoffMs,
         route: "dock_reconcile",
         params: baseParams,
         limit: baseParams.limit,
       });
-      for (const [rejectedReason, count] of Object.entries(supplements.rejectedCounts)) {
-        rejectedCounts[rejectedReason] = Number(rejectedCounts[rejectedReason] || 0) + Number(count || 0);
-      }
-      const appRows = mergeHumanStartedRowsWithSupplements(acceptedRows, supplements.acceptedRows);
+      mergeRejectedCounts(rejectedCounts, supplements.rejectedCounts);
+      const appRows = mergeHumanStartedRowsWithSupplements(
+        rowsWithLiveBypassSupplements,
+        supplements.acceptedRows,
+      );
       const orderedRows = orderedDockRows([], appRows, liveRows, liveProof.rollupRows);
       // Card order is derived only after every row has proven activity from
       // thread/read plus thread/turns/list. Raw thread/list order is input data,
@@ -525,7 +582,10 @@ class RelayStateEngine {
           completeness: canonicalByID.get(row.id).completeness,
         }) : null)
         .filter(Boolean);
-      const totalValidationFailures = validationFailures + canonical.validationFailures;
+      const totalValidationFailures = validationFailures
+        + bypassSupplements.validationFailures
+        + supplements.validationFailures
+        + canonical.validationFailures;
       const complete = defaultScope.complete
         && liveProof.scope.complete
         && totalValidationFailures === 0
@@ -580,6 +640,9 @@ class RelayStateEngine {
           hostId: host.id,
           rows: cards.length,
           rejectedCounts,
+          retentionRejectedRows: defaultScope.retentionRejectedRows + supplements.retentionRejectedRows,
+          liveBypassThreadIDs: bypassThreadIDs.size,
+          liveBypassSupplementedRows: bypassSupplements.acceptedRows.length,
           validationFailures: totalValidationFailures,
           supplementValidationFailures: supplements.validationFailures,
           supplementedRows: supplements.acceptedRows.length,
@@ -594,6 +657,9 @@ class RelayStateEngine {
           rows: cards.length,
           seq: result.seq,
           rejectedCounts,
+          retentionRejectedRows: defaultScope.retentionRejectedRows + supplements.retentionRejectedRows,
+          liveBypassThreadIDs: bypassThreadIDs.size,
+          liveBypassSupplementedRows: bypassSupplements.acceptedRows.length,
           validationFailures: totalValidationFailures,
           supplementValidationFailures: supplements.validationFailures,
           supplementedRows: supplements.acceptedRows.length,
@@ -645,8 +711,10 @@ class RelayStateEngine {
         sortDirection: "desc",
         modelProviders: [],
       };
+      const retentionCutoffMs = threadRetentionCutoffMs(this.config);
       const previousArchiveCards = this.store.listArchiveCards({ hostID: host.id }).cards;
       const defaultScope = await drainThreadListRows(this.config, baseParams, {
+        cutoffMs: retentionCutoffMs,
         name: "archived:interactiveDefault",
         sourceScope: "interactiveDefault",
       });
@@ -656,14 +724,14 @@ class RelayStateEngine {
         interactiveRows,
         { route: "archive_reconcile" },
       );
+      mergeRejectedCounts(rejectedCounts, defaultScope.rejectedCounts);
       const supplements = await readSessionIndexHumanStartedSupplements(this.config, acceptedRows, {
+        cutoffMs: retentionCutoffMs,
         route: "archive_reconcile",
         params: baseParams,
         limit: baseParams.limit,
       });
-      for (const [rejectedReason, count] of Object.entries(supplements.rejectedCounts)) {
-        rejectedCounts[rejectedReason] = Number(rejectedCounts[rejectedReason] || 0) + Number(count || 0);
-      }
+      mergeRejectedCounts(rejectedCounts, supplements.rejectedCounts);
       const rows = mergeHumanStartedRowsWithSupplements(acceptedRows, supplements.acceptedRows);
       const canonical = await canonicalizeThreadRows(this.config, rows, { route: "archive_reconcile" });
       const cards = canonical.rows
@@ -673,7 +741,7 @@ class RelayStateEngine {
           completeness: row.completeness,
         }))
         .filter(Boolean);
-      const totalValidationFailures = validationFailures + canonical.validationFailures;
+      const totalValidationFailures = validationFailures + supplements.validationFailures + canonical.validationFailures;
       const complete = defaultScope.complete && totalValidationFailures === 0 && canonical.complete;
       const result = this.store.applyArchiveReconciliation({
         host,
@@ -703,6 +771,7 @@ class RelayStateEngine {
         hostId: host.id,
         rows: cards.length,
         rejectedCounts,
+        retentionRejectedRows: defaultScope.retentionRejectedRows + supplements.retentionRejectedRows,
         validationFailures: totalValidationFailures,
         supplementValidationFailures: supplements.validationFailures,
         seq: result.seq,

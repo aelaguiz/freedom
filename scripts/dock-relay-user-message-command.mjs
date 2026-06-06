@@ -188,7 +188,9 @@ class RelayUserMessageCommandEngine {
       });
     }
 
-    await assertHumanThreadID(this.config, threadId);
+    await assertHumanThreadID(this.config, threadId, {
+      allowAppFacingCardRouteFallback: true,
+    });
 
     const hostID = this.config.hostId;
     const inputJSON = stableInputJSON(input);

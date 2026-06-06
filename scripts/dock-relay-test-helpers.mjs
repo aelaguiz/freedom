@@ -199,6 +199,7 @@ function appServerRegistryFixtureConfig({
 } = {}) {
   return {
     codexHome,
+    threadRetentionWindowMs: Number.POSITIVE_INFINITY,
     registryIncludeDaemonHistory: includeDaemonHistory,
     registryProcessListProvider: async () => [],
     registryFixtureHistoryEndpoints: historyUrl

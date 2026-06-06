@@ -76,11 +76,11 @@ SIM_UI_SYNC_DIR ?= /tmp/codex-client/sim-ui-audit-$(shell date -u +%Y%m%dT%H%M%S
 SIM_UI_SYNC_HOSTS ?= 127.0.0.1:$(DOCK_RELAY_PORT)
 SIM_UI_SYNC_RELAY_WS ?= ws://127.0.0.1:$(DOCK_RELAY_PORT)
 # XCTest accessibility polling is the proof transport, not the product path.
-# Keep the default live proof short and repeatable; use scenario/matrix targets
-# for intentional long-running and checkpoint-sweep coverage.
-SIM_UI_SYNC_DURATION_MS ?= 15000
+# Keep the default live proof long enough for active real-data rows to settle;
+# use scenario/matrix targets for intentional mutation and checkpoint coverage.
+SIM_UI_SYNC_DURATION_MS ?= 45000
 SIM_UI_SYNC_SAMPLE_MS ?= 1500
-SIM_UI_SYNC_RELAY_DURATION_MS ?= 45000
+SIM_UI_SYNC_RELAY_DURATION_MS ?= 75000
 SIM_UI_SYNC_RELAY_SAMPLE_MS ?= 30000
 SIM_UI_SYNC_RELAY_DETAIL ?= none
 SIM_UI_SYNC_RELAY_DETAIL_LIMIT ?= 5
