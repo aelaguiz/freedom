@@ -1,3 +1,4 @@
+import CryptoKit
 import SwiftUI
 
 struct HostSummaryView: View {
@@ -294,12 +295,39 @@ extension DockRowViewModel {
             "projection=\(projectionID)",
             "hostDisplay=\(hostDisplayName)",
             "thread=\(threadID)",
+            "order=\(displayOrderKey)",
+            "titleLength=\(title.codexDockDisplayTitle.utf16.count)",
+            "titleHash=\(title.codexDockDisplayTitle.codexDockTitleFingerprint)",
             "status=\(status.rawValue)",
             "origin=\(origin.automationKind)",
             "relationship=\(relationship.rawValue)",
             "label=\(label == nil ? "none" : "present")",
             isPinned ? "Pinned" : "Not pinned",
         ].joined(separator: "; ")
+    }
+}
+
+private extension String {
+    var codexDockDisplayTitle: String {
+        var end = endIndex
+        while end > startIndex {
+            let previous = index(before: end)
+            let isTrailingWhitespace = self[previous].unicodeScalars.allSatisfy {
+                CharacterSet.whitespacesAndNewlines.contains($0)
+            }
+            if !isTrailingWhitespace {
+                break
+            }
+            end = previous
+        }
+        return String(self[..<end])
+    }
+
+    var codexDockTitleFingerprint: String {
+        let digest = SHA256.hash(data: Data(utf8))
+        return digest.prefix(8)
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }
 

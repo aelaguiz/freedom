@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import test from "node:test";
 
 import {
@@ -51,6 +52,14 @@ function messageListValue({ events, projections = [], requestStatuses = [] }) {
     .map(([cardID, status]) => `${encodeAutomationSegment(cardID)}=${status}`)
     .join("|");
   return `events=${events}; filter=all; projections=${encodedProjections}; request-statuses=${encodedRequestStatuses}`;
+}
+
+function textFingerprint(value) {
+  return {
+    kind: "textFingerprint",
+    length: value.length,
+    sha256: crypto.createHash("sha256").update(value).digest("hex").slice(0, 16),
+  };
 }
 
 function relayReport({ finishedAt = "2026-05-31T00:00:01.000Z", status = "idle" } = {}) {
@@ -111,10 +120,14 @@ function twoRowRelaySample() {
   return report.samples[0];
 }
 
-function dockRow({ thread = "thread-a", status = "idle", origin = "human" } = {}) {
+function dockRow({ thread = "thread-a", status = "idle", origin = "human", title = null, order = null } = {}) {
+  const titleValue = title
+    ? `; titleLength=${title.length}; titleHash=${textFingerprint(title).sha256}`
+    : "";
+  const orderValue = order ? `; order=${order}` : "";
   return {
     identifier: `codexdock.dock.row.host.${thread}`,
-    value: `host=host; sourceHost=host; projection=${threadCardProjectionID(thread)}; thread=${thread}; status=${status}; origin=${origin}; label=none; Not pinned`,
+    value: `host=host; sourceHost=host; projection=${threadCardProjectionID(thread)}; thread=${thread}${orderValue}${titleValue}; status=${status}; origin=${origin}; label=none; Not pinned`,
     label: thread,
     frame: { minX: 0, minY: 10, width: 100, height: 44 },
   };
@@ -587,6 +600,30 @@ test("simulator UI proof fails visible row status mismatches", () => {
   assert.deepEqual(evaluation.failures.map((failure) => failure.code), ["dock_ui_row_status_mismatch"]);
 });
 
+test("simulator UI proof accepts matching sanitized row title fingerprints", () => {
+  const relay = relayReport().samples[0];
+  relay.freshDock.rows[0].title = textFingerprint("Renamed thread");
+  const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
+  sample.dockRows = [dockRow({ title: "Renamed thread" })];
+
+  const evaluation = evaluateUISample(sample, relay);
+
+  assert.equal(evaluation.ok, true);
+  assert.deepEqual(evaluation.failures, []);
+});
+
+test("simulator UI proof fails stale sanitized row title fingerprints", () => {
+  const relay = relayReport().samples[0];
+  relay.freshDock.rows[0].title = textFingerprint("Renamed thread");
+  const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
+  sample.dockRows = [dockRow({ title: "Old thread" })];
+
+  const evaluation = evaluateUISample(sample, relay);
+
+  assert.equal(evaluation.ok, false);
+  assert.equal(evaluation.failures.some((failure) => failure.code === "dock_ui_row_title_mismatch"), true);
+});
+
 test("simulator UI proof accepts checkpoint sweeps that cover all relay rows", () => {
   const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
   sample.dockRootValue = "loaded; rows=2; pinned=0; lens=newest; search=false; filters=0";
@@ -671,6 +708,96 @@ test("simulator UI proof uses stream notification snapshots as timestamped Dock 
   assert.deepEqual(proof.failures, []);
 });
 
+test("simulator UI proof uses scenario stream notification snapshots as timestamped Dock truth", () => {
+  const report = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
+  report.samples[0].freshDock = {
+    rowCount: 2,
+    totalRows: 2,
+    renderOrderProjectionIDs: [threadCardProjectionID("thread-a"), threadCardProjectionID("thread-b")],
+    rows: twoRowRelaySample().freshDock.rows,
+  };
+  report.mode = "scenario";
+  report.scenarios = [{
+    id: "rename-title",
+    stream: {
+      notifications: [{
+        method: "dock/update",
+        receivedAt: "2026-05-31T00:00:02.000Z",
+        kind: "upsert",
+        seq: 2,
+        snapshot: {
+          rowCount: 2,
+          totalRows: 2,
+          renderOrderProjectionIDs: [threadCardProjectionID("thread-b"), threadCardProjectionID("thread-a")],
+          rows: [
+            {
+              id: threadCardProjectionID("thread-b"),
+              projectionID: threadCardProjectionID("thread-b"),
+              logicalHostID: "host",
+              threadID: "thread-b",
+              status: "running",
+              lane: "agent",
+              sourceKind: "automation",
+            },
+            {
+              id: threadCardProjectionID("thread-a"),
+              projectionID: threadCardProjectionID("thread-a"),
+              logicalHostID: "host",
+              threadID: "thread-a",
+              status: "idle",
+              lane: "human",
+              sourceKind: "human",
+            },
+          ],
+        },
+      }],
+    },
+    transitions: [],
+  }];
+
+  const proof = buildRenderedUIReport({
+    relayReport: report,
+    uiSamples: [
+      orderedUISample({
+        sampledAt: "2026-05-31T00:00:02.500Z",
+        threads: ["thread-b", "thread-a"],
+      }),
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(proof.summary.ok, true);
+  assert.equal(proof.evaluations[0].relaySampleIndex, "rename-title:stream:2");
+  assert.deepEqual(proof.failures, []);
+});
+
+test("simulator UI proof skips exact row scoring after an update event without row truth", () => {
+  const report = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
+  report.clientPathEvidence = {
+    events: [{
+      route: "dock/update",
+      at: "2026-05-31T00:00:02.000Z",
+      kind: "upsert",
+      seq: 2,
+      countedAsClientPath: true,
+    }],
+  };
+
+  const proof = buildRenderedUIReport({
+    relayReport: report,
+    uiSamples: [
+      uiSample({ sampledAt: "2026-05-31T00:00:01.500Z", status: "idle" }),
+      uiSample({ sampledAt: "2026-05-31T00:00:02.500Z", status: "running" }),
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(proof.summary.ok, true);
+  assert.equal(proof.evaluations[1].scored, false);
+  assert.equal(proof.evaluations[1].relaySampleIndex, "unknown:2");
+  assert.deepEqual(proof.failures, []);
+});
+
 test("simulator UI proof scores Dock rows at row capture time", () => {
   const report = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
   report.samples[0].freshDock = {
@@ -744,6 +871,22 @@ test("simulator UI proof fails visible Dock rows rendered out of relay order", (
   assert.equal(evaluation.ok, false);
   assert.equal(evaluation.visibleOrderChecks, 1);
   assert.equal(evaluation.failures.some((failure) => failure.code === "dock_ui_order_mismatch"), true);
+});
+
+test("simulator UI proof fails rows with stale displayed relay order keys", () => {
+  const relaySample = twoRowRelaySample();
+  relaySample.freshDock.rows[0].displayOrderKey = "001";
+  const sample = uiSample({ sampledAt: "2026-05-31T00:00:01.500Z" });
+  sample.dockRows = [
+    dockRow({ thread: "thread-a", order: "999" }),
+  ];
+
+  const evaluation = evaluateUISample(sample, relaySample);
+
+  assert.equal(evaluation.ok, false);
+  const mismatch = evaluation.failures.find((failure) => failure.code === "dock_ui_row_order_key_mismatch");
+  assert.equal(mismatch?.uiDisplayOrderKey, "999");
+  assert.equal(mismatch?.relayDisplayOrderKey, "001");
 });
 
 test("simulator UI proof skips global order checks for grouped Dock lenses", () => {
@@ -1007,6 +1150,27 @@ test("simulator UI proof scores against stream notification truth between sparse
   assert.equal(result.evaluations[0].relaySampleIndex, "stream:2");
 });
 
+test("simulator UI proof does not score whole-list rows against stale relay truth", () => {
+  const relay = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
+  relay.mode = "scenario";
+  relay.scenarios = [];
+  const result = buildRenderedUIReport({
+    relayReport: relay,
+    uiSamples: [
+      uiSample({ sampledAt: "2026-05-31T00:00:01.500Z", status: "idle" }),
+      uiSample({ sampledAt: "2026-05-31T00:00:10.000Z", status: "running" }),
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(result.summary.ok, true);
+  assert.equal(result.summary.scoredUISampleCount, 1);
+  assert.equal(result.summary.staleRelayTruthUISamples, 1);
+  assert.equal(result.evaluations[1].scored, false);
+  assert.equal(result.evaluations[1].truthUnknownReason, "stale_relay_truth");
+  assert.equal(result.evaluations[1].staleRelaySampleIndex, 0);
+});
+
 test("simulator UI proof scores visible Dock rows at sampledAt when checkpoint sweep finishes later", () => {
   const report = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
   report.samples[0].freshDock = {
@@ -1138,6 +1302,155 @@ test("simulator UI proof scores scenario archive and unarchive transition window
     report.scenarioTransitionCoverage.checks.map((check) => [check.transition, check.observedLagMs]),
     [["archive", 400], ["unarchive", 400]],
   );
+});
+
+test("simulator UI proof does not fail scenario acceptance on unrelated whole-list drift", () => {
+  const relay = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
+  relay.mode = "scenario";
+  relay.samples[0].freshDock = {
+    rowCount: 2,
+    totalRows: 2,
+    renderOrderProjectionIDs: [threadCardProjectionID("thread-a"), threadCardProjectionID("thread-b")],
+    rows: twoRowRelaySample().freshDock.rows,
+  };
+  relay.scenarios = [{
+    id: "rename-title",
+    transitions: [{
+      name: "target-update",
+      route: "thread/name/set",
+      wait: { observedAt: "2026-05-31T00:00:02.000Z" },
+      lag: {
+        relaySeenAt: "2026-05-31T00:00:02.000Z",
+        lag_change_to_relay_ms: 20,
+        maxStreamLagMs: 2_000,
+        ok: true,
+      },
+      freshDock: relay.samples[0].freshDock,
+    }],
+  }];
+
+  const report = buildRenderedUIReport({
+    relayReport: relay,
+    uiSamples: [
+      orderedUISample({
+        sampledAt: "2026-05-31T00:00:02.400Z",
+        threads: ["thread-a", "thread-b"],
+      }),
+      orderedUISample({
+        sampledAt: "2026-05-31T00:00:03.500Z",
+        threads: ["thread-b", "thread-a"],
+      }),
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.scenarioTransitionFailures, 0);
+  assert.equal(report.summary.uiLag.ok, false);
+  assert.equal(report.summary.ok, true);
+  assert.equal(report.failures.some((failure) => failure.code === "dock_ui_lag_exceeded"), false);
+});
+
+test("simulator UI proof scores Dock transitions from the observed stream snapshot", () => {
+  const relay = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
+  const projectionID = threadCardProjectionID("thread-a");
+  const observedTitle = "Observed rename title";
+  const laterTitle = "Later fresh title";
+  const observedSnapshot = {
+    rowCount: 1,
+    totalRows: 1,
+    renderOrderProjectionIDs: [projectionID],
+    rows: [{
+      id: projectionID,
+      projectionID,
+      logicalHostID: "host",
+      threadID: "thread-a",
+      status: "idle",
+      lane: "human",
+      sourceKind: "human",
+      title: observedTitle,
+      displayOrderKey: "0001|observed",
+    }],
+  };
+  relay.mode = "scenario";
+  relay.samples[0].freshDock = observedSnapshot;
+  relay.scenarios = [{
+    id: "rename-title",
+    transitions: [{
+      name: "rename-title",
+      route: "thread/name/set",
+      wait: {
+        observedAt: "2026-05-31T00:00:02.000Z",
+        snapshot: observedSnapshot,
+      },
+      lag: {
+        relaySeenAt: "2026-05-31T00:00:02.000Z",
+        lag_change_to_relay_ms: 12,
+        maxStreamLagMs: 2_000,
+        ok: true,
+      },
+      freshDock: {
+        rowCount: 1,
+        totalRows: 1,
+        lastReceivedAt: "2026-05-31T00:00:05.000Z",
+        renderOrderProjectionIDs: [projectionID],
+        rows: [{
+          ...observedSnapshot.rows[0],
+          title: laterTitle,
+          displayOrderKey: "0002|later",
+        }],
+      },
+    }],
+  }];
+
+  const report = buildRenderedUIReport({
+    relayReport: relay,
+    uiSamples: [{
+      ...uiSample({ sampledAt: "2026-05-31T00:00:02.300Z" }),
+      dockRows: [dockRow({
+        title: observedTitle,
+        order: "0001|observed",
+      })],
+    }, {
+      ...uiSample({ sampledAt: "2026-05-31T00:00:05.300Z" }),
+      dockRows: [dockRow({
+        title: laterTitle,
+        order: "0002|later",
+      })],
+    }],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.equal(report.summary.scenarioTransitionFailures, 0);
+  assert.equal(report.evaluations[1].relaySampleIndex, "rename-title:rename-title:fresh");
+  assert.deepEqual(
+    report.scenarioTransitionCoverage.checks.map((check) => [check.transition, check.observedLagMs]),
+    [["rename-title", 300]],
+  );
+});
+
+test("simulator UI proof scores later UI samples against later relay truth", () => {
+  const relay = scenarioRelayReport();
+  const laterRelaySample = relayReport({
+    finishedAt: "2026-05-31T00:00:06.000Z",
+    status: "running",
+  }).samples[0];
+  laterRelaySample.sampleIndex = 1;
+  laterRelaySample.startedAt = "2026-05-31T00:00:05.900Z";
+  relay.samples.push(laterRelaySample);
+
+  const report = buildRenderedUIReport({
+    relayReport: relay,
+    uiSamples: [
+      emptyUISample({ sampledAt: "2026-05-31T00:00:02.400Z" }),
+      uiSample({ sampledAt: "2026-05-31T00:00:05.400Z", status: "idle" }),
+      uiSample({ sampledAt: "2026-05-31T00:00:06.400Z", status: "running" }),
+    ],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.equal(report.evaluations.at(-1).relaySampleIndex, 1);
 });
 
 test("simulator UI proof scores scenario lag from Dock evidence read start", () => {

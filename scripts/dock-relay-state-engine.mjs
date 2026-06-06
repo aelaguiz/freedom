@@ -4,6 +4,7 @@ import {
   RELAY_STATE_RECONCILE_INTERVAL_MS,
   RELAY_STATE_SNAPSHOT_SOFT_LIMIT_BYTES,
   RELAY_STATE_STREAM_SCHEMA_VERSION,
+  RELAY_STATE_TARGETED_DIRTY_DEBOUNCE_MS,
   RELAY_STATE_UPDATE_SOFT_LIMIT_BYTES,
   THREAD_LIST_MAX_LIMIT,
 } from "./dock-relay-constants.mjs";
@@ -11,21 +12,14 @@ import { NotificationIngestor } from "./dock-relay-state-ingest.mjs";
 import { relayStateStoreForConfig } from "./dock-relay-state-store.mjs";
 import { StateSubscriptionHub } from "./dock-relay-state-subscriptions.mjs";
 import {
-  threadCardDisplayOrderKey,
-} from "./dock-relay-projection-engine.mjs";
-import {
   DOCK_VIEW,
   ARCHIVE_VIEW,
-  applyHiddenActivityRollupsToCards,
   buildWindow,
   estimateJSONBytes,
   normalizeThread,
   normalizedStatus,
   orderedDockRows,
   publicHostFromConfig,
-  relayRowCarriesActivitySignal,
-  timestampToISO,
-  timestampToMs,
 } from "./dock-relay-state-views.mjs";
 import { isHumanStartedThread } from "./dock-relay-human-thread-filter.mjs";
 import {
@@ -35,6 +29,7 @@ import {
   enrichHumanStartedRows,
   mergeHumanStartedRowsWithSupplements,
   mergePrivateLiveRows,
+  readCanonicalThreadForProjection,
   readSessionIndexHumanStartedSupplements,
 } from "./dock-relay-thread-data.mjs";
 
@@ -90,67 +85,24 @@ function liveLeaseFromRow(row, endpoint, maxAgeMs) {
   };
 }
 
-function cacheHasUsableLiveOverlay(snapshot) {
-  const state = snapshot?.liveOverlay?.state;
-  return state === "ready" || state === "degraded";
+function threadIDFromNotification(message) {
+  return message?.params?.threadId
+    || message?.params?.threadID
+    || message?.params?.thread_id
+    || message?.params?.thread?.id
+    || null;
 }
 
-function liveRowsFromStatusCache(cache) {
-  const snapshot = cache?.snapshot?.();
-  if (!cacheHasUsableLiveOverlay(snapshot)) {
-    return [];
-  }
-  return Array.isArray(snapshot.rows) ? snapshot.rows : [];
+function threadNameFromNotification(message) {
+  return typeof message?.params?.threadName === "string"
+    ? message.params.threadName
+    : (typeof message?.params?.thread_name === "string"
+      ? message.params.thread_name
+      : (typeof message?.params?.name === "string" ? message.params.name : null));
 }
 
-function rollupRowsFromStatusCache(cache) {
-  const snapshot = cache?.snapshot?.();
-  if (!cacheHasUsableLiveOverlay(snapshot)) {
-    return [];
-  }
-  return Array.isArray(snapshot.rollupRows) ? snapshot.rollupRows : [];
-}
-
-function cardWithLiveStatusOverlay(card, liveRow) {
-  if (!card || !liveRow?.status) {
-    return card;
-  }
-  const status = normalizedStatus(liveRow);
-  const liveActivityAtMs = timestampToMs(
-    liveRow.activityAtMs
-      ?? liveRow.activityAt
-      ?? liveRow.updatedAt
-      ?? liveRow.createdAt
-  );
-  const storedActivityAtMs = Number(card.activityAtMs || 0);
-  const activityAtMs = relayRowCarriesActivitySignal(liveRow)
-    ? Math.max(storedActivityAtMs, liveActivityAtMs)
-    : storedActivityAtMs;
-  return {
-    ...card,
-    backendSessionID: liveRow.sessionId || card.backendSessionID,
-    activityAt: timestampToISO(activityAtMs),
-    activityAtMs,
-    status,
-    displayOrderKey: threadCardDisplayOrderKey({
-      activityAtMs,
-      status,
-      projectionID: card.projectionID,
-    }),
-  };
-}
-
-function applyLiveStatusOverlayToCards(cards, liveRows = [], rollupRows = []) {
-  if (!Array.isArray(cards) || cards.length === 0) {
-    return cards;
-  }
-  const liveRowsByID = new Map((liveRows || []).map((row) => [row?.id, row]).filter(([id]) => id));
-  const cardsWithLiveStatus = liveRowsByID.size > 0
-    ? cards
-      .map((card) => cardWithLiveStatusOverlay(card, liveRowsByID.get(card.threadID)))
-      .sort((left, right) => String(left.displayOrderKey).localeCompare(String(right.displayOrderKey)))
-    : cards;
-  return applyHiddenActivityRollupsToCards(cardsWithLiveStatus, rollupRows);
+function threadStatusFromNotification(message) {
+  return message?.params?.status || null;
 }
 
 class StateReconciler {
@@ -251,6 +203,7 @@ class RelayStateEngine {
     });
     this.mutationReconcileChain = Promise.resolve(null);
     this.liveLeaseExpiryTimer = null;
+    this.threadDirtyTimers = new Map();
     this.started = false;
   }
 
@@ -267,6 +220,10 @@ class RelayStateEngine {
       clearTimeout(this.liveLeaseExpiryTimer);
       this.liveLeaseExpiryTimer = null;
     }
+    for (const timer of this.threadDirtyTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.threadDirtyTimers.clear();
     await this.reconciler.stop();
     await this.mutationReconcileChain.catch(() => null);
     this.store.close();
@@ -291,9 +248,25 @@ class RelayStateEngine {
     }
   }
 
-  cardForThread(threadID) {
+  async refreshDockProjectionForSnapshot(reason) {
+    const liveSnapshot = await this.refreshLiveStatusCacheForSnapshot(reason);
+    if (!liveSnapshot?.ok) {
+      return liveSnapshot;
+    }
+    const hasLiveEndpointEvidence = Number(liveSnapshot.endpoints?.length || 0) > 0
+      || Number(liveSnapshot.rows?.length || 0) > 0
+      || Number(liveSnapshot.rollupRows?.length || 0) > 0
+      || Number(liveSnapshot.failedEndpoints || 0) > 0
+      || Number(liveSnapshot.failedThreadReads || 0) > 0;
+    if (!hasLiveEndpointEvidence) {
+      return liveSnapshot;
+    }
+    return this.reconcileDock({ reason: `${reason}:pre_snapshot` });
+  }
+
+  cardForThread(threadID, { visibleOnly = true } = {}) {
     const host = publicHostFromConfig(this.config);
-    return this.store.cardForThread({ hostID: host.id, threadID });
+    return this.store.cardForThread({ hostID: host.id, threadID, visibleOnly });
   }
 
   scheduleLiveLeaseExpiryReconciliation(hostID) {
@@ -339,6 +312,166 @@ class RelayStateEngine {
       });
     });
     timer.unref?.();
+  }
+
+  async publishTargetedCardResult(result, {
+    view = result?.view,
+    reason = "targeted-card-update",
+  } = {}) {
+    if (result?.removedFrom?.changed) {
+      await this.publishTargetedCardResult(result.removedFrom, {
+        view: result.removedFrom.view,
+        reason,
+      });
+    }
+    if (!result?.changed || !view) {
+      return;
+    }
+    const host = publicHostFromConfig(this.config);
+    const archived = view === ARCHIVE_VIEW;
+    const freshness = this.store.freshnessForHost(host.id, { archived });
+    const totalRows = archived
+      ? this.store.listArchiveCards({ hostID: host.id, offset: 0, limit: 0 }).totalRows
+      : this.store.listDockCards({ hostID: host.id, offset: 0, limit: 0 }).totalRows;
+    await this.subscriptions.publishDelta(this.subscriptions.cardDelta({
+      view,
+      seq: result.seq,
+      sourceHostID: host.id,
+      freshness,
+      rows: result.rows || [],
+      projectionIDs: result.projectionIDs || [],
+      totalRows,
+      complete: result.complete === true ? true : undefined,
+      reason,
+    }));
+    this.logger?.info?.("state.targeted_projection_delta_emitted", {
+      reason,
+      hostId: host.id,
+      view,
+      seq: result.seq,
+      upsertCount: Number(result.rows?.length || 0),
+      deleteCount: Number(result.projectionIDs?.length || 0),
+    });
+  }
+
+  async publishTargetedArchiveMove(results, reason) {
+    await this.publishTargetedCardResult(results?.dock, { view: DOCK_VIEW, reason });
+    await this.publishTargetedCardResult(results?.archive, { view: ARCHIVE_VIEW, reason });
+  }
+
+  async patchThreadCard({ threadId, patch, reason }) {
+    const host = publicHostFromConfig(this.config);
+    const result = this.store.applyThreadCardPatch({
+      host,
+      threadID: threadId,
+      patch,
+      reason,
+    });
+    if (!result?.hidden) {
+      await this.publishTargetedCardResult(result, { view: result.view, reason });
+    }
+    return result;
+  }
+
+  async projectThreadCard({ threadId, reason, archived = false, eventThread = null } = {}) {
+    const host = publicHostFromConfig(this.config);
+    let row = eventThread;
+    let canonical = null;
+    if (row?.id) {
+      canonical = await canonicalizeThreadRows(this.config, [row], { route: reason });
+      row = canonical.rows[0] || null;
+    } else {
+      canonical = await readCanonicalThreadForProjection(this.config, threadId, { route: reason });
+      row = canonical.row;
+    }
+    if (!row?.id) {
+      throw new Error("targeted projection could not resolve thread row");
+    }
+    const card = normalizeThread(row, host, "human", {
+      archiveState: archived ? "archived" : "active",
+      freshness: row.freshness,
+      completeness: row.completeness,
+    });
+    const result = this.store.applyTargetedCardUpsert({
+      host,
+      card,
+      reason,
+    });
+    await this.publishTargetedCardResult(result, { view: result.view, reason });
+    return result;
+  }
+
+  async updateThreadCardFromEvent({ threadId, reason, patch = null, archived = null, eventThread = null } = {}) {
+    if (!threadId) {
+      return null;
+    }
+    if (patch && Object.keys(patch).length > 0) {
+      const patched = await this.patchThreadCard({ threadId, patch, reason });
+      if (!patched?.missing) {
+        return {
+          reason,
+          path: patched.changed ? "direct_patch" : "direct_patch_noop",
+          [patched.view === ARCHIVE_VIEW ? "archive" : "dock"]: patched,
+        };
+      }
+      if (patched.hidden) {
+        return {
+          reason,
+          path: "hidden_card_ignored",
+        };
+      }
+    }
+    const existing = this.cardForThread(threadId);
+    if (!existing && !eventThread && this.cardForThread(threadId, { visibleOnly: false })) {
+      return {
+        reason,
+        path: "hidden_card_ignored",
+      };
+    }
+    const targetArchived = archived !== null && archived !== undefined
+      ? Boolean(archived)
+      : existing?.archiveState === "archived";
+    const projected = await this.projectThreadCard({
+      threadId,
+      reason,
+      archived: targetArchived,
+      eventThread,
+    });
+    return {
+      reason,
+      path: "targeted_read",
+      [projected.view === ARCHIVE_VIEW ? "archive" : "dock"]: projected,
+    };
+  }
+
+  queueThreadDirtyUpdate({ threadId, reason }) {
+    if (!threadId) {
+      return null;
+    }
+    const key = threadId;
+    const existingTimer = this.threadDirtyTimers.get(key);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    const timer = setTimeout(() => {
+      this.threadDirtyTimers.delete(key);
+      this.queueMutationReconciliation(() => this.updateThreadCardFromEvent({
+        threadId,
+        reason,
+      })).catch((error) => {
+        this.logger?.warn?.("state.thread_dirty_targeted_update_failed", {
+          reason,
+          error,
+        });
+      });
+    }, this.config.relayStateTargetedDirtyDebounceMs || RELAY_STATE_TARGETED_DIRTY_DEBOUNCE_MS);
+    timer.unref?.();
+    this.threadDirtyTimers.set(key, timer);
+    return {
+      reason,
+      threadId,
+      queued: true,
+    };
   }
 
   async reconcileDock({ reason = "manual" } = {}) {
@@ -730,26 +863,11 @@ class RelayStateEngine {
       });
     }
 
-    const liveRows = liveRowsFromStatusCache(this.config.liveStatusCache);
-    const rollupRows = rollupRowsFromStatusCache(this.config.liveStatusCache);
-    const allCards = liveRows.length > 0 || rollupRows.length > 0
-      ? applyLiveStatusOverlayToCards(
-        this.store.listDockCards({ hostID: host.id, offset: 0, limit: totalRows }).cards,
-        liveRows,
-        rollupRows,
-      )
-      : null;
-
     const listDockCards = ({ offset: requestedOffset, limit: requestedLimit }) => {
-      if (!allCards) {
-        return this.store.listDockCards({ hostID: host.id, offset: requestedOffset, limit: requestedLimit });
-      }
-      const safeOffset = Math.max(0, Number(requestedOffset || 0));
-      const safeLimit = Math.max(0, Number(requestedLimit || 0));
-      return {
-        cards: allCards.slice(safeOffset, safeOffset + safeLimit),
-        totalRows: allCards.length,
-      };
+      // Snapshots must expose only the committed projection. Live status cache
+      // is folded into the store by reconciliation/targeted updates; applying
+      // it here creates a second truth that subscribers were never sent.
+      return this.store.listDockCards({ hostID: host.id, offset: requestedOffset, limit: requestedLimit });
     };
 
     let windowLimit = Math.max(1, Math.min(Number(limit || 1), totalRows));
@@ -859,7 +977,7 @@ class RelayStateEngine {
   }
 
   async subscribeDock({ session, downstreamWs, sendJson }) {
-    await this.refreshLiveStatusCacheForSnapshot("dock/subscribe");
+    await this.refreshDockProjectionForSnapshot("dock/subscribe");
     return this.subscribeCardView({
       view: DOCK_VIEW,
       updateMethod: "dock/update",
@@ -935,7 +1053,7 @@ class RelayStateEngine {
   }
 
   async resyncDock({ downstreamWs = null, sendJson = null } = {}) {
-    await this.refreshLiveStatusCacheForSnapshot("dock/resync");
+    await this.refreshDockProjectionForSnapshot("dock/resync");
     return this.resyncCardView({
       view: DOCK_VIEW,
       updateMethod: "dock/update",
@@ -1164,11 +1282,42 @@ class RelayStateEngine {
     if (!mutation) {
       return null;
     }
-    return this.queueMutationReconciliation(() => this.reconcileDockAndArchiveAfterMutation({
-      reason: mutation.reason,
-      logEvent: "state.archive_mutation_reconcile_failed",
-      failureMessage: "archive mutation reconcile failed",
-    }));
+    return this.queueMutationReconciliation(async () => {
+      const host = publicHostFromConfig(this.config);
+      const move = this.store.applyThreadArchiveMove({
+        host,
+        threadID: mutation.threadId,
+        archived: mutation.archived,
+        reason: mutation.reason,
+      });
+      if (move.missing) {
+        if (move.hidden) {
+          return {
+            reason: mutation.reason,
+            path: "hidden_card_ignored",
+            dock: move.dock,
+            archive: move.archive,
+          };
+        }
+        const projected = await this.projectThreadCard({
+          threadId: mutation.threadId,
+          reason: mutation.reason,
+          archived: mutation.archived,
+        });
+        return {
+          reason: mutation.reason,
+          path: "targeted_read",
+          [projected.view === ARCHIVE_VIEW ? "archive" : "dock"]: projected,
+        };
+      }
+      await this.publishTargetedArchiveMove(move, mutation.reason);
+      return {
+        reason: mutation.reason,
+        path: "targeted_archive_move",
+        dock: move.dock,
+        archive: move.archive,
+      };
+    });
   }
 
   async handleThreadNameNotification(message) {
@@ -1176,28 +1325,13 @@ class RelayStateEngine {
     if (!mutation) {
       return null;
     }
-    const threadName = typeof message?.params?.threadName === "string"
-      ? message.params.threadName
-      : null;
+    const threadName = threadNameFromNotification(message);
     return this.queueMutationReconciliation(async () => {
-      if (threadName && typeof this.store.cardForThread === "function") {
-        const card = this.cardForThread(mutation.threadId);
-        if (card?.title === threadName) {
-          this.logger?.debug?.("state.thread_name_notification_skipped", {
-            reason: mutation.reason,
-          });
-          return {
-            reason: mutation.reason,
-            dock: null,
-            archive: null,
-            skipped: true,
-          };
-        }
-      }
-      return this.reconcileDockAndArchiveAfterMutation({
+      const patch = threadName ? { title: threadName } : null;
+      return this.updateThreadCardFromEvent({
+        threadId: mutation.threadId,
         reason: mutation.reason,
-        logEvent: "state.thread_name_mutation_reconcile_failed",
-        failureMessage: "thread name mutation reconcile failed",
+        patch,
       });
     });
   }
@@ -1207,20 +1341,89 @@ class RelayStateEngine {
     if (!mutation) {
       return null;
     }
-    return this.queueMutationReconciliation(async () => ({
+    const rawStatus = threadStatusFromNotification(message);
+    const status = rawStatus ? normalizedStatus({ status: rawStatus }) : null;
+    return this.queueMutationReconciliation(async () => this.updateThreadCardFromEvent({
+      threadId: mutation.threadId,
       reason: mutation.reason,
-      dock: await this.reconcileDock({ reason: mutation.reason }),
+      patch: status && status !== "unknown" ? { status } : null,
     }));
   }
 
-  async handleThreadNameMutation({ threadId, reason = "thread/name/set" }) {
+  async handleThreadStartedNotification(message) {
+    const thread = message?.params?.thread || null;
+    const threadId = threadIDFromNotification(message);
+    if (message?.method !== "thread/started" || !threadId) {
+      return null;
+    }
+    return this.queueMutationReconciliation(async () => this.updateThreadCardFromEvent({
+      threadId,
+      reason: "thread/started",
+      archived: false,
+      eventThread: thread,
+    }));
+  }
+
+  async handleThreadArchivedNotification(message) {
+    const threadId = threadIDFromNotification(message);
+    if (message?.method !== "thread/archived" || !threadId) {
+      return null;
+    }
+    return this.handleArchiveMutation({ threadId, archived: true });
+  }
+
+  async handleThreadUnarchivedNotification(message) {
+    const threadId = threadIDFromNotification(message);
+    if (message?.method !== "thread/unarchived" || !threadId) {
+      return null;
+    }
+    return this.handleArchiveMutation({ threadId, archived: false });
+  }
+
+  async handleThreadClosedNotification(message) {
+    const threadId = threadIDFromNotification(message);
+    if (message?.method !== "thread/closed" || !threadId) {
+      return null;
+    }
+    return this.queueMutationReconciliation(async () => {
+      const host = publicHostFromConfig(this.config);
+      const removed = this.store.applyTargetedCardRemoval({
+        host,
+        threadID: threadId,
+        reason: "thread/closed",
+      });
+      await this.publishTargetedCardResult(removed, { view: removed.view, reason: "thread/closed" });
+      return {
+        reason: "thread/closed",
+        path: "targeted_remove",
+        [removed.view === ARCHIVE_VIEW ? "archive" : "dock"]: removed,
+      };
+    });
+  }
+
+  handleThreadDirtyNotification(message) {
+    const method = message?.method;
+    if (!["turn/started", "turn/completed", "item/started", "item/completed", "serverRequest/resolved"].includes(method)) {
+      return null;
+    }
+    const threadId = threadIDFromNotification(message);
     if (!threadId) {
       return null;
     }
-    return this.queueMutationReconciliation(() => this.reconcileDockAndArchiveAfterMutation({
+    return this.queueThreadDirtyUpdate({
+      threadId,
+      reason: method,
+    });
+  }
+
+  async handleThreadNameMutation({ threadId, name = null, reason = "thread/name/set" }) {
+    if (!threadId) {
+      return null;
+    }
+    return this.queueMutationReconciliation(() => this.updateThreadCardFromEvent({
+      threadId,
       reason,
-      logEvent: "state.thread_name_mutation_reconcile_failed",
-      failureMessage: "thread name mutation reconcile failed",
+      patch: typeof name === "string" && name.trim().length > 0 ? { title: name } : null,
     }));
   }
 

@@ -1511,6 +1511,35 @@ async function canonicalizeThreadRows(config, rows = [], {
   };
 }
 
+async function canonicalizeThreadRow(config, row, {
+  route = "targeted_thread_card",
+} = {}) {
+  const result = await canonicalizeThreadRows(config, row ? [row] : [], { route });
+  return {
+    row: result.rows[0] || null,
+    complete: result.complete,
+    validationFailures: result.validationFailures,
+  };
+}
+
+async function readCanonicalThreadForProjection(config, threadId, {
+  route = "targeted_thread_card",
+} = {}) {
+  const response = await aggregateThreadRead(
+    config,
+    { threadId, includeTurns: false },
+    {
+      allowHistoryForPrivateOwner: true,
+      allowAppFacingCardRouteFallback: true,
+    },
+  );
+  const thread = sanitizeRelayFields(response?.thread);
+  if (!thread?.id) {
+    throw new Error("targeted thread/read returned no thread");
+  }
+  return canonicalizeThreadRow(config, thread, { route });
+}
+
 async function endpointForThread(config, threadId, method = "thread/resume", options = {}) {
   if (!config.appServerRegistry) {
     throw new Error("appServerRegistry is required for relay app-server routing");
@@ -1570,6 +1599,7 @@ export {
   aggregateThreadRead,
   archiveThread,
   attentionFlagsForServerRequest,
+  canonicalizeThreadRow,
   canonicalizeThreadRows,
   collectLiveRows,
   drainThreadListRows,
@@ -1587,6 +1617,7 @@ export {
   preferThread,
   readHistoryThread,
   readHistoryThreadList,
+  readCanonicalThreadForProjection,
   readSessionIndexHumanStartedSupplements,
   sanitizeRelayFields,
   setThreadName,

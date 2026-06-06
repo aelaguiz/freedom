@@ -51,6 +51,7 @@ Node relay checks:
 ```bash
 rtk npm test
 rtk npm run test:relay
+rtk npm run test:docs
 ```
 
 Generated Xcode project checks:
@@ -105,6 +106,81 @@ If physical Mobile MCP reports `WebDriverAgent is not running on device`, stop
 retrying physical Mobile MCP for that task. Record that exact blocker and use
 simulator/local proof only where it is valid. Amir will run the physical iPhone
 manual test when the build is ready.
+
+## Testing And Proof
+
+`docs/TESTING.md` is the current testing guide. It explains which existing
+commands to run, what counts as proof, and how to add Swift, relay, contract,
+and over-time simulator tests.
+
+`docs/CODEX_DOCK_UNIFIED_TESTING_FRAMEWORK_2026-06-05.md` is the plan for the
+future unified framework. It proposes `test-smoke`, `test-full`, and
+`test-overtime`, but those targets do not exist until `Makefile` contains them.
+Do not tell a user or another agent to run those proposed targets as current
+commands.
+
+Current completion-grade live-update proof is:
+
+```bash
+rtk make sim-ui-controlled-matrix-proof SIM='iPhone 17'
+```
+
+Fixture-backed simulator proof is regression proof, not real-data proof. For
+user-visible app or relay behavior, also run the real relay-backed simulator
+pass before claiming the app was tested against live data:
+
+```bash
+rtk make sim-ui-sync-proof SIM='iPhone 17'
+```
+
+For realtime Dock-card changes where rename/archive behavior matters, prefer
+the focused real-data gate:
+
+```bash
+rtk make sim-ui-realdata-realtime-proof SIM='iPhone 17'
+```
+
+Real-data simulator proof means the installed simulator app connects to the
+normal Dock relay on `:4510` and renders real Codex session rows. Do not
+describe controlled fixtures, fixture rows, mocks, loopback-only WebSockets,
+relay-only probes, status endpoints, or direct `dock/subscribe` counts as
+"tested in the sim against live data". If the real-data simulator pass cannot
+run, report the exact command and blocker before claiming the work is done.
+
+Current full Node contract and relay proof is:
+
+```bash
+rtk npm run contract:check
+rtk npm test
+rtk npm run test:docs
+rtk npm run test:host-service
+```
+
+Current diagnostic visibility proof is:
+
+```bash
+rtk make sim-ui-dump SIM='iPhone 17'
+```
+
+`sim-ui-dump` is not live-update acceptance proof by itself. Status endpoints,
+logs, debug bundles, screenshots, mocks, fixture rows, SwiftUI preview rows,
+Unix sockets, scripted transports, loopback-only WebSockets, raw
+`ws://127.0.0.1:4500`, raw detail side-door routes, and
+`projection/witness/read` are not app completion proof.
+
+When adding an over-time simulator scenario today, update all current owners:
+`scripts/dock-relay-controlled-simulator-fixture.mjs`,
+`scripts/dock-relay-controlled-simulator-matrix.mjs`, `Makefile`, relevant
+Node tests, and proof contracts if route or field evidence changes. The future
+plan replaces that three-place scenario workflow with one scenario catalog.
+
+When adding a root bug doc under `docs/bugs/`, adding or removing a controlled
+simulator scenario, or discovering a new failure class in a plan, audit,
+worklog, or debug note, update
+`docs/CODEX_DOCK_TEST_SCENARIO_COVERAGE.md` and run
+`rtk npm run test:docs`. That guard checks that bug docs and controlled
+scenario ids stay discoverable, and that fixture-only simulator scenarios are
+called out as gaps instead of quietly falling out of completion proof.
 
 ## Service Path
 
@@ -277,6 +353,9 @@ files; treat them as intentional local work.
 ## Docs Map
 
 - `README.md`: product orientation, app-server modes, relay runbook, simulator and device flows.
+- `docs/TESTING.md`: current testing commands, proof rules, and add-a-test guidance.
+- `docs/CODEX_DOCK_TEST_SCENARIO_COVERAGE.md`: docs-mined bug, scenario, and failure-class coverage ledger.
+- `docs/CODEX_DOCK_UNIFIED_TESTING_FRAMEWORK_2026-06-05.md`: plan for unified smoke, full, and over-time test tiers.
 - `Makefile`: canonical service, simulator, device, and app commands.
 - `project.yml`: XcodeGen target, settings, permissions, scheme, and app metadata source.
 - `Package.swift`: SwiftPM package and test target source.

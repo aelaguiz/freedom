@@ -33,7 +33,7 @@ const MODES = new Set(["one-shot", "read-only-real-home", "soak", "scenario"]);
 const DETAIL_MODES = new Set(["none", "sampled", "all"]);
 const TURN_SORT_DIRECTIONS = new Set(["asc", "desc"]);
 const TURN_ITEMS_VIEWS = new Set(["notLoaded", "summary", "full"]);
-const SCENARIOS = new Set(["archive-toggle", "detail-reconnect", "live-lease-expiry", "multi-host-isolation", "resync-gap", "server-request", "source-refresh", "spawn-edge", "thread-activity", "all"]);
+const SCENARIOS = new Set(["archive-toggle", "detail-reconnect", "live-lease-expiry", "multi-host-isolation", "rename-title", "resync-gap", "server-request", "source-refresh", "spawn-edge", "thread-activity", "all"]);
 const DEFAULT_SCENARIO = "archive-toggle";
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_SOAK_DURATION_MS = 900_000;
@@ -59,6 +59,7 @@ const CLIENT_PATH_ROUTES = new Set([
   "archive/update",
   "archive/resync",
   "thread/archive",
+  "thread/name/set",
   "thread/unarchive",
   "thread/detail/subscribe",
   "thread/detail/resync",
@@ -77,6 +78,7 @@ const FORBIDDEN_DOCK_STREAM_KEYS = new Set([
 const REQUIRED_SCENARIOS = Object.freeze([
   { id: "existing-active", label: "Existing idle active thread appears in Dock", implementedBy: "archive-toggle" },
   { id: "existing-archived", label: "Existing archived thread appears only in archived views", implementedBy: "archive-toggle" },
+  { id: "rename-title", label: "Thread rename updates the active Dock title through the real app-server route", implementedBy: "rename-title" },
   { id: "new-thread", label: "New thread is created and appears within the convergence budget", implementedBy: "thread-activity" },
   { id: "new-turn-order", label: "Existing thread receives a new turn and moves order correctly", implementedBy: "thread-activity" },
   { id: "live-lease-expiry", label: "Active live thread appears as live and later expires when no longer live", implementedBy: "live-lease-expiry" },
@@ -113,13 +115,13 @@ function usage() {
     "  --limit <n>                App-server page size, capped at 250. Defaults to 250.",
     "  --turn-sort-direction <asc|desc>  Turn order to request. Defaults to desc.",
     "  --turn-items-view <notLoaded|summary|full>  Turn detail to request. Exhaustive defaults to full.",
-    "  --scenario <archive-toggle|detail-reconnect|live-lease-expiry|multi-host-isolation|resync-gap|server-request|source-refresh|spawn-edge|thread-activity|all>  Scenario actuator set for scenario mode. Defaults to archive-toggle.",
+    "  --scenario <archive-toggle|detail-reconnect|live-lease-expiry|multi-host-isolation|rename-title|resync-gap|server-request|source-refresh|spawn-edge|thread-activity|all>  Scenario actuator set for scenario mode. Defaults to archive-toggle.",
     "  --scenario-thread-id <id>   Select an exact thread id for scenario mode instead of the first active Dock row.",
     "  --scenario-hold-ms <n>      Hold after each scenario mutation before the next mutation. Defaults to 0.",
     "  --scenario-repetitions <n>  Repeat the selected scenario. Defaults to 1.",
     "  --client-path-only         Accepted for compatibility; this script only proves actual client-exercised relay routes.",
     "  --force-dock-resync        In soak mode, explicitly call dock/resync each sample and verify convergence.",
-    "  --duration-ms <n>          Soak duration. Defaults to 900000.",
+    "  --duration-ms <n>          Soak duration, or explicit scenario relay-truth observation window. Defaults to 900000.",
     "  --sample-interval-ms <n>   Soak sample interval. Defaults to 30000.",
     "  --settle-ms <n>            Time to let stream updates arrive before comparisons. Defaults to 250.",
     "  --dock-collection-timeout-ms <n>  Time to wait for streamed Dock catch-up. Defaults to 120000.",
@@ -215,6 +217,7 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
     scenarioHoldMs: DEFAULT_SCENARIO_HOLD_MS,
     scenarioRepetitions: DEFAULT_SCENARIO_REPETITIONS,
     durationMs: DEFAULT_SOAK_DURATION_MS,
+    durationMsExplicit: false,
     sampleIntervalMs: DEFAULT_SAMPLE_INTERVAL_MS,
     settleMs: DEFAULT_STREAM_SETTLE_MS,
     dockCollectionTimeoutMs: DEFAULT_DOCK_COLLECTION_TIMEOUT_MS,
@@ -309,9 +312,11 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
       options.scenarioRepetitions = parsePositiveInteger(arg.slice("--scenario-repetitions=".length), "--scenario-repetitions");
     } else if (arg === "--duration-ms") {
       options.durationMs = parseNonNegativeInteger(readValue(index, arg), "--duration-ms");
+      options.durationMsExplicit = true;
       index += 1;
     } else if (arg.startsWith("--duration-ms=")) {
       options.durationMs = parseNonNegativeInteger(arg.slice("--duration-ms=".length), "--duration-ms");
+      options.durationMsExplicit = true;
     } else if (arg === "--sample-interval-ms") {
       options.sampleIntervalMs = parsePositiveInteger(readValue(index, arg), "--sample-interval-ms");
       index += 1;
@@ -398,7 +403,7 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
     throw new Error("--turn-items-view must be notLoaded, summary, or full");
   }
   if (!SCENARIOS.has(options.scenario)) {
-    throw new Error("--scenario must be archive-toggle, detail-reconnect, live-lease-expiry, multi-host-isolation, resync-gap, server-request, source-refresh, spawn-edge, thread-activity, or all");
+    throw new Error("--scenario must be archive-toggle, detail-reconnect, live-lease-expiry, multi-host-isolation, rename-title, resync-gap, server-request, source-refresh, spawn-edge, thread-activity, or all");
   }
   try {
     const relayURL = new URL(options.relayUrl);
@@ -433,6 +438,13 @@ function textFingerprint(value) {
     length: value.length,
     sha256: crypto.createHash("sha256").update(value).digest("hex").slice(0, 16),
   };
+}
+
+function displayTitleFingerprint(value) {
+  if (typeof value !== "string") {
+    return value ?? null;
+  }
+  return textFingerprint(value.trimEnd());
 }
 
 function normalizeForComparison(value, key = "") {
@@ -616,7 +628,7 @@ function sanitizeCardForReport(card) {
     lane: card?.lane || null,
     sourceKind: card?.sourceKind || null,
     archived: card?.archived ?? null,
-    title: card?.title ?? null,
+    title: displayTitleFingerprint(card?.title ?? null),
     displaySummary: card?.displaySummary ?? null,
     latestSummary: card?.latestSummary ?? null,
     preview: card?.preview ?? null,
@@ -1148,6 +1160,49 @@ function compareDockStates(streamSnapshot, freshSnapshot) {
   };
 }
 
+function compareDockThreadCard(streamSnapshot, freshSnapshot, threadID) {
+  const findings = [];
+  const streamCard = dockSnapshotCardForThread(streamSnapshot, threadID);
+  const freshCard = dockSnapshotCardForThread(freshSnapshot, threadID);
+  if (!streamCard || !freshCard) {
+    if (Boolean(streamCard) !== Boolean(freshCard)) {
+      findings.push({
+        code: "dock_stream_thread_card_presence_mismatch",
+        severity: "error",
+        message: "long-lived dock stream target thread presence differs from fresh dock/subscribe snapshot",
+        threadID,
+        present: Boolean(streamCard),
+        expected: Boolean(freshCard),
+      });
+    }
+    return {
+      ok: findings.length === 0,
+      findings,
+      streamCardCount: streamCard ? 1 : 0,
+      freshCardCount: freshCard ? 1 : 0,
+    };
+  }
+
+  const streamComparable = normalizeForComparison(streamCard);
+  const freshComparable = normalizeForComparison(freshCard);
+  if (stableJSONString(streamComparable) !== stableJSONString(freshComparable)) {
+    findings.push({
+      code: "dock_stream_thread_card_payload_mismatch",
+      severity: "error",
+      message: "long-lived dock stream target thread card payload differs from fresh dock/subscribe snapshot",
+      cardID: cardID(streamCard) || cardID(freshCard),
+      threadID,
+      differingKeys: firstDifferingKeys(streamComparable, freshComparable),
+    });
+  }
+  return {
+    ok: findings.length === 0,
+    findings,
+    streamCardCount: 1,
+    freshCardCount: 1,
+  };
+}
+
 function comparableFreshness(freshness) {
   if (!freshness || typeof freshness !== "object") {
     return null;
@@ -1228,7 +1283,7 @@ function applyStreamLagBudget(comparison, streamLag) {
   };
 }
 
-async function compareStreamToFreshDock({ streamProbe, freshDock, options, routeEvents }) {
+async function compareStreamToFreshDock({ streamProbe, freshDock, options, routeEvents, threadID = null }) {
   let currentFreshDock = freshDock;
   const attempts = [];
   for (let attempt = 0; attempt <= options.streamCompareAttempts; attempt += 1) {
@@ -1239,7 +1294,9 @@ async function compareStreamToFreshDock({ streamProbe, freshDock, options, route
     const checkedAtMs = Date.now();
     const checkedAt = new Date(checkedAtMs).toISOString();
     const streamSnapshot = streamProbe.snapshot();
-    const comparison = compareDockStates(streamSnapshot, currentFreshDock);
+    const comparison = threadID
+      ? compareDockThreadCard(streamSnapshot, currentFreshDock, threadID)
+      : compareDockStates(streamSnapshot, currentFreshDock);
     attempts.push({
       attempt,
       checkedAt,
@@ -1377,6 +1434,7 @@ async function collectDockClientPathSnapshot(options, routeEvents = null) {
       }
       const receivedAt = new Date().toISOString();
       recordRoute(routeEvents, "dock/update", "collect complete Dock state from streamed client-path update", {
+        at: receivedAt,
         kind: message.params?.kind || null,
         seq: message.params?.seq ?? null,
       });
@@ -1563,6 +1621,7 @@ class DockStreamProbe {
     const receivedAt = new Date().toISOString();
     if (message?.method === "archive/update") {
       recordRoute(this.routeEvents, "archive/update", "receive long-lived Archive stream update", {
+        at: receivedAt,
         kind: message.params?.kind || null,
         seq: message.params?.seq ?? null,
       });
@@ -1583,6 +1642,7 @@ class DockStreamProbe {
       return;
     }
     recordRoute(this.routeEvents, "dock/update", "receive long-lived Dock stream update", {
+      at: receivedAt,
       kind: message.params?.kind || null,
       seq: message.params?.seq ?? null,
     });
@@ -1804,6 +1864,51 @@ function selectScenarioArchiveTarget(dockSnapshot, requestedThreadID = null) {
   })[0] || null;
 }
 
+function selectScenarioRenameTarget(dockSnapshot, requestedThreadID = null) {
+  const cards = Array.isArray(dockSnapshot?.rows) ? dockSnapshot.rows : [];
+  const candidates = cards
+    .map((card) => {
+      const title = nonEmpty(card?.title) || nonEmpty(card?.displayTitle) || null;
+      return {
+        cardID: cardID(card),
+        threadID: cardThreadID(card),
+        logicalHostID: card?.logicalHostID || null,
+        status: card?.status || null,
+        archived: card?.archived ?? false,
+        title,
+      };
+    })
+    .filter((target) => nonEmpty(target.threadID)
+      && target.archived !== true
+      && target.status !== "unknown"
+      && nonEmpty(target.title));
+  if (requestedThreadID) {
+    return candidates.find((target) => target.threadID === requestedThreadID) || null;
+  }
+  return candidates.sort((left, right) => {
+    const leftRank = SCENARIO_ARCHIVE_STATUS_PRIORITY[left.status || "unknown"] ?? 99;
+    const rightRank = SCENARIO_ARCHIVE_STATUS_PRIORITY[right.status || "unknown"] ?? 99;
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
+    }
+    return left.cardID.localeCompare(right.cardID);
+  })[0] || null;
+}
+
+function sanitizeScenarioTargetForReport(target) {
+  if (!target) {
+    return null;
+  }
+  return normalizeForComparison({
+    cardID: target.cardID || null,
+    threadID: target.threadID || null,
+    logicalHostID: target.logicalHostID || null,
+    status: target.status || null,
+    archived: target.archived ?? null,
+    title: displayTitleFingerprint(target.title || null),
+  });
+}
+
 function selectScenarioDetailTarget(dockSnapshot, requestedThreadID = null) {
   const targets = selectDetailTargets(dockSnapshot, {
     detail: "all",
@@ -1846,7 +1951,8 @@ function scenarioLagSummary({ transition, startedAtMs, acknowledgedAtMs, observe
   const ackToRelayMs = Number.isFinite(Number(observedAtMs)) && Number.isFinite(Number(acknowledgedAtMs))
     ? Math.max(0, Number(observedAtMs) - Number(acknowledgedAtMs))
     : null;
-  const exceeded = changeToRelayMs !== null && changeToRelayMs > maxStreamLagMs;
+  const observedLagMs = ackToRelayMs ?? changeToRelayMs;
+  const exceeded = observedLagMs !== null && observedLagMs > maxStreamLagMs;
   return {
     transition,
     startedAt: new Date(startedAtMs).toISOString(),
@@ -1854,8 +1960,9 @@ function scenarioLagSummary({ transition, startedAtMs, acknowledgedAtMs, observe
     relaySeenAt: Number.isFinite(Number(observedAtMs)) ? new Date(observedAtMs).toISOString() : null,
     lag_change_to_relay_ms: changeToRelayMs,
     lag_ack_to_relay_ms: ackToRelayMs,
+    observedLagMs,
     maxStreamLagMs,
-    ok: changeToRelayMs !== null && !exceeded,
+    ok: observedLagMs !== null && !exceeded,
     exceeded,
   };
 }
@@ -2450,15 +2557,30 @@ async function buildSoakReport(options) {
   };
 }
 
-async function requestScenarioThreadMutation({ options, method, target, routeEvents }) {
+async function requestScenarioThreadMutation({ options, method, target, routeEvents, params = {} }) {
   return withRelayClient(options, null, async (client) => {
     recordRoute(routeEvents, method, `scenario ${method} selected Dock row`, {
       threadID: target.threadID,
       cardID: target.cardID,
       logicalHostID: target.logicalHostID,
+      paramKeys: Object.keys(params).sort(),
+      name: params.name ? textFingerprint(params.name) : undefined,
     });
-    return client.request(method, { threadId: target.threadID });
+    return client.request(method, { threadId: target.threadID, ...params });
   }, routeEvents);
+}
+
+function mutationResponseSummary(response) {
+  if (response === null || response === undefined) {
+    return null;
+  }
+  if (typeof response !== "object") {
+    return { type: typeof response };
+  }
+  return {
+    type: Array.isArray(response) ? "array" : "object",
+    keys: Object.keys(response).sort(),
+  };
 }
 
 function observedSnapshotTime(snapshot) {
@@ -2540,6 +2662,286 @@ function scenarioComparisonFindings({ phase, comparison }) {
     code: `scenario_${phase}_${finding.code || "dock_stream_mismatch"}`,
     message: `scenario ${phase}: ${finding.message || "long-lived Dock stream differs from fresh Dock snapshot"}`,
   }));
+}
+
+async function runRenameTitleScenario(options) {
+  const routeEvents = [];
+  const findings = [];
+  const transitions = [];
+  const streamProbe = new DockStreamProbe(options);
+  const startedAtMs = Date.now();
+  let target = null;
+  let originalTitle = null;
+  let renamed = false;
+  let restored = false;
+  await streamProbe.open();
+  await streamProbe.waitForComplete(options.dockCollectionTimeoutMs);
+  try {
+    const beforeDock = await collectDockClientPathSnapshot(options, routeEvents);
+    target = selectScenarioRenameTarget(beforeDock, options.scenarioThreadID);
+    if (!target) {
+      findings.push({
+        code: "scenario_rename_title_no_restorable_active_thread",
+        severity: "error",
+        message: options.scenarioThreadID
+          ? "scenario rename-title could not find the requested active Dock row with a restorable title"
+          : "scenario rename-title could not find an active Dock row with a restorable title",
+        requestedThreadID: options.scenarioThreadID || null,
+      });
+      return {
+        id: "rename-title",
+        ok: false,
+        startedAt: new Date(startedAtMs).toISOString(),
+        endedAt: new Date().toISOString(),
+        target: null,
+        beforeDock: sanitizeDockSnapshotForReport(beforeDock),
+        transitions,
+        stream: {
+          notificationCount: streamProbe.notifications.length,
+          resyncCount: streamProbe.resyncs.length,
+          finalState: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
+        },
+        clientPathEvidence: summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]),
+        findings,
+      };
+    }
+    originalTitle = target.title;
+
+    if (!dockSnapshotHasThread(streamProbe.snapshot(), target.threadID)) {
+      findings.push({
+        code: "scenario_rename_title_initial_stream_missing_thread",
+        severity: "error",
+        message: "long-lived Dock stream did not contain the selected active Dock row before rename",
+        threadID: target.threadID,
+        cardID: target.cardID,
+      });
+    }
+
+    const proofTitle = `Codex Dock realtime proof ${new Date(startedAtMs).toISOString()} ${crypto.randomUUID().slice(0, 8)}`;
+    const renameStartedAtMs = Date.now();
+    let renameAcknowledgedAtMs = null;
+    let renameResponse = null;
+    try {
+      renameResponse = await requestScenarioThreadMutation({
+        options,
+        method: "thread/name/set",
+        target,
+        routeEvents,
+        params: { name: proofTitle },
+      });
+      renamed = true;
+      renameAcknowledgedAtMs = Date.now();
+    } catch (error) {
+      renameAcknowledgedAtMs = Date.now();
+      findings.push({
+        code: "scenario_rename_title_request_failed",
+        severity: "error",
+        message: "thread/name/set failed for the selected Dock row",
+        threadID: target.threadID,
+        error: error?.message || String(error),
+      });
+    }
+
+    const renameWait = renameAcknowledgedAtMs
+      ? await waitForStreamCondition({
+        streamProbe,
+        timeoutMs: options.dockCollectionTimeoutMs,
+        predicate: (snapshot) => observedSnapshotTime(snapshot) >= renameStartedAtMs
+          && dockSnapshotCardForThread(snapshot, target.threadID)?.title === proofTitle,
+      })
+      : { ok: false, observedAtMs: null, observedAt: null };
+    const renameLag = scenarioLagSummary({
+      transition: "rename-title",
+      startedAtMs: renameStartedAtMs,
+      acknowledgedAtMs: renameAcknowledgedAtMs,
+      observedAtMs: renameWait.observedAtMs,
+      maxStreamLagMs: options.maxStreamLagMs,
+    });
+    if (!renameWait.ok) {
+      findings.push({
+        code: "scenario_rename_title_not_seen_on_dock_stream",
+        severity: "error",
+        message: "long-lived Dock stream did not show the renamed thread title within the collection timeout",
+        threadID: target.threadID,
+        timeoutMs: options.dockCollectionTimeoutMs,
+      });
+    } else if (renameLag.exceeded) {
+      findings.push({
+        code: "scenario_rename_title_lag_exceeded",
+        severity: "error",
+        message: "renamed thread title appeared on the long-lived Dock stream after the client-visible lag budget",
+        threadID: target.threadID,
+        observedLagMs: renameLag.observedLagMs,
+        maxStreamLagMs: options.maxStreamLagMs,
+      });
+    }
+
+    const afterRenameDock = await collectDockClientPathSnapshot(options, routeEvents);
+    const renameComparisonResult = await compareStreamToFreshDock({
+      streamProbe,
+      freshDock: afterRenameDock,
+      options,
+      routeEvents,
+      threadID: target.threadID,
+    });
+    if (dockSnapshotCardForThread(renameComparisonResult.freshDock, target.threadID)?.title !== proofTitle) {
+      findings.push({
+        code: "scenario_rename_title_fresh_dock_title_mismatch",
+        severity: "error",
+        message: "fresh Dock client-path snapshot did not show the renamed title",
+        threadID: target.threadID,
+      });
+    }
+    const renameComparison = renameComparisonResult.comparison;
+    findings.push(...scenarioComparisonFindings({ phase: "rename-title", comparison: renameComparison }));
+    transitions.push({
+      name: "rename-title",
+      kind: "rename",
+      route: "thread/name/set",
+      response: normalizeForComparison(mutationResponseSummary(renameResponse)),
+      wait: renameWait,
+      lag: renameLag,
+      title: displayTitleFingerprint(proofTitle),
+      freshDock: sanitizeDockSnapshotForReport(renameComparisonResult.freshDock),
+      streamComparison: renameComparison,
+      streamComparisonAttempts: renameComparisonResult.attempts,
+      convergence: renameComparisonResult.streamLag,
+    });
+    if (options.scenarioHoldMs > 0) {
+      await sleep(options.scenarioHoldMs);
+    }
+
+    const restoreStartedAtMs = Date.now();
+    let restoreAcknowledgedAtMs = null;
+    let restoreResponse = null;
+    try {
+      restoreResponse = await requestScenarioThreadMutation({
+        options,
+        method: "thread/name/set",
+        target,
+        routeEvents,
+        params: { name: originalTitle },
+      });
+      restoreAcknowledgedAtMs = Date.now();
+    } catch (error) {
+      restoreAcknowledgedAtMs = Date.now();
+      findings.push({
+        code: "scenario_rename_title_restore_request_failed",
+        severity: "error",
+        message: "thread/name/set failed while restoring the selected Dock row title",
+        threadID: target.threadID,
+        error: error?.message || String(error),
+      });
+    }
+
+    const restoreWait = restoreAcknowledgedAtMs
+      ? await waitForStreamCondition({
+        streamProbe,
+        timeoutMs: options.dockCollectionTimeoutMs,
+        predicate: (snapshot) => observedSnapshotTime(snapshot) >= restoreStartedAtMs
+          && dockSnapshotCardForThread(snapshot, target.threadID)?.title === originalTitle,
+      })
+      : { ok: false, observedAtMs: null, observedAt: null };
+    const restoreLag = scenarioLagSummary({
+      transition: "restore-title",
+      startedAtMs: restoreStartedAtMs,
+      acknowledgedAtMs: restoreAcknowledgedAtMs,
+      observedAtMs: restoreWait.observedAtMs,
+      maxStreamLagMs: options.maxStreamLagMs,
+    });
+    if (!restoreWait.ok) {
+      findings.push({
+        code: "scenario_rename_title_restore_not_seen_on_dock_stream",
+        severity: "error",
+        message: "long-lived Dock stream did not show the restored thread title within the collection timeout",
+        threadID: target.threadID,
+        timeoutMs: options.dockCollectionTimeoutMs,
+      });
+    } else if (restoreLag.exceeded) {
+      findings.push({
+        code: "scenario_rename_title_restore_lag_exceeded",
+        severity: "error",
+        message: "restored thread title appeared on the long-lived Dock stream after the client-visible lag budget",
+        threadID: target.threadID,
+        observedLagMs: restoreLag.observedLagMs,
+        maxStreamLagMs: options.maxStreamLagMs,
+      });
+    }
+
+    const afterRestoreDock = await collectDockClientPathSnapshot(options, routeEvents);
+    const restoreComparisonResult = await compareStreamToFreshDock({
+      streamProbe,
+      freshDock: afterRestoreDock,
+      options,
+      routeEvents,
+      threadID: target.threadID,
+    });
+    if (dockSnapshotCardForThread(restoreComparisonResult.freshDock, target.threadID)?.title !== originalTitle) {
+      findings.push({
+        code: "scenario_rename_title_fresh_dock_restore_mismatch",
+        severity: "error",
+        message: "fresh Dock client-path snapshot did not show the restored title",
+        threadID: target.threadID,
+      });
+    } else {
+      restored = true;
+    }
+    const restoreComparison = restoreComparisonResult.comparison;
+    findings.push(...scenarioComparisonFindings({ phase: "restore-title", comparison: restoreComparison }));
+    transitions.push({
+      name: "restore-title",
+      kind: "rename",
+      route: "thread/name/set",
+      response: normalizeForComparison(mutationResponseSummary(restoreResponse)),
+      wait: restoreWait,
+      lag: restoreLag,
+      title: displayTitleFingerprint(originalTitle),
+      freshDock: sanitizeDockSnapshotForReport(restoreComparisonResult.freshDock),
+      streamComparison: restoreComparison,
+      streamComparisonAttempts: restoreComparisonResult.attempts,
+      convergence: restoreComparisonResult.streamLag,
+    });
+
+    return {
+      id: "rename-title",
+      ok: !findings.some((finding) => finding.severity === "error" || finding.severity === "warning"),
+      startedAt: new Date(startedAtMs).toISOString(),
+      endedAt: new Date().toISOString(),
+      actuator: {
+        type: "app-server RPC through relay",
+        routes: ["thread/name/set"],
+        clientExercised: true,
+        reversible: true,
+        realData: true,
+      },
+      target: sanitizeScenarioTargetForReport(target),
+      beforeDock: sanitizeDockSnapshotForReport(beforeDock),
+      transitions,
+      stream: {
+        notificationCount: streamProbe.notifications.length,
+        resyncCount: streamProbe.resyncs.length,
+        finalState: sanitizeDockSnapshotForReport(streamProbe.snapshot()),
+      },
+      clientPathEvidence: summarizeClientPathEvents([...streamProbe.routeEvents, ...routeEvents]),
+      findings,
+    };
+  } finally {
+    if (renamed && !restored && target && originalTitle) {
+      try {
+        await requestScenarioThreadMutation({
+          options,
+          method: "thread/name/set",
+          target,
+          routeEvents: [],
+          params: { name: originalTitle },
+        });
+      } catch {
+        // The report already records the scenario failure. This best-effort
+        // restore avoids leaking title text into logs or proof artifacts.
+      }
+    }
+    await streamProbe.close();
+  }
 }
 
 async function runArchiveToggleScenario(options) {
@@ -2647,12 +3049,19 @@ async function runArchiveToggleScenario(options) {
           message: "archived thread disappeared from the long-lived Dock stream after the client-visible lag budget",
           threadID: target.threadID,
           iteration,
-          observedLagMs: archiveLag.lag_change_to_relay_ms,
+          observedLagMs: archiveLag.observedLagMs,
           maxStreamLagMs: options.maxStreamLagMs,
         });
       }
       const afterArchiveDock = await collectDockClientPathSnapshot(options, routeEvents);
-      if (dockSnapshotHasThread(afterArchiveDock, target.threadID)) {
+      const archiveComparisonResult = await compareStreamToFreshDock({
+        streamProbe,
+        freshDock: afterArchiveDock,
+        options,
+        routeEvents,
+        threadID: target.threadID,
+      });
+      if (dockSnapshotHasThread(archiveComparisonResult.freshDock, target.threadID)) {
         findings.push({
           code: "scenario_archive_fresh_dock_still_contains_thread",
           severity: "error",
@@ -2661,18 +3070,20 @@ async function runArchiveToggleScenario(options) {
           iteration,
         });
       }
-      const archiveComparison = compareDockStates(streamProbe.snapshot(), afterArchiveDock);
+      const archiveComparison = archiveComparisonResult.comparison;
       findings.push(...scenarioComparisonFindings({ phase: archiveName, comparison: archiveComparison }));
       transitions.push({
         name: archiveName,
         kind: "archive",
         iteration,
         route: "thread/archive",
-        response: normalizeForComparison(archiveResponse || null),
+        response: normalizeForComparison(mutationResponseSummary(archiveResponse)),
         wait: archiveWait,
         lag: archiveLag,
-        freshDock: sanitizeDockSnapshotForReport(afterArchiveDock),
+        freshDock: sanitizeDockSnapshotForReport(archiveComparisonResult.freshDock),
         streamComparison: archiveComparison,
+        streamComparisonAttempts: archiveComparisonResult.attempts,
+        convergence: archiveComparisonResult.streamLag,
       });
       if (options.scenarioHoldMs > 0) {
         await sleep(options.scenarioHoldMs);
@@ -2734,12 +3145,19 @@ async function runArchiveToggleScenario(options) {
           message: "unarchived thread reappeared on the long-lived Dock stream after the client-visible lag budget",
           threadID: target.threadID,
           iteration,
-          observedLagMs: unarchiveLag.lag_change_to_relay_ms,
+          observedLagMs: unarchiveLag.observedLagMs,
           maxStreamLagMs: options.maxStreamLagMs,
         });
       }
       const afterUnarchiveDock = await collectDockClientPathSnapshot(options, routeEvents);
-      if (!dockSnapshotHasThread(afterUnarchiveDock, target.threadID)) {
+      const unarchiveComparisonResult = await compareStreamToFreshDock({
+        streamProbe,
+        freshDock: afterUnarchiveDock,
+        options,
+        routeEvents,
+        threadID: target.threadID,
+      });
+      if (!dockSnapshotHasThread(unarchiveComparisonResult.freshDock, target.threadID)) {
         findings.push({
           code: "scenario_unarchive_fresh_dock_missing_thread",
           severity: "error",
@@ -2748,18 +3166,20 @@ async function runArchiveToggleScenario(options) {
           iteration,
         });
       }
-      const unarchiveComparison = compareDockStates(streamProbe.snapshot(), afterUnarchiveDock);
+      const unarchiveComparison = unarchiveComparisonResult.comparison;
       findings.push(...scenarioComparisonFindings({ phase: unarchiveName, comparison: unarchiveComparison }));
       transitions.push({
         name: unarchiveName,
         kind: "unarchive",
         iteration,
         route: "thread/unarchive",
-        response: normalizeForComparison(unarchiveResponse || null),
+        response: normalizeForComparison(mutationResponseSummary(unarchiveResponse)),
         wait: unarchiveWait,
         lag: unarchiveLag,
-        freshDock: sanitizeDockSnapshotForReport(afterUnarchiveDock),
+        freshDock: sanitizeDockSnapshotForReport(unarchiveComparisonResult.freshDock),
         streamComparison: unarchiveComparison,
+        streamComparisonAttempts: unarchiveComparisonResult.attempts,
+        convergence: unarchiveComparisonResult.streamLag,
       });
       if (iteration < options.scenarioRepetitions && options.scenarioHoldMs > 0) {
         await sleep(options.scenarioHoldMs);
@@ -2775,9 +3195,9 @@ async function runArchiveToggleScenario(options) {
         type: "app-server RPC through relay",
         routes: ["thread/archive", "thread/unarchive"],
         clientExercised: true,
-        repetitions: options.scenarioRepetitions,
+        scenarioRepetitions: options.scenarioRepetitions,
       },
-      target,
+      target: sanitizeScenarioTargetForReport(target),
       beforeDock: sanitizeDockSnapshotForReport(beforeDock),
       transitions,
       stream: {
@@ -2906,7 +3326,7 @@ async function runDetailReconnectScenario(options) {
       severity: "error",
       message: "detail reconnect historical reload and live boundary exceeded the client-visible lag budget",
       threadID: target.threadID,
-      observedLagMs: reconnectLag.lag_change_to_relay_ms,
+      observedLagMs: reconnectLag.observedLagMs,
       maxStreamLagMs: options.maxStreamLagMs,
     });
   }
@@ -3027,7 +3447,7 @@ async function runResyncGapScenario(options) {
         code: "scenario_resync_gap_lag_exceeded",
         severity: "error",
         message: "dock/resync recovery completed after the client-visible lag budget",
-        observedLagMs: lag.lag_change_to_relay_ms,
+        observedLagMs: lag.observedLagMs,
         maxStreamLagMs: options.maxStreamLagMs,
       });
     }
@@ -3244,7 +3664,7 @@ async function runThreadActivityScenario(options) {
         code: "scenario_new_thread_lag_exceeded",
         severity: "error",
         message: "new thread appeared after the client-visible lag budget",
-        observedLagMs: newLag.lag_change_to_relay_ms,
+        observedLagMs: newLag.observedLagMs,
         maxStreamLagMs: options.maxStreamLagMs,
       });
     }
@@ -3298,7 +3718,7 @@ async function runThreadActivityScenario(options) {
         code: "scenario_new_turn_order_lag_exceeded",
         severity: "error",
         message: "existing thread update moved order after the client-visible lag budget",
-        observedLagMs: turnLag.lag_change_to_relay_ms,
+        observedLagMs: turnLag.observedLagMs,
         maxStreamLagMs: options.maxStreamLagMs,
       });
     }
@@ -3511,7 +3931,7 @@ async function runSpawnEdgeScenario(options) {
         code: "scenario_spawn_edge_lag_exceeded",
         severity: "error",
         message: "human-only spawn-edge state settled after the client-visible lag budget",
-        observedLagMs: spawnLag.lag_change_to_relay_ms,
+        observedLagMs: spawnLag.observedLagMs,
         maxStreamLagMs: options.maxStreamLagMs,
       });
     }
@@ -3767,7 +4187,7 @@ async function runLiveLeaseExpiryScenario(options) {
         severity: "error",
         message: "live lease expiry reached the long-lived Dock stream after the client-visible lag budget",
         threadID,
-        observedLagMs: expiredLag.lag_change_to_relay_ms,
+        observedLagMs: expiredLag.observedLagMs,
         maxStreamLagMs: options.maxStreamLagMs,
       });
     }
@@ -4095,7 +4515,7 @@ async function runMultiHostIsolationScenario(options) {
         code: "scenario_multi_host_update_lag_exceeded",
         severity: "error",
         message: "host A update reached its Dock stream after the client-visible lag budget",
-        observedLagMs: updateLag.lag_change_to_relay_ms,
+        observedLagMs: updateLag.observedLagMs,
         maxStreamLagMs: options.maxStreamLagMs,
       });
     }
@@ -4473,7 +4893,7 @@ async function runServerRequestScenario(options) {
         code: "scenario_server_request_lag_exceeded",
         severity: "error",
         message: "server request arrived after the client-visible lag budget",
-        observedLagMs: requestLag.lag_change_to_relay_ms,
+        observedLagMs: requestLag.observedLagMs,
         maxStreamLagMs: options.maxStreamLagMs,
       });
     }
@@ -4516,7 +4936,7 @@ async function runServerRequestScenario(options) {
         code: "scenario_server_request_resolution_lag_exceeded",
         severity: "error",
         message: "server request resolution arrived after the client-visible lag budget",
-        observedLagMs: resolutionLag.lag_change_to_relay_ms,
+        observedLagMs: resolutionLag.observedLagMs,
         maxStreamLagMs: options.maxStreamLagMs,
       });
     }
@@ -4748,7 +5168,7 @@ async function runSourceRefreshScenario(options) {
         code: "scenario_source_refresh_stale_lag_exceeded",
         severity: "error",
         message: "source refresh stale state appeared after the client-visible lag budget",
-        observedLagMs: failLag.lag_change_to_relay_ms,
+        observedLagMs: failLag.observedLagMs,
         maxStreamLagMs: options.maxStreamLagMs,
       });
     }
@@ -4806,7 +5226,7 @@ async function runSourceRefreshScenario(options) {
         code: "scenario_source_refresh_recovery_lag_exceeded",
         severity: "error",
         message: "source refresh recovery appeared after the client-visible lag budget",
-        observedLagMs: recoverLag.lag_change_to_relay_ms,
+        observedLagMs: recoverLag.observedLagMs,
         maxStreamLagMs: options.maxStreamLagMs,
       });
     }
@@ -4962,6 +5382,9 @@ async function buildScenarioReport(options) {
   if (options.scenario === "multi-host-isolation" || options.scenario === "all") {
     scenarios.push(await runMultiHostIsolationScenario(options));
   }
+  if (options.scenario === "rename-title" || options.scenario === "all") {
+    scenarios.push(await runRenameTitleScenario(options));
+  }
   if (options.scenario === "server-request" || options.scenario === "all") {
     scenarios.push(await runServerRequestScenario(options));
   }
@@ -4974,7 +5397,6 @@ async function buildScenarioReport(options) {
   if (options.scenario === "thread-activity" || options.scenario === "all") {
     scenarios.push(await runThreadActivityScenario(options));
   }
-  const sample = await buildSample({ options, sampleIndex: 0, streamProbe: null });
   const unsupportedScenarioFindings = unsupportedScenarioFindingsFor(options);
   const scenarioFindings = [
     ...scenarios.flatMap((scenario) => scenario.findings || []),
@@ -4982,23 +5404,50 @@ async function buildScenarioReport(options) {
   ];
   const scenarioHasFailure = scenarioFindings
     .some((finding) => finding.severity === "error" || finding.severity === "warning");
-  const samples = [{
-    ...sample,
-    ok: sample.ok && !scenarioHasFailure,
-    scenarios: scenarios.map((scenario) => ({
-      id: scenario.id,
-      ok: scenario.ok,
-      target: scenario.target || null,
-      transitions: scenario.transitions || [],
-      findings: scenario.findings || [],
-    })),
-    findings: [...(sample.findings || []), ...scenarioFindings],
-    findingCounts: findingCounts([...(sample.findings || []), ...scenarioFindings]),
-  }];
-  const summary = summarizeSamples(samples, null);
+  const observationDeadlineMs = options.durationMsExplicit
+    ? startedAtMs + options.durationMs
+    : null;
+  const samples = [];
+  let sampleIndex = 0;
+  const observationStreamProbe = new DockStreamProbe(options);
+  await observationStreamProbe.open();
+  await observationStreamProbe.waitForComplete(options.dockCollectionTimeoutMs);
+  try {
+    do {
+      const sample = await buildSample({ options, sampleIndex, streamProbe: observationStreamProbe });
+      const firstSample = sampleIndex === 0;
+      const findings = firstSample
+        ? [...(sample.findings || []), ...scenarioFindings]
+        : [...(sample.findings || [])];
+      samples.push({
+        ...sample,
+        ok: sample.ok && !(firstSample && scenarioHasFailure),
+        ...(firstSample ? {
+          scenarios: scenarios.map((scenario) => ({
+            id: scenario.id,
+            ok: scenario.ok,
+            target: scenario.target || null,
+            transitions: scenario.transitions || [],
+            findings: scenario.findings || [],
+          })),
+        } : {}),
+        findings,
+        findingCounts: findingCounts(findings),
+      });
+      sampleIndex += 1;
+      if (observationDeadlineMs === null || Date.now() >= observationDeadlineMs) {
+        break;
+      }
+      await sleep(Math.min(options.sampleIntervalMs, Math.max(0, observationDeadlineMs - Date.now())));
+    } while (Date.now() <= observationDeadlineMs);
+  } finally {
+    await observationStreamProbe.close();
+  }
+  const summary = summarizeSamples(samples, observationStreamProbe);
   const scenarioRouteEvents = scenarios.flatMap((scenario) => scenario.clientPathEvidence?.events || []);
   const clientPathEvidence = summarizeClientPathEvents([
     ...scenarioRouteEvents,
+    ...observationStreamProbe.routeEvents,
     ...samples.flatMap((sample) => sample.clientPathEvidence?.events || []),
   ]);
   const scenarioFailures = scenarioFindings
@@ -5024,6 +5473,12 @@ async function buildScenarioReport(options) {
       scenarioFailures: scenarioFailures.length,
       implementedScenarios: scenarios.map((scenario) => scenario.id),
       unimplementedRequiredScenarios: unsupportedScenarioFindings.map((finding) => finding.scenarioID),
+    },
+    stream: {
+      notificationCount: observationStreamProbe.notifications.length,
+      resyncCount: observationStreamProbe.resyncs.length,
+      closed: observationStreamProbe.closed,
+      finalState: sanitizeDockSnapshotForReport(observationStreamProbe.snapshot()),
     },
     clientPathEvidence,
     oracleEvidence: null,
@@ -5162,6 +5617,7 @@ export {
   buildSyncAuditReport,
   cardID,
   compareDockStates,
+  compareDockThreadCard,
   collectDockClientPathSnapshot,
   dockStateFromPayload,
   emptyDockStreamState,
@@ -5172,6 +5628,7 @@ export {
   selectDetailTargets,
   selectScenarioArchiveTarget,
   selectScenarioDetailTarget,
+  selectScenarioRenameTarget,
   scenarioLagSummary,
   scenarioRequirementImplemented,
   scenarioTransitionName,

@@ -832,6 +832,12 @@ test("thread/name/set forwards to app-server and refreshes dock card title from 
         assert.equal(initial.error, undefined);
         const initialCard = initial.result.rows.find((card) => card.threadID === "newer");
         assert.equal(initialCard?.title, "Newer turn row");
+        config.relayStateEngine.reconcileDock = async () => {
+          throw new Error("broad dock reconcile must not refresh thread/name/set");
+        };
+        config.relayStateEngine.reconcileArchive = async () => {
+          throw new Error("broad archive reconcile must not refresh thread/name/set");
+        };
 
         const updatePromise = waitForRelayMessage(ws, (message) => (
           message.method === "dock/update"
@@ -945,6 +951,12 @@ test("thread/name/updated from history upstream refreshes dock card title withou
         assert.equal(initial.error, undefined);
         const initialCard = initial.result.rows.find((card) => card.threadID === "newer");
         assert.equal(initialCard?.title, "Newer turn row");
+        config.relayStateEngine.reconcileDock = async () => {
+          throw new Error("broad dock reconcile must not refresh thread/name/updated");
+        };
+        config.relayStateEngine.reconcileArchive = async () => {
+          throw new Error("broad archive reconcile must not refresh thread/name/updated");
+        };
 
         const updatePromise = waitForRelayMessage(ws, (message) => (
           message.method === "dock/update"
@@ -981,6 +993,12 @@ test("thread/name/updated from active detail upstream refreshes dock card title 
         assert.equal(detail.error, undefined);
         assert.equal(detail.result?.threadID, "newer");
         assert.equal(appServer.resumedClientCount, 1);
+        config.relayStateEngine.reconcileDock = async () => {
+          throw new Error("broad dock reconcile must not refresh active detail thread/name/updated");
+        };
+        config.relayStateEngine.reconcileArchive = async () => {
+          throw new Error("broad archive reconcile must not refresh active detail thread/name/updated");
+        };
 
         const updatePromise = waitForRelayMessage(ws, (message) => (
           message.method === "dock/update"
@@ -1125,6 +1143,12 @@ test("thread/status/changed from history upstream refreshes dock card status wit
         assert.equal(initial.error, undefined);
         const initialCard = initial.result.rows.find((card) => card.threadID === "newer");
         assert.equal(initialCard?.status, "idle");
+        config.relayStateEngine.reconcileDock = async () => {
+          throw new Error("broad dock reconcile must not refresh thread/status/changed");
+        };
+        config.relayStateEngine.reconcileArchive = async () => {
+          throw new Error("broad archive reconcile must not refresh thread/status/changed");
+        };
 
         const updatePromise = waitForRelayMessage(ws, (message) => (
           message.method === "dock/update"
@@ -1399,9 +1423,10 @@ test("dock/update replacement upsert is complete when it carries every current r
           cards: [],
           complete: true,
         });
-        assert.ok(archiveOnly.seq > initialDockSeq);
-        assert.equal(config.relayStateEngine.store.currentSeq(), archiveOnly.seq);
+        assert.equal(archiveOnly.seq, 1);
+        assert.ok(config.relayStateEngine.store.currentSeq() > initialDockSeq);
         assert.equal(config.relayStateEngine.store.currentSeqForView("dock"), initialDockSeq);
+        assert.equal(config.relayStateEngine.store.currentSeqForView("archive"), archiveOnly.seq);
 
         sourceRows = [{
           id: "recovered",
@@ -1423,7 +1448,7 @@ test("dock/update replacement upsert is complete when it carries every current r
         const update = await updatePromise;
 
         assert.equal("baseSeq" in update.params, false);
-        assert.ok(update.params.seq > initialDockSeq);
+        assert.equal(update.params.seq, initialDockSeq + 1);
         assert.equal(update.params.complete, true);
         assert.equal(update.params.totalRows, 1);
         assert.deepEqual(update.params.rows.map((card) => card.threadID), ["recovered"]);

@@ -2384,12 +2384,12 @@ async function runServerRenameNotificationScenario(options) {
     notificationSentAtMs = Date.now();
     sourceRows = [
       {
-        ...fixtureThread(renamedThreadID, "Simulator server rename row preview", 300),
-        name: renamedTitle,
-      },
-      {
         ...fixtureThread(stableThreadID, "Simulator server rename stable row", 200),
         name: "Simulator server rename stable title",
+      },
+      {
+        ...fixtureThread(renamedThreadID, "Simulator server rename row preview", 100),
+        name: renamedTitle,
       },
     ];
     const notificationCount = emitThreadNameUpdated(renamedThreadID, renamedTitle);
@@ -2407,8 +2407,8 @@ async function runServerRenameNotificationScenario(options) {
       timeoutMs: options.dockCollectionTimeoutMs,
       predicate: (snapshot) => {
         const renamedCard = dockSnapshotCardForThread(snapshot, renamedThreadID);
-        return dockSnapshotThreadIndex(snapshot, renamedThreadID) === 0
-          && dockSnapshotThreadIndex(snapshot, stableThreadID) === 1
+        return dockSnapshotThreadIndex(snapshot, stableThreadID) === 0
+          && dockSnapshotThreadIndex(snapshot, renamedThreadID) === 1
           && renamedCard?.title === renamedTitle;
       },
     });
@@ -2691,16 +2691,16 @@ async function runServerStatusNotificationScenario(options) {
     notificationSentAtMs = Date.now();
     sourceRows = [
       fixtureThreadWithStatus(
-        statusThreadID,
-        "Simulator server status after notification",
-        300,
-        runningStatus
-      ),
-      fixtureThreadWithStatus(
         stableThreadID,
         "Simulator server status stable row",
         200,
         { type: "notLoaded" }
+      ),
+      fixtureThreadWithStatus(
+        statusThreadID,
+        "Simulator server status after notification",
+        100,
+        runningStatus
       ),
     ];
     const notificationCount = emitThreadStatusChanged(statusThreadID, runningStatus);
@@ -2718,8 +2718,8 @@ async function runServerStatusNotificationScenario(options) {
       timeoutMs: options.dockCollectionTimeoutMs,
       predicate: (snapshot) => {
         const statusCard = dockSnapshotCardForThread(snapshot, statusThreadID);
-        return dockSnapshotThreadIndex(snapshot, statusThreadID) === 0
-          && dockSnapshotThreadIndex(snapshot, stableThreadID) === 1
+        return dockSnapshotThreadIndex(snapshot, stableThreadID) === 0
+          && dockSnapshotThreadIndex(snapshot, statusThreadID) === 1
           && statusCard?.status === "running";
       },
     });

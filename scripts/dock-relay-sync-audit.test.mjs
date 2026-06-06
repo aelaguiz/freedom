@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import test from "node:test";
 
 import {
   applyDockPayload,
   compareDockStates,
+  compareDockThreadCard,
   emptyDockStreamState,
   parseArgs,
   sanitizeDockSnapshotForReport,
   selectDetailTargets,
+  selectScenarioRenameTarget,
+  scenarioLagSummary,
   summarizeClientPathEvents,
 } from "./dock-relay-sync-audit.mjs";
 import { RELAY_STATE_STREAM_SCHEMA_VERSION } from "./dock-relay-constants.mjs";
@@ -111,6 +115,83 @@ test("sync audit skips unknown rows when selecting detail proof targets", () => 
     detailLimit: 5,
   });
   assert.deepEqual(all.map((target) => target.threadID), ["thread-running", "thread-idle"]);
+});
+
+test("sync audit accepts rename-title scenario and counts thread/name/set as client path", () => {
+  const options = parseArgs(["--mode", "scenario", "--scenario", "rename-title"]);
+  assert.equal(options.scenario, "rename-title");
+
+  const evidence = summarizeClientPathEvents([
+    {
+      route: "thread/name/set",
+      countedAsClientPath: true,
+    },
+  ]);
+  assert.deepEqual(evidence.routes, ["thread/name/set"]);
+  assert.deepEqual(evidence.routeCounts, { "thread/name/set": 1 });
+});
+
+test("sync audit tracks explicit scenario observation duration", () => {
+  const implicit = parseArgs(["--mode", "scenario"]);
+  assert.equal(implicit.durationMsExplicit, false);
+
+  const explicit = parseArgs([
+    "--mode", "scenario",
+    "--duration-ms", "12000",
+    "--sample-interval-ms", "250",
+  ]);
+
+  assert.equal(explicit.durationMsExplicit, true);
+  assert.equal(explicit.durationMs, 12_000);
+  assert.equal(explicit.sampleIntervalMs, 250);
+});
+
+test("sync audit selects restorable non-private active rows for rename-title", () => {
+  const dockSnapshot = snapshot({
+    rows: [
+      threadCard("thread-private", "001", { status: "unknown", title: "Private row" }),
+      threadCard("thread-missing-title", "002", { status: "idle" }),
+      threadCard("thread-idle", "003", { status: "idle", title: "Restorable row" }),
+    ],
+  });
+
+  const target = selectScenarioRenameTarget(dockSnapshot);
+
+  assert.equal(target.threadID, "thread-idle");
+  assert.equal(target.title, "Restorable row");
+});
+
+test("sync audit sanitizes relay card titles as display-title fingerprints", () => {
+  const dockSnapshot = snapshot({
+    rows: [
+      threadCard("thread-title", "001", { title: "Restorable row " }),
+    ],
+  });
+
+  const reportSnapshot = sanitizeDockSnapshotForReport(dockSnapshot);
+  const title = reportSnapshot.rows[0].title;
+
+  assert.deepEqual(title, {
+    kind: "textFingerprint",
+    length: "Restorable row".length,
+    sha256: crypto.createHash("sha256").update("Restorable row").digest("hex").slice(0, 16),
+  });
+});
+
+test("scenario lag budgets command transitions from acknowledgement when present", () => {
+  const lag = scenarioLagSummary({
+    transition: "restore-title",
+    startedAtMs: 1_000,
+    acknowledgedAtMs: 6_000,
+    observedAtMs: 6_020,
+    maxStreamLagMs: 2_000,
+  });
+
+  assert.equal(lag.lag_change_to_relay_ms, 5_020);
+  assert.equal(lag.lag_ack_to_relay_ms, 20);
+  assert.equal(lag.observedLagMs, 20);
+  assert.equal(lag.ok, true);
+  assert.equal(lag.exceeded, false);
 });
 
 test("sync audit flags heartbeat sequence gaps", () => {
@@ -301,6 +382,39 @@ test("sync audit compares long-lived stream freshness to fresh snapshots", () =>
 
   assert.equal(comparison.ok, false);
   assert.equal(comparison.findings.some((finding) => finding.code === "dock_stream_freshness_mismatch"), true);
+});
+
+test("sync audit target thread comparison ignores unrelated live row churn", () => {
+  const comparison = compareDockThreadCard(
+    snapshot({
+      rows: [
+        threadCard("target", "001", { title: "same" }),
+        threadCard("unrelated", "002", { title: "old" }),
+      ],
+    }),
+    snapshot({
+      rows: [
+        threadCard("target", "001", { title: "same" }),
+        threadCard("unrelated", "000", { title: "new" }),
+      ],
+    }),
+    "target",
+  );
+
+  assert.equal(comparison.ok, true);
+  assert.deepEqual(comparison.findings, []);
+});
+
+test("sync audit target thread comparison still fails target payload drift", () => {
+  const comparison = compareDockThreadCard(
+    snapshot({ rows: [threadCard("target", "001", { title: "old" })] }),
+    snapshot({ rows: [threadCard("target", "001", { title: "new" })] }),
+    "target",
+  );
+
+  assert.equal(comparison.ok, false);
+  assert.equal(comparison.findings[0].code, "dock_stream_thread_card_payload_mismatch");
+  assert.deepEqual(comparison.findings[0].differingKeys, ["title"]);
 });
 
 test("sync audit ignores freshness timestamp churn when status and error match", () => {

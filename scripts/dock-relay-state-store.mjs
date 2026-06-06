@@ -12,6 +12,7 @@ import {
   PROJECTION_ENGINE_VERSION,
   PROJECTION_IDENTITY_VERSION,
   PROJECTION_SCHEMA_VERSION,
+  threadCardDisplayOrderKey,
 } from "./dock-relay-projection-engine.mjs";
 import {
   ARCHIVE_VIEW,
@@ -124,6 +125,63 @@ function requireProjectionCard(card, view) {
   }
   return card;
 }
+
+function viewForCard(card) {
+  return card?.archiveState === "archived" || card?.view === ARCHIVE_VIEW
+    ? ARCHIVE_VIEW
+    : DOCK_VIEW;
+}
+
+function archiveStateForView(view) {
+  return view === ARCHIVE_VIEW ? "archived" : "active";
+}
+
+function listCardsForView(store, view, { hostID, offset = 0, limit = null } = {}) {
+  return view === ARCHIVE_VIEW
+    ? store.listArchiveCards({ hostID, offset, limit })
+    : store.listDockCards({ hostID, offset, limit });
+}
+
+function freshnessForView(store, view, hostID) {
+  return store.freshnessForHost(hostID, { archived: view === ARCHIVE_VIEW });
+}
+
+function cardTruthCompleteForView(store, view, hostID) {
+  return store.cardTruthCompleteForHost(hostID, { archived: view === ARCHIVE_VIEW });
+}
+
+function recomputeCardOrder(card) {
+  if (!card || typeof card !== "object") {
+    return card;
+  }
+  const projectionID = card.projectionID;
+  if (!projectionID) {
+    return card;
+  }
+  return {
+    ...card,
+    displayOrderKey: threadCardDisplayOrderKey({
+      activityAtMs: card.activityAtMs,
+      status: card.status,
+      projectionID,
+    }),
+  };
+}
+
+function scopedCardPresenceForView(view) {
+  return {
+    archiveState: archiveStateForView(view),
+    activeScopePresent: view === DOCK_VIEW,
+    archivedScopePresent: view === ARCHIVE_VIEW,
+  };
+}
+
+const VISIBLE_THREAD_SCOPE_SQL = `
+  (
+    (t.active_scope_present = 1 AND t.archive_state != 'archived')
+    OR (t.archived_scope_present = 1 AND t.archive_state = 'archived')
+  )
+`;
 
 function sortJSON(value) {
   if (Array.isArray(value)) {
@@ -271,6 +329,7 @@ class RelayStateStore {
 
       CREATE TABLE IF NOT EXISTS changes (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        view_seq INTEGER NOT NULL,
         view TEXT NOT NULL,
         host_id TEXT,
         thread_id TEXT,
@@ -324,6 +383,7 @@ class RelayStateStore {
       CREATE INDEX IF NOT EXISTS idx_changes_view_seq
         ON changes(view, seq);
     `);
+    this.ensureChangesViewSeqColumn();
     ensureOutboundUserMessageStoreSchema(this.db);
     this.ensureThreadColumns();
     this.ensureLiveLeaseColumns();
@@ -386,8 +446,8 @@ class RelayStateStore {
       DELETE FROM turn_cache;
     `);
     this.db.prepare(`
-      INSERT INTO changes (view, host_id, thread_id, change_type, payload_json, created_at)
-      VALUES (?, NULL, NULL, ?, ?, ?)
+      INSERT INTO changes (view, view_seq, host_id, thread_id, change_type, payload_json, created_at)
+      VALUES (?, 1, NULL, NULL, ?, ?, ?)
     `).run(
       DOCK_VIEW,
       "projection-cache-schema-reset",
@@ -399,6 +459,34 @@ class RelayStateStore {
       }),
       nowISOString()
     );
+  }
+
+  ensureChangesViewSeqColumn() {
+    const columns = new Set(this.db.prepare("PRAGMA table_info(changes)").all().map((row) => row.name));
+    if (!columns.has("view_seq")) {
+      this.db.exec("ALTER TABLE changes ADD COLUMN view_seq INTEGER");
+    }
+    const rows = this.db.prepare(`
+      SELECT seq, view, view_seq
+      FROM changes
+      ORDER BY seq ASC
+    `).all();
+    const counters = new Map();
+    const update = this.db.prepare("UPDATE changes SET view_seq = ? WHERE seq = ?");
+    for (const row of rows) {
+      const existing = Number(row.view_seq || 0);
+      if (existing > 0) {
+        counters.set(row.view, Math.max(Number(counters.get(row.view) || 0), existing));
+        continue;
+      }
+      const next = Number(counters.get(row.view) || 0) + 1;
+      counters.set(row.view, next);
+      update.run(next, row.seq);
+    }
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_changes_view_view_seq
+        ON changes(view, view_seq)
+    `);
   }
 
   ensureThreadColumns() {
@@ -494,7 +582,7 @@ class RelayStateStore {
 
   currentSeqForView(view) {
     return this.db.prepare(`
-      SELECT COALESCE(MAX(seq), 0) AS seq
+      SELECT COALESCE(MAX(view_seq), 0) AS seq
       FROM changes
       WHERE view = ?
     `).get(view).seq || 0;
@@ -818,6 +906,335 @@ class RelayStateStore {
     });
   }
 
+  applyTargetedCardUpsert({
+    host,
+    card,
+    reason = "targeted-card-upsert",
+  }) {
+    const view = card?.view === ARCHIVE_VIEW ? ARCHIVE_VIEW : DOCK_VIEW;
+    const at = nowISOString();
+    return this.transaction(() => {
+      this.upsertHost(host, at);
+      const previousFreshness = freshnessForView(this, view, host.id);
+      const previousTotalRows = listCardsForView(this, view, { hostID: host.id, offset: 0, limit: 0 }).totalRows;
+      const previous = this.cardForThread({ hostID: host.id, threadID: card?.threadID, visibleOnly: true });
+      const previousView = previous ? viewForCard(previous) : null;
+      const previousViewFreshness = previousView && previousView !== view
+        ? freshnessForView(this, previousView, host.id)
+        : null;
+      const previousViewTotalRows = previousView && previousView !== view
+        ? listCardsForView(this, previousView, { hostID: host.id, offset: 0, limit: 0 }).totalRows
+        : null;
+      const previousInView = previous && viewForCard(previous) === view ? previous : null;
+      const cardWithOrder = recomputeCardOrder({
+        ...card,
+        archiveState: archiveStateForView(view),
+        view,
+      });
+      requireProjectionCard(cardWithOrder, view);
+      this.upsertThreadCard(host.id, cardWithOrder, {
+        ...scopedCardPresenceForView(view),
+        at,
+      });
+      const nextFreshness = freshnessForView(this, view, host.id);
+      const nextTotalRows = listCardsForView(this, view, { hostID: host.id, offset: 0, limit: 0 }).totalRows;
+      const rowChanged = sortedJSONString(comparableProjectionCard(previousInView))
+        !== sortedJSONString(comparableProjectionCard(cardWithOrder));
+      const changed = rowChanged
+        || Number(previousTotalRows || 0) !== Number(nextTotalRows || 0)
+        || sortedJSONString(comparableProjectionFreshness(previousFreshness))
+          !== sortedJSONString(comparableProjectionFreshness(nextFreshness));
+      const seq = changed
+        ? this.recordChange({
+            view,
+            hostID: host.id,
+            threadID: cardWithOrder.threadID,
+            changeType: "targeted-card-upsert",
+            payload: { reason },
+            at,
+          })
+        : this.currentSeqForView(view);
+      let removedFrom = null;
+      if (previousView && previousView !== view) {
+        const nextPreviousViewFreshness = freshnessForView(this, previousView, host.id);
+        const nextPreviousViewTotalRows = listCardsForView(this, previousView, { hostID: host.id, offset: 0, limit: 0 }).totalRows;
+        const previousViewChanged = Number(previousViewTotalRows || 0) !== Number(nextPreviousViewTotalRows || 0)
+          || sortedJSONString(comparableProjectionFreshness(previousViewFreshness))
+            !== sortedJSONString(comparableProjectionFreshness(nextPreviousViewFreshness));
+        const previousViewSeq = previousViewChanged
+          ? this.recordChange({
+              view: previousView,
+              hostID: host.id,
+              threadID: previous.threadID,
+              changeType: "targeted-card-view-move-removal",
+              payload: { reason, toView: view },
+              at,
+            })
+          : this.currentSeqForView(previousView);
+        removedFrom = {
+          view: previousView,
+          seq: previousViewSeq,
+          rows: [],
+          projectionIDs: previousViewChanged ? [previous.projectionID] : [],
+          changed: previousViewChanged,
+          complete: nextPreviousViewFreshness.status === "fresh"
+            && cardTruthCompleteForView(this, previousView, host.id),
+        };
+      }
+      if (changed) {
+        this.pruneChanges();
+      }
+      if (removedFrom?.changed) {
+        this.pruneChanges();
+      }
+      return {
+        view,
+        seq,
+        rows: changed ? [cardWithOrder] : [],
+        projectionIDs: [],
+        changed,
+        removedFrom,
+        complete: freshnessForView(this, view, host.id).status === "fresh"
+          && cardTruthCompleteForView(this, view, host.id),
+      };
+    });
+  }
+
+  applyThreadCardPatch({
+    host,
+    threadID,
+    patch = {},
+    reason = "targeted-card-patch",
+  }) {
+    const at = nowISOString();
+    return this.transaction(() => {
+      this.upsertHost(host, at);
+      const current = this.cardForThread({ hostID: host.id, threadID, visibleOnly: true });
+      if (!current) {
+        const hidden = this.cardForThread({ hostID: host.id, threadID, visibleOnly: false });
+        return {
+          view: null,
+          seq: null,
+          rows: [],
+          projectionIDs: [],
+          changed: false,
+          missing: true,
+          hidden: Boolean(hidden),
+        };
+      }
+      const view = viewForCard(current);
+      const previousFreshness = freshnessForView(this, view, host.id);
+      const previousTotalRows = listCardsForView(this, view, { hostID: host.id, offset: 0, limit: 0 }).totalRows;
+      const patched = recomputeCardOrder({
+        ...current,
+        ...patch,
+        archiveState: archiveStateForView(view),
+        view,
+      });
+      requireProjectionCard(patched, view);
+      const rowChanged = sortedJSONString(comparableProjectionCard(current))
+        !== sortedJSONString(comparableProjectionCard(patched));
+      if (rowChanged) {
+        this.upsertThreadCard(host.id, patched, {
+          ...scopedCardPresenceForView(view),
+          at,
+        });
+      }
+      const nextFreshness = freshnessForView(this, view, host.id);
+      const nextTotalRows = listCardsForView(this, view, { hostID: host.id, offset: 0, limit: 0 }).totalRows;
+      const changed = rowChanged
+        || Number(previousTotalRows || 0) !== Number(nextTotalRows || 0)
+        || sortedJSONString(comparableProjectionFreshness(previousFreshness))
+          !== sortedJSONString(comparableProjectionFreshness(nextFreshness));
+      const seq = changed
+        ? this.recordChange({
+            view,
+            hostID: host.id,
+            threadID,
+            changeType: "targeted-card-patch",
+            payload: { reason },
+            at,
+          })
+        : this.currentSeqForView(view);
+      if (changed) {
+        this.pruneChanges();
+      }
+      return {
+        view,
+        seq,
+        rows: changed ? [patched] : [],
+        projectionIDs: [],
+        changed,
+        missing: false,
+        complete: freshnessForView(this, view, host.id).status === "fresh"
+          && cardTruthCompleteForView(this, view, host.id),
+      };
+    });
+  }
+
+  applyThreadArchiveMove({
+    host,
+    threadID,
+    archived,
+    reason = archived ? "thread/archive" : "thread/unarchive",
+  }) {
+    const at = nowISOString();
+    return this.transaction(() => {
+      this.upsertHost(host, at);
+      const current = this.cardForThread({ hostID: host.id, threadID, visibleOnly: true });
+      if (!current) {
+        const hidden = this.cardForThread({ hostID: host.id, threadID, visibleOnly: false });
+        return {
+          dock: { view: DOCK_VIEW, seq: this.currentSeqForView(DOCK_VIEW), rows: [], projectionIDs: [], changed: false, missing: true },
+          archive: { view: ARCHIVE_VIEW, seq: this.currentSeqForView(ARCHIVE_VIEW), rows: [], projectionIDs: [], changed: false, missing: true },
+          missing: true,
+          hidden: Boolean(hidden),
+        };
+      }
+      const fromView = viewForCard(current);
+      const toView = archived ? ARCHIVE_VIEW : DOCK_VIEW;
+      const before = {
+        [DOCK_VIEW]: {
+          freshness: freshnessForView(this, DOCK_VIEW, host.id),
+          totalRows: listCardsForView(this, DOCK_VIEW, { hostID: host.id, offset: 0, limit: 0 }).totalRows,
+        },
+        [ARCHIVE_VIEW]: {
+          freshness: freshnessForView(this, ARCHIVE_VIEW, host.id),
+          totalRows: listCardsForView(this, ARCHIVE_VIEW, { hostID: host.id, offset: 0, limit: 0 }).totalRows,
+        },
+      };
+      const moved = recomputeCardOrder({
+        ...current,
+        archiveState: archiveStateForView(toView),
+        view: toView,
+      });
+      requireProjectionCard(moved, toView);
+      if (fromView !== toView || sortedJSONString(comparableProjectionCard(current)) !== sortedJSONString(comparableProjectionCard(moved))) {
+        this.upsertThreadCard(host.id, moved, {
+          ...scopedCardPresenceForView(toView),
+          at,
+        });
+      }
+      const results = {
+        [DOCK_VIEW]: {
+          view: DOCK_VIEW,
+          rows: [],
+          projectionIDs: [],
+          changed: false,
+          seq: this.currentSeqForView(DOCK_VIEW),
+        },
+        [ARCHIVE_VIEW]: {
+          view: ARCHIVE_VIEW,
+          rows: [],
+          projectionIDs: [],
+          changed: false,
+          seq: this.currentSeqForView(ARCHIVE_VIEW),
+        },
+      };
+      if (fromView !== toView) {
+        results[fromView].projectionIDs = [current.projectionID];
+        results[fromView].changed = true;
+        results[toView].rows = [moved];
+        results[toView].changed = true;
+      } else if (sortedJSONString(comparableProjectionCard(current)) !== sortedJSONString(comparableProjectionCard(moved))) {
+        results[toView].rows = [moved];
+        results[toView].changed = true;
+      }
+      for (const view of [DOCK_VIEW, ARCHIVE_VIEW]) {
+        const afterFreshness = freshnessForView(this, view, host.id);
+        const afterTotalRows = listCardsForView(this, view, { hostID: host.id, offset: 0, limit: 0 }).totalRows;
+        if (
+          Number(before[view].totalRows || 0) !== Number(afterTotalRows || 0)
+          || sortedJSONString(comparableProjectionFreshness(before[view].freshness))
+            !== sortedJSONString(comparableProjectionFreshness(afterFreshness))
+        ) {
+          results[view].changed = true;
+        }
+        if (results[view].changed) {
+          results[view].seq = this.recordChange({
+            view,
+            hostID: host.id,
+            threadID,
+            changeType: "targeted-archive-move",
+            payload: { reason, archived: Boolean(archived) },
+            at,
+          });
+          results[view].complete = afterFreshness.status === "fresh"
+            && cardTruthCompleteForView(this, view, host.id);
+        } else {
+          results[view].complete = afterFreshness.status === "fresh"
+            && cardTruthCompleteForView(this, view, host.id);
+        }
+      }
+      if (results[DOCK_VIEW].changed || results[ARCHIVE_VIEW].changed) {
+        this.pruneChanges();
+      }
+      return {
+        dock: results[DOCK_VIEW],
+        archive: results[ARCHIVE_VIEW],
+        missing: false,
+      };
+    });
+  }
+
+  applyTargetedCardRemoval({
+    host,
+    threadID,
+    reason = "targeted-card-removal",
+  }) {
+    const at = nowISOString();
+    return this.transaction(() => {
+      this.upsertHost(host, at);
+      const current = this.cardForThread({ hostID: host.id, threadID, visibleOnly: true });
+      if (!current) {
+        return {
+          view: null,
+          seq: null,
+          rows: [],
+          projectionIDs: [],
+          changed: false,
+          missing: true,
+        };
+      }
+      const view = viewForCard(current);
+      const previousFreshness = freshnessForView(this, view, host.id);
+      const previousTotalRows = listCardsForView(this, view, { hostID: host.id, offset: 0, limit: 0 }).totalRows;
+      if (view === ARCHIVE_VIEW) {
+        this.markThreadNotArchived(host.id, threadID, at);
+      } else {
+        this.markThreadInactive(host.id, threadID, at);
+      }
+      const nextFreshness = freshnessForView(this, view, host.id);
+      const nextTotalRows = listCardsForView(this, view, { hostID: host.id, offset: 0, limit: 0 }).totalRows;
+      const changed = Number(previousTotalRows || 0) !== Number(nextTotalRows || 0)
+        || sortedJSONString(comparableProjectionFreshness(previousFreshness))
+          !== sortedJSONString(comparableProjectionFreshness(nextFreshness));
+      const seq = changed
+        ? this.recordChange({
+            view,
+            hostID: host.id,
+            threadID,
+            changeType: "targeted-card-removal",
+            payload: { reason },
+            at,
+          })
+        : this.currentSeqForView(view);
+      if (changed) {
+        this.pruneChanges();
+      }
+      return {
+        view,
+        seq,
+        rows: [],
+        projectionIDs: changed ? [current.projectionID] : [],
+        changed,
+        missing: false,
+        complete: freshnessForView(this, view, host.id).status === "fresh"
+          && cardTruthCompleteForView(this, view, host.id),
+      };
+    });
+  }
+
   upsertThreadCard(hostID, card, {
     archiveState = "active",
     activeScopePresent = true,
@@ -931,12 +1348,13 @@ class RelayStateStore {
     return deleteRejectedLiveLeases(this.db, hostID);
   }
 
-  cardForThread({ hostID, threadID }) {
+  cardForThread({ hostID, threadID, visibleOnly = false }) {
     const row = this.db.prepare(`
       SELECT t.*
       FROM threads t
       WHERE t.host_id = ? AND t.thread_id = ?
         AND ${HUMAN_APP_FACING_THREAD_SQL_FOR_ALIAS}
+        ${visibleOnly ? `AND ${VISIBLE_THREAD_SCOPE_SQL}` : ""}
       LIMIT 1
     `).get(hostID, threadID);
     return normalizeStoredCard(row);
@@ -1071,11 +1489,16 @@ class RelayStateStore {
     payload = null,
     at = nowISOString(),
   }) {
-    const result = this.db.prepare(`
-      INSERT INTO changes (view, host_id, thread_id, change_type, payload_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(view, hostID, threadID, changeType, payload ? JSON.stringify(payload) : null, at);
-    return Number(result.lastInsertRowid);
+    const viewSeq = Number(this.db.prepare(`
+      SELECT COALESCE(MAX(view_seq), 0) + 1 AS seq
+      FROM changes
+      WHERE view = ?
+    `).get(view).seq || 1);
+    this.db.prepare(`
+      INSERT INTO changes (view, view_seq, host_id, thread_id, change_type, payload_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(view, viewSeq, hostID, threadID, changeType, payload ? JSON.stringify(payload) : null, at);
+    return viewSeq;
   }
 
   pruneChanges(limit = RELAY_STATE_CHANGE_RETENTION) {

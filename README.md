@@ -14,9 +14,9 @@ The normal Codex daemon provides durable history on this Unix socket:
 ```
 
 Running Codex clients can also create live app-server/session owners. The relay
-discovers attachable loopback WebSocket owners from the local process table,
-records private stdio owners as diagnostics, and prefers the live owner for
-thread-specific methods when it has a current lease.
+discovers attachable Unix-socket and loopback WebSocket owners from the local
+process table, records private stdio owners as diagnostics, and prefers the
+attachable owner for thread-specific methods when it has a current lease.
 
 Dock no longer starts a special raw `:4500` app-server. The iPhone never connects
 directly to a Codex app-server. It connects to the Dock relay on `:4510`, and
@@ -51,15 +51,28 @@ blocked by device tooling, record the exact skipped command and exact blocker.
 Simulator, local relay, service-status, and generated-artifact proof only prove
 the parts they actually exercise.
 
-## Exhaustive Sync Harness
+## Testing And Proof
 
-The repeatable over-time sync proof is documented in
-`docs/CODEX_DOCK_EXHAUSTIVE_SYNC_RUNBOOK_2026-05-31.md`.
+Current test commands, proof rules, and add-a-test guidance are documented in
+`docs/TESTING.md`.
 
-Use it when checking whether Codex storage, app-server state, relay projection,
-client-used routes, and the literal `iPhone 17` simulator display stay in sync.
-The harness treats lag over the configured budget as a failure, even if a later
-sample eventually catches up.
+Historical bug, plan, audit, worklog, and UI-requirement coverage is tracked in
+`docs/CODEX_DOCK_TEST_SCENARIO_COVERAGE.md`. When adding a root bug doc under
+`docs/bugs/`, adding or removing a controlled simulator scenario, or finding a
+new failure class in old docs, update that ledger and run:
+
+```sh
+rtk npm run test:docs
+```
+
+The future unified framework plan is
+`docs/CODEX_DOCK_UNIFIED_TESTING_FRAMEWORK_2026-06-05.md`. It defines the
+proposed `test-smoke`, `test-full`, and `test-overtime` Makefile targets, but
+those targets are not current commands until `Makefile` contains them.
+
+The older exhaustive sync runbook,
+`docs/CODEX_DOCK_EXHAUSTIVE_SYNC_RUNBOOK_2026-05-31.md`, remains a narrower
+historical reference for over-time sync proof.
 
 ## Canonical Service Start
 

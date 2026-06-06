@@ -178,7 +178,18 @@ function relaySampleTimeMS(sample) {
   return Number.isFinite(value) ? value : 0;
 }
 
-function relaySampleAtOrBefore(relaySamples, uiSample) {
+function staleRelayTruthSample(relaySample, { ageMs, maxTruthAgeMs }) {
+  return {
+    ...relaySample,
+    truthUnknown: true,
+    truthUnknownReason: "stale_relay_truth",
+    staleRelaySampleIndex: relaySample?.sampleIndex ?? null,
+    relayTruthAgeMs: ageMs,
+    relayTruthMaxAgeMs: maxTruthAgeMs,
+  };
+}
+
+function relaySampleAtOrBefore(relaySamples, uiSample, { maxTruthAgeMs = null } = {}) {
   const target = sampleTimeMS(uiSample);
   let selected = null;
   for (const relaySample of relaySamples) {
@@ -188,6 +199,17 @@ function relaySampleAtOrBefore(relaySamples, uiSample) {
       continue;
     }
     break;
+  }
+  if (selected
+      && !selected.truthUnknown
+      && maxTruthAgeMs !== null
+      && maxTruthAgeMs !== undefined
+      && Number.isFinite(Number(maxTruthAgeMs))
+      && Number(maxTruthAgeMs) >= 0) {
+    const ageMs = target - relaySampleTimeMS(selected);
+    if (ageMs > Number(maxTruthAgeMs)) {
+      return staleRelayTruthSample(selected, { ageMs, maxTruthAgeMs: Number(maxTruthAgeMs) });
+    }
   }
   return selected;
 }
@@ -216,6 +238,7 @@ function dockVisibleTruthKey(freshDock) {
     const row = rowsByProjectionID.get(projectionID) || {};
     return {
       projectionID,
+      title: relayTextFingerprint(row.title),
       status: row.status || null,
       origin: relayOrigin(row),
     };
@@ -229,6 +252,7 @@ function dockVisibleTruthKey(freshDock) {
       }
       return {
         projectionID,
+        title: relayTextFingerprint(row.title),
         status: row.status || null,
         origin: relayOrigin(row),
       };
@@ -242,6 +266,22 @@ function dockVisibleTruthKey(freshDock) {
   });
 }
 
+function transitionDockTruth(transition) {
+  const snapshot = transition?.wait?.snapshot;
+  if (snapshot && typeof snapshot === "object" && Array.isArray(snapshot.rows)) {
+    return snapshot;
+  }
+  return transition?.freshDock || null;
+}
+
+function transitionFreshDockTruthTimeMS(transition) {
+  return firstDateMS(
+    transition?.freshDock?.lastReceivedAt,
+    transition?.convergence?.convergedAt,
+    transition?.streamComparisonAttempts?.at(-1)?.checkedAt,
+  );
+}
+
 function scenarioTransitionTruths(relayReport) {
   const truths = [];
   for (const scenario of Array.isArray(relayReport?.scenarios) ? relayReport.scenarios : []) {
@@ -249,16 +289,21 @@ function scenarioTransitionTruths(relayReport) {
     for (let index = 0; index < transitions.length; index += 1) {
       const transition = transitions[index];
       const atMs = scenarioTransitionTimeMS(transition);
-      if (atMs === null || !transition?.freshDock) {
+      const truthDock = transitionDockTruth(transition);
+      if (atMs === null || !truthDock) {
         continue;
       }
-      const truthKey = dockVisibleTruthKey(transition.freshDock);
+      const truthKey = dockVisibleTruthKey(truthDock);
       // Scenario proof is about user-visible Dock states. Internal transitions
       // that keep the same visible truth must not create an impossible
       // zero-width UI observation window.
       const nextTransition = transitions.slice(index + 1)
-        .filter((candidate) => candidate?.freshDock && dockVisibleTruthKey(candidate.freshDock) !== truthKey)
-        .map((candidate) => scenarioTransitionTimeMS(candidate))
+        .map((candidate) => ({
+          atMs: scenarioTransitionTimeMS(candidate),
+          truthDock: transitionDockTruth(candidate),
+        }))
+        .filter((candidate) => candidate.truthDock && dockVisibleTruthKey(candidate.truthDock) !== truthKey)
+        .map((candidate) => candidate.atMs)
         .find((candidateMs) => candidateMs !== null && candidateMs >= atMs) ?? null;
       const at = new Date(atMs).toISOString();
       truths.push({
@@ -273,12 +318,109 @@ function scenarioTransitionTruths(relayReport) {
           sampleIndex: `${scenario.id || "scenario"}:${transition.name || index}`,
           startedAt: at,
           finishedAt: at,
-          freshDock: transition.freshDock,
+          freshDock: truthDock,
         },
       });
     }
   }
   return truths.sort((left, right) => left.atMs - right.atMs);
+}
+
+function scenarioTransitionFreshDockTruths(relayReport) {
+  const truths = [];
+  for (const scenario of Array.isArray(relayReport?.scenarios) ? relayReport.scenarios : []) {
+    const transitions = Array.isArray(scenario?.transitions) ? scenario.transitions : [];
+    for (let index = 0; index < transitions.length; index += 1) {
+      const transition = transitions[index];
+      if (!transition?.freshDock) {
+        continue;
+      }
+      const atMs = transitionFreshDockTruthTimeMS(transition);
+      if (atMs === null) {
+        continue;
+      }
+      const at = new Date(atMs).toISOString();
+      truths.push({
+        sampleIndex: `${scenario.id || "scenario"}:${transition.name || index}:fresh`,
+        startedAt: at,
+        finishedAt: at,
+        freshDock: transition.freshDock,
+      });
+    }
+  }
+  return truths;
+}
+
+function notificationTruthSamples(notifications, sampleIndexPrefix) {
+  const samples = [];
+  const seenStreamSnapshots = new Set();
+  for (const notification of Array.isArray(notifications) ? notifications : []) {
+    const atMs = dateMS(notification?.receivedAt);
+    const snapshot = notification?.snapshot;
+    if (atMs === null || !snapshot) {
+      continue;
+    }
+    const key = `${notification.receivedAt || ""}:${notification.seq ?? ""}:${notification.kind || ""}`;
+    if (seenStreamSnapshots.has(key)) {
+      continue;
+    }
+    seenStreamSnapshots.add(key);
+    // Stream deltas are the relay state the app actually sees between
+    // fresh samples. Without them, UI proof can compare against stale truth.
+    samples.push({
+      sampleIndex: `${sampleIndexPrefix}:${notification.seq ?? "unknown"}`,
+      startedAt: notification.receivedAt,
+      finishedAt: notification.receivedAt,
+      freshDock: snapshot,
+    });
+  }
+  return samples;
+}
+
+function scenarioStreamTruthSamples(relayReport) {
+  const samples = [];
+  for (const scenario of Array.isArray(relayReport?.scenarios) ? relayReport.scenarios : []) {
+    samples.push(...notificationTruthSamples(
+      scenario?.stream?.notifications || [],
+      `${scenario.id || "scenario"}:stream`,
+    ));
+  }
+  return samples;
+}
+
+function clientPathTruthUnknownSamples(relayReport) {
+  const events = [
+    ...(Array.isArray(relayReport?.clientPathEvidence?.events) ? relayReport.clientPathEvidence.events : []),
+    ...((Array.isArray(relayReport?.scenarios) ? relayReport.scenarios : [])
+      .flatMap((scenario) => (
+        Array.isArray(scenario?.clientPathEvidence?.events)
+          ? scenario.clientPathEvidence.events
+          : []
+      ))),
+  ];
+  const seen = new Set();
+  const samples = [];
+  for (const event of events) {
+    const atMs = dateMS(event?.at);
+    if (event?.route !== "dock/update" || atMs === null || event.snapshot) {
+      continue;
+    }
+    const key = `${event.at}:${event.seq ?? ""}:${event.kind || ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    samples.push({
+      sampleIndex: `unknown:${event.seq ?? "unknown"}`,
+      startedAt: event.at,
+      finishedAt: event.at,
+      truthUnknown: true,
+      route: event.route,
+      kind: event.kind || null,
+      seq: event.seq ?? null,
+    });
+  }
+  return samples;
 }
 
 function detailTruthProjectionIDs(truth) {
@@ -363,36 +505,39 @@ function relayTruthSamples(relayReport) {
   const regularSamples = (Array.isArray(relayReport.samples) ? relayReport.samples : [])
     .filter((sample) => dateMS(sample?.finishedAt || sample?.startedAt) !== null);
   const streamSamples = [];
-  const seenStreamSnapshots = new Set();
   for (const sample of regularSamples) {
-    const notifications = Array.isArray(sample?.stream?.notifications)
-      ? sample.stream.notifications
-      : [];
-    for (const notification of notifications) {
-      const atMs = dateMS(notification?.receivedAt);
-      const snapshot = notification?.snapshot;
-      if (atMs === null || !snapshot) {
-        continue;
-      }
-      const key = `${notification.receivedAt || ""}:${notification.seq ?? ""}:${notification.kind || ""}`;
-      if (seenStreamSnapshots.has(key)) {
-        continue;
-      }
-      seenStreamSnapshots.add(key);
-      // Stream deltas are the relay state the app actually sees between
-      // fresh samples. Without them, UI proof can compare against stale truth.
-      streamSamples.push({
-        sampleIndex: `stream:${notification.seq ?? "unknown"}`,
-        startedAt: notification.receivedAt,
-        finishedAt: notification.receivedAt,
-        freshDock: snapshot,
-      });
-    }
+    streamSamples.push(...notificationTruthSamples(sample?.stream?.notifications || [], "stream"));
   }
   const transitionSamples = scenarioTransitionTruths(relayReport)
     .map((truth) => truth.truthSample);
-  return [...regularSamples, ...streamSamples, ...transitionSamples]
-    .sort((left, right) => relaySampleTimeMS(left) - relaySampleTimeMS(right));
+  const transitionFreshSamples = scenarioTransitionFreshDockTruths(relayReport);
+  const scenarioStreamSamples = scenarioStreamTruthSamples(relayReport);
+  const unknownSamples = clientPathTruthUnknownSamples(relayReport);
+  return [
+    ...regularSamples,
+    ...streamSamples,
+    ...transitionSamples,
+    ...transitionFreshSamples,
+    ...scenarioStreamSamples,
+    ...unknownSamples,
+  ].sort((left, right) => {
+    const timeDelta = relaySampleTimeMS(left) - relaySampleTimeMS(right);
+    if (timeDelta !== 0) {
+      return timeDelta;
+    }
+    if (left.truthUnknown && !right.truthUnknown) {
+      return -1;
+    }
+    if (!left.truthUnknown && right.truthUnknown) {
+      return 1;
+    }
+    return String(left.sampleIndex ?? "").localeCompare(String(right.sampleIndex ?? ""));
+  });
+}
+
+function shouldCullStaleRelayTruth(relayReport) {
+  return relayReport?.mode === "scenario"
+    || (Array.isArray(relayReport?.scenarios) && relayReport.scenarios.length > 0);
 }
 
 function relayOrigin(card) {
@@ -420,6 +565,45 @@ function relayRowsByProjectionID(relaySample) {
     }
   }
   return byKey;
+}
+
+function textFingerprint(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  return {
+    kind: "textFingerprint",
+    length: value.length,
+    sha256: crypto.createHash("sha256").update(value).digest("hex").slice(0, 16),
+  };
+}
+
+function relayTextFingerprint(value) {
+  if (!value) {
+    return null;
+  }
+  if (typeof value === "string") {
+    return textFingerprint(value);
+  }
+  if (value.kind === "textFingerprint"
+      && Number.isFinite(Number(value.length))
+      && typeof value.sha256 === "string"
+      && value.sha256.length > 0) {
+    return {
+      kind: "textFingerprint",
+      length: Number(value.length),
+      sha256: value.sha256,
+    };
+  }
+  return null;
+}
+
+function parseIntegerField(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : null;
 }
 
 function relayProjectionID(row) {
@@ -1260,6 +1444,10 @@ function evaluateDockRows({ sample, rows, relayRows, failures, source }) {
       );
       continue;
     }
+    const titleFingerprint = relayTextFingerprint(relayRow.title);
+    const uiTitleHash = parsed.titleHash || null;
+    const uiTitleLength = parseIntegerField(parsed.titleLength);
+    const uiDisplayOrderKey = typeof parsed.order === "string" ? parsed.order : null;
     if (status && status !== relayRow.status) {
       addFailure(
         failures,
@@ -1270,6 +1458,63 @@ function evaluateDockRows({ sample, rows, relayRows, failures, source }) {
           key,
           uiStatus: status,
           relayStatus: relayRow.status,
+          source,
+        }
+      );
+    }
+    if (titleFingerprint) {
+      if (!uiTitleHash) {
+        addFailure(
+          failures,
+          sample,
+          rowFailureCode(source, "row_title_fingerprint_missing"),
+          "Rendered row did not expose a sanitized title fingerprint for relay title comparison.",
+          {
+            key,
+            source,
+          }
+        );
+      } else if (uiTitleHash !== titleFingerprint.sha256) {
+        addFailure(
+          failures,
+          sample,
+          rowFailureCode(source, "row_title_mismatch"),
+          "Rendered row title fingerprint does not match relay projection row title.",
+          {
+            key,
+            uiTitleHash,
+            relayTitleHash: titleFingerprint.sha256,
+            source,
+          }
+        );
+      }
+      if (uiTitleLength !== null && uiTitleLength !== titleFingerprint.length) {
+        addFailure(
+          failures,
+          sample,
+          rowFailureCode(source, "row_title_length_mismatch"),
+          "Rendered row title length does not match relay projection row title.",
+          {
+            key,
+            uiTitleLength,
+            relayTitleLength: titleFingerprint.length,
+            source,
+          }
+        );
+      }
+    }
+    if (uiDisplayOrderKey !== null
+        && typeof relayRow.displayOrderKey === "string"
+        && uiDisplayOrderKey !== relayRow.displayOrderKey) {
+      addFailure(
+        failures,
+        sample,
+        rowFailureCode(source, "row_order_key_mismatch"),
+        "Rendered row display order key does not match relay projection row order key.",
+        {
+          key,
+          uiDisplayOrderKey,
+          relayDisplayOrderKey: relayRow.displayOrderKey,
           source,
         }
       );
@@ -1344,6 +1589,33 @@ function evaluateUISample(sample, relaySample) {
       ok: true,
       scored: false,
       relaySampleIndex: null,
+      rootValue: sample.dockRootValue || "",
+      rowCount: Array.isArray(sample.dockRows) ? sample.dockRows.length : 0,
+      sweepRowCount: dockSweep ? dockSweep.rows.length : null,
+      sweepStepCount: dockSweep ? dockSweep.stepCount ?? null : null,
+      visibleOrderChecks: 0,
+      sweepOrderChecks: 0,
+      uiRootRows: parseRootRowCount(sample.dockRootValue || ""),
+      relayRowCount: null,
+      failures,
+    };
+  }
+  if (relaySample.truthUnknown) {
+    return {
+      ok: true,
+      scored: false,
+      observedAt: isoFromMS(dockEvidenceObservedAtMS(sample)),
+      observedAtMs: dockEvidenceObservedAtMS(sample),
+      relaySampleIndex: relaySample.sampleIndex ?? null,
+      relaySampleFinishedAt: relaySample.finishedAt || relaySample.startedAt || null,
+      truthUnknownReason: relaySample.truthUnknownReason || "unknown_relay_truth",
+      staleRelaySampleIndex: relaySample.staleRelaySampleIndex ?? null,
+      relayTruthAgeMs: Number.isFinite(Number(relaySample.relayTruthAgeMs))
+        ? Number(relaySample.relayTruthAgeMs)
+        : null,
+      relayTruthMaxAgeMs: Number.isFinite(Number(relaySample.relayTruthMaxAgeMs))
+        ? Number(relaySample.relayTruthMaxAgeMs)
+        : null,
       rootValue: sample.dockRootValue || "",
       rowCount: Array.isArray(sample.dockRows) ? sample.dockRows.length : 0,
       sweepRowCount: dockSweep ? dockSweep.rows.length : null,
@@ -1572,7 +1844,7 @@ function evaluateScenarioTransitionCoverage({ uiSamples, transitions, maxUiLagMs
         scenarioID: transition.scenarioID,
         transition: transition.transition,
         route: transition.route,
-        observedMs: transition.relayLag.lag_change_to_relay_ms ?? transition.relayLag.observedLagMs ?? null,
+        observedMs: transition.relayLag.observedLagMs ?? transition.relayLag.lag_change_to_relay_ms ?? null,
         budgetMs: transition.relayLag.maxStreamLagMs ?? maxUiLagMs,
       });
     }
@@ -1649,7 +1921,7 @@ function evaluateDetailTransitionCoverage({ uiSamples, transitions, maxUiLagMs }
         scenarioID: transition.scenarioID,
         transition: transition.transition,
         route: transition.route,
-        observedMs: transition.relayLag.lag_change_to_relay_ms ?? transition.relayLag.observedLagMs ?? null,
+        observedMs: transition.relayLag.observedLagMs ?? transition.relayLag.lag_change_to_relay_ms ?? null,
         budgetMs: transition.relayLag.maxStreamLagMs ?? maxUiLagMs,
       });
     }
@@ -1741,6 +2013,7 @@ function buildRenderedUIReport({ relayReport, uiSamples, maxUiLagMs = DEFAULT_MA
   const failures = [];
   const transitions = scenarioTransitionTruths(relayReport);
   const detailTransitions = detailTransitionTruths(relayReport);
+  const hasTransitionAcceptance = transitions.length > 0 || detailTransitions.length > 0;
   const relaySamples = relayTruthSamples(relayReport);
   if (!relayReport.summary?.clientPathOK) {
     failures.push({
@@ -1761,28 +2034,14 @@ function buildRenderedUIReport({ relayReport, uiSamples, maxUiLagMs = DEFAULT_MA
     });
   }
 
-  const evaluations = uiSamples.map((sample) => evaluateUISample(sample, relaySampleAtOrBefore(relaySamples, sample)));
+  const relayTruthMaxAgeMs = shouldCullStaleRelayTruth(relayReport) ? maxUiLagMs : null;
+  const evaluations = uiSamples.map((sample) => evaluateUISample(
+    sample,
+    relaySampleAtOrBefore(relaySamples, sample, { maxTruthAgeMs: relayTruthMaxAgeMs }),
+  ));
 
   const lagAttempts = uiLagAttempts(uiSamples, evaluations);
   const uiLag = evaluateStreamConvergenceLag(lagAttempts, maxUiLagMs);
-  if (lagAttempts.length === 0) {
-    failures.push({
-      code: "dock_ui_no_scored_samples",
-      message: "No simulator displayed-UI samples occurred after relay truth samples were available.",
-    });
-  } else if (!uiLag.ok) {
-    failures.push({
-      code: "dock_ui_lag_exceeded",
-      message: uiLag.converged
-        ? "Rendered Dock UI exceeded the convergence budget after divergence."
-        : "Rendered Dock UI diverged from relay truth and did not converge.",
-      observedMs: uiLag.observedLagMs,
-      budgetMs: maxUiLagMs,
-      firstMismatchAt: uiLag.firstMismatchAt,
-      convergedAt: uiLag.convergedAt,
-      lastCheckedAt: uiLag.lastCheckedAt,
-    });
-  }
   const scenarioTransitionCoverage = evaluateScenarioTransitionCoverage({
     uiSamples,
     transitions,
@@ -1793,20 +2052,44 @@ function buildRenderedUIReport({ relayReport, uiSamples, maxUiLagMs = DEFAULT_MA
     transitions: detailTransitions,
     maxUiLagMs,
   });
-  const ignoredScenarioWarmupSamples = ignoredScenarioWarmupSampleIndexes(uiSamples, scenarioTransitionCoverage);
-  if (Number.isInteger(uiLag.convergedAttempt)) {
-    for (const [index, evaluation] of evaluations.entries()) {
-      if (index <= uiLag.convergedAttempt || ignoredScenarioWarmupSamples.has(index)) {
-        continue;
-      }
-      failures.push(...evaluation.failures);
+
+  if (!hasTransitionAcceptance) {
+    if (lagAttempts.length === 0) {
+      failures.push({
+        code: "dock_ui_no_scored_samples",
+        message: "No simulator displayed-UI samples occurred after relay truth samples were available.",
+      });
+    } else if (!uiLag.ok) {
+      failures.push({
+        code: "dock_ui_lag_exceeded",
+        message: uiLag.converged
+          ? "Rendered Dock UI exceeded the convergence budget after divergence."
+          : "Rendered Dock UI diverged from relay truth and did not converge.",
+        observedMs: uiLag.observedLagMs,
+        budgetMs: maxUiLagMs,
+        firstMismatchAt: uiLag.firstMismatchAt,
+        convergedAt: uiLag.convergedAt,
+        lastCheckedAt: uiLag.lastCheckedAt,
+      });
     }
-  } else if (lagAttempts.length > 0) {
-    failures.push(...(evaluations.at(-1)?.failures || []));
+  }
+
+  const ignoredScenarioWarmupSamples = ignoredScenarioWarmupSampleIndexes(uiSamples, scenarioTransitionCoverage);
+  if (!hasTransitionAcceptance) {
+    if (Number.isInteger(uiLag.convergedAttempt)) {
+      for (const [index, evaluation] of evaluations.entries()) {
+        if (index <= uiLag.convergedAttempt || ignoredScenarioWarmupSamples.has(index)) {
+          continue;
+        }
+        failures.push(...evaluation.failures);
+      }
+    } else if (lagAttempts.length > 0) {
+      failures.push(...(evaluations.at(-1)?.failures || []));
+    }
   }
 
   const bestConsecutivePassingSamples = countConsecutivePassing(evaluations);
-  if (lagAttempts.length >= 2 && bestConsecutivePassingSamples < 2) {
+  if (!hasTransitionAcceptance && lagAttempts.length >= 2 && bestConsecutivePassingSamples < 2) {
     failures.push({
       code: "dock_ui_missing_stable_samples",
       message: "Rendered Dock UI did not produce two consecutive passing samples.",
@@ -1832,11 +2115,15 @@ function buildRenderedUIReport({ relayReport, uiSamples, maxUiLagMs = DEFAULT_MA
     },
     config: {
       maxUiLagMs,
+      relayTruthMaxAgeMs,
     },
     summary: {
       ok: failures.length === 0,
       uiSampleCount: uiSamples.length,
       scoredUISampleCount: lagAttempts.length,
+      staleRelayTruthUISamples: evaluations.filter((evaluation) => (
+        evaluation.truthUnknownReason === "stale_relay_truth"
+      )).length,
       relaySampleCount: relaySamples.length,
       scenarioTransitionCount: transitions.length,
       scenarioTransitionChecks: scenarioTransitionCoverage.checks.length,

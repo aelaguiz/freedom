@@ -28,6 +28,7 @@
     "thread/detail/resync",
     "thread/detail/subscribe",
     "thread/detail/update",
+    "thread/name/set",
     "thread/unarchive",
     "turn/interrupt",
     "turn/start",

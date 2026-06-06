@@ -177,18 +177,28 @@ test("StateSubscriptionHub default heartbeat uses per-view sequence", async () =
   assert.equal(archiveUpdates.every((update) => update.seq === 11), true);
 });
 
-test("dock subscribe overlays fresh live cache status before returning the first snapshot", async () => {
+test("dock subscribe uses committed projection instead of live cache overlay", async () => {
   const dormantLiveCard = testDockCard({
     threadID: "live-thread",
     status: "dormant",
     activityAtMs: 1_000,
   });
+  const refreshedLiveCard = {
+    ...testDockCard({
+      threadID: "live-thread",
+      status: "running",
+      activityAtMs: 3_000,
+    }),
+    backendSessionID: "live-session",
+  };
   const idleCard = testDockCard({
     threadID: "idle-thread",
     status: "idle",
     activityAtMs: 2_000,
   });
   let liveCacheRefreshed = false;
+  let projectionRefreshed = false;
+  const reconcileCalls = [];
   const engine = new RelayStateEngine(
     {
       hostId: "home",
@@ -232,7 +242,7 @@ test("dock subscribe overlays fresh live cache status before returning the first
           return 1;
         },
         currentSeqForView() {
-          return 1;
+          return projectionRefreshed ? 2 : 1;
         },
         freshnessForHost(_hostID, { archived }) {
           assert.equal(archived, false);
@@ -243,7 +253,7 @@ test("dock subscribe overlays fresh live cache status before returning the first
           return true;
         },
         listDockCards({ offset = 0, limit = 500 }) {
-          const cards = [dormantLiveCard, idleCard]
+          const cards = [projectionRefreshed ? refreshedLiveCard : dormantLiveCard, idleCard]
             .sort((left, right) => left.displayOrderKey.localeCompare(right.displayOrderKey));
           return {
             cards: cards.slice(offset, offset + limit),
@@ -254,6 +264,11 @@ test("dock subscribe overlays fresh live cache status before returning the first
       },
     },
   );
+  engine.reconcileDock = async ({ reason }) => {
+    reconcileCalls.push(reason);
+    projectionRefreshed = true;
+    return { seq: 2, rows: [refreshedLiveCard], projectionIDs: [], changed: true };
+  };
   const session = {};
   const snapshot = await engine.subscribeDock({
     session,
@@ -264,19 +279,22 @@ test("dock subscribe overlays fresh live cache status before returning the first
   await engine.close();
 
   assert.equal(liveCacheRefreshed, true);
-  assert.equal(snapshot.rows[0].threadID, "live-thread");
-  assert.equal(snapshot.rows[0].status, "running");
-  assert.equal(snapshot.rows[0].backendSessionID, "live-session");
-  assert.equal(snapshot.rows[0].activityAtMs, 3_000);
+  assert.deepEqual(reconcileCalls, ["dock/subscribe:pre_snapshot"]);
+  const liveThread = snapshot.rows.find((card) => card.threadID === "live-thread");
+  assert.equal(liveThread?.status, "running");
+  assert.equal(liveThread?.backendSessionID, "live-session");
+  assert.equal(liveThread?.activityAtMs, 3_000);
 });
 
-test("dock subscribe overlays hidden child rollups before returning the first snapshot", async () => {
+test("dock subscribe uses committed projection instead of hidden child rollup overlay", async () => {
   const parentCard = testDockCard({
     threadID: "parent-thread",
     status: "idle",
     activityAtMs: 1_000,
   });
   let liveCacheRefreshed = false;
+  let projectionRefreshed = false;
+  const reconcileCalls = [];
   const engine = new RelayStateEngine(
     {
       hostId: "home",
@@ -322,7 +340,7 @@ test("dock subscribe overlays hidden child rollups before returning the first sn
           return 1;
         },
         currentSeqForView() {
-          return 1;
+          return projectionRefreshed ? 2 : 1;
         },
         freshnessForHost(_hostID, { archived }) {
           assert.equal(archived, false);
@@ -342,6 +360,11 @@ test("dock subscribe overlays hidden child rollups before returning the first sn
       },
     },
   );
+  engine.reconcileDock = async ({ reason }) => {
+    reconcileCalls.push(reason);
+    projectionRefreshed = true;
+    return { seq: 2, rows: [parentCard], projectionIDs: [], changed: true };
+  };
   const session = {};
   const snapshot = await engine.subscribeDock({
     session,
@@ -352,14 +375,15 @@ test("dock subscribe overlays hidden child rollups before returning the first sn
   await engine.close();
 
   assert.equal(liveCacheRefreshed, true);
+  assert.deepEqual(reconcileCalls, ["dock/subscribe:pre_snapshot"]);
   assert.equal(snapshot.rows.length, 1);
   assert.equal(snapshot.rows[0].threadID, "parent-thread");
-  assert.equal(snapshot.rows[0].status, "running");
+  assert.equal(snapshot.rows[0].status, "idle");
   assert.equal(snapshot.rows[0].backendSessionID, "parent-thread");
-  assert.equal(snapshot.rows[0].activityAtMs, 4_000);
+  assert.equal(snapshot.rows[0].activityAtMs, 1_000);
 });
 
-test("archive mutations reconcile and publish dock and archive views", async () => {
+test("archive mutations move one card without broad dock/archive reconcile", async () => {
   const calls = [];
   const engine = new RelayStateEngine(
     { hostId: "home", logger: null },
@@ -367,6 +391,14 @@ test("archive mutations reconcile and publish dock and archive views", async () 
       store: {
         currentSeq() {
           return 1;
+        },
+        applyThreadArchiveMove({ threadID, archived, reason }) {
+          calls.push({ action: "targeted-archive-move", threadID, archived, reason });
+          return {
+            dock: { view: "dock", seq: 2, rows: [], projectionIDs: ["host:home/thread:thread-1/row:threadCard"], changed: true },
+            archive: { view: "archive", seq: 3, rows: [{ threadID }], projectionIDs: [], changed: true },
+            missing: false,
+          };
         },
         close() {},
       },
@@ -380,19 +412,21 @@ test("archive mutations reconcile and publish dock and archive views", async () 
     calls.push({ view: "archive", reason });
     return { seq: 3 };
   };
+  engine.publishTargetedArchiveMove = async (_move, reason) => {
+    calls.push({ action: "publish-targeted-archive-move", reason });
+  };
 
   const result = await engine.handleArchiveMutation({ threadId: "thread-1", archived: true });
 
   assert.deepEqual(calls, [
-    { view: "dock", reason: "thread/archive" },
-    { view: "archive", reason: "thread/archive" },
+    { action: "targeted-archive-move", threadID: "thread-1", archived: true, reason: "thread/archive" },
+    { action: "publish-targeted-archive-move", reason: "thread/archive" },
   ]);
   assert.equal(result.reason, "thread/archive");
-  assert.deepEqual(result.dock, { seq: 2 });
-  assert.deepEqual(result.archive, { seq: 3 });
+  assert.equal(result.path, "targeted_archive_move");
 });
 
-test("thread name mutations reconcile and publish dock and archive views", async () => {
+test("thread name mutations patch one card without broad dock/archive reconcile", async () => {
   const calls = [];
   const engine = new RelayStateEngine(
     { hostId: "home", logger: null },
@@ -400,6 +434,17 @@ test("thread name mutations reconcile and publish dock and archive views", async
       store: {
         currentSeq() {
           return 1;
+        },
+        applyThreadCardPatch({ threadID, patch, reason }) {
+          calls.push({ action: "targeted-card-patch", threadID, patch, reason });
+          return {
+            view: "dock",
+            seq: 4,
+            rows: [{ threadID, title: patch.title }],
+            projectionIDs: [],
+            changed: true,
+            missing: false,
+          };
         },
         close() {},
       },
@@ -413,16 +458,18 @@ test("thread name mutations reconcile and publish dock and archive views", async
     calls.push({ view: "archive", reason });
     return { seq: 5 };
   };
+  engine.publishTargetedCardResult = async (_result, { view, reason }) => {
+    calls.push({ action: "publish-targeted-card", view, reason });
+  };
 
-  const result = await engine.handleThreadNameMutation({ threadId: "thread-1" });
+  const result = await engine.handleThreadNameMutation({ threadId: "thread-1", name: "New title" });
 
   assert.deepEqual(calls, [
-    { view: "dock", reason: "thread/name/set" },
-    { view: "archive", reason: "thread/name/set" },
+    { action: "targeted-card-patch", threadID: "thread-1", patch: { title: "New title" }, reason: "thread/name/set" },
+    { action: "publish-targeted-card", view: "dock", reason: "thread/name/set" },
   ]);
   assert.equal(result.reason, "thread/name/set");
-  assert.deepEqual(result.dock, { seq: 4 });
-  assert.deepEqual(result.archive, { seq: 5 });
+  assert.equal(result.path, "direct_patch");
 });
 
 test("thread/name/updated notifications are parsed as thread-name invalidations", () => {
@@ -471,7 +518,7 @@ test("thread/status/changed notifications are parsed as status invalidations", (
   }), null);
 });
 
-test("thread/name/updated notifications reconcile and publish dock and archive views", async () => {
+test("thread/name/updated notifications patch one card without broad reconcile", async () => {
   const calls = [];
   const engine = new RelayStateEngine(
     { hostId: "home", logger: null },
@@ -479,6 +526,17 @@ test("thread/name/updated notifications reconcile and publish dock and archive v
       store: {
         currentSeq() {
           return 1;
+        },
+        applyThreadCardPatch({ threadID, patch, reason }) {
+          calls.push({ action: "targeted-card-patch", threadID, patch, reason });
+          return {
+            view: "dock",
+            seq: 6,
+            rows: [{ threadID, title: patch.title }],
+            projectionIDs: [],
+            changed: true,
+            missing: false,
+          };
         },
         close() {},
       },
@@ -492,6 +550,9 @@ test("thread/name/updated notifications reconcile and publish dock and archive v
     calls.push({ view: "archive", reason });
     return { seq: 7 };
   };
+  engine.publishTargetedCardResult = async (_result, { view, reason }) => {
+    calls.push({ action: "publish-targeted-card", view, reason });
+  };
 
   const result = await engine.handleThreadNameNotification({
     method: "thread/name/updated",
@@ -502,15 +563,14 @@ test("thread/name/updated notifications reconcile and publish dock and archive v
   });
 
   assert.deepEqual(calls, [
-    { view: "dock", reason: "thread/name/updated" },
-    { view: "archive", reason: "thread/name/updated" },
+    { action: "targeted-card-patch", threadID: "thread-1", patch: { title: "Server title" }, reason: "thread/name/updated" },
+    { action: "publish-targeted-card", view: "dock", reason: "thread/name/updated" },
   ]);
   assert.equal(result.reason, "thread/name/updated");
-  assert.deepEqual(result.dock, { seq: 6 });
-  assert.deepEqual(result.archive, { seq: 7 });
+  assert.equal(result.path, "direct_patch");
 });
 
-test("thread/status/changed notifications reconcile dock cards without refreshing archive", async () => {
+test("thread/status/changed notifications patch one card without broad reconcile", async () => {
   const calls = [];
   const engine = new RelayStateEngine(
     { hostId: "home", logger: null },
@@ -518,6 +578,17 @@ test("thread/status/changed notifications reconcile dock cards without refreshin
       store: {
         currentSeq() {
           return 1;
+        },
+        applyThreadCardPatch({ threadID, patch, reason }) {
+          calls.push({ action: "targeted-card-patch", threadID, patch, reason });
+          return {
+            view: "dock",
+            seq: 8,
+            rows: [{ threadID, status: patch.status }],
+            projectionIDs: [],
+            changed: true,
+            missing: false,
+          };
         },
         close() {},
       },
@@ -531,6 +602,9 @@ test("thread/status/changed notifications reconcile dock cards without refreshin
     calls.push({ view: "archive", reason });
     return { seq: 9 };
   };
+  engine.publishTargetedCardResult = async (_result, { view, reason }) => {
+    calls.push({ action: "publish-targeted-card", view, reason });
+  };
 
   const result = await engine.handleThreadStatusNotification({
     method: "thread/status/changed",
@@ -541,14 +615,164 @@ test("thread/status/changed notifications reconcile dock cards without refreshin
   });
 
   assert.deepEqual(calls, [
-    { view: "dock", reason: "thread/status/changed" },
+    { action: "targeted-card-patch", threadID: "thread-1", patch: { status: "running" }, reason: "thread/status/changed" },
+    { action: "publish-targeted-card", view: "dock", reason: "thread/status/changed" },
   ]);
   assert.equal(result.reason, "thread/status/changed");
-  assert.deepEqual(result.dock, { seq: 8 });
-  assert.equal("archive" in result, false);
+  assert.equal(result.path, "direct_patch");
 });
 
-test("thread/name/updated reconcile failures do not log raw thread names", async () => {
+test("thread/name/updated ignores hidden scoped cards instead of reviving them", async () => {
+  const calls = [];
+  const engine = new RelayStateEngine(
+    { hostId: "home", logger: null },
+    {
+      store: {
+        currentSeq() {
+          return 1;
+        },
+        applyThreadCardPatch({ threadID, patch, reason }) {
+          calls.push({ action: "targeted-card-patch", threadID, patch, reason });
+          return {
+            view: null,
+            seq: null,
+            rows: [],
+            projectionIDs: [],
+            changed: false,
+            missing: true,
+            hidden: true,
+          };
+        },
+        cardForThread() {
+          throw new Error("hidden patched card should not fall through to thread/read");
+        },
+        close() {},
+      },
+    },
+  );
+  engine.publishTargetedCardResult = async () => {
+    calls.push({ action: "publish-targeted-card" });
+  };
+
+  const result = await engine.handleThreadNameNotification({
+    method: "thread/name/updated",
+    params: {
+      threadId: "thread-1",
+      threadName: "Server title",
+    },
+  });
+
+  assert.deepEqual(calls, [
+    { action: "targeted-card-patch", threadID: "thread-1", patch: { title: "Server title" }, reason: "thread/name/updated" },
+  ]);
+  assert.equal(result.reason, "thread/name/updated");
+  assert.equal(result.path, "hidden_card_ignored");
+});
+
+test("thread dirty targeted updates ignore hidden scoped cards instead of reviving them", async () => {
+  const calls = [];
+  const engine = new RelayStateEngine(
+    { hostId: "home", logger: null },
+    {
+      store: {
+        currentSeq() {
+          return 1;
+        },
+        cardForThread({ threadID, visibleOnly }) {
+          calls.push({ action: "card-for-thread", threadID, visibleOnly });
+          return visibleOnly
+            ? null
+            : {
+                threadID,
+                archiveState: "active",
+              };
+        },
+        close() {},
+      },
+    },
+  );
+
+  const result = await engine.updateThreadCardFromEvent({
+    threadId: "thread-1",
+    reason: "turn/started",
+  });
+
+  assert.deepEqual(calls, [
+    { action: "card-for-thread", threadID: "thread-1", visibleOnly: true },
+    { action: "card-for-thread", threadID: "thread-1", visibleOnly: false },
+  ]);
+  assert.equal(result.reason, "turn/started");
+  assert.equal(result.path, "hidden_card_ignored");
+});
+
+test("archive mutations ignore hidden scoped cards instead of reviving them", async () => {
+  const calls = [];
+  const engine = new RelayStateEngine(
+    { hostId: "home", logger: null },
+    {
+      store: {
+        currentSeq() {
+          return 1;
+        },
+        applyThreadArchiveMove({ threadID, archived, reason }) {
+          calls.push({ action: "targeted-archive-move", threadID, archived, reason });
+          return {
+            dock: { view: "dock", seq: 1, rows: [], projectionIDs: [], changed: false, missing: true },
+            archive: { view: "archive", seq: 1, rows: [], projectionIDs: [], changed: false, missing: true },
+            missing: true,
+            hidden: true,
+          };
+        },
+        close() {},
+      },
+    },
+  );
+
+  const result = await engine.handleArchiveMutation({ threadId: "thread-1", archived: true });
+
+  assert.deepEqual(calls, [
+    { action: "targeted-archive-move", threadID: "thread-1", archived: true, reason: "thread/archive" },
+  ]);
+  assert.equal(result.reason, "thread/archive");
+  assert.equal(result.path, "hidden_card_ignored");
+});
+
+test("thread dirty notifications coalesce to one targeted read per thread", async () => {
+  const calls = [];
+  const engine = new RelayStateEngine(
+    { hostId: "home", logger: null, relayStateTargetedDirtyDebounceMs: 5 },
+    {
+      store: {
+        currentSeq() {
+          return 1;
+        },
+        close() {},
+      },
+    },
+  );
+  engine.updateThreadCardFromEvent = async ({ threadId, reason }) => {
+    calls.push({ threadId, reason });
+    return { threadId, reason };
+  };
+
+  try {
+    engine.handleThreadDirtyNotification({
+      method: "turn/started",
+      params: { threadId: "thread-1" },
+    });
+    engine.handleThreadDirtyNotification({
+      method: "item/completed",
+      params: { threadId: "thread-1" },
+    });
+    await sleep(30);
+
+    assert.deepEqual(calls, [{ threadId: "thread-1", reason: "item/completed" }]);
+  } finally {
+    await engine.close();
+  }
+});
+
+test("thread/name/updated targeted failures do not log raw thread names", async () => {
   const warnings = [];
   const rawThreadName = "Raw server rename title that must not be logged";
   const engine = new RelayStateEngine(
@@ -565,14 +789,13 @@ test("thread/name/updated reconcile failures do not log raw thread names", async
         currentSeq() {
           return 1;
         },
+        applyThreadCardPatch() {
+          throw new Error("targeted patch failed");
+        },
         close() {},
       },
     },
   );
-  engine.reconcileDock = async () => {
-    throw new Error("dock reconcile failed");
-  };
-  engine.reconcileArchive = async ({ reason }) => ({ seq: 8, reason });
 
   await assert.rejects(
     () => engine.handleThreadNameNotification({
@@ -582,10 +805,10 @@ test("thread/name/updated reconcile failures do not log raw thread names", async
         threadName: rawThreadName,
       },
     }),
-    /dock reconcile failed/u
+    /targeted patch failed/u
   );
 
-  assert.ok(warnings.some((entry) => entry.event === "state.thread_name_mutation_reconcile_failed"));
+  assert.ok(warnings.length === 0);
   assert.equal(JSON.stringify(warnings).includes(rawThreadName), false);
 });
 

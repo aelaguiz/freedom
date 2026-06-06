@@ -163,11 +163,15 @@ not implementation logs, plan audits, or architecture-plan companions.
 | COV-013 | Connectivity, foreground, live-window, and protocol docs | Foreground/background resume can claim live before Dock, Archive, and Thread Detail catch up. | `foreground-resume-all-surfaces`, `detail-reconnect`, `resync-gap`. | Large profile must repeat foreground resume while rows are stale and changing. |
 | COV-014 | Mockup requirements and UX docs | UI requirements for filters, not-loaded rows, offline/partial states, archive, pinned rows, and order can drift from proof. | Some cases are covered by `large-list-checkpoint`, `multi-host-isolation`, `archive-toggle`, and Swift tests. | Future coverage ledger rows should link each durable mockup requirement to a scenario, unit test, or explicit non-goal. |
 | COV-015 | Realtime transcription and voice docs | Voice and transcription routes are relay-side, secret-sensitive, and not Dock-card proof. | `rtk npm run test:relay` includes realtime transcription tests; docs forbid secrets in app and logs. | `test-overtime` should not mix voice proof with Dock-card proof unless a scenario explicitly covers composer/user-message behavior. |
+| COV-016 | `docs/CODEX_DOCK_REALTIME_VS_POLLING_ARCHITECTURE_2026-06-05.md` | App-server `thread/list` can miss a real indexed thread that `thread/read` can read, which makes a pure app-server Dock list incomplete unless Codex list/index behavior is repaired. | Diagnostic-only live audit on 2026-06-05 found the gap; no current default matrix scenario asserts session-index/read/list equivalence. | Add an app-server list/index coverage case that proves every real app-facing `thread/read`-readable indexed row is present in `thread/list`, or explicitly models stale `session_index.jsonl` rows and the readable-missing-row failure. |
 
 ## Current Gaps After The Docs Review
 
 - `file-change-review` is supported by the controlled fixture but is not in the
   default matrix.
+- App-server list/index equivalence is not covered: a 2026-06-05 live audit
+  found one `session_index.jsonl` row with a rollout that `thread/read` could
+  read but `thread/list` did not return.
 - Pinned-row action survival during live updates is not a current default
   matrix scenario.
 - System Health route-evidence behavior is not a current default matrix

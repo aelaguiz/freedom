@@ -527,10 +527,18 @@ function threadIDFromStatusNotification(message) {
   return message?.params?.threadId || message?.params?.threadID || null;
 }
 
+function threadIDFromGenericNotification(message) {
+  return message?.params?.threadId
+    || message?.params?.threadID
+    || message?.params?.thread?.id
+    || null;
+}
+
 function ingestRelayStateNotification(config, message, source = {}) {
+  const engine = relayStateEngineForConfig(config);
   if (message?.method === "thread/name/updated") {
     try {
-      relayStateEngineForConfig(config)
+      engine
         .handleThreadNameNotification(message)
         .catch((error) => {
           relayLogger(config).warn("state.thread_name_notification_ingest_failed", {
@@ -553,7 +561,7 @@ function ingestRelayStateNotification(config, message, source = {}) {
 
   if (message?.method === "thread/status/changed") {
     try {
-      relayStateEngineForConfig(config)
+      engine
         .handleThreadStatusNotification(message)
         .catch((error) => {
           relayLogger(config).warn("state.thread_status_notification_ingest_failed", {
@@ -574,6 +582,102 @@ function ingestRelayStateNotification(config, message, source = {}) {
     return true;
   }
 
+  if (message?.method === "thread/started") {
+    try {
+      engine
+        .handleThreadStartedNotification(message)
+        .catch((error) => {
+          relayLogger(config).warn("state.thread_started_notification_ingest_failed", {
+            method: message.method,
+            sourceLabel: source?.label || null,
+            threadIDHash: shortHash(threadIDFromGenericNotification(message)),
+            error,
+          });
+        });
+    } catch (error) {
+      relayLogger(config).warn("state.thread_started_notification_ingest_failed", {
+        method: message.method,
+        sourceLabel: source?.label || null,
+        threadIDHash: shortHash(threadIDFromGenericNotification(message)),
+        error,
+      });
+    }
+    return true;
+  }
+
+  if (message?.method === "thread/archived") {
+    try {
+      engine
+        .handleThreadArchivedNotification(message)
+        .catch((error) => {
+          relayLogger(config).warn("state.thread_archived_notification_ingest_failed", {
+            method: message.method,
+            sourceLabel: source?.label || null,
+            threadIDHash: shortHash(threadIDFromGenericNotification(message)),
+            error,
+          });
+        });
+    } catch (error) {
+      relayLogger(config).warn("state.thread_archived_notification_ingest_failed", {
+        method: message.method,
+        sourceLabel: source?.label || null,
+        threadIDHash: shortHash(threadIDFromGenericNotification(message)),
+        error,
+      });
+    }
+    return true;
+  }
+
+  if (message?.method === "thread/unarchived") {
+    try {
+      engine
+        .handleThreadUnarchivedNotification(message)
+        .catch((error) => {
+          relayLogger(config).warn("state.thread_unarchived_notification_ingest_failed", {
+            method: message.method,
+            sourceLabel: source?.label || null,
+            threadIDHash: shortHash(threadIDFromGenericNotification(message)),
+            error,
+          });
+        });
+    } catch (error) {
+      relayLogger(config).warn("state.thread_unarchived_notification_ingest_failed", {
+        method: message.method,
+        sourceLabel: source?.label || null,
+        threadIDHash: shortHash(threadIDFromGenericNotification(message)),
+        error,
+      });
+    }
+    return true;
+  }
+
+  if (message?.method === "thread/closed") {
+    try {
+      engine
+        .handleThreadClosedNotification(message)
+        .catch((error) => {
+          relayLogger(config).warn("state.thread_closed_notification_ingest_failed", {
+            method: message.method,
+            sourceLabel: source?.label || null,
+            threadIDHash: shortHash(threadIDFromGenericNotification(message)),
+            error,
+          });
+        });
+    } catch (error) {
+      relayLogger(config).warn("state.thread_closed_notification_ingest_failed", {
+        method: message.method,
+        sourceLabel: source?.label || null,
+        threadIDHash: shortHash(threadIDFromGenericNotification(message)),
+        error,
+      });
+    }
+    return true;
+  }
+
+  if (engine.handleThreadDirtyNotification(message)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -581,7 +685,7 @@ function reconcileThreadNameAfterResponse(config, params = {}) {
   const threadId = params?.threadId || params?.threadID || null;
   try {
     relayStateEngineForConfig(config)
-      .handleThreadNameMutation({ threadId })
+      .handleThreadNameMutation({ threadId, name: params?.name || null })
       .catch((error) => {
         relayLogger(config).warn("state.thread_name_mutation_reconcile_failed", {
           method: "thread/name/set",
