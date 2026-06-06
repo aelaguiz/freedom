@@ -164,6 +164,14 @@ Proof:
   - `rtk make host-service-doctor HOST_SERVICE_PLATFORM=linux ... DOCK_RELAY_WS=ws://100.66.11.7:4510` passed on `home` on 2026-06-06.
   - `127.0.0.1:4510/readyz`, `127.0.0.1:4510/statusz`, and
     `100.66.11.7:4510/readyz` were OK.
+- Cross-relay compare:
+  - `rtk make relay-host-compare HOSTS=amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510` passed on 2026-06-06.
+  - Direct app-facing `statusz` summaries after compare:
+    - Mac: `ok: true`, `host: "Amir-M5"`, `registryOK: true`, `failedEndpoints: 0`.
+    - `home`: `ok: true`, `host: "home"`, `registryOK: true`, `failedEndpoints: 0`.
+- Post-deploy retention database checks:
+  - Mac `.codex-dock/relay-state.sqlite`: `offendingCount: 0`.
+  - `home` `.codex-dock/relay-state.sqlite`: `offendingCount: 0`.
 
 Findings:
 
