@@ -7,8 +7,8 @@ Audit: `docs/CODEX_DOCK_48H_THREAD_RETENTION_ARCHITECTURE_2026-06-06_PLAN_AUDIT.
 ## Status
 
 Implementation complete; strict review complete; Node proof, canonical live
-simulator proof, real-data realtime simulator proof, relay status, and relay
-SQLite retention audit all passed. Relay deploy is pending.
+simulator proof, real-data realtime simulator proof, relay SQLite retention
+audit, and both live relay deploys all passed.
 
 ## Slice Log
 
@@ -135,3 +135,36 @@ Findings:
   real-data row churn. Fixed `Makefile` defaults so the canonical
   `rtk make sim-ui-sync-proof SIM='iPhone 17'` command now uses the same
   `45000` ms UI sampling and `75000` ms relay sampling that passed reliably.
+
+### IMP-005 Live Relay Deploy
+
+Status: complete
+
+Scope:
+
+- Commit and push the retention implementation.
+- Refresh the Mac live relay from the Mac checkout.
+- Fast-forward the `home` checkout to the pushed branch and refresh the Linux
+  relay service.
+- Verify both app-facing relay paths.
+
+Proof:
+
+- Retention implementation commit: `241fb48 Filter relay threads older than 48 hours`.
+- Branch: `codex-dock-agents-tab-live-counts`.
+- Mac relay:
+  - `rtk make services` passed on 2026-06-06.
+  - `rtk make dock-relay-status` passed on 2026-06-06.
+  - `127.0.0.1:4510/readyz`, `127.0.0.1:4510/statusz`, and
+    `amir-m5.fairy-salmon.ts.net:4510/readyz` were OK.
+- `home` relay:
+  - `rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk git fetch && rtk git pull --ff-only'` passed on 2026-06-06.
+  - `rtk make services HOST_SERVICE_PLATFORM=linux ... DOCK_RELAY_WS=ws://100.66.11.7:4510` passed on `home` on 2026-06-06.
+  - `rtk make dock-relay-status HOST_SERVICE_PLATFORM=linux ... DOCK_RELAY_WS=ws://100.66.11.7:4510` passed on `home` on 2026-06-06.
+  - `rtk make host-service-doctor HOST_SERVICE_PLATFORM=linux ... DOCK_RELAY_WS=ws://100.66.11.7:4510` passed on `home` on 2026-06-06.
+  - `127.0.0.1:4510/readyz`, `127.0.0.1:4510/statusz`, and
+    `100.66.11.7:4510/readyz` were OK.
+
+Findings:
+
+- None.

@@ -1,7 +1,7 @@
 # Codex Dock 48h Thread Retention Architecture
 
 Date: 2026-06-06
-Status: implemented; proof complete; strict review complete; relay deploy pending
+Status: implemented; proof complete; strict review complete; deployed to both live relays
 Owner repo: `/Users/aelaguiz/workspace/codex-client`
 
 ## Direct Answer
