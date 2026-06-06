@@ -2,6 +2,13 @@
 
 This repo is the Swift client for the Codex Dock MVP.
 
+## Canonical Product Intent
+
+The canonical intended user journey is
+`docs/CODEX_DOCK_CANONICAL_USER_JOURNEY.md`. Use it as the product-intent
+source of truth when current code, dated plans, or older UX specs disagree about
+what the app should do.
+
 ## App-Server Runbook
 
 Codex owns app-server/session processes. Dock owns one phone-facing relay that
