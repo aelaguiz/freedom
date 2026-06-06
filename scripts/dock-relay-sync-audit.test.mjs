@@ -7,6 +7,7 @@ import {
   compareDockStates,
   compareDockThreadCard,
   emptyDockStreamState,
+  evaluateStreamConvergenceLag,
   parseArgs,
   sanitizeDockSnapshotForReport,
   selectDetailTargets,
@@ -382,6 +383,62 @@ test("sync audit compares long-lived stream freshness to fresh snapshots", () =>
 
   assert.equal(comparison.ok, false);
   assert.equal(comparison.findings.some((finding) => finding.code === "dock_stream_freshness_mismatch"), true);
+});
+
+test("sync audit does not count stale fresh snapshots as long-lived stream lag", () => {
+  const convergence = evaluateStreamConvergenceLag([
+    {
+      attempt: 0,
+      checkedAt: "2026-06-06T05:19:07.986Z",
+      checkedAtMs: 1_780_723_147_986,
+      ok: false,
+      streamSeq: 4817,
+      freshSeq: 4816,
+    },
+    {
+      attempt: 1,
+      checkedAt: "2026-06-06T05:19:21.071Z",
+      checkedAtMs: 1_780_723_161_071,
+      ok: true,
+      streamSeq: 4818,
+      freshSeq: 4818,
+    },
+  ], 2_000);
+
+  assert.equal(convergence.ok, true);
+  assert.equal(convergence.exceeded, false);
+  assert.equal(convergence.observedLagMs, 0);
+  assert.equal(convergence.firstMismatchAttempt, null);
+  assert.equal(convergence.convergedAttempt, 1);
+});
+
+test("sync audit does not claim convergence when only the fresh snapshot is stale", () => {
+  const convergence = evaluateStreamConvergenceLag([
+    {
+      attempt: 0,
+      checkedAt: "2026-06-06T05:19:07.986Z",
+      checkedAtMs: 1_780_723_147_986,
+      ok: false,
+      streamSeq: 4817,
+      freshSeq: 4816,
+    },
+    {
+      attempt: 1,
+      checkedAt: "2026-06-06T05:19:08.986Z",
+      checkedAtMs: 1_780_723_148_986,
+      ok: false,
+      streamSeq: 4818,
+      freshSeq: 4817,
+    },
+  ], 2_000);
+
+  assert.equal(convergence.ok, true);
+  assert.equal(convergence.exceeded, false);
+  assert.equal(convergence.converged, false);
+  assert.equal(convergence.observedLagMs, 0);
+  assert.equal(convergence.firstMismatchAttempt, null);
+  assert.equal(convergence.convergedAttempt, null);
+  assert.equal(convergence.lastCheckedAt, "2026-06-06T05:19:08.986Z");
 });
 
 test("sync audit target thread comparison ignores unrelated live row churn", () => {

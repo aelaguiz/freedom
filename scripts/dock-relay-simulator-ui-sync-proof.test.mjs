@@ -120,16 +120,32 @@ function twoRowRelaySample() {
   return report.samples[0];
 }
 
-function dockRow({ thread = "thread-a", status = "idle", origin = "human", title = null, order = null } = {}) {
+function dockRow({ thread = "thread-a", status = "idle", origin = "human", title = null, order = null, host = "host" } = {}) {
+  const projectionID = projectionIDForThreadCard({ sourceHostID: host, threadID: thread });
   const titleValue = title
     ? `; titleLength=${title.length}; titleHash=${textFingerprint(title).sha256}`
     : "";
   const orderValue = order ? `; order=${order}` : "";
   return {
-    identifier: `codexdock.dock.row.host.${thread}`,
-    value: `host=host; sourceHost=host; projection=${threadCardProjectionID(thread)}; thread=${thread}${orderValue}${titleValue}; status=${status}; origin=${origin}; label=none; Not pinned`,
+    identifier: `codexdock.dock.row.${host}.${thread}`,
+    value: `host=${host}; sourceHost=${host}; projection=${projectionID}; thread=${thread}${orderValue}${titleValue}; status=${status}; origin=${origin}; label=none; Not pinned`,
     label: thread,
     frame: { minX: 0, minY: 10, width: 100, height: 44 },
+  };
+}
+
+function relayDockCard({ host = "host", thread = "thread-a", order = "001", status = "idle" } = {}) {
+  const projectionID = projectionIDForThreadCard({ sourceHostID: host, threadID: thread });
+  return {
+    id: projectionID,
+    projectionID,
+    logicalHostID: host,
+    sourceHostID: host,
+    threadID: thread,
+    status,
+    lane: "human",
+    sourceKind: "human",
+    displayOrderKey: order,
   };
 }
 
@@ -1171,6 +1187,48 @@ test("simulator UI proof does not score whole-list rows against stale relay trut
   assert.equal(result.evaluations[1].staleRelaySampleIndex, 0);
 });
 
+test("simulator UI proof scores late checkpoint sweeps for static controlled scenarios", () => {
+  const relay = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
+  relay.kind = "codex-dock-controlled-simulator-scenario-relay-report";
+  relay.mode = "scenario";
+  relay.scenario = "large-list-checkpoint";
+  relay.scenarios = [{
+    id: "large-list-checkpoint",
+    transitions: [],
+  }];
+  relay.samples[0].freshDock = {
+    rowCount: 2,
+    totalRows: 2,
+    renderOrderProjectionIDs: [threadCardProjectionID("thread-a"), threadCardProjectionID("thread-b")],
+    rows: twoRowRelaySample().freshDock.rows,
+  };
+  const sample = uiSample({ sampledAt: "2026-05-31T00:00:10.000Z" });
+  sample.dockRootValue = "loaded; rows=2; pinned=0; lens=newest; search=false; filters=0";
+  sample.dockRows = [dockRow({ thread: "thread-a" })];
+  sample.dockSweep = {
+    startedAt: "2026-05-31T00:00:10.000Z",
+    finishedAt: "2026-05-31T00:00:10.300Z",
+    stepCount: 0,
+    expectedRootRows: 2,
+    rows: [
+      dockRow({ thread: "thread-a" }),
+      dockRow({ thread: "thread-b", status: "running", origin: "automation" }),
+    ],
+  };
+
+  const result = buildRenderedUIReport({
+    relayReport: relay,
+    uiSamples: [sample],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(result.summary.ok, true);
+  assert.equal(result.summary.staleRelayTruthUISamples, 0);
+  assert.equal(result.summary.dockSweepOrderChecks, 1);
+  assert.equal(result.evaluations[0].scored, true);
+  assert.equal(result.evaluations[0].sweepOrderChecks, 1);
+});
+
 test("simulator UI proof scores visible Dock rows at sampledAt when checkpoint sweep finishes later", () => {
   const report = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
   report.samples[0].freshDock = {
@@ -1426,6 +1484,94 @@ test("simulator UI proof scores Dock transitions from the observed stream snapsh
   assert.deepEqual(
     report.scenarioTransitionCoverage.checks.map((check) => [check.transition, check.observedLagMs]),
     [["rename-title", 300]],
+  );
+});
+
+test("simulator UI proof scores multi-host transitions against composite fresh Dock truth", () => {
+  const hostA = "sim-multi-host-a";
+  const hostB = "sim-multi-host-b";
+  const hostARows = [
+    relayDockCard({ host: hostA, thread: "host-a-new", order: "001" }),
+    relayDockCard({ host: hostA, thread: "shared-thread", order: "002" }),
+    relayDockCard({ host: hostA, thread: "host-a-only", order: "004" }),
+  ];
+  const hostBRows = [
+    relayDockCard({ host: hostB, thread: "shared-thread", order: "003" }),
+    relayDockCard({ host: hostB, thread: "host-b-only", order: "005" }),
+  ];
+  const hostASnapshot = {
+    rowCount: 3,
+    totalRows: 3,
+    renderOrderProjectionIDs: hostARows.map((row) => row.projectionID),
+    rows: hostARows,
+  };
+  const hostBSnapshot = {
+    rowCount: 2,
+    totalRows: 2,
+    renderOrderProjectionIDs: hostBRows.map((row) => row.projectionID),
+    rows: hostBRows,
+  };
+  const compositeRows = [
+    hostARows[0],
+    hostARows[1],
+    hostBRows[0],
+    hostARows[2],
+    hostBRows[1],
+  ];
+  const compositeSnapshot = {
+    rowCount: 5,
+    totalRows: 5,
+    renderOrderProjectionIDs: compositeRows.map((row) => row.projectionID),
+    rows: compositeRows,
+  };
+  const relay = relayReport({ finishedAt: "2026-05-31T00:00:01.000Z" });
+  relay.mode = "scenario";
+  relay.samples[0].freshDock = compositeSnapshot;
+  relay.scenarios = [{
+    id: "multi-host-isolation",
+    transitions: [{
+      name: "multi-host-isolation",
+      kind: "multi-host-isolation",
+      route: "dock/update",
+      wait: {
+        observedAt: "2026-05-31T00:00:02.000Z",
+        snapshot: hostASnapshot,
+      },
+      lag: {
+        relaySeenAt: "2026-05-31T00:00:02.000Z",
+        lag_change_to_relay_ms: 2,
+        maxStreamLagMs: 2_000,
+        ok: true,
+      },
+      freshDock: compositeSnapshot,
+      freshDockA: hostASnapshot,
+      freshDockB: hostBSnapshot,
+    }],
+  }];
+
+  const report = buildRenderedUIReport({
+    relayReport: relay,
+    uiSamples: [{
+      sampleIndex: 0,
+      sampledAt: "2026-05-31T00:00:02.300Z",
+      dockRootValue: "loaded; rows=5; pinned=0; lens=newest; search=false; filters=0",
+      dockRows: [
+        dockRow({ host: hostA, thread: "host-a-new", order: "001" }),
+        dockRow({ host: hostA, thread: "shared-thread", order: "002" }),
+        dockRow({ host: hostB, thread: "shared-thread", order: "003" }),
+        dockRow({ host: hostA, thread: "host-a-only", order: "004" }),
+        dockRow({ host: hostB, thread: "host-b-only", order: "005" }),
+      ],
+      hostSummaries: [],
+    }],
+    maxUiLagMs: 2_000,
+  });
+
+  assert.equal(report.summary.ok, true);
+  assert.equal(report.summary.scenarioTransitionFailures, 0);
+  assert.deepEqual(
+    report.scenarioTransitionCoverage.checks.map((check) => [check.transition, check.observedLagMs]),
+    [["multi-host-isolation", 300]],
   );
 });
 

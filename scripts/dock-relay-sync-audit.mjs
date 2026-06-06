@@ -1213,6 +1213,12 @@ function comparableFreshness(freshness) {
   };
 }
 
+function isFreshSnapshotBehindStream(attempt) {
+  const streamSeq = Number(attempt?.streamSeq);
+  const freshSeq = Number(attempt?.freshSeq);
+  return Number.isFinite(streamSeq) && Number.isFinite(freshSeq) && streamSeq > freshSeq;
+}
+
 function evaluateStreamConvergenceLag(attempts, maxStreamLagMs) {
   const checkedAttempts = (attempts || [])
     .filter((attempt) => Number.isFinite(Number(attempt?.checkedAtMs)))
@@ -1220,27 +1226,31 @@ function evaluateStreamConvergenceLag(attempts, maxStreamLagMs) {
       ...attempt,
       checkedAtMs: Number(attempt.checkedAtMs),
     }));
-  const firstMismatch = checkedAttempts.find((attempt) => attempt.ok === false) || null;
+  const lagRelevantAttempts = checkedAttempts.filter(
+    (attempt) => !(attempt.ok === false && isFreshSnapshotBehindStream(attempt)),
+  );
+  const firstMismatch = lagRelevantAttempts.find((attempt) => attempt.ok === false) || null;
   if (!firstMismatch) {
-    const firstAttempt = checkedAttempts[0] || null;
+    const converged = checkedAttempts.find((attempt) => attempt.ok === true) || null;
+    const lastAttempt = checkedAttempts[checkedAttempts.length - 1] || null;
     return {
       ok: true,
       exceeded: false,
-      converged: true,
+      converged: Boolean(converged),
       observedLagMs: 0,
       maxStreamLagMs,
       firstMismatchAttempt: null,
       firstMismatchAt: null,
-      convergedAttempt: firstAttempt?.attempt ?? null,
-      convergedAt: firstAttempt?.checkedAt || null,
-      lastCheckedAt: firstAttempt?.checkedAt || null,
+      convergedAttempt: converged?.attempt ?? null,
+      convergedAt: converged?.checkedAt || null,
+      lastCheckedAt: lastAttempt?.checkedAt || null,
     };
   }
 
-  const converged = checkedAttempts.find(
+  const converged = lagRelevantAttempts.find(
     (attempt) => attempt.ok === true && attempt.checkedAtMs >= firstMismatch.checkedAtMs,
   ) || null;
-  const lastAttempt = checkedAttempts[checkedAttempts.length - 1] || firstMismatch;
+  const lastAttempt = lagRelevantAttempts[lagRelevantAttempts.length - 1] || firstMismatch;
   const observedLagMs = Math.max(
     0,
     (converged?.checkedAtMs ?? lastAttempt.checkedAtMs) - firstMismatch.checkedAtMs,

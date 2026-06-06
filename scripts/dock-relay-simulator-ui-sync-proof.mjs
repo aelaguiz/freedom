@@ -266,7 +266,16 @@ function dockVisibleTruthKey(freshDock) {
   });
 }
 
+function isCompositeDockTransition(transition) {
+  return Array.isArray(transition?.freshDock?.rows)
+    && transition?.freshDockA
+    && transition?.freshDockB;
+}
+
 function transitionDockTruth(transition) {
+  if (isCompositeDockTransition(transition)) {
+    return transition.freshDock;
+  }
   const snapshot = transition?.wait?.snapshot;
   if (snapshot && typeof snapshot === "object" && Array.isArray(snapshot.rows)) {
     return snapshot;
@@ -535,9 +544,20 @@ function relayTruthSamples(relayReport) {
   });
 }
 
+function hasStaticControlledScenarioTruth(relayReport) {
+  const scenarios = Array.isArray(relayReport?.scenarios) ? relayReport.scenarios : [];
+  return relayReport?.kind === "codex-dock-controlled-simulator-scenario-relay-report"
+    && scenarios.length > 0
+    && scenarios.every((scenario) => !Array.isArray(scenario?.transitions) || scenario.transitions.length === 0);
+}
+
 function shouldCullStaleRelayTruth(relayReport) {
+  const scenarios = Array.isArray(relayReport?.scenarios) ? relayReport.scenarios : [];
+  if (hasStaticControlledScenarioTruth(relayReport)) {
+    return false;
+  }
   return relayReport?.mode === "scenario"
-    || (Array.isArray(relayReport?.scenarios) && relayReport.scenarios.length > 0);
+    || scenarios.length > 0;
 }
 
 function relayOrigin(card) {
