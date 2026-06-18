@@ -102,6 +102,37 @@ final class DockRenderProjectorTests: XCTestCase {
         XCTAssertEqual(snapshot.rows.map(\.threadID), ["human-row"])
     }
 
+    func testProjectorShowsNoActivityForUnknownRelayActivityTimestamp() throws {
+        let host = makeHost()
+        let input = DockRenderInput(
+            hosts: [host],
+            hostStates: [
+                DockHostStateViewModel(
+                    host: DockHostViewModel(host: host),
+                    status: .degraded(rowCount: 1, message: "card activity proof incomplete")
+                )
+            ],
+            cardsByHostID: [
+                host.id: [
+                    threadCardFixture(
+                        host: host,
+                        threadID: "stale-partial-row",
+                        title: "Stale partial row",
+                        updatedAt: 0,
+                        displayOrderKey: "10000000000000000|0004|host%3AAmir-M5%2Fthread%3Astale-partial-row%2Frow%3AthreadCard"
+                    )
+                ]
+            ],
+            isPartial: true
+        )
+        let projector = DockRenderProjector(now: { Date(timeIntervalSince1970: 1_781_692_472) })
+
+        let row = try XCTUnwrap(projector.snapshot(from: input, localMetadata: [:]).rows.first)
+
+        XCTAssertEqual(row.lastActivity, "No activity")
+        XCTAssertEqual(row.lastActivityDate, .distantPast)
+    }
+
     func testProjectorAppliesPinnedMetadataOnlyToDeliveredRows() async {
         let host = makeHost()
         let humanKey = LocalThreadMetadataKey(

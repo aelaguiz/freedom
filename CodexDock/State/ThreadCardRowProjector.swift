@@ -133,7 +133,10 @@ struct ThreadCardRowProjector {
     private func activityDate(for card: DockThreadCardDTO) -> Date {
         // The relay owns card recency. If this timestamp is missing, decoding
         // fails at the DTO boundary instead of letting Swift invent an order.
-        Date(timeIntervalSince1970: TimeInterval(card.activityAtMs) / 1_000)
+        guard card.activityAtMs > 0 else {
+            return .distantPast
+        }
+        return Date(timeIntervalSince1970: TimeInterval(card.activityAtMs) / 1_000)
     }
 
     private func status(for status: DockThreadCardStatus) -> DockRowStatusKind {

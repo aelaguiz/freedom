@@ -50,6 +50,6 @@ final class CodexDockPerformanceScrollUITests: XCTestCase {
         if let hosts = environment["CODEX_DOCK_UI_TEST_HOSTS"], !hosts.isEmpty {
             return hosts
         }
-        return "amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510"
+        return "amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510,amirs-m3-max-new.fairy-salmon.ts.net:4510"
     }
 }

@@ -164,6 +164,11 @@ not implementation logs, plan audits, or architecture-plan companions.
 | COV-014 | Mockup requirements and UX docs | UI requirements for filters, not-loaded rows, offline/partial states, archive, pinned rows, and order can drift from proof. | Some cases are covered by `large-list-checkpoint`, `multi-host-isolation`, `archive-toggle`, and Swift tests. | Future coverage ledger rows should link each durable mockup requirement to a scenario, unit test, or explicit non-goal. |
 | COV-015 | Realtime transcription and voice docs | Voice and transcription routes are relay-side, secret-sensitive, and not Dock-card proof. | `rtk npm run test:relay` includes realtime transcription tests; docs forbid secrets in app and logs. | `test-overtime` should not mix voice proof with Dock-card proof unless a scenario explicitly covers composer/user-message behavior. |
 | COV-016 | `docs/CODEX_DOCK_REALTIME_VS_POLLING_ARCHITECTURE_2026-06-05.md` | App-server `thread/list` can miss a real indexed thread that `thread/read` can read, which makes a pure app-server Dock list incomplete unless Codex list/index behavior is repaired. | Diagnostic-only live audit on 2026-06-05 found the gap; no current default matrix scenario asserts session-index/read/list equivalence. | Add an app-server list/index coverage case that proves every real app-facing `thread/read`-readable indexed row is present in `thread/list`, or explicitly models stale `session_index.jsonl` rows and the readable-missing-row failure. |
+| COV-017 | `docs/CODEX_DOCK_SWIPE_ARCHIVE_THREAD_ARCHITECTURE_PLAN_2026-06-06.md`, `docs/CODEX_DOCK_SWIPE_ARCHIVE_THREAD_ARCHITECTURE_PLAN_2026-06-06_PLAN_AUDIT.md` | Existing `archive-toggle` route/stream proof can be mistaken for proof that the app UI's new leading swipe actually archived a row. | `archive-toggle` covers relay/archive stream movement; the new plan requires a focused `app-test` UI gesture proof, but that test does not exist yet. | Add and run the focused app UI test that drives the leading swipe, taps `Archive`, verifies Archived Threads, and restores the row; keep `sim-ui-realdata-realtime-proof` as separate live relay/stream proof. |
+| COV-018 | `docs/CODEX_DOCK_NEW_AND_FORK_SESSION_ARCHITECTURE_2026-06-06.md`, `docs/CODEX_DOCK_NEW_AND_FORK_SESSION_ARCHITECTURE_2026-06-06_PLAN_AUDIT.md` | App-started new/fork session launch can double-create on retry, route through the wrong live/history/private owner, bypass `DockThreadCardDTO` projection, or split into separate phone-facing start/fork paths. | No implementation exists yet. The plan requires relay duplicate/idempotency tests, Swift DTO and `DockStore` tests, app UI proof, and real relay-backed simulator proof before completion. | Add `thread/session/launch` relay tests for duplicate IDs, ambiguous upstream delivery, owner routing, and projection upsert; add Swift app-client and `DockStore` tests; add focused app UI proof for New Session and row Fork; run real relay simulator proof once implemented. |
+| COV-019 | `docs/CODEX_DOCK_CHECK_STATE_AUDIT_2026-06-06.md` | User-message delivery can collapse definite relay errors, transport timeouts, and unresolved projection reconciliation into a vague terminal `Check` badge. | Gap. Current tests cover optimistic pending rows, relay duplicate IDs, stale-turn fallback, and canonical merge, but not thrown definite errors becoming `Check` or ambiguous delivery followed by reconciliation. | Add relay and Swift tests for `failedDefinite` preservation, transport-ambiguous reconciliation by `clientUserMessageId`, failure-path resync, command-status recovery after reload, and real relay-backed simulator proof that `Check` is not a normal terminal state. |
+| COV-020 | `docs/CODEX_DOCK_THREAD_CONTROL_ARCHITECTURE_AUDIT_2026-06-06.md`, `docs/bugs/private-codex-runtime-thread-detail-unavailable-2026-06-05.md` | Dock can show history-readable or private-runtime-visible rows that are not controllable from the phone, so detail can fall back to a snapshot and send/control routes can fail. | Gap. Registry tests cover private transport classification, but no current proof requires every main Dock active row to resume, live-subscribe, and expose send/control capability before the composer is enabled. | Add row-level control capability proof, private-owner handoff/proxy/takeover tests, real relay-backed simulator proof that visible active rows are controllable, and app tests that keep Send disabled until an active controllable upstream session exists. |
+| COV-021 | `docs/CODEX_DOCK_THREAD_CONTROL_ARCHITECTURE_AUDIT_2026-06-06.md`, `docs/CODEX_DOCK_CODEX_SOURCE_PATCH_ANALYSIS_2026-06-06_WORKLOG.md` | A shared `$CODEX_HOME` and daemon socket can make resumed Codex CLI sessions use the wrong account/auth cache; Dock may see loaded or `systemError` rows from a daemon that cannot send under the intended account. | Gap. Makefile and host service accept `CODEX_HOME`, but no current proof requires AIMgr runtime-scoped Codex homes, one-effective-source session continuity across account epochs, Codex SQLite/goals continuity, wrong-account daemon detection, profile-plus-remote socket semantics, or parallel runtime isolation. | Add AIMgr tests for `~/.aimgr/codex-runtimes/<run-id>/epochs/<label>-<timestamp>`, `sessions` / `archived_sessions` continuity with no duplicate active truth sources, Codex SQLite strategy proof via `CODEX_SQLITE_HOME` or epoch-local rebuild, account rotation resuming the same session id under a new epoch, child launch `CODEX_HOME` propagation, and status run/epoch/socket/home-mode reporting; add launcher/relay docs and tests for runtime-epoch `CODEX_HOME`, service env propagation, distinct relay runtime dirs/ports/host IDs, app capability UI for account/auth/`systemError` rows, and explicit proof that `-p <profile> --remote unix://` does not imply a profile-specific account daemon unless the launcher or Codex runtime-home patch provides one. |
 
 ## Current Gaps After The Docs Review
 
@@ -172,6 +177,28 @@ not implementation logs, plan audits, or architecture-plan companions.
 - App-server list/index equivalence is not covered: a 2026-06-05 live audit
   found one `session_index.jsonl` row with a rollout that `thread/read` could
   read but `thread/list` did not return.
+- Swipe archive UI proof is not covered yet: `archive-toggle` proves the relay
+  route/stream transition, but the planned leading-swipe app UI proof has not
+  been implemented.
+- New/fork session launch proof is not covered yet: the architecture plan
+  requires idempotent relay launch tests, Swift DockStore tests, focused app UI
+  proof, and real relay-backed simulator proof before the app can claim this
+  behavior works.
+- User-message `Check` is not covered as a failure class yet: current tests do
+  not prove that definite relay errors stay definite, that ambiguous transport
+  failures reconcile by `clientUserMessageId`, or that terminal `Check` is rare
+  and explained.
+- Thread control capability is not covered yet: current proof can show rows and
+  pass relay health while those rows are private-runtime-owned, history-only, or
+  otherwise not sendable from the phone.
+- Multi-account Codex launch proof is not covered yet: current proof does not
+  require AIMgr runtime-scoped Codex homes, one-effective-source session
+  continuity across account epochs, Codex SQLite/goals continuity,
+  account-epoch `CODEX_HOME`, isolated daemon sockets, or distinct relay
+  identities for parallel runtimes. Current proof also does not cover the
+  source-level failure where `-p <profile> --remote unix://` attaches to the
+  shared `CODEX_HOME` daemon socket instead of a profile/account-specific
+  daemon.
 - Pinned-row action survival during live updates is not a current default
   matrix scenario.
 - System Health route-evidence behavior is not a current default matrix

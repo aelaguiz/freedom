@@ -9,7 +9,7 @@ func launchRelayBackedCodexDockApp(
     let app = XCUIApplication()
     app.launchEnvironment["CODEX_DOCK_HOSTS"] = hosts
         ?? ProcessInfo.processInfo.environment["CODEX_DOCK_UI_TEST_HOSTS"]
-        ?? "amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510"
+        ?? "amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510,amirs-m3-max-new.fairy-salmon.ts.net:4510"
     app.launchEnvironment["CODEX_DOCK_AUTOMATION_SNAPSHOTS"] = "1"
     for (key, value) in additionalEnvironment {
         app.launchEnvironment[key] = value

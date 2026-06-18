@@ -48,8 +48,9 @@ Bonjour metadata so the app can find it after a normal home-screen launch.
 Mocks, scripted transports, Unix sockets, and loopback-only WebSockets do not
 complete the physical phone path. The current phone path is the Dock relay on
 `:4510`, with no iPhone-side bearer token. The iPhone 17 Pro uses
-`ws://amir-m5.fairy-salmon.ts.net:4510` and
-`ws://home.fairy-salmon.ts.net:4510`; the iPhone 14 uses
+`ws://amir-m5.fairy-salmon.ts.net:4510`,
+`ws://home.fairy-salmon.ts.net:4510`, and
+`ws://amirs-m3-max-new.fairy-salmon.ts.net:4510`; the iPhone 14 uses
 `ws://Amir-M5.local:4510` and `ws://192.168.50.74:4510`.
 
 Physical-device proof is Makefile-owned. Use `rtk make device-install` and
@@ -195,7 +196,7 @@ Route-health diagnostics:
 
 ```sh
 rtk make relay-doctor
-rtk make relay-host-compare HOSTS=amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510
+rtk make relay-host-compare HOSTS=amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510,amirs-m3-max-new.fairy-salmon.ts.net:4510
 rtk make relay-debug-bundle
 ```
 
@@ -251,12 +252,33 @@ rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-
 rtk ssh home 'cd /home/aelaguiz/workspace/codex-client && rtk make host-service-doctor'
 ```
 
+Mac `amirs-m3-max-new` service over Tailscale:
+
+```sh
+rtk ssh amirs-m3-max-new 'cd /Users/aelaguiz/workspace/codex-client && PATH="$HOME/.local/bin:$PATH" rtk make services HOST_SERVICE_PLATFORM=macos CODEX_DOCK_REAL_HOST_ID=amirs-m3-max-new CODEX_DOCK_REAL_HOST_NAME=Amirs-M3-Max-New APP_SERVER_HOST=amirs-m3-max-new.fairy-salmon.ts.net DOCK_RELAY_WS=ws://amirs-m3-max-new.fairy-salmon.ts.net:4510 HOST_SERVICE_NETWORK_PROFILE=tailscale'
+```
+
+Check `amirs-m3-max-new` after start:
+
+```sh
+rtk ssh amirs-m3-max-new 'cd /Users/aelaguiz/workspace/codex-client && PATH="$HOME/.local/bin:$PATH" rtk make host-service-status HOST_SERVICE_PLATFORM=macos CODEX_DOCK_REAL_HOST_ID=amirs-m3-max-new CODEX_DOCK_REAL_HOST_NAME=Amirs-M3-Max-New APP_SERVER_HOST=amirs-m3-max-new.fairy-salmon.ts.net DOCK_RELAY_WS=ws://amirs-m3-max-new.fairy-salmon.ts.net:4510 HOST_SERVICE_NETWORK_PROFILE=tailscale'
+rtk ssh amirs-m3-max-new 'cd /Users/aelaguiz/workspace/codex-client && PATH="$HOME/.local/bin:$PATH" rtk make host-service-doctor HOST_SERVICE_PLATFORM=macos CODEX_DOCK_REAL_HOST_ID=amirs-m3-max-new CODEX_DOCK_REAL_HOST_NAME=Amirs-M3-Max-New APP_SERVER_HOST=amirs-m3-max-new.fairy-salmon.ts.net DOCK_RELAY_WS=ws://amirs-m3-max-new.fairy-salmon.ts.net:4510 HOST_SERVICE_NETWORK_PROFILE=tailscale'
+```
+
 From the Mac, the app-facing `home` relay should answer:
 
 ```sh
-curl -fsS --max-time 5 http://100.66.11.7:4510/readyz
-curl -fsS --max-time 5 http://100.66.11.7:4510/statusz
-curl -fsS --max-time 5 http://100.66.11.7:4510/routesz
+rtk curl -fsS --max-time 5 http://home.fairy-salmon.ts.net:4510/readyz
+rtk curl -fsS --max-time 5 http://home.fairy-salmon.ts.net:4510/statusz
+rtk curl -fsS --max-time 5 http://home.fairy-salmon.ts.net:4510/routesz
+```
+
+From the Mac, the app-facing `amirs-m3-max-new` relay should answer:
+
+```sh
+rtk curl -fsS --max-time 5 http://amirs-m3-max-new.fairy-salmon.ts.net:4510/readyz
+rtk curl -fsS --max-time 5 http://amirs-m3-max-new.fairy-salmon.ts.net:4510/statusz
+rtk curl -fsS --max-time 5 http://amirs-m3-max-new.fairy-salmon.ts.net:4510/routesz
 ```
 
 Use `readyz` only as process proof. Use `statusz` or `routesz` for route proof;
@@ -288,7 +310,7 @@ rtk make relay-debug-bundle
 Compare configured relay hosts:
 
 ```sh
-rtk make relay-host-compare HOSTS=amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510
+rtk make relay-host-compare HOSTS=amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510,amirs-m3-max-new.fairy-salmon.ts.net:4510
 ```
 
 Copy app-owned diagnostics from a simulator:
@@ -384,8 +406,10 @@ write app-safe settings to `.codex-dock/host.env`, and leave the user-owned
 `.env` untouched. They may read `OPENAI_API_KEY` from the shell or `.env`, but
 they must not rewrite `.env`. Host identity is derived by the host-service
 wrapper when `CODEX_DOCK_REAL_HOST_ID` and `CODEX_DOCK_REAL_HOST_NAME` are not
-set, so `rtk make services` derives `Amir-M5` on the Mac and `home` / `Home` on
-the Linux `home` host.
+set, so `rtk make services` derives `Amir-M5` on the local Mac and
+`home` / `Home` on the Linux `home` host. Use explicit host identity overrides
+for `amirs-m3-max-new` so it appears as `amirs-m3-max-new` /
+`Amirs-M3-Max-New`.
 
 `.codex-dock/service.env` may contain host-side secrets and relay provider
 settings:
@@ -471,7 +495,8 @@ rtk make iphone-14
 ```
 
 The iPhone 17 Pro (`CB9FFF0E-89AD-57B5-9C00-6552D814875E`) is configured with
-`amir-m5.fairy-salmon.ts.net:4510` and `home.fairy-salmon.ts.net:4510`. The
+`amir-m5.fairy-salmon.ts.net:4510`, `home.fairy-salmon.ts.net:4510`, and
+`amirs-m3-max-new.fairy-salmon.ts.net:4510`. The
 iPhone 14 (`0A4EFF8B-54D8-58FB-B3FB-63263265B9CC`) is configured with
 `Amir-M5.local:4510` and `192.168.50.74:4510`. Verify the saved host list without
 reinstalling:
@@ -585,8 +610,9 @@ matters. Screenshots are useful triage evidence, but they are not the selector
 strategy for this workflow.
 
 By default the simulator and UI tests launch the app against the current
-two-host relay list: `amir-m5.fairy-salmon.ts.net:4510` and
-`home.fairy-salmon.ts.net:4510`. `CODEX_DOCK_HOSTS` is the complete host list
+three-host relay list: `amir-m5.fairy-salmon.ts.net:4510`,
+`home.fairy-salmon.ts.net:4510`, and
+`amirs-m3-max-new.fairy-salmon.ts.net:4510`. `CODEX_DOCK_HOSTS` is the complete host list
 for that launch, so saved or discovered hosts do not change the test surface.
 To use a different relay endpoint, pass a comma-separated host list:
 

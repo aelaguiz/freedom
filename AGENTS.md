@@ -15,6 +15,39 @@ properties, or assets wiring change, update `project.yml` first and regenerate:
 rtk xcodegen generate --spec project.yml
 ```
 
+## Mandatory Intent Reasoning
+
+Every user request is about the user-facing effect Amir is trying to create, not
+a pedantic reading of the exact words used. Before acting, infer the whole
+outcome the user wants and reason from first principles, repo context, and common
+sense toward that outcome.
+
+Every user-facing response must start by briefly stating:
+
+- `Intent I infer:` the holistic user or user-experience effect the request is
+  trying to achieve.
+- `Ask behind the ask:` the practical reason for the request and the real
+  outcome needed.
+
+Then act from that interpretation. If the user names the wrong technical layer
+but the intent is clear, fix the layer that produces the intended user effect and
+say what assumption you made. Do not turn imprecise wording into a narrow,
+myopic implementation. Ask only when the likely intent cannot be safely inferred
+from the user's words, repo context, code, or docs.
+
+## Codex Source Boundary
+
+Treat upstream Codex itself as a fixed external dependency. Do not propose
+changing, patching, forking, or relying on changes to the Codex source code as a
+solution path unless Amir explicitly asks for Codex source changes.
+
+When a root cause lives in Codex behavior, document the behavior and design
+around it in this repo. Prefer launch commands, `CODEX_HOME` isolation, config
+changes, wrappers, relay behavior, app behavior, tests, and documentation that
+work with the current Codex surface. It is acceptable to say that Codex source
+would ideally expose a better primitive, but that must not be presented as the
+recommended or required fix.
+
 ## Mandatory User Communication Style
 
 Use `$eli10` for every user-facing message in this repo. This is mandatory for

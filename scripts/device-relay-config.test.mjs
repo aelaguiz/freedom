@@ -11,12 +11,13 @@ import {
 test("device relay config writes host list without relay identity", () => {
   assert.deepEqual(
     buildRelayConfig({
-      hosts: "amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510",
+      hosts: "amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510,amirs-m3-max-new.fairy-salmon.ts.net:4510",
     }),
     {
       hosts: [
         { host: "amir-m5.fairy-salmon.ts.net", port: 4510 },
         { host: "home.fairy-salmon.ts.net", port: 4510 },
+        { host: "amirs-m3-max-new.fairy-salmon.ts.net", port: 4510 },
       ],
     },
   );
@@ -79,13 +80,14 @@ test("device relay config verification fails on extra phone identity", () => {
 test("host env verification accepts only app-facing relay hosts", () => {
   assert.deepEqual(
     buildRelayConfigFromHostEnv([
-      "CODEX_DOCK_HOSTS=amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510",
+      "CODEX_DOCK_HOSTS=amir-m5.fairy-salmon.ts.net:4510,home.fairy-salmon.ts.net:4510,amirs-m3-max-new.fairy-salmon.ts.net:4510",
       "",
     ].join("\n")),
     {
       hosts: [
         { host: "amir-m5.fairy-salmon.ts.net", port: 4510 },
         { host: "home.fairy-salmon.ts.net", port: 4510 },
+        { host: "amirs-m3-max-new.fairy-salmon.ts.net", port: 4510 },
       ],
     },
   );
